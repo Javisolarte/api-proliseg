@@ -1,12 +1,11 @@
 import { Injectable, NotFoundException } from "@nestjs/common"
-import  { SupabaseService } from "../supabase/supabase.service"
+import { SupabaseService } from "../supabase/supabase.service"
 import type { UpdateUsuarioDto, AsignarModuloDto } from "./dto/usuario.dto"
 
 @Injectable()
 export class UsuariosService {
   constructor(private readonly supabaseService: SupabaseService) {
-     console.log('Construyendo UsuariosService');
-     console.log('Dependencia inyectada:', supabaseService);
+    console.log("🧩 Construyendo UsuariosService")
   }
 
   async findAll() {
@@ -76,47 +75,82 @@ export class UsuariosService {
     return { message: "Usuario desactivado exitosamente", data }
   }
 
+  /**
+   * 🧩 Obtener permisos (módulos) de un usuario según:
+   * - los módulos asignados a su rol
+   * - los módulos individuales asignados al usuario
+   */
   async getPermisos(usuarioId: number) {
     const supabase = this.supabaseService.getClient()
 
-    // Obtener usuario con su rol
-    const { data: usuario } = await supabase.from("usuarios_externos").select("id, rol").eq("id", usuarioId).single()
+    // 1️⃣ Obtener usuario con su rol
+    const { data: usuario, error: userError } = await supabase
+      .from("usuarios_externos")
+      .select("id, rol")
+      .eq("id", usuarioId)
+      .single()
 
-    if (!usuario) {
+    if (userError || !usuario) {
       throw new NotFoundException(`Usuario con ID ${usuarioId} no encontrado`)
     }
 
-    // Obtener módulos del rol
-    const { data: rolesModulos } = await supabase
+    // 2️⃣ Obtener módulos del rol
+    const { data: rolesModulos, error: rolError } = await supabase
       .from("roles_modulos")
       .select("modulo_id, modulos(*)")
       .eq("rol_id", usuario.rol)
 
-    // Obtener módulos específicos del usuario
-    const { data: usuariosModulos } = await supabase
+    if (rolError) throw rolError
+
+    // 3️⃣ Obtener módulos específicos del usuario
+    const { data: usuariosModulos, error: userModError } = await supabase
       .from("usuarios_modulos")
-      .select("modulo_id, modulos(*), concedido")
+      .select("modulo_id, concedido, modulos(*)")
       .eq("usuario_id", usuarioId)
 
+    if (userModError) throw userModError
+
+    // 4️⃣ Combinar y eliminar duplicados
+    const modulosMap = new Map<number, any>()
+
+    rolesModulos?.forEach((rm) => {
+      const modulo = Array.isArray(rm.modulos) ? rm.modulos[0] : rm.modulos
+      if (modulo && modulo.id) modulosMap.set(modulo.id, modulo)
+    })
+
+    usuariosModulos?.forEach((um) => {
+      const modulo = Array.isArray(um.modulos) ? um.modulos[0] : um.modulos
+      if (modulo && modulo.id) modulosMap.set(modulo.id, modulo)
+    })
+
+    const todosLosModulos = Array.from(modulosMap.values())
+
+    // 5️⃣ Retornar permisos consolidados
     return {
-      modulos_rol: rolesModulos?.map((rm) => rm.modulos) || [],
-      modulos_usuario: usuariosModulos || [],
+      success: true,
+      usuario_id: usuarioId,
+      rol_id: usuario.rol,
+      permisos: todosLosModulos,
+      total: todosLosModulos.length,
     }
   }
 
+  /**
+   * 🔐 Asignar o actualizar permiso (módulo) a un usuario
+   */
   async asignarModulo(usuarioId: number, asignarModuloDto: AsignarModuloDto) {
     const supabase = this.supabaseService.getClient()
 
-    // Verificar si ya existe la asignación
+    // 1️⃣ Verificar si ya existe
     const { data: existing } = await supabase
       .from("usuarios_modulos")
       .select("id")
       .eq("usuario_id", usuarioId)
       .eq("modulo_id", asignarModuloDto.modulo_id)
-      .single()
+      .maybeSingle()
 
     if (existing) {
-      // Actualizar
+      // 2️⃣ Actualizar
       const { data, error } = await supabase
         .from("usuarios_modulos")
         .update({ concedido: asignarModuloDto.concedido })
@@ -127,7 +161,7 @@ export class UsuariosService {
       if (error) throw error
       return data
     } else {
-      // Crear nuevo
+      // 3️⃣ Crear nuevo
       const { data, error } = await supabase
         .from("usuarios_modulos")
         .insert({

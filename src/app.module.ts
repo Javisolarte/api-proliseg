@@ -22,6 +22,12 @@ import { TurnosModule } from './modules/turnos/turnos.module';
 import { AsistenciasModule } from './modules/asistencias/asistencias.module';
 import { SupabaseModule } from './modules/supabase/supabase.module';
 import { IaModule } from './modules/ia/ia.module';
+import { ServiciosModule } from './modules/servicios/servicios.module';
+import { PermisosModule } from './modules/permisos/permisos.module';
+import { AsignacionesModule } from './modules/asignaciones/asignaciones.module';
+import { PuestosModule } from './modules/puestos/puestos.module';
+import { SubpuestosModule } from './modules/subpuestos/subpuestos.module';
+
 
 
 
@@ -56,6 +62,11 @@ import { IaModule } from './modules/ia/ia.module';
     TurnosModule,
     AsistenciasModule,
     IaModule,
+    ServiciosModule,
+    PermisosModule,
+    AsignacionesModule,
+    PuestosModule,
+    SubpuestosModule,
   
   ],
   providers: [

@@ -1,10 +1,21 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, UseGuards } from "@nestjs/common"
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from "@nestjs/swagger"
-import type { PuestosService } from "./puestos.service"
-import type { CreatePuestoDto, UpdatePuestoDto } from "./dto/puesto.dto"
-import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
-import { PermissionsGuard } from "../auth/guards/permissions.guard"
-import { RequirePermissions } from "../auth/decorators/permissions.decorator"
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Param,
+  Body,
+  Delete,
+  UseGuards,
+  Request,
+  ParseIntPipe,
+} from "@nestjs/common";
+import { PuestosService } from "./puestos.service";
+import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { PermissionsGuard } from "../auth/guards/permissions.guard";
+import { RequirePermissions } from "../auth/decorators/permissions.decorator";
+import { CreatePuestoDto, UpdatePuestoDto } from "./dto/puesto.dto";
+import { ApiBearerAuth, ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 
 @ApiTags("Puestos")
 @Controller("puestos")
@@ -14,42 +25,41 @@ export class PuestosController {
   constructor(private readonly puestosService: PuestosService) {}
 
   @Get()
-  @RequirePermissions("puestos_trabajo")
+  @RequirePermissions("puestos")
   @ApiOperation({ summary: "Listar todos los puestos de trabajo" })
-  @ApiResponse({ status: 200, description: "Lista de puestos" })
-  async findAll() {
-    return this.puestosService.findAll()
+  findAll() {
+    return this.puestosService.findAll();
   }
 
-  @Get(':id')
-  @RequirePermissions('puestos_trabajo')
-  @ApiOperation({ summary: 'Obtener puesto por ID' })
-  @ApiResponse({ status: 200, description: 'Puesto encontrado' })
-  async findOne(@Param('id') id: string) {
-    return this.puestosService.findOne(Number.parseInt(id));
+  @Get(":id")
+  @RequirePermissions("puestos")
+  @ApiOperation({ summary: "Obtener un puesto específico por ID" })
+  findOne(@Param("id", ParseIntPipe) id: number) {
+    return this.puestosService.findOne(id);
   }
 
   @Post()
-  @RequirePermissions('puestos_trabajo')
-  @ApiOperation({ summary: 'Crear nuevo puesto de trabajo' })
-  @ApiResponse({ status: 201, description: 'Puesto creado exitosamente' })
-  async create(@Body() createPuestoDto: CreatePuestoDto) {
-    return this.puestosService.create(createPuestoDto);
+  @RequirePermissions("puestos")
+  @ApiOperation({ summary: "Crear un nuevo puesto de trabajo" })
+  create(@Body() dto: CreatePuestoDto, @Request() req) {
+    return this.puestosService.create(dto, req.user.id);
   }
 
   @Put(":id")
-  @RequirePermissions("puestos_trabajo")
-  @ApiOperation({ summary: "Actualizar puesto de trabajo" })
-  @ApiResponse({ status: 200, description: "Puesto actualizado exitosamente" })
-  async update(@Param('id') id: string, @Body() updatePuestoDto: UpdatePuestoDto) {
-    return this.puestosService.update(Number.parseInt(id), updatePuestoDto)
+  @RequirePermissions("puestos")
+  @ApiOperation({ summary: "Actualizar los datos de un puesto" })
+  update(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: UpdatePuestoDto,
+    @Request() req
+  ) {
+    return this.puestosService.update(id, dto, req.user.id);
   }
 
-  @Delete(':id')
-  @RequirePermissions('puestos_trabajo')
-  @ApiOperation({ summary: 'Eliminar puesto de trabajo' })
-  @ApiResponse({ status: 200, description: 'Puesto eliminado exitosamente' })
-  async remove(@Param('id') id: string) {
-    return this.puestosService.remove(Number.parseInt(id));
+  @Delete(":id")
+  @RequirePermissions("puestos")
+  @ApiOperation({ summary: "Eliminar (soft delete) un puesto" })
+  softDelete(@Param("id", ParseIntPipe) id: number, @Request() req) {
+    return this.puestosService.softDelete(id, req.user.id);
   }
 }
