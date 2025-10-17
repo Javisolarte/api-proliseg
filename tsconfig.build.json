@@ -5,5 +5,5 @@
     "removeComments": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "test", "dist"]
+  "exclude": ["node_modules", "test", "**/*.spec.ts"]
 }
