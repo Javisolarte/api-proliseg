@@ -130,7 +130,7 @@ export class GeminiService {
       });
 
       const result = await model.generateContent([
-        `Eres un asistente conversacional integrado en un sistema empresarial con acceso a datos.
+        `Eres un asistente conversacional integrado en un sistema empresarial con acceso a datos el sistema empresarial es de una empresa de seguridad privada , PROLISEG LTDA presta servicioos de seguridad fija y movil en todo colombia.
         El usuario ha preguntado: "${prompt}".
         
         Si la pregunta no requiere SQL, respóndele en español de forma natural, profesional y amigable.
