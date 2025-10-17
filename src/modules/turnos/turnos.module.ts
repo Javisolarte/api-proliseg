@@ -1,10 +1,11 @@
 import { Module } from "@nestjs/common";
 import { TurnosController } from "./turnos.controller";
 import { TurnosService } from "./turnos.service";
-import { AuthModule } from "../auth/auth.module"; // ✅ Importar AuthModule para usar guards y AuthService
+import { AuthModule } from "../auth/auth.module";
+import { SupabaseModule } from "../supabase/supabase.module";
 
 @Module({
-  imports: [AuthModule], // 🔥 Permite proteger rutas y usar AuthService
+  imports: [AuthModule, SupabaseModule],
   controllers: [TurnosController],
   providers: [TurnosService],
   exports: [TurnosService],

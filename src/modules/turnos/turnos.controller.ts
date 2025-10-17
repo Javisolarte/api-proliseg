@@ -1,11 +1,22 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, ParseIntPipe } from "@nestjs/common"
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from "@nestjs/swagger"
-import { TurnosService } from "./turnos.service"
-import type { CreateTurnoDto, UpdateTurnoDto } from "./dto/turno.dto"
-import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
-import { PermissionsGuard } from "../auth/guards/permissions.guard"
-import { RequirePermissions } from "../auth/decorators/permissions.decorator"
-import { CurrentUser } from "../auth/decorators/current-user.decorator"
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Param,
+  Body,
+  UseGuards,
+  Request,
+  ParseIntPipe,
+  Query,
+} from "@nestjs/common";
+import { TurnosService } from "./turnos.service";
+import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { PermissionsGuard } from "../auth/guards/permissions.guard";
+import { RequirePermissions } from "../auth/decorators/permissions.decorator";
+import { CreateTurnoDto, UpdateTurnoDto } from "./dto/turno.dto";
+import { ApiTags, ApiBearerAuth, ApiOperation } from "@nestjs/swagger";
 
 @ApiTags("Turnos")
 @Controller("turnos")
@@ -14,47 +25,54 @@ import { CurrentUser } from "../auth/decorators/current-user.decorator"
 export class TurnosController {
   constructor(private readonly turnosService: TurnosService) {}
 
+  // ✅ Listar todos los turnos (con filtros opcionales)
   @Get()
   @RequirePermissions("turnos")
-  @ApiOperation({ summary: "Listar todos los turnos" })
-  @ApiResponse({ status: 200, description: "Lista de turnos" })
-  async findAll(
+  @ApiOperation({ summary: "Listar todos los turnos (con filtros opcionales)" })
+  findAll(
     @Query("fecha") fecha?: string,
     @Query("empleado_id") empleadoId?: number,
-    @Query("puesto_id") puestoId?: number,
+    @Query("puesto_id") puestoId?: number
   ) {
-    return this.turnosService.findAll({ fecha, empleadoId, puestoId })
+    return this.turnosService.findAll({ fecha, empleadoId, puestoId });
   }
 
-  @Get(":id")
+  // ✅ Obtener todos los turnos de un empleado específico
+  @Get("empleado/:empleadoId")
   @RequirePermissions("turnos")
-  @ApiOperation({ summary: "Obtener turno por ID" })
-  @ApiResponse({ status: 200, description: "Turno encontrado" })
-  async findOne(@Param("id", ParseIntPipe) id: number) {
-    return this.turnosService.findOne(id)
+  @ApiOperation({ summary: "Obtener todos los turnos de un empleado específico" })
+  findByEmpleado(@Param("empleadoId", ParseIntPipe) empleadoId: number) {
+    return this.turnosService.findByEmpleado(empleadoId);
   }
 
+  // ✅ Crear un nuevo turno
   @Post()
   @RequirePermissions("turnos")
-  @ApiOperation({ summary: "Crear nuevo turno" })
-  @ApiResponse({ status: 201, description: "Turno creado exitosamente" })
-  async create(@Body() createTurnoDto: CreateTurnoDto, @CurrentUser() user: any) {
-    return this.turnosService.create(createTurnoDto, user.id)
+  @ApiOperation({ summary: "Crear un nuevo turno" })
+  create(@Body() dto: CreateTurnoDto, @Request() req) {
+    return this.turnosService.create(dto, req.user.id);
   }
 
-  @Put(":id")
+  // ✅ Actualizar todos los turnos de un empleado
+  @Put("empleado/:empleadoId")
   @RequirePermissions("turnos")
-  @ApiOperation({ summary: "Actualizar turno" })
-  @ApiResponse({ status: 200, description: "Turno actualizado exitosamente" })
-  async update(@Param("id", ParseIntPipe) id: number, @Body() updateTurnoDto: UpdateTurnoDto) {
-    return this.turnosService.update(id, updateTurnoDto)
+  @ApiOperation({ summary: "Actualizar todos los turnos de un empleado" })
+  updateByEmpleado(
+    @Param("empleadoId", ParseIntPipe) empleadoId: number,
+    @Body() dto: UpdateTurnoDto,
+    @Request() req
+  ) {
+    return this.turnosService.updateByEmpleado(empleadoId, dto, req.user.id);
   }
 
-  @Delete(":id")
+  // ✅ Desactivar (soft delete) todos los turnos de un empleado
+  @Delete("empleado/:empleadoId")
   @RequirePermissions("turnos")
-  @ApiOperation({ summary: "Eliminar turno" })
-  @ApiResponse({ status: 200, description: "Turno eliminado exitosamente" })
-  async remove(@Param("id", ParseIntPipe) id: number) {
-    return this.turnosService.remove(id)
+  @ApiOperation({ summary: "Desactivar (soft delete) todos los turnos de un empleado" })
+  softDeleteByEmpleado(
+    @Param("empleadoId", ParseIntPipe) empleadoId: number,
+    @Request() req
+  ) {
+    return this.turnosService.softDeleteByEmpleado(empleadoId, req.user.id);
   }
 }

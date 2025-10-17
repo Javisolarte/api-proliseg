@@ -27,6 +27,9 @@ import { PermisosModule } from './modules/permisos/permisos.module';
 import { AsignacionesModule } from './modules/asignaciones/asignaciones.module';
 import { PuestosModule } from './modules/puestos/puestos.module';
 import { SubpuestosModule } from './modules/subpuestos/subpuestos.module';
+import { TurnosConfiguracionModule } from './modules/turnos_configuracion/turnos_configuracion.module';
+import { RolesModule } from './modules/roles/roles.module';
+
 
 
 
@@ -67,6 +70,7 @@ import { SubpuestosModule } from './modules/subpuestos/subpuestos.module';
     AsignacionesModule,
     PuestosModule,
     SubpuestosModule,
+    TurnosConfiguracionModule
   
   ],
   providers: [
