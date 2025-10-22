@@ -2,10 +2,11 @@ import { Module } from "@nestjs/common";
 import { AsignacionesController } from "./asignaciones.controller";
 import { AsignacionesService } from "./asignaciones.service";
 import { AuthModule } from "../auth/auth.module";
+import { AsignarTurnosService } from "../asignar_turnos/asignar_turnos.service";
 
 @Module({
   imports: [AuthModule],
   controllers: [AsignacionesController],
-  providers: [AsignacionesService],
+  providers: [AsignacionesService, AsignarTurnosService], // 🔹 Inyectado el servicio de turnos
 })
 export class AsignacionesModule {}

@@ -5,7 +5,7 @@ import { AsignarPermisoDto, ActualizarPermisoDto } from "./dto/permiso.dto";
 @Injectable()
 export class PermisosService {
   private readonly logger = new Logger(PermisosService.name);
-  private readonly table = "usuarios_modulos";
+  private readonly table = "roles_modulos_usuarios_externos";
 
   constructor(private readonly supabaseService: SupabaseService) {}
 

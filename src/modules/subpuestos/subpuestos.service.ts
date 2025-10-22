@@ -22,8 +22,8 @@ export class SubpuestosService {
         ),
         configuracion:configuracion_id (
           id,
-          nombre,
-          tipo_turno
+          nombre
+         
         )
       `)
       .order("created_at", { ascending: false });
@@ -48,8 +48,8 @@ export class SubpuestosService {
         ),
         configuracion:configuracion_id (
           id,
-          nombre,
-          tipo_turno
+          nombre
+     
         )
       `)
       .eq("id", id)

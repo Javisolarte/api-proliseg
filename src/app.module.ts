@@ -28,7 +28,12 @@ import { AsignacionesModule } from './modules/asignaciones/asignaciones.module';
 import { PuestosModule } from './modules/puestos/puestos.module';
 import { SubpuestosModule } from './modules/subpuestos/subpuestos.module';
 import { TurnosConfiguracionModule } from './modules/turnos_configuracion/turnos_configuracion.module';
-import { RolesModule } from './modules/roles/roles.module';
+import { NotificacionesModule } from './modules/notificaciones/notificaciones.module';
+import { ArlModule } from './modules/arl/arl.module';
+import { FondosPensionModule } from './modules/fondos_pension/fondos_pension.module';
+import { EpsModule } from './modules/eps/eps.module';
+import { AsignarTurnosModule } from './modules/asignar_turnos/asignar_turnos.module';
+import { TurnosReemplazosModule } from './modules/turnos_reemplazos/turnos_reemplazos.module';
 
 
 
@@ -70,7 +75,14 @@ import { RolesModule } from './modules/roles/roles.module';
     AsignacionesModule,
     PuestosModule,
     SubpuestosModule,
-    TurnosConfiguracionModule
+    TurnosConfiguracionModule,
+    NotificacionesModule,
+    ArlModule,
+    FondosPensionModule,
+    EpsModule,
+    AsignarTurnosModule,
+ 
+    TurnosReemplazosModule,
   
   ],
   providers: [

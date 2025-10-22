@@ -139,7 +139,7 @@ async login(loginDto: LoginDto, req?: any) {
 
     // 🔹 Permisos del usuario
     const { data: permisosUsuario, error: permisosError } = await supabase
-      .from('usuarios_modulos')
+      .from('roles_modulos_usuarios_externos')
       .select('modulo_id, modulos(*)')
       .eq('usuario_id', usuarioExterno.id)
       .eq('concedido', true);
@@ -326,7 +326,7 @@ async login(loginDto: LoginDto, req?: any) {
 
       // 🔹 Obtener permisos del usuario
       const { data: permisosUsuario } = await supabase
-        .from('usuarios_modulos')
+        .from('roles_modulos_usuarios_externos')
         .select('modulo_id, modulos(*)')
         .eq('usuario_id', usuarioExterno.id)
         .eq('concedido', true);

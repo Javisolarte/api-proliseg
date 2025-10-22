@@ -24,6 +24,15 @@ export class CreateAsignacionDto {
   @IsOptional()
   @IsString()
   observaciones?: string;
+
+  @ApiProperty({ example: 1, description: "ID de la configuración de turnos que se aplicará" })
+  @IsInt()
+  configuracion_id: number;
+
+  @ApiProperty({ example: 10, description: "ID del contrato asociado a la asignación (opcional)", required: false })
+  @IsOptional()
+  @IsInt()
+  contrato_id?: number;
 }
 
 export class UpdateAsignacionDto extends PartialType(CreateAsignacionDto) {
@@ -32,17 +41,17 @@ export class UpdateAsignacionDto extends PartialType(CreateAsignacionDto) {
   @IsBoolean()
   activo?: boolean;
 
-  @ApiProperty({ example: "2025-10-17", required: false })
+  @ApiProperty({ example: "2025-10-17", description: "Fecha final de la asignación (opcional)", required: false })
   @IsOptional()
   @IsDateString()
   fecha_fin?: string;
 
-  @ApiProperty({ example: "23:00:00", required: false })
+  @ApiProperty({ example: "23:00:00", description: "Hora final de la asignación (opcional)", required: false })
   @IsOptional()
   @IsString()
   hora_fin?: string;
 
-  @ApiProperty({ example: "Fin de contrato", required: false })
+  @ApiProperty({ example: "Fin de contrato", description: "Motivo de finalización de la asignación (opcional)", required: false })
   @IsOptional()
   @IsString()
   motivo_finalizacion?: string;

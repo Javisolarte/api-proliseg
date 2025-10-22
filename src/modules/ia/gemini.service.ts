@@ -117,6 +117,55 @@ export class GeminiService {
       throw new Error(`Error en la API de Gemini: ${error.message}`);
     }
   }
+  
+
+  
+  /**
+   * 🤖 Analiza la asistencia (entrada o salida) del empleado
+   * con IA para detectar comportamientos inusuales o riesgos.
+   */
+  async analizarAsistencia(params: {
+    tipo: 'entrada' | 'salida';
+    empleado_id: number;
+    lugar_nombre: string;
+    distancia_metros: number;
+    historial?: any[];
+  }): Promise<string> {
+    const { tipo, empleado_id, lugar_nombre, distancia_metros, historial } = params;
+
+    const prompt = `
+Eres una IA experta en control de asistencia de personal de seguridad.
+Analiza el siguiente evento de asistencia:
+
+📋 Datos:
+- Empleado ID: ${empleado_id}
+- Lugar: ${lugar_nombre}
+- Distancia respecto al punto asignado: ${distancia_metros.toFixed(2)} metros
+- Tipo de registro: ${tipo}
+- Historial reciente: ${JSON.stringify(historial || [])}
+
+Indica:
+1. Nivel de riesgo (bajo, medio o alto).
+2. Si el comportamiento es normal o anómalo.
+3. Una breve explicación del porqué.
+Responde en una sola línea clara y concisa.
+`;
+    const model = this.genAI.getGenerativeModel({
+      model: 'models/gemini-2.5-flash',
+    });
+
+    try {
+      const result = await model.generateContent(prompt);
+      const texto = result.response.text();
+
+      this.logger.log(`🧠 Análisis IA (${tipo}) generado correctamente para empleado ${empleado_id}`);
+      return texto || 'Sin observaciones detectadas por la IA.';
+    } catch (error) {
+      this.logger.error('❌ Error analizando asistencia con IA', error);
+      throw new Error(`Error en la API de Gemini: ${error.message}`);
+    }
+  }
+
 
   /**
    * 🤖 Responde de forma natural a preguntas generales (sin SQL)
