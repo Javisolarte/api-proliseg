@@ -34,11 +34,12 @@ import { FondosPensionModule } from './modules/fondos_pension/fondos_pension.mod
 import { EpsModule } from './modules/eps/eps.module';
 import { AsignarTurnosModule } from './modules/asignar_turnos/asignar_turnos.module';
 import { TurnosReemplazosModule } from './modules/turnos_reemplazos/turnos_reemplazos.module';
-
-
-
-
-
+import { MinutasModule } from './modules/minutas/minutas.module';
+import { CapacitacionesModule } from './modules/capacitaciones/capacitaciones.module';
+import { RutasModule } from './modules/rutas/rutas.module';
+import { ReportesModule } from './modules/reportes/reportes.module';
+import { AuditoriaModule } from './modules/auditoria/auditoria.module';
+import { ModulosModule } from './modules/modulos/modulos.module';
 
 @Module({
   imports: [
@@ -81,13 +82,14 @@ import { TurnosReemplazosModule } from './modules/turnos_reemplazos/turnos_reemp
     FondosPensionModule,
     EpsModule,
     AsignarTurnosModule,
- 
     TurnosReemplazosModule,
-  
+    MinutasModule,
+    CapacitacionesModule,
+    RutasModule,
+    ReportesModule,
+    AuditoriaModule,
+    ModulosModule,
   ],
-  providers: [
-    // Global guards - order matters!
-   
-  ],
+  providers: [],
 })
-export class AppModule {}
+export class AppModule { }

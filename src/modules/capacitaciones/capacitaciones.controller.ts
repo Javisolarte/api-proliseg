@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Put, Delete, Body, Param, UseGuards } from "@nestjs/common"
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from "@nestjs/swagger"
-import type { CapacitacionesService } from "./capacitaciones.service"
-import type { CreateCapacitacionDto, UpdateCapacitacionDto } from "./dto/capacitacion.dto"
+import { CapacitacionesService } from "./capacitaciones.service"
+import { CreateCapacitacionDto, UpdateCapacitacionDto } from "./dto/capacitacion.dto"
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
 import { PermissionsGuard } from "../auth/guards/permissions.guard"
 import { RequirePermissions } from "../auth/decorators/permissions.decorator"
@@ -11,7 +11,7 @@ import { RequirePermissions } from "../auth/decorators/permissions.decorator"
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth("JWT-auth")
 export class CapacitacionesController {
-  constructor(private readonly capacitacionesService: CapacitacionesService) {}
+  constructor(private readonly capacitacionesService: CapacitacionesService) { }
 
   @Get()
   @RequirePermissions("capacitaciones")
@@ -51,5 +51,21 @@ export class CapacitacionesController {
   @ApiResponse({ status: 200, description: "Capacitación eliminada exitosamente" })
   async remove(@Param("id") id: number) {
     return this.capacitacionesService.remove(id)
+  }
+
+  @Post("asignar")
+  @RequirePermissions("capacitaciones")
+  @ApiOperation({ summary: "Asignar capacitación a empleado" })
+  @ApiResponse({ status: 201, description: "Asignación creada exitosamente" })
+  async asignar(@Body() asignacion: any) {
+    return this.capacitacionesService.asignarCapacitacion(asignacion)
+  }
+
+  @Get("asignaciones/todas")
+  @RequirePermissions("capacitaciones")
+  @ApiOperation({ summary: "Listar todas las asignaciones" })
+  @ApiResponse({ status: 200, description: "Lista de asignaciones" })
+  async getAsignaciones() {
+    return this.capacitacionesService.getAsignaciones()
   }
 }

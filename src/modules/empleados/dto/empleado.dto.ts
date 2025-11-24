@@ -6,12 +6,15 @@ import {
   IsBoolean,
   IsDateString,
   IsEmail,
+  IsNumber,
 } from "class-validator";
+import { Transform } from "class-transformer";
 
 export class CreateEmpleadoDto {
   @ApiProperty({ example: 1, required: false, description: "FK a usuarios_externos.id (opcional)" })
   @IsOptional()
   @IsInt()
+  @Transform(({ value }) => parseInt(value))
   usuario_id?: number;
 
   @ApiProperty({ example: "Juan Pérez García", description: "Nombre completo del empleado" })
@@ -67,11 +70,6 @@ export class CreateEmpleadoDto {
   @IsString()
   genero?: string;
 
-  @ApiProperty({ example: 1, required: false, description: "Si aún tienes este campo en la tabla" })
-  @IsOptional()
-  @IsInt()
-  tipo_empleado_id?: number;
-
   @ApiProperty({ example: "Indefinido", required: false })
   @IsOptional()
   @IsString()
@@ -81,42 +79,132 @@ export class CreateEmpleadoDto {
   @IsDateString()
   fecha_ingreso: string;
 
-  // <-- Nombre corregido para mapear exactamente a la columna de la tabla
+  @ApiProperty({ example: "2024-01-01", required: false })
+  @IsOptional()
+  @IsDateString()
+  fecha_salida?: string;
+
+  @ApiProperty({ example: "Renuncia voluntaria", required: false })
+  @IsOptional()
+  @IsString()
+  motivo_salida?: string;
+
   @ApiProperty({ example: 1, required: false, description: "ID del puesto (column 'puesto_id')" })
   @IsOptional()
   @IsInt()
+  @Transform(({ value }) => parseInt(value))
   puesto_id?: number;
 
   @ApiProperty({ example: 1, required: false })
   @IsOptional()
   @IsInt()
+  @Transform(({ value }) => parseInt(value))
   eps_id?: number;
 
   @ApiProperty({ example: 1, required: false })
   @IsOptional()
   @IsInt()
+  @Transform(({ value }) => parseInt(value))
   arl_id?: number;
 
   @ApiProperty({ example: 1, required: false })
   @IsOptional()
   @IsInt()
+  @Transform(({ value }) => parseInt(value))
   fondo_pension_id?: number;
+
+  @ApiProperty({ example: "2023-01-01", required: false })
+  @IsOptional()
+  @IsDateString()
+  fecha_afiliacion_eps?: string;
+
+  @ApiProperty({ example: "2024-01-01", required: false })
+  @IsOptional()
+  @IsDateString()
+  fecha_fin_eps?: string;
+
+  @ApiProperty({ example: "2023-01-01", required: false })
+  @IsOptional()
+  @IsDateString()
+  fecha_afiliacion_arl?: string;
+
+  @ApiProperty({ example: "2024-01-01", required: false })
+  @IsOptional()
+  @IsDateString()
+  fecha_fin_arl?: string;
+
+  @ApiProperty({ example: "2023-01-01", required: false })
+  @IsOptional()
+  @IsDateString()
+  fecha_afiliacion_pension?: string;
+
+  @ApiProperty({ example: "2024-01-01", required: false })
+  @IsOptional()
+  @IsDateString()
+  fecha_fin_pension?: string;
 
   @ApiProperty({ example: 48, required: false })
   @IsOptional()
   @IsInt()
+  @Transform(({ value }) => parseInt(value))
   horas_trabajadas_semana?: number;
 
   @ApiProperty({ example: true, required: false })
   @IsOptional()
   @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
   activo?: boolean;
 
-  // usamos string porque en la tabla 'empleados' existe la columna 'rol' (varchar)
+  @ApiProperty({ example: false, required: false })
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
+  verificado_documentos?: boolean;
+
+  @ApiProperty({ example: 1, required: false })
+  @IsOptional()
+  @IsInt()
+  @Transform(({ value }) => parseInt(value))
+  verificado_por?: number;
+
+  @ApiProperty({ example: "2023-01-01T10:00:00Z", required: false })
+  @IsOptional()
+  @IsDateString()
+  fecha_verificacion?: string;
+
   @ApiProperty({ example: "empleado", required: false, description: "Rol como texto (ej: 'empleado', 'supervisor')" })
   @IsOptional()
   @IsString()
   rol?: string;
+
+  @ApiProperty({ example: false, required: false })
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
+  asignado?: boolean;
+
+  @ApiProperty({ example: 0, required: false })
+  @IsOptional()
+  @IsNumber()
+  @Transform(({ value }) => parseFloat(value))
+  nivel_confianza?: number;
+
+  @ApiProperty({ example: 0, required: false })
+  @IsOptional()
+  @IsNumber()
+  @Transform(({ value }) => parseFloat(value))
+  riesgo_ausencia?: number;
+
+  @ApiProperty({ example: 0, required: false })
+  @IsOptional()
+  @IsNumber()
+  @Transform(({ value }) => parseFloat(value))
+  rendimiento_promedio?: number;
+
+  @ApiProperty({ example: "2023-01-01T10:00:00Z", required: false })
+  @IsOptional()
+  @IsDateString()
+  ultima_evaluacion?: string;
 }
 
-export class UpdateEmpleadoDto extends PartialType(CreateEmpleadoDto) {}
+export class UpdateEmpleadoDto extends PartialType(CreateEmpleadoDto) { }

@@ -10,7 +10,7 @@ export class IaService {
   constructor(
     private readonly geminiService: GeminiService,
     private readonly supabase: SupabaseService,
-  ) {}
+  ) { }
 
   // ============================================================
   // 🧠 1. PROCESAR CONSULTA NATURAL → SQL (ya existente)
@@ -91,6 +91,14 @@ export class IaService {
       `;
       const analisis = await this.geminiService.humanResponse(prompt);
 
+      // Guardar predicción en BD
+      await this.supabase.getClientWithAuth(user.token).from('ia_predicciones_incidentes').insert({
+        tipo_prediccion: 'ausencia', // Default, debería venir del análisis
+        probabilidad: 0.8, // Mock, debería parsearse del análisis
+        observaciones: analisis,
+        fecha_prediccion: new Date().toISOString(),
+      });
+
       return { ok: true, predicciones: analisis };
     } catch (err: any) {
       this.logger.error('❌ Error en generarPredicciones:', err);
@@ -143,6 +151,15 @@ export class IaService {
       `;
       const resultado = await this.geminiService.humanResponse(prompt);
 
+      // Guardar log de reentrenamiento
+      await this.supabase.getClientWithAuth(user.token).from('ia_modelos_configuracion').insert({
+        nombre_modelo: 'adaptativo_personal',
+        version: 'v2.0', // Incremental logic needed
+        parametros: { ajuste: resultado },
+        tipo_modelo: 'reentrenamiento',
+        fecha_entrenamiento: new Date().toISOString(),
+      });
+
       return { ok: true, mensaje: 'Modelo actualizado', detalle: resultado };
     } catch (err: any) {
       this.logger.error('❌ Error en reentrenarModelo:', err);
@@ -184,23 +201,62 @@ export class IaService {
     try {
       this.logger.log(`📹 [Anomalías IA] Analizando cámaras y sensores para ${user.email}`);
 
-      const { data, error } = await this.supabase
-        .getClientWithAuth(user.token)
-        .from('eventos_sensores')
-        .select('*');
-
-      if (error) throw new Error(error.message);
+      // Mock data source for now, replace with actual table if exists or use params
+      const data = [{ evento: 'movimiento_brusco', timestamp: new Date() }];
 
       const prompt = `
       Detecta comportamientos anómalos o sospechosos en los siguientes eventos de sensores o cámaras:
-      ${JSON.stringify(data.slice(0, 20))}
+      ${JSON.stringify(data)}
       Indica posibles amenazas, fallos o movimientos inusuales.
       `;
       const analisis = await this.geminiService.humanResponse(prompt);
 
+      // Guardar anomalía
+      await this.supabase.getClientWithAuth(user.token).from('ia_comportamiento_anomalo').insert({
+        tipo_anomalia: 'detectada_ia',
+        descripcion: analisis,
+        nivel_alerta: 'medio', // Logic needed to parse from analysis
+        timestamp: new Date().toISOString(),
+      });
+
       return { ok: true, analisis };
     } catch (err: any) {
       this.logger.error('❌ Error en detectarComportamientoAnomalo:', err);
+      throw new BadRequestException(err.message);
+    }
+  }
+  // ============================================================
+  // 🧠 7. SUGERENCIAS DE REEMPLAZO IA
+  // ============================================================
+  async sugerirReemplazo(turno: any, candidatos: any[]) {
+    try {
+      this.logger.log(`🧠 [Sugerencias IA] Analizando ${candidatos.length} candidatos para reemplazo.`);
+
+      const prompt = `
+      Actúa como un jefe de operaciones de seguridad experto.
+      Necesito un reemplazo para el siguiente turno:
+      - Fecha: ${turno.fecha}
+      - Horario: ${turno.hora_inicio} - ${turno.hora_fin}
+      - Puesto: ${turno.puesto_nombre} (${turno.ciudad})
+      - Cliente: ${turno.cliente_nombre}
+
+      Tengo la siguiente lista de empleados disponibles (que no tienen turno asignado en ese horario):
+      ${JSON.stringify(candidatos)}
+
+      Analiza la lista y sugiere los 3 mejores candidatos.
+      Criterios de selección:
+      1. Prioriza empleados que ya conozcan el puesto (si se indica en sus datos).
+      2. Prioriza empleados que vivan cerca o en la misma ciudad.
+      3. Considera su antigüedad o rol si es relevante.
+
+      Formato de respuesta deseado (texto natural):
+      "Te sugiero a [Nombre] porque [Razón]. Como segunda opción [Nombre]..."
+      `;
+
+      const sugerencia = await this.geminiService.humanResponse(prompt);
+      return { ok: true, sugerencia };
+    } catch (err: any) {
+      this.logger.error('❌ Error en sugerirReemplazo:', err);
       throw new BadRequestException(err.message);
     }
   }

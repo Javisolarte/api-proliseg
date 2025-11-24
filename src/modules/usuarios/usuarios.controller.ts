@@ -1,6 +1,6 @@
 import { Controller, Get, Put, Delete, Body, Param, UseGuards, Post } from "@nestjs/common"
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from "@nestjs/swagger"
-import  { UsuariosService } from "./usuarios.service"
+import { UsuariosService } from "./usuarios.service"
 import type { UpdateUsuarioDto, AsignarModuloDto } from "./dto/usuario.dto"
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
 import { PermissionsGuard } from "../auth/guards/permissions.guard"
@@ -12,10 +12,10 @@ import { Roles } from "../auth/decorators/roles.decorator"
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth("JWT-auth")
 export class UsuariosController {
-  constructor(private readonly usuariosService: UsuariosService) {}
+  constructor(private readonly usuariosService: UsuariosService) { }
 
   @Get()
-  @RequirePermissions("usuarios")
+  @RequirePermissions("usuarios.manage")
   @ApiOperation({ summary: "Listar todos los usuarios" })
   @ApiResponse({ status: 200, description: "Lista de usuarios" })
   async findAll() {
@@ -23,7 +23,7 @@ export class UsuariosController {
   }
 
   @Get(':id')
-  @RequirePermissions('usuarios')
+  @RequirePermissions('usuarios.manage')
   @ApiOperation({ summary: 'Obtener usuario por ID' })
   @ApiResponse({ status: 200, description: 'Usuario encontrado' })
   async findOne(@Param('id') id: number) {
@@ -31,7 +31,7 @@ export class UsuariosController {
   }
 
   @Put(":id")
-  @RequirePermissions("usuarios")
+  @RequirePermissions("usuarios.manage")
   @ApiOperation({ summary: "Actualizar usuario" })
   @ApiResponse({ status: 200, description: "Usuario actualizado exitosamente" })
   async update(@Param('id') id: number, @Body() updateUsuarioDto: UpdateUsuarioDto) {
@@ -39,7 +39,7 @@ export class UsuariosController {
   }
 
   @Delete(':id')
-  @RequirePermissions('usuarios')
+  @RequirePermissions('usuarios.manage')
   @Roles('superusuario', 'administrador')
   @ApiOperation({ summary: 'Desactivar usuario' })
   @ApiResponse({ status: 200, description: 'Usuario desactivado exitosamente' })
@@ -48,7 +48,7 @@ export class UsuariosController {
   }
 
   @Get(':id/permisos')
-  @RequirePermissions('usuarios')
+  @RequirePermissions('usuarios.manage')
   @ApiOperation({ summary: 'Obtener permisos de un usuario' })
   @ApiResponse({ status: 200, description: 'Permisos del usuario' })
   async getPermisos(@Param('id') id: number) {
@@ -56,7 +56,7 @@ export class UsuariosController {
   }
 
   @Post(":id/modulos")
-  @RequirePermissions("usuarios")
+  @RequirePermissions("usuarios.manage")
   @Roles("superusuario", "administrador")
   @ApiOperation({ summary: "Asignar o revocar módulo a usuario" })
   @ApiResponse({ status: 200, description: "Módulo asignado/revocado exitosamente" })

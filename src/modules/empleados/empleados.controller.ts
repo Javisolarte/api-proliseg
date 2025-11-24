@@ -10,6 +10,8 @@ import {
   ParseIntPipe,
   Req,
   BadRequestException,
+  UseInterceptors,
+  UploadedFiles,
 } from "@nestjs/common";
 import {
   ApiTags,
@@ -17,9 +19,11 @@ import {
   ApiResponse,
   ApiBearerAuth,
   ApiBody,
+  ApiConsumes,
 } from "@nestjs/swagger";
+import { FileFieldsInterceptor } from "@nestjs/platform-express";
 import { EmpleadosService } from "./empleados.service";
-import  { CreateEmpleadoDto, UpdateEmpleadoDto } from "./dto/empleado.dto";
+import { CreateEmpleadoDto, UpdateEmpleadoDto } from "./dto/empleado.dto";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { PermissionsGuard } from "../auth/guards/permissions.guard";
 import { RequirePermissions } from "../auth/decorators/permissions.decorator";
@@ -31,7 +35,7 @@ import type { Request } from "express";
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth("JWT-auth")
 export class EmpleadosController {
-  constructor(private readonly empleadosService: EmpleadosService) {}
+  constructor(private readonly empleadosService: EmpleadosService) { }
 
   /**
    * 🔹 Listar todos los empleados (sin filtros)
@@ -66,43 +70,34 @@ export class EmpleadosController {
   @Post()
   @RequirePermissions("empleados")
   @ApiOperation({ summary: "Crear nuevo empleado" })
+  @ApiConsumes("multipart/form-data")
+  @UseInterceptors(
+    FileFieldsInterceptor([
+      { name: "foto_perfil", maxCount: 1 },
+      { name: "cedula_pdf", maxCount: 1 },
+      { name: "hoja_de_vida", maxCount: 1 },
+      { name: "certificados", maxCount: 5 },
+      { name: "documentos_adicionales", maxCount: 5 },
+    ])
+  )
   @ApiResponse({ status: 201, description: "Empleado creado exitosamente" })
   @ApiResponse({ status: 400, description: "Bad Request - body inválido" })
-  @ApiBody({
-    description:
-      "Objeto con los datos del empleado. Los campos nombre_completo, cedula y fecha_ingreso son obligatorios.",
-    schema: {
-      type: "object",
-      example: {
-        nombre_completo: "Juan Pérez García",
-        cedula: "1234567890",
-        fecha_ingreso: "2025-10-12",
-        telefono: "3001234567",
-        correo: "juan.perez@ejemplo.com",
-        direccion: "Calle 123 #45-67",
-        departamento: "Cundinamarca",
-        ciudad: "Bogotá",
-        estado_civil: "Soltero",
-        genero: "Masculino",
-        tipo_contrato: "Indefinido",
-        puesto_trabajo_id: 1,
-        eps_id: 1,
-        arl_id: 1,
-        fondo_pension_id: 1,
-        horas_trabajadas_semana: 48,
-        activo: true,
-        rol_id: 2,
-      },
-    },
-  })
   async create(
     @Req() request: Request,
     @Body() createEmpleadoDto: CreateEmpleadoDto,
+    @UploadedFiles() files: {
+      foto_perfil?: Express.Multer.File[];
+      cedula_pdf?: Express.Multer.File[];
+      hoja_de_vida?: Express.Multer.File[];
+      certificados?: Express.Multer.File[];
+      documentos_adicionales?: Express.Multer.File[];
+    },
     @CurrentUser() user: any
   ) {
     // --- Debug logs (crudo + transformado) ---
     console.log("📥 [Controller] request.body (raw):", request.body);
     console.log("📥 [Controller] createEmpleadoDto (after transform):", createEmpleadoDto);
+    console.log("📂 [Controller] files:", files ? Object.keys(files) : "No files");
     console.log("👤 [Controller] current user:", user && { id: user.id, email: user.email });
 
     // Validación primaria: request.body debe ser un objeto y no un array
@@ -111,7 +106,7 @@ export class EmpleadosController {
     }
 
     // Delegar al servicio (el servicio tendrá validaciones adicionales)
-    return this.empleadosService.create(createEmpleadoDto, user.id);
+    return this.empleadosService.create(createEmpleadoDto, user.id, files);
   }
 
   /**
@@ -120,16 +115,34 @@ export class EmpleadosController {
   @Put(":id")
   @RequirePermissions("empleados")
   @ApiOperation({ summary: "Actualizar empleado" })
+  @ApiConsumes("multipart/form-data")
+  @UseInterceptors(
+    FileFieldsInterceptor([
+      { name: "foto_perfil", maxCount: 1 },
+      { name: "cedula_pdf", maxCount: 1 },
+      { name: "hoja_de_vida", maxCount: 1 },
+      { name: "certificados", maxCount: 5 },
+      { name: "documentos_adicionales", maxCount: 5 },
+    ])
+  )
   @ApiResponse({ status: 200, description: "Empleado actualizado exitosamente" })
   @ApiResponse({ status: 400, description: "Bad Request - body inválido" })
   async update(
     @Param("id", ParseIntPipe) id: number,
     @Body() updateEmpleadoDto: UpdateEmpleadoDto,
+    @UploadedFiles() files: {
+      foto_perfil?: Express.Multer.File[];
+      cedula_pdf?: Express.Multer.File[];
+      hoja_de_vida?: Express.Multer.File[];
+      certificados?: Express.Multer.File[];
+      documentos_adicionales?: Express.Multer.File[];
+    },
     @CurrentUser() user: any
   ) {
     // log minimal para debug
     console.log("✏️ [Controller] updateEmpleadoDto:", { id, payload: updateEmpleadoDto, updatedBy: user?.id });
-    return this.empleadosService.update(id, updateEmpleadoDto, user.id);
+    console.log("📂 [Controller] files:", files ? Object.keys(files) : "No files");
+    return this.empleadosService.update(id, updateEmpleadoDto, user.id, files);
   }
 
   /**
@@ -158,4 +171,3 @@ export class EmpleadosController {
     return this.empleadosService.getCapacitaciones(id);
   }
 }
-        

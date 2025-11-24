@@ -30,7 +30,7 @@ import { RequirePermissions } from "../auth/decorators/permissions.decorator";
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth("JWT-auth")
 export class TurnosReemplazosController {
-  constructor(private readonly service: TurnosReemplazosService) {}
+  constructor(private readonly service: TurnosReemplazosService) { }
 
   /**
    * 📋 Listar reemplazos existentes
@@ -76,10 +76,19 @@ export class TurnosReemplazosController {
       "Devuelve sugerencias si no se indica empleado_reemplazo_id. Si se indica, crea el reemplazo.",
   })
   async create(@Body() dto: CreateTurnoReemplazoDto): Promise<any> {
-  return this.service.create(dto);/**
-   * ✏️ ojo cambiar
+    return this.service.create(dto);
+  }
+
+  /**
+   * 🧠 Sugerir reemplazo con IA (Gemini)
    */
-}
+  @Get("sugerir-ia/:turnoId")
+  @RequirePermissions("turnos_reemplazos")
+  @ApiOperation({ summary: "Sugerir reemplazo inteligente con IA (Gemini)" })
+  @ApiResponse({ status: 200, description: "Sugerencia generada por IA" })
+  async sugerirIA(@Param("turnoId") turnoId: string) {
+    return this.service.sugerirReemplazoIA(Number(turnoId));
+  }
 
 
   /**

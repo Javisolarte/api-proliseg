@@ -6,7 +6,7 @@ import type { CreateEmpleadoDto, UpdateEmpleadoDto } from "./dto/empleado.dto";
 export class EmpleadosService {
   private readonly logger = new Logger(EmpleadosService.name);
 
-  constructor(private readonly supabaseService: SupabaseService) {}
+  constructor(private readonly supabaseService: SupabaseService) { }
 
   // 🔹 Obtener todos los empleados con joins
   async findAll(filters?: { activo?: boolean; tipoEmpleadoId?: number }) {
@@ -93,15 +93,75 @@ export class EmpleadosService {
     return empleados[0];
   }
 
+  // 🔹 Helper para subir archivos a Supabase Storage
+  private async uploadFile(file: Express.Multer.File, bucket: string, path: string): Promise<string> {
+    const supabase = this.supabaseService.getClient();
+    const { data, error } = await supabase.storage
+      .from(bucket)
+      .upload(path, file.buffer, {
+        contentType: file.mimetype,
+        upsert: true,
+      });
+
+    if (error) {
+      this.logger.error(`❌ Error subiendo archivo a ${bucket}: ${JSON.stringify(error)}`);
+      throw error;
+    }
+
+    const { data: publicUrlData } = supabase.storage.from(bucket).getPublicUrl(path);
+    return publicUrlData.publicUrl;
+  }
+
   // 🔹 Crear empleado
-  async create(createEmpleadoDto: CreateEmpleadoDto, userId: number) {
+  async create(createEmpleadoDto: CreateEmpleadoDto, userId: number, files?: Record<string, Express.Multer.File[]>) {
     const supabase = this.supabaseService.getClient();
     this.logger.debug(`🧩 Creando empleado con DTO: ${JSON.stringify(createEmpleadoDto)}`);
+
+    const fileUrls: any = {};
+
+    // Subir archivos si existen
+    if (files) {
+      if (files.foto_perfil?.[0]) {
+        const file = files.foto_perfil[0];
+        const path = `${createEmpleadoDto.cedula}/${Date.now()}_${file.originalname}`;
+        fileUrls.foto_perfil_url = await this.uploadFile(file, 'fotos_perfil', path);
+        fileUrls.fecha_ultima_actualizacion_foto = new Date().toISOString();
+      }
+      if (files.cedula_pdf?.[0]) {
+        const file = files.cedula_pdf[0];
+        const path = `${createEmpleadoDto.cedula}/${Date.now()}_${file.originalname}`;
+        fileUrls.cedula_pdfurl = await this.uploadFile(file, 'cedulas', path);
+      }
+      if (files.hoja_de_vida?.[0]) {
+        const file = files.hoja_de_vida[0];
+        const path = `${createEmpleadoDto.cedula}/${Date.now()}_${file.originalname}`;
+        fileUrls.hoja_de_vida_url = await this.uploadFile(file, 'hojas_vida', path);
+      }
+      if (files.certificados) {
+        const certificadosUrls: string[] = [];
+        for (const file of files.certificados) {
+          const path = `${createEmpleadoDto.cedula}/${Date.now()}_${file.originalname}`;
+          const url = await this.uploadFile(file, 'certificados', path);
+          certificadosUrls.push(url);
+        }
+        fileUrls.certificados_urls = certificadosUrls;
+      }
+      if (files.documentos_adicionales) {
+        const docsUrls: string[] = [];
+        for (const file of files.documentos_adicionales) {
+          const path = `${createEmpleadoDto.cedula}/${Date.now()}_${file.originalname}`;
+          const url = await this.uploadFile(file, 'documentos_adicionales', path);
+          docsUrls.push(url);
+        }
+        fileUrls.documentos_adicionales_urls = docsUrls;
+      }
+    }
 
     const { data, error } = await supabase
       .from("empleados")
       .insert({
         ...createEmpleadoDto,
+        ...fileUrls,
         creado_por: userId,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -119,13 +179,13 @@ export class EmpleadosService {
   }
 
   // 🔹 Actualizar empleado
-  async update(id: number, updateEmpleadoDto: UpdateEmpleadoDto, userId: number) {
+  async update(id: number, updateEmpleadoDto: UpdateEmpleadoDto, userId: number, files?: Record<string, Express.Multer.File[]>) {
     const supabase = this.supabaseService.getClient();
     this.logger.debug(`🟡 Actualizando empleado ${id} con datos: ${JSON.stringify(updateEmpleadoDto)}`);
 
     const { data: existing, error: findError } = await supabase
       .from("empleados")
-      .select("id")
+      .select("id, cedula, certificados_urls, documentos_adicionales_urls")
       .eq("id", id)
       .single();
 
@@ -133,10 +193,51 @@ export class EmpleadosService {
       throw new NotFoundException(`Empleado con ID ${id} no encontrado`);
     }
 
+    const fileUrls: any = {};
+
+    // Subir archivos si existen
+    if (files) {
+      if (files.foto_perfil?.[0]) {
+        const file = files.foto_perfil[0];
+        const path = `${existing.cedula}/${Date.now()}_${file.originalname}`;
+        fileUrls.foto_perfil_url = await this.uploadFile(file, 'fotos_perfil', path);
+        fileUrls.fecha_ultima_actualizacion_foto = new Date().toISOString();
+      }
+      if (files.cedula_pdf?.[0]) {
+        const file = files.cedula_pdf[0];
+        const path = `${existing.cedula}/${Date.now()}_${file.originalname}`;
+        fileUrls.cedula_pdfurl = await this.uploadFile(file, 'cedulas', path);
+      }
+      if (files.hoja_de_vida?.[0]) {
+        const file = files.hoja_de_vida[0];
+        const path = `${existing.cedula}/${Date.now()}_${file.originalname}`;
+        fileUrls.hoja_de_vida_url = await this.uploadFile(file, 'hojas_vida', path);
+      }
+      if (files.certificados) {
+        const certificadosUrls: string[] = existing.certificados_urls || [];
+        for (const file of files.certificados) {
+          const path = `${existing.cedula}/${Date.now()}_${file.originalname}`;
+          const url = await this.uploadFile(file, 'certificados', path);
+          certificadosUrls.push(url);
+        }
+        fileUrls.certificados_urls = certificadosUrls;
+      }
+      if (files.documentos_adicionales) {
+        const docsUrls: string[] = existing.documentos_adicionales_urls || [];
+        for (const file of files.documentos_adicionales) {
+          const path = `${existing.cedula}/${Date.now()}_${file.originalname}`;
+          const url = await this.uploadFile(file, 'documentos_adicionales', path);
+          docsUrls.push(url);
+        }
+        fileUrls.documentos_adicionales_urls = docsUrls;
+      }
+    }
+
     const { data, error } = await supabase
       .from("empleados")
       .update({
         ...updateEmpleadoDto,
+        ...fileUrls,
         actualizado_por: userId,
         updated_at: new Date().toISOString(),
       })

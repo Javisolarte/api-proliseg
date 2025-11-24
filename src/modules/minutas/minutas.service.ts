@@ -1,10 +1,10 @@
 import { Injectable, NotFoundException } from "@nestjs/common"
-import type { SupabaseService } from "../supabase/supabase.service"
+import { SupabaseService } from "../supabase/supabase.service"
 import type { CreateMinutaDto, UpdateMinutaDto } from "./dto/minuta.dto"
 
 @Injectable()
 export class MinutasService {
-  constructor(private readonly supabaseService: SupabaseService) {}
+  constructor(private readonly supabaseService: SupabaseService) { }
 
   async findAll() {
     const supabase = this.supabaseService.getClient()
@@ -17,7 +17,9 @@ export class MinutasService {
           fecha,
           empleados(id, nombre_completo)
         ),
-        puestos_trabajo(id, nombre, direccion)
+        puestos_trabajo(id, nombre, direccion),
+        usuario_entrante:usuarios_externos!minutas_turno_entrante_fkey(id, nombre_completo),
+        usuario_saliente:usuarios_externos!minutas_turno_saliente_fkey(id, nombre_completo)
       `)
       .order("created_at", { ascending: false })
 
@@ -38,7 +40,11 @@ export class MinutasService {
           hora_fin,
           empleados(id, nombre_completo, cedula)
         ),
-        puestos_trabajo(id, nombre, direccion, ciudad)
+        puestos_trabajo(id, nombre, direccion, ciudad),
+        usuarios_externos!minutas_creada_por_fkey(id, nombre_completo),
+        validado_por_usuario:usuarios_externos!minutas_validado_por_fkey(id, nombre_completo),
+        usuario_entrante:usuarios_externos!minutas_turno_entrante_fkey(id, nombre_completo),
+        usuario_saliente:usuarios_externos!minutas_turno_saliente_fkey(id, nombre_completo)
       `)
       .eq("id", id)
       .single()

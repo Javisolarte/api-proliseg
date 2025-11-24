@@ -12,5 +12,6 @@ import { AuthModule } from '../auth/auth.module';
   ],
   controllers: [IaController],
   providers: [IaService, GeminiService], // ✅ Reemplazamos OpenAIService por GeminiService
+  exports: [IaService],
 })
-export class IaModule {}
+export class IaModule { }

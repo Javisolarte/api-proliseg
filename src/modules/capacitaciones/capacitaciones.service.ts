@@ -1,10 +1,10 @@
 import { Injectable, NotFoundException } from "@nestjs/common"
-import type { SupabaseService } from "../supabase/supabase.service"
+import { SupabaseService } from "../supabase/supabase.service"
 import type { CreateCapacitacionDto, UpdateCapacitacionDto } from "./dto/capacitacion.dto"
 
 @Injectable()
 export class CapacitacionesService {
-  constructor(private readonly supabaseService: SupabaseService) {}
+  constructor(private readonly supabaseService: SupabaseService) { }
 
   async findAll() {
     const supabase = this.supabaseService.getClient()
@@ -66,5 +66,39 @@ export class CapacitacionesService {
     }
 
     return { message: "Capacitación eliminada exitosamente", data }
+  }
+
+  // 🔹 Asignar capacitación a empleado
+  async asignarCapacitacion(asignacion: any) {
+    const supabase = this.supabaseService.getClient()
+    const { data, error } = await supabase
+      .from("empleado_capacitaciones")
+      .insert(asignacion)
+      .select()
+      .single()
+
+    if (error) throw error
+    return data
+  }
+
+  // 🔹 Obtener asignaciones
+  async getAsignaciones(empleadoId?: number) {
+    const supabase = this.supabaseService.getClient()
+    let query = supabase
+      .from("empleado_capacitaciones")
+      .select(`
+        *,
+        capacitaciones(nombre, descripcion),
+        empleados(nombre_completo, cedula)
+      `)
+
+    if (empleadoId) {
+      query = query.eq("empleado_id", empleadoId)
+    }
+
+    const { data, error } = await query.order("fecha_realizacion", { ascending: false })
+
+    if (error) throw error
+    return data
   }
 }

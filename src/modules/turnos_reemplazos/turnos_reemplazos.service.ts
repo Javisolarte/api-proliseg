@@ -37,9 +37,76 @@ interface Turno {
   hora_fin: string;
 }
 
+import { IaService } from "../ia/ia.service";
+
 @Injectable()
 export class TurnosReemplazosService {
-  constructor(private readonly supabaseService: SupabaseService) {}
+  constructor(
+    private readonly supabaseService: SupabaseService,
+    private readonly iaService: IaService
+  ) { }
+
+  // 🧠 Sugerir reemplazo con IA (Gemini)
+  async sugerirReemplazoIA(turnoId: number) {
+    const supabase = this.supabaseService.getClient();
+
+    // 1️⃣ Obtener turno original con detalles
+    const { data: turno, error } = await supabase
+      .from("turnos")
+      .select(`
+        *,
+        puestos_trabajo (id, nombre, ciudad, direccion, contratos(clientes(nombre_empresa)))
+      `)
+      .eq("id", turnoId)
+      .single();
+
+    if (error || !turno) throw new NotFoundException("Turno no encontrado");
+
+    const turnoDetalle = {
+      fecha: turno.fecha,
+      hora_inicio: turno.hora_inicio,
+      hora_fin: turno.hora_fin,
+      puesto_nombre: turno.puestos_trabajo?.nombre,
+      ciudad: turno.puestos_trabajo?.ciudad,
+      direccion: turno.puestos_trabajo?.direccion,
+      cliente_nombre: turno.puestos_trabajo?.contratos?.clientes?.nombre_empresa || "Desconocido",
+    };
+
+    // 2️⃣ Obtener empleados activos de la misma ciudad (o todos si no hay ciudad)
+    let query = supabase.from("empleados").select("id, nombre_completo, cedula, ciudad, puesto_id").eq("activo", true);
+
+    if (turnoDetalle.ciudad) {
+      query = query.eq("ciudad", turnoDetalle.ciudad);
+    }
+
+    const { data: empleados } = await query;
+    const candidatosPotenciales = empleados || [];
+
+    // 3️⃣ Filtrar empleados que NO tengan turno ese día a esa hora
+    const candidatosDisponibles: any[] = [];
+
+    for (const emp of candidatosPotenciales) {
+      // Verificar si tiene turno en conflicto
+      const { data: turnosConflicto } = await supabase
+        .from("turnos")
+        .select("id")
+        .eq("empleado_id", emp.id)
+        .eq("fecha", turno.fecha)
+        .or(`and(hora_inicio.lte.${turno.hora_fin},hora_fin.gte.${turno.hora_inicio})`);
+
+      if (!turnosConflicto || turnosConflicto.length === 0) {
+        candidatosDisponibles.push({
+          id: emp.id,
+          nombre: emp.nombre_completo,
+          ciudad: emp.ciudad,
+          es_su_puesto_habitual: emp.puesto_id === turno.puesto_id
+        });
+      }
+    }
+
+    // 4️⃣ Enviar a IA
+    return this.iaService.sugerirReemplazo(turnoDetalle, candidatosDisponibles);
+  }
 
   // 🌍 Obtener coordenadas desde una dirección textual (Nominatim / OpenStreetMap)
   private async obtenerCoordenadasDesdeDireccion(direccion: string): Promise<Coordenadas | null> {
@@ -69,8 +136,8 @@ export class TurnosReemplazosService {
     const a =
       Math.sin(dLat / 2) ** 2 +
       Math.cos((lat1 * Math.PI) / 180) *
-        Math.cos((lat2 * Math.PI) / 180) *
-        Math.sin(dLon / 2) ** 2;
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
@@ -148,11 +215,11 @@ export class TurnosReemplazosService {
       const distancia =
         coordsPuesto && coordsEmpleado
           ? this.calcularDistancia(
-              coordsEmpleado.lat,
-              coordsEmpleado.lon,
-              coordsPuesto.lat,
-              coordsPuesto.lon
-            )
+            coordsEmpleado.lat,
+            coordsEmpleado.lon,
+            coordsPuesto.lat,
+            coordsPuesto.lon
+          )
           : 9999;
 
       const scoreIA = this.calcularScoreIA(empleado.id, historial, turno.puesto_id);
