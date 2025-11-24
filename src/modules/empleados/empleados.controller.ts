@@ -86,11 +86,11 @@ export class EmpleadosController {
     @Req() request: Request,
     @Body() createEmpleadoDto: CreateEmpleadoDto,
     @UploadedFiles() files: {
-      foto_perfil?: Express.Multer.File[];
-      cedula_pdf?: Express.Multer.File[];
-      hoja_de_vida?: Express.Multer.File[];
-      certificados?: Express.Multer.File[];
-      documentos_adicionales?: Express.Multer.File[];
+      foto_perfil?: any[];
+      cedula_pdf?: any[];
+      hoja_de_vida?: any[];
+      certificados?: any[];
+      documentos_adicionales?: any[];
     },
     @CurrentUser() user: any
   ) {
@@ -131,11 +131,11 @@ export class EmpleadosController {
     @Param("id", ParseIntPipe) id: number,
     @Body() updateEmpleadoDto: UpdateEmpleadoDto,
     @UploadedFiles() files: {
-      foto_perfil?: Express.Multer.File[];
-      cedula_pdf?: Express.Multer.File[];
-      hoja_de_vida?: Express.Multer.File[];
-      certificados?: Express.Multer.File[];
-      documentos_adicionales?: Express.Multer.File[];
+      foto_perfil?: any[];
+      cedula_pdf?: any[];
+      hoja_de_vida?: any[];
+      certificados?: any[];
+      documentos_adicionales?: any[];
     },
     @CurrentUser() user: any
   ) {

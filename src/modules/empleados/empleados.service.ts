@@ -94,7 +94,7 @@ export class EmpleadosService {
   }
 
   // 🔹 Helper para subir archivos a Supabase Storage
-  private async uploadFile(file: Express.Multer.File, bucket: string, path: string): Promise<string> {
+  private async uploadFile(file: any, bucket: string, path: string): Promise<string> {
     const supabase = this.supabaseService.getClient();
     const { data, error } = await supabase.storage
       .from(bucket)
@@ -113,7 +113,7 @@ export class EmpleadosService {
   }
 
   // 🔹 Crear empleado
-  async create(createEmpleadoDto: CreateEmpleadoDto, userId: number, files?: Record<string, Express.Multer.File[]>) {
+  async create(createEmpleadoDto: CreateEmpleadoDto, userId: number, files?: Record<string, any[]>) {
     const supabase = this.supabaseService.getClient();
     this.logger.debug(`🧩 Creando empleado con DTO: ${JSON.stringify(createEmpleadoDto)}`);
 
@@ -179,7 +179,7 @@ export class EmpleadosService {
   }
 
   // 🔹 Actualizar empleado
-  async update(id: number, updateEmpleadoDto: UpdateEmpleadoDto, userId: number, files?: Record<string, Express.Multer.File[]>) {
+  async update(id: number, updateEmpleadoDto: UpdateEmpleadoDto, userId: number, files?: Record<string, any[]>) {
     const supabase = this.supabaseService.getClient();
     this.logger.debug(`🟡 Actualizando empleado ${id} con datos: ${JSON.stringify(updateEmpleadoDto)}`);
 
