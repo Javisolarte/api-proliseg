@@ -74,13 +74,13 @@ export class EmpleadosController {
     description: `Crea un nuevo empleado con datos personales y archivos adjuntos.
     
 **Archivos soportados:**
-- 📸 **foto_perfil**: Foto del empleado (JPG, PNG) - Se guarda como: cedula.ext
-- 📄 **cedula_pdf**: Cédula escaneada (PDF) - Se guarda como: cedula.pdf
-- 📋 **hoja_de_vida**: Hoja de vida (PDF) - Se guarda como: cedula.pdf
+- 📸 **foto_perfil**: Foto del empleado (JPG, PNG) - Se guarda como: cedula.ext (ej: 1234567890.jpg)
+- 📄 **cedula_pdf**: Cédula escaneada (PDF) - Se guarda como: cedula.pdf (ej: 1234567890.pdf)
+- 📋 **hoja_de_vida**: Hoja de vida (PDF) - Se guarda como: cedula_hv.pdf (ej: 1234567890_hv.pdf)
 - 🎓 **certificados**: Múltiples certificados (PDF, hasta 5) - Se guardan como: cedula_cert1.pdf, cedula_cert2.pdf, etc.
 - 📎 **documentos_adicionales**: Otros documentos (PDF, hasta 5) - Se guardan como: cedula_doc1.pdf, cedula_doc2.pdf, etc.
 
-Todos los archivos se guardan en buckets de Supabase Storage y se sobrescriben si ya existen.`
+Todos los archivos se guardan directamente en sus respectivos buckets de Supabase Storage (sin carpetas) y se sobrescriben si ya existen.`
   })
   @ApiConsumes("multipart/form-data")
   @ApiBody({

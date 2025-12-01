@@ -123,24 +123,26 @@ export class EmpleadosService {
     if (files) {
       if (files.foto_perfil?.[0]) {
         const file = files.foto_perfil[0];
-        const path = `${createEmpleadoDto.cedula}/${Date.now()}_${file.originalname}`;
+        const ext = file.originalname.split('.').pop();
+        const path = `${createEmpleadoDto.cedula}.${ext}`;
         fileUrls.foto_perfil_url = await this.uploadFile(file, 'empleados/fotos_perfil', path);
         fileUrls.fecha_ultima_actualizacion_foto = new Date().toISOString();
       }
       if (files.cedula_pdf?.[0]) {
         const file = files.cedula_pdf[0];
-        const path = `${createEmpleadoDto.cedula}/${Date.now()}_${file.originalname}`;
+        const path = `${createEmpleadoDto.cedula}.pdf`;
         fileUrls.cedula_pdfurl = await this.uploadFile(file, 'empleados/cedulas', path);
       }
       if (files.hoja_de_vida?.[0]) {
         const file = files.hoja_de_vida[0];
-        const path = `${createEmpleadoDto.cedula}/${Date.now()}_${file.originalname}`;
+        const path = `${createEmpleadoDto.cedula}_hv.pdf`;
         fileUrls.hoja_de_vida_url = await this.uploadFile(file, 'empleados/hojas_vida', path);
       }
       if (files.certificados) {
         const certificadosUrls: string[] = [];
-        for (const file of files.certificados) {
-          const path = `${createEmpleadoDto.cedula}/${Date.now()}_${file.originalname}`;
+        for (let i = 0; i < files.certificados.length; i++) {
+          const file = files.certificados[i];
+          const path = `${createEmpleadoDto.cedula}_cert${i + 1}.pdf`;
           const url = await this.uploadFile(file, 'empleados/cerificados', path);
           certificadosUrls.push(url);
         }
@@ -148,8 +150,9 @@ export class EmpleadosService {
       }
       if (files.documentos_adicionales) {
         const docsUrls: string[] = [];
-        for (const file of files.documentos_adicionales) {
-          const path = `${createEmpleadoDto.cedula}/${Date.now()}_${file.originalname}`;
+        for (let i = 0; i < files.documentos_adicionales.length; i++) {
+          const file = files.documentos_adicionales[i];
+          const path = `${createEmpleadoDto.cedula}_doc${i + 1}.pdf`;
           const url = await this.uploadFile(file, 'empleados/documentos_adicionales', path);
           docsUrls.push(url);
         }
@@ -199,24 +202,27 @@ export class EmpleadosService {
     if (files) {
       if (files.foto_perfil?.[0]) {
         const file = files.foto_perfil[0];
-        const path = `${existing.cedula}/${Date.now()}_${file.originalname}`;
+        const ext = file.originalname.split('.').pop();
+        const path = `${existing.cedula}.${ext}`;
         fileUrls.foto_perfil_url = await this.uploadFile(file, 'empleados/fotos_perfil', path);
         fileUrls.fecha_ultima_actualizacion_foto = new Date().toISOString();
       }
       if (files.cedula_pdf?.[0]) {
         const file = files.cedula_pdf[0];
-        const path = `${existing.cedula}/${Date.now()}_${file.originalname}`;
+        const path = `${existing.cedula}.pdf`;
         fileUrls.cedula_pdfurl = await this.uploadFile(file, 'empleados/cedulas', path);
       }
       if (files.hoja_de_vida?.[0]) {
         const file = files.hoja_de_vida[0];
-        const path = `${existing.cedula}/${Date.now()}_${file.originalname}`;
+        const path = `${existing.cedula}_hv.pdf`;
         fileUrls.hoja_de_vida_url = await this.uploadFile(file, 'empleados/hojas_vida', path);
       }
       if (files.certificados) {
         const certificadosUrls: string[] = existing.certificados_urls || [];
-        for (const file of files.certificados) {
-          const path = `${existing.cedula}/${Date.now()}_${file.originalname}`;
+        const startIndex = certificadosUrls.length;
+        for (let i = 0; i < files.certificados.length; i++) {
+          const file = files.certificados[i];
+          const path = `${existing.cedula}_cert${startIndex + i + 1}.pdf`;
           const url = await this.uploadFile(file, 'empleados/cerificados', path);
           certificadosUrls.push(url);
         }
@@ -224,8 +230,10 @@ export class EmpleadosService {
       }
       if (files.documentos_adicionales) {
         const docsUrls: string[] = existing.documentos_adicionales_urls || [];
-        for (const file of files.documentos_adicionales) {
-          const path = `${existing.cedula}/${Date.now()}_${file.originalname}`;
+        const startIndex = docsUrls.length;
+        for (let i = 0; i < files.documentos_adicionales.length; i++) {
+          const file = files.documentos_adicionales[i];
+          const path = `${existing.cedula}_doc${startIndex + i + 1}.pdf`;
           const url = await this.uploadFile(file, 'empleados/documentos_adicionales', path);
           docsUrls.push(url);
         }
