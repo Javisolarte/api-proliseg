@@ -1,10 +1,10 @@
 import { Injectable, NotFoundException } from "@nestjs/common"
-import type { SupabaseService } from "../supabase/supabase.service"
+import { SupabaseService } from "../supabase/supabase.service"
 import type { CreateIncidenteDto, UpdateIncidenteDto } from "./dto/incidente.dto"
 
 @Injectable()
 export class IncidentesService {
-  constructor(private readonly supabaseService: SupabaseService) {}
+  constructor(private readonly supabaseService: SupabaseService) { }
 
   async findAll(filters?: { estado?: string; nivelGravedad?: string }) {
     const supabase = this.supabaseService.getClient()

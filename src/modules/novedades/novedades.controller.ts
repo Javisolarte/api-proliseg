@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Put, Delete, Body, Param, UseGuards } from "@nestjs/common"
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from "@nestjs/swagger"
-import type { NovedadesService } from "./novedades.service"
+import { NovedadesService } from "./novedades.service"
 import type { CreateNovedadDto, UpdateNovedadDto } from "./dto/novedad.dto"
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
 import { PermissionsGuard } from "../auth/guards/permissions.guard"
@@ -12,7 +12,7 @@ import { CurrentUser } from "../auth/decorators/current-user.decorator"
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth("JWT-auth")
 export class NovedadesController {
-  constructor(private readonly novedadesService: NovedadesService) {}
+  constructor(private readonly novedadesService: NovedadesService) { }
 
   @Get()
   @RequirePermissions("novedades")

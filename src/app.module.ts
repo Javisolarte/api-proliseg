@@ -41,6 +41,9 @@ import { ReportesModule } from './modules/reportes/reportes.module';
 import { AuditoriaModule } from './modules/auditoria/auditoria.module';
 import { ModulosModule } from './modules/modulos/modulos.module';
 import { SalariosModule } from './modules/salarios/salarios.module';
+import { RolesModule } from './modules/roles/roles.module';
+import { NovedadesModule } from './modules/novedades/novedades.module';
+import { IncidentesModule } from './modules/incidentes/incidentes.module';
 
 @Module({
   imports: [
@@ -91,6 +94,9 @@ import { SalariosModule } from './modules/salarios/salarios.module';
     AuditoriaModule,
     ModulosModule,
     SalariosModule,
+    RolesModule,
+    NovedadesModule,
+    IncidentesModule,
   ],
   providers: [],
 })

@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Put, Body, Param, Query, UseGuards, ParseIntPipe } from "@nestjs/common"
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from "@nestjs/swagger"
-import type { IncidentesService } from "./incidentes.service"
+import { IncidentesService } from "./incidentes.service"
 import type { CreateIncidenteDto, UpdateIncidenteDto } from "./dto/incidente.dto"
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
 import { PermissionsGuard } from "../auth/guards/permissions.guard"
@@ -12,7 +12,7 @@ import { CurrentUser } from "../auth/decorators/current-user.decorator"
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth("JWT-auth")
 export class IncidentesController {
-  constructor(private readonly incidentesService: IncidentesService) {}
+  constructor(private readonly incidentesService: IncidentesService) { }
 
   @Get()
   @RequirePermissions("incidentes")

@@ -5,33 +5,35 @@ import {
   ExecutionContext,
   ForbiddenException,
   InternalServerErrorException,
+  Logger,
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { PERMISSIONS_KEY } from "../decorators/permissions.decorator";
+import { hasPermission } from "../../../config/permissions.config";
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {
-  constructor(private reflector: Reflector) {}
+  private readonly logger = new Logger(PermissionsGuard.name);
+
+  constructor(private reflector: Reflector) { }
 
   canActivate(context: ExecutionContext): boolean {
     const requiredPermissions =
       this.reflector.get<string[]>(PERMISSIONS_KEY, context.getHandler()) || [];
 
-    console.log("🧩 [PermissionsGuard] → Permisos requeridos:", requiredPermissions);
+    this.logger.log(`🧩 Permisos requeridos: ${requiredPermissions.join(", ")}`);
 
     // Si no hay permisos requeridos, dejar pasar
     if (!requiredPermissions || requiredPermissions.length === 0) {
-      console.log("✅ [PermissionsGuard] → No se requieren permisos para esta ruta.");
+      this.logger.log("✅ No se requieren permisos para esta ruta.");
       return true;
     }
 
     const request = context.switchToHttp().getRequest();
     const user = request.user;
 
-    console.log("👤 [PermissionsGuard] → Usuario en request:", user);
-
     if (!user) {
-      console.error("⛔ [PermissionsGuard] → No hay usuario autenticado en la request.");
+      this.logger.error("⛔ No hay usuario autenticado en la request.");
       throw new ForbiddenException("Usuario no autenticado o no presente en la petición.");
     }
 
@@ -39,64 +41,75 @@ export class PermissionsGuard implements CanActivate {
     let userPermissionsRaw = user.permissions ?? user.permisos ?? null;
 
     if (!userPermissionsRaw) {
-      console.log("⚠️ [PermissionsGuard] → Intentando obtener permisos desde metadatos...");
+      this.logger.warn("⚠️ Intentando obtener permisos desde metadatos...");
       const appMeta = user.app_metadata ?? user.user_metadata ?? null;
       if (appMeta) {
         userPermissionsRaw = appMeta.permissions ?? appMeta.permisos ?? null;
       }
     }
 
-    console.log("📦 [PermissionsGuard] → Permisos crudos del usuario:", userPermissionsRaw);
-
     if (!userPermissionsRaw) {
-      console.error("❌ [PermissionsGuard] → No se encontraron permisos en ninguna parte del objeto usuario.");
+      this.logger.error("❌ No se encontraron permisos en ninguna parte del objeto usuario.");
       throw new InternalServerErrorException(
         "Los permisos del usuario no están disponibles o no tienen el formato esperado."
       );
     }
 
-    // Normalizar a Set<string>
-    const userPermissionsNames = new Set<string>();
+    // Normalizar a string[]
+    const userPermissions = this.normalizePermissions(userPermissionsRaw);
 
-    if (Array.isArray(userPermissionsRaw)) {
-      console.log("🔍 [PermissionsGuard] → userPermissionsRaw es un array.");
-      userPermissionsRaw.forEach((p) => {
-        if (typeof p === "string") userPermissionsNames.add(p);
-        else if (p && (p.nombre || p.name || p.key)) {
-          userPermissionsNames.add(String(p.nombre ?? p.name ?? p.key));
-        }
-      });
-    } else if (typeof userPermissionsRaw === "string") {
-      console.log("🔍 [PermissionsGuard] → userPermissionsRaw es una cadena separada por comas.");
-      userPermissionsRaw
-        .split(",")
-        .map((s) => s.trim())
-        .forEach((s) => userPermissionsNames.add(s));
-    } else if (typeof userPermissionsRaw === "object") {
-      console.log("🔍 [PermissionsGuard] → userPermissionsRaw es un objeto.");
-      Object.values(userPermissionsRaw).forEach((v) => {
-        if (typeof v === "string") userPermissionsNames.add(v);
-      });
-    } else {
-      console.error("❌ [PermissionsGuard] → Formato desconocido para permisos del usuario:", typeof userPermissionsRaw);
-      throw new InternalServerErrorException("Formato desconocido para permisos del usuario.");
-    }
-
-    console.log("✅ [PermissionsGuard] → Permisos normalizados del usuario:", [...userPermissionsNames]);
+    this.logger.log(`✅ Permisos del usuario: ${userPermissions.join(", ")}`);
 
     // Verificar que el usuario tenga todos los permisos requeridos
-    const hasAll = requiredPermissions.every((r) => userPermissionsNames.has(r));
-
-    console.log(
-      `🔎 [PermissionsGuard] → Verificando permisos. Requeridos: ${requiredPermissions.join(", ")} | Usuario tiene: ${[...userPermissionsNames].join(", ")}`
+    // Usando la función helper que soporta permisos granulares
+    const hasAll = requiredPermissions.every((requiredPerm) =>
+      hasPermission(userPermissions, requiredPerm)
     );
 
     if (!hasAll) {
-      console.warn("🚫 [PermissionsGuard] → Usuario no tiene todos los permisos requeridos.");
-      throw new ForbiddenException("No tiene los permisos necesarios para acceder a este recurso.");
+      const missingPerms = requiredPermissions.filter(
+        (perm) => !hasPermission(userPermissions, perm)
+      );
+      this.logger.warn(
+        `🚫 Usuario no tiene los permisos requeridos. Faltan: ${missingPerms.join(", ")}`
+      );
+      throw new ForbiddenException(
+        `No tiene los permisos necesarios para acceder a este recurso. Permisos faltantes: ${missingPerms.join(", ")}`
+      );
     }
 
-    console.log("🟢 [PermissionsGuard] → Acceso permitido.");
+    this.logger.log("🟢 Acceso permitido.");
     return true;
+  }
+
+  /**
+   * Normaliza los permisos del usuario a un array de strings
+   */
+  private normalizePermissions(permissionsRaw: any): string[] {
+    const permissions: string[] = [];
+
+    if (Array.isArray(permissionsRaw)) {
+      permissionsRaw.forEach((p) => {
+        if (typeof p === "string") {
+          permissions.push(p);
+        } else if (p && (p.nombre || p.name || p.key)) {
+          permissions.push(String(p.nombre ?? p.name ?? p.key));
+        }
+      });
+    } else if (typeof permissionsRaw === "string") {
+      permissionsRaw
+        .split(",")
+        .map((s) => s.trim())
+        .forEach((s) => permissions.push(s));
+    } else if (typeof permissionsRaw === "object") {
+      Object.values(permissionsRaw).forEach((v) => {
+        if (typeof v === "string") permissions.push(v);
+      });
+    } else {
+      this.logger.error(`❌ Formato desconocido para permisos: ${typeof permissionsRaw}`);
+      throw new InternalServerErrorException("Formato desconocido para permisos del usuario.");
+    }
+
+    return permissions;
   }
 }

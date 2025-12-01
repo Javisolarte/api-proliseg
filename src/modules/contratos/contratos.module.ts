@@ -1,12 +1,14 @@
-import { Module } from "@nestjs/common";
-import { ContratosController } from "./contratos.controller";
-import { ContratosService } from "./contratos.service";
-import { AuthModule } from "../auth/auth.module"; // ✅ Importar AuthModule para usar guards y AuthService
+import { Module } from '@nestjs/common';
+import { ContratosService } from './contratos.service';
+import { ContratosController } from './contratos.controller';
+import { SupabaseModule } from '../supabase/supabase.module';
+import { AuthModule } from '../auth/auth.module';
+import { RlsHelperService } from '../../common/services/rls-helper.service';
 
 @Module({
-  imports: [AuthModule], // 🔥 Permite usar autenticación/autorización en este módulo
+  imports: [SupabaseModule, AuthModule],
   controllers: [ContratosController],
-  providers: [ContratosService],
+  providers: [ContratosService, RlsHelperService],
   exports: [ContratosService],
 })
-export class ContratosModule {}
+export class ContratosModule { }

@@ -1,10 +1,10 @@
 import { Injectable, NotFoundException } from "@nestjs/common"
-import type { SupabaseService } from "../supabase/supabase.service"
+import { SupabaseService } from "../supabase/supabase.service"
 import type { CreateRolDto, UpdateRolDto, AsignarModuloRolDto } from "./dto/rol.dto"
 
 @Injectable()
 export class RolesService {
-  constructor(private readonly supabaseService: SupabaseService) {}
+  constructor(private readonly supabaseService: SupabaseService) { }
 
   async findAll() {
     const supabase = this.supabaseService.getClient()
