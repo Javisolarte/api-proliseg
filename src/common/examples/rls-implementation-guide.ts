@@ -12,7 +12,7 @@
  */
 
 import { Injectable, NotFoundException, Logger } from '@nestjs/common';
-import { SupabaseService } from '../supabase/supabase.service';
+import { SupabaseService } from '../../supabase/supabase.service';
 import { RlsHelperService } from '../../common/services/rls-helper.service';
 import { RlsContext } from '../../config/permissions.config';
 
