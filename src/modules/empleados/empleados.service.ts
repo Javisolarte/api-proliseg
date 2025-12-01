@@ -8,6 +8,33 @@ export class EmpleadosService {
 
   constructor(private readonly supabaseService: SupabaseService) { }
 
+  // 🔹 Helper para parsear campos JSONB que vienen como strings desde exec_sql
+  private parseJsonbFields(empleado: any): any {
+    if (!empleado) return empleado;
+
+    // Parsear certificados_urls si es string
+    if (empleado.certificados_urls && typeof empleado.certificados_urls === 'string') {
+      try {
+        empleado.certificados_urls = JSON.parse(empleado.certificados_urls);
+      } catch (e) {
+        this.logger.warn(`⚠️ Error parseando certificados_urls: ${e.message}`);
+        empleado.certificados_urls = [];
+      }
+    }
+
+    // Parsear documentos_adicionales_urls si es string
+    if (empleado.documentos_adicionales_urls && typeof empleado.documentos_adicionales_urls === 'string') {
+      try {
+        empleado.documentos_adicionales_urls = JSON.parse(empleado.documentos_adicionales_urls);
+      } catch (e) {
+        this.logger.warn(`⚠️ Error parseando documentos_adicionales_urls: ${e.message}`);
+        empleado.documentos_adicionales_urls = [];
+      }
+    }
+
+    return empleado;
+  }
+
   // 🔹 Obtener todos los empleados con joins
   async findAll(filters?: { activo?: boolean; tipoEmpleadoId?: number }) {
     const supabase = this.supabaseService.getClient();
@@ -46,8 +73,11 @@ export class EmpleadosService {
     // 🚫 Ya no parseamos JSON (Supabase devuelve un objeto)
     const empleados = Array.isArray(data) ? data : [];
 
-    this.logger.debug(`✅ Resultado Supabase (findAll): ${empleados.length} registros`);
-    return empleados;
+    // Parsear campos JSONB en cada empleado
+    const empleadosParsed = empleados.map(emp => this.parseJsonbFields(emp));
+
+    this.logger.debug(`✅ Resultado Supabase (findAll): ${empleadosParsed.length} registros`);
+    return empleadosParsed;
   }
 
   // 🔹 Obtener un empleado por ID con joins
@@ -89,8 +119,11 @@ export class EmpleadosService {
       throw new NotFoundException(`Empleado con ID ${id} no encontrado`);
     }
 
-    this.logger.debug(`🟢 Empleado encontrado: ${JSON.stringify(empleados[0], null, 2)}`);
-    return empleados[0];
+    // Parsear campos JSONB
+    const empleadoParsed = this.parseJsonbFields(empleados[0]);
+
+    this.logger.debug(`🟢 Empleado encontrado: ${JSON.stringify(empleadoParsed, null, 2)}`);
+    return empleadoParsed;
   }
 
   // 🔹 Helper para subir archivos a Supabase Storage
