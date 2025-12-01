@@ -95,7 +95,7 @@ export class EmpleadosService {
 
   // 🔹 Helper para subir archivos a Supabase Storage
   private async uploadFile(file: any, bucket: string, path: string): Promise<string> {
-    const supabase = this.supabaseService.getClient();
+    const supabase = this.supabaseService.getSupabaseAdminClient();
     const { data, error } = await supabase.storage
       .from(bucket)
       .upload(path, file.buffer, {
@@ -124,24 +124,24 @@ export class EmpleadosService {
       if (files.foto_perfil?.[0]) {
         const file = files.foto_perfil[0];
         const path = `${createEmpleadoDto.cedula}/${Date.now()}_${file.originalname}`;
-        fileUrls.foto_perfil_url = await this.uploadFile(file, 'fotos_perfil', path);
+        fileUrls.foto_perfil_url = await this.uploadFile(file, 'empleados/fotos_perfil', path);
         fileUrls.fecha_ultima_actualizacion_foto = new Date().toISOString();
       }
       if (files.cedula_pdf?.[0]) {
         const file = files.cedula_pdf[0];
         const path = `${createEmpleadoDto.cedula}/${Date.now()}_${file.originalname}`;
-        fileUrls.cedula_pdfurl = await this.uploadFile(file, 'cedulas', path);
+        fileUrls.cedula_pdfurl = await this.uploadFile(file, 'empleados/cedulas', path);
       }
       if (files.hoja_de_vida?.[0]) {
         const file = files.hoja_de_vida[0];
         const path = `${createEmpleadoDto.cedula}/${Date.now()}_${file.originalname}`;
-        fileUrls.hoja_de_vida_url = await this.uploadFile(file, 'hojas_vida', path);
+        fileUrls.hoja_de_vida_url = await this.uploadFile(file, 'empleados/hojas_vida', path);
       }
       if (files.certificados) {
         const certificadosUrls: string[] = [];
         for (const file of files.certificados) {
           const path = `${createEmpleadoDto.cedula}/${Date.now()}_${file.originalname}`;
-          const url = await this.uploadFile(file, 'certificados', path);
+          const url = await this.uploadFile(file, 'empleados/cerificados', path);
           certificadosUrls.push(url);
         }
         fileUrls.certificados_urls = certificadosUrls;
@@ -150,7 +150,7 @@ export class EmpleadosService {
         const docsUrls: string[] = [];
         for (const file of files.documentos_adicionales) {
           const path = `${createEmpleadoDto.cedula}/${Date.now()}_${file.originalname}`;
-          const url = await this.uploadFile(file, 'documentos_adicionales', path);
+          const url = await this.uploadFile(file, 'empleados/documentos_adicionales', path);
           docsUrls.push(url);
         }
         fileUrls.documentos_adicionales_urls = docsUrls;
@@ -200,24 +200,24 @@ export class EmpleadosService {
       if (files.foto_perfil?.[0]) {
         const file = files.foto_perfil[0];
         const path = `${existing.cedula}/${Date.now()}_${file.originalname}`;
-        fileUrls.foto_perfil_url = await this.uploadFile(file, 'fotos_perfil', path);
+        fileUrls.foto_perfil_url = await this.uploadFile(file, 'empleados/fotos_perfil', path);
         fileUrls.fecha_ultima_actualizacion_foto = new Date().toISOString();
       }
       if (files.cedula_pdf?.[0]) {
         const file = files.cedula_pdf[0];
         const path = `${existing.cedula}/${Date.now()}_${file.originalname}`;
-        fileUrls.cedula_pdfurl = await this.uploadFile(file, 'cedulas', path);
+        fileUrls.cedula_pdfurl = await this.uploadFile(file, 'empleados/cedulas', path);
       }
       if (files.hoja_de_vida?.[0]) {
         const file = files.hoja_de_vida[0];
         const path = `${existing.cedula}/${Date.now()}_${file.originalname}`;
-        fileUrls.hoja_de_vida_url = await this.uploadFile(file, 'hojas_vida', path);
+        fileUrls.hoja_de_vida_url = await this.uploadFile(file, 'empleados/hojas_vida', path);
       }
       if (files.certificados) {
         const certificadosUrls: string[] = existing.certificados_urls || [];
         for (const file of files.certificados) {
           const path = `${existing.cedula}/${Date.now()}_${file.originalname}`;
-          const url = await this.uploadFile(file, 'certificados', path);
+          const url = await this.uploadFile(file, 'empleados/cerificados', path);
           certificadosUrls.push(url);
         }
         fileUrls.certificados_urls = certificadosUrls;
@@ -226,7 +226,7 @@ export class EmpleadosService {
         const docsUrls: string[] = existing.documentos_adicionales_urls || [];
         for (const file of files.documentos_adicionales) {
           const path = `${existing.cedula}/${Date.now()}_${file.originalname}`;
-          const url = await this.uploadFile(file, 'documentos_adicionales', path);
+          const url = await this.uploadFile(file, 'empleados/documentos_adicionales', path);
           docsUrls.push(url);
         }
         fileUrls.documentos_adicionales_urls = docsUrls;

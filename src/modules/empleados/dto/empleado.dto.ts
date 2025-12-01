@@ -205,6 +205,21 @@ export class CreateEmpleadoDto {
   @IsOptional()
   @IsDateString()
   ultima_evaluacion?: string;
+
+  @ApiProperty({ example: 1, required: false, description: "ID del salario asignado" })
+  @IsOptional()
+  @IsInt()
+  @Transform(({ value }) => parseInt(value))
+  salario_id?: number;
+
+  @ApiProperty({
+    example: "Bachiller",
+    required: false,
+    description: "Nivel de formación académica (ej: Bachiller, Técnico, Tecnólogo, Profesional, Especialización, Maestría, Doctorado)"
+  })
+  @IsOptional()
+  @IsString()
+  formacion_academica?: string;
 }
 
 export class UpdateEmpleadoDto extends PartialType(CreateEmpleadoDto) { }

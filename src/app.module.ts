@@ -40,6 +40,7 @@ import { RutasModule } from './modules/rutas/rutas.module';
 import { ReportesModule } from './modules/reportes/reportes.module';
 import { AuditoriaModule } from './modules/auditoria/auditoria.module';
 import { ModulosModule } from './modules/modulos/modulos.module';
+import { SalariosModule } from './modules/salarios/salarios.module';
 
 @Module({
   imports: [
@@ -89,6 +90,7 @@ import { ModulosModule } from './modules/modulos/modulos.module';
     ReportesModule,
     AuditoriaModule,
     ModulosModule,
+    SalariosModule,
   ],
   providers: [],
 })
