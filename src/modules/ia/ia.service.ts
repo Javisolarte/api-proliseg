@@ -68,7 +68,7 @@ export class IaService {
         const respuesta = await this.geminiService.humanResponse(userQuery);
         return {
           ok: true,
-          message: `Hola ${userName}, ${respuesta}`
+          message: respuesta
         };
       }
 
@@ -98,14 +98,14 @@ export class IaService {
 
       if (error) throw new Error(error.message);
 
-      // 7️⃣ Humanizar la respuesta con saludo personalizado
+      // 7️⃣ Humanizar la respuesta
       const respuestaNatural = await this.geminiService.humanizeResponse(userQuery, data);
 
       return {
         ok: true,
         sql: cleanSql,
         data,
-        message: `Hola ${userName}, ${respuestaNatural}`,
+        message: respuestaNatural,
       };
     } catch (err: any) {
       this.logger.error('❌ Error en processQuery:', err);

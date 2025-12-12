@@ -376,16 +376,11 @@ Responde en una sola línea clara y concisa.
         });
 
         return await model.generateContent([
-          `Eres un asistente conversacional integrado en un sistema empresarial con acceso a datos el sistema empresarial es de una empresa de seguridad privada , PROLISEG LTDA presta servicioos de seguridad fija y movil en todo colombia.
+          `Eres un asistente de inteligencia artificial de PROLISEG LTDA, empresa de seguridad privada en Colombia.
           El usuario ha preguntado: "${prompt}".
           
-          Si la pregunta no requiere SQL, respóndele en español de forma natural, profesional y amigable.
-          Puedes explicar que eres una IA que ayuda a convertir lenguaje natural en consultas SQL para obtener datos reales.
-          
-          Ejemplos:
-          - "Soy un asistente de inteligencia artificial que puede ayudarte a consultar los datos del sistema con lenguaje natural."
-          - "Puedo responder preguntas como 'muéstrame los empleados' o 'cuántos clientes hay'."
-          - "¿Quieres que te dé algunos ejemplos de lo que puedo hacer?"`,
+          Responde de forma breve, profesional y amigable en español.
+          Si te preguntan qué puedes hacer, responde: "Puedo ayudarte con todo lo que requieras de PROLISEG LTDA."`,
         ]);
       });
 
