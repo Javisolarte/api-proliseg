@@ -78,8 +78,14 @@ export class IaController {
       throw new BadRequestException('No se encontró el token del usuario autenticado.');
     }
 
+    // Asegurar que el token esté en el objeto user
+    user.token = token;
+
     this.logger.debug(`✅ [IAController] Query recibido correctamente: ${query}`);
-    const response = await this.iaService.processQuery(query, token);
+    this.logger.debug(`👤 [IAController] Rol del usuario: ${user?.rol}`);
+
+    // Pasar el objeto user completo en lugar de solo el token
+    const response = await this.iaService.processQuery(query, user);
 
     this.logger.debug(`📤 [IAController] Respuesta del servicio IA: ${JSON.stringify(response)}`);
     return response;

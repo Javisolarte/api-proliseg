@@ -1,4 +1,4 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { GeminiService } from './gemini.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import { schema } from './schema';
@@ -7,34 +7,77 @@ import { schema } from './schema';
 export class IaService {
   private readonly logger = new Logger(IaService.name);
 
+  // Roles permitidos para usar el servicio de IA
+  private readonly ALLOWED_ROLES = ['superusuario', 'gerencia', 'administrativo'];
+  private readonly BLOCKED_ROLES = ['vigilante', 'cliente', 'coordinador', 'supervisor'];
+
   constructor(
     private readonly geminiService: GeminiService,
     private readonly supabase: SupabaseService,
   ) { }
 
+  /**
+   * 🔐 Verifica si el usuario tiene acceso al servicio de IA
+   */
+  private checkUserAccess(user: any): { hasAccess: boolean; userName: string } {
+    const userName = user?.nombre_completo || user?.nombre || user?.email || 'Usuario';
+    const userRole = user?.rol?.toLowerCase();
+
+    if (!userRole) {
+      this.logger.warn(`⚠️ Usuario sin rol definido: ${user?.email}`);
+      return { hasAccess: false, userName };
+    }
+
+    const hasAccess = this.ALLOWED_ROLES.includes(userRole);
+
+    if (!hasAccess) {
+      this.logger.warn(`🚫 Acceso denegado para rol: ${userRole} (${user?.email})`);
+    } else {
+      this.logger.log(`✅ Acceso permitido para rol: ${userRole} (${user?.email})`);
+    }
+
+    return { hasAccess, userName };
+  }
+
   // ============================================================
   // 🧠 1. PROCESAR CONSULTA NATURAL → SQL (ya existente)
   // ============================================================
-  async processQuery(userQuery: string, token: string) {
+  async processQuery(userQuery: string, user: any) {
     try {
       this.logger.debug(`🧠 Recibida consulta natural: "${userQuery}"`);
 
-      // 1️⃣ Detectar si requiere SQL
+      // 1️⃣ Verificar acceso del usuario
+      const { hasAccess, userName } = this.checkUserAccess(user);
+
+      if (!hasAccess) {
+        const blockedMessage = `Hola ${userName}, por el momento no tienes acceso a este servicio.`;
+        this.logger.warn(`🚫 Acceso denegado: ${user?.email} (${user?.rol})`);
+        return {
+          ok: false,
+          message: blockedMessage,
+          accessDenied: true
+        };
+      }
+
+      // 2️⃣ Detectar si requiere SQL
       const intent = await this.geminiService.detectIntent(userQuery);
       this.logger.debug(`🎯 Intención detectada: ${intent}`);
 
       // 🗣️ Si es una pregunta general, responder sin SQL
       if (intent === 'general') {
         const respuesta = await this.geminiService.humanResponse(userQuery);
-        return { ok: true, message: respuesta };
+        return {
+          ok: true,
+          message: `Hola ${userName}, ${respuesta}`
+        };
       }
 
-      // 2️⃣ Generar SQL usando el esquema de Supabase
+      // 3️⃣ Generar SQL usando el esquema de Supabase
       const sqlResponse = await this.geminiService.naturalToSQL(
         `${userQuery}\n\nEsquema de la base de datos:\n${schema}`,
       );
 
-      // 3️⃣ Limpiar SQL
+      // 4️⃣ Limpiar SQL
       const cleanSql = sqlResponse
         .replace(/```sql/gi, '')
         .replace(/```/g, '')
@@ -43,25 +86,26 @@ export class IaService {
 
       this.logger.debug(`🧩 SQL limpio final:\n${cleanSql}`);
 
-      // 4️⃣ Validar que sea SELECT
+      // 5️⃣ Validar que sea SELECT
       if (!cleanSql.toUpperCase().startsWith('SELECT')) {
         throw new BadRequestException('Solo se permiten consultas SELECT.');
       }
 
-      // 5️⃣ Ejecutar SQL con Supabase
+      // 6️⃣ Ejecutar SQL con Supabase
+      const token = user?.token || user?.access_token;
       const userClient = this.supabase.getClientWithAuth(token);
       const { data, error } = await userClient.rpc('execute_sql', { query: cleanSql });
 
       if (error) throw new Error(error.message);
 
-      // 6️⃣ Humanizar la respuesta
+      // 7️⃣ Humanizar la respuesta con saludo personalizado
       const respuestaNatural = await this.geminiService.humanizeResponse(userQuery, data);
 
       return {
         ok: true,
         sql: cleanSql,
         data,
-        message: respuestaNatural,
+        message: `Hola ${userName}, ${respuestaNatural}`,
       };
     } catch (err: any) {
       this.logger.error('❌ Error en processQuery:', err);
