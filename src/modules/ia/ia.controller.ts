@@ -28,7 +28,7 @@ import { IaDto } from './dto/ia.dto';
 export class IaController {
   private readonly logger = new Logger(IaController.name);
 
-  constructor(private readonly iaService: IaService) {}
+  constructor(private readonly iaService: IaService) { }
 
   // ============================================================
   // 🔹 1. CONSULTAS IA SQL
@@ -232,5 +232,51 @@ export class IaController {
   async detectarAnomalias(@CurrentUser() user: any) {
     this.logger.log(`📹 Analizando video/sensores para ${user.email}`);
     return this.iaService.detectarComportamientoAnomalo(user);
+  }
+
+  // ============================================================
+  // 🔹 7. ESTADO DE API KEYS DE GEMINI
+  // ============================================================
+  @Get('api-keys-status')
+  @ApiOperation({
+    summary: 'Consulta el estado de las API keys de Gemini',
+    description:
+      'Muestra cuántas peticiones quedan disponibles en cada API key y cuál está actualmente en uso.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Estado de las API keys obtenido correctamente',
+    schema: {
+      example: {
+        ok: true,
+        totalKeys: 5,
+        currentKeyIndex: 2,
+        keys: [
+          {
+            keyNumber: 1,
+            requestCount: 25,
+            remaining: 0,
+            isBlocked: true,
+            lastError: 'Límite de peticiones alcanzado',
+            lastResetTime: '2025-12-12T10:00:00.000Z',
+          },
+          {
+            keyNumber: 2,
+            requestCount: 15,
+            remaining: 10,
+            isBlocked: false,
+            lastError: null,
+            lastResetTime: '2025-12-12T10:00:00.000Z',
+          },
+        ],
+      },
+    },
+  })
+  async getApiKeysStatus() {
+    this.logger.log('📊 Consultando estado de API keys de Gemini');
+    return {
+      ok: true,
+      ...this.iaService.getGeminiApiKeysStatus(),
+    };
   }
 }

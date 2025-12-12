@@ -260,4 +260,11 @@ export class IaService {
       throw new BadRequestException(err.message);
     }
   }
+
+  // ============================================================
+  // 📊 8. ESTADO DE API KEYS DE GEMINI
+  // ============================================================
+  getGeminiApiKeysStatus() {
+    return this.geminiService.getApiKeysStatus();
+  }
 }

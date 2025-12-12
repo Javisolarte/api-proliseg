@@ -10,7 +10,7 @@ import { validationSchema } from './config/validation.config';
 import { DatabaseModule } from './database/database.module';
 
 // Common
-
+import { HelpersModule } from './common/helpers/helpers.module';
 
 // Modules
 import { AuthModule } from './modules/auth/auth.module';
@@ -99,7 +99,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
     NovedadesModule,
     IncidentesModule,
     DashboardModule,
-    DashboardModule,
+    HelpersModule,
   ],
   providers: [],
 })
