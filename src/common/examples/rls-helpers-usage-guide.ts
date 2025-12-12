@@ -30,12 +30,12 @@ export class TurnosServiceExample {
 
         if (rlsContext) {
             // Vigilante: solo sus turnos
-            if (rlsContext.rol === 'vigilante') {
+            if (rlsContext.rol === 'vigilante' && rlsContext.empleadoId) {
                 query = query.eq('empleado_id', rlsContext.empleadoId);
             }
 
             // Cliente: turnos de sus puestos
-            else if (rlsContext.rol === 'cliente') {
+            else if (rlsContext.rol === 'cliente' && rlsContext.clienteId) {
                 const puestoIds = await this.puestosHelper.getPuestoIdsCliente(rlsContext.clienteId);
                 if (puestoIds.length > 0) {
                     query = query.in('puesto_id', puestoIds);
@@ -70,7 +70,7 @@ export class PuestosServiceExample {
 
         if (rlsContext) {
             // Vigilante: solo puestos asignados
-            if (rlsContext.rol === 'vigilante') {
+            if (rlsContext.rol === 'vigilante' && rlsContext.empleadoId) {
                 const puestoIds = await this.puestosHelper.getPuestosAsignadosEmpleado(rlsContext.empleadoId);
                 if (puestoIds.length > 0) {
                     query = query.in('id', puestoIds);
@@ -80,7 +80,7 @@ export class PuestosServiceExample {
             }
 
             // Cliente: solo sus puestos
-            else if (rlsContext.rol === 'cliente') {
+            else if (rlsContext.rol === 'cliente' && rlsContext.clienteId) {
                 const contratoIds = await this.puestosHelper.getContratoIdsCliente(rlsContext.clienteId);
                 if (contratoIds.length > 0) {
                     query = query.in('contrato_id', contratoIds);
@@ -113,7 +113,7 @@ export class MinutasServiceExample {
 
         if (rlsContext) {
             // Vigilante: minutas de sus puestos O creadas por él
-            if (rlsContext.rol === 'vigilante') {
+            if (rlsContext.rol === 'vigilante' && rlsContext.empleadoId) {
                 const puestoIds = await this.puestosHelper.getPuestosAsignadosEmpleado(rlsContext.empleadoId);
 
                 if (puestoIds.length > 0) {
@@ -126,7 +126,7 @@ export class MinutasServiceExample {
             }
 
             // Cliente: minutas de sus puestos
-            else if (rlsContext.rol === 'cliente') {
+            else if (rlsContext.rol === 'cliente' && rlsContext.clienteId) {
                 const puestoIds = await this.puestosHelper.getPuestoIdsCliente(rlsContext.clienteId);
                 if (puestoIds.length > 0) {
                     query = query.in('puesto_id', puestoIds);
@@ -170,12 +170,12 @@ export class EmpleadosServiceExample {
     async findOne(id: number, rlsContext?: RlsContext) {
         if (rlsContext) {
             // Vigilante solo puede ver su propio perfil
-            if (rlsContext.rol === 'vigilante') {
+            if (rlsContext.rol === 'vigilante' && rlsContext.empleadoId) {
                 this.rlsValidation.validarAccesoEmpleadoVigilante(rlsContext.empleadoId, id);
             }
 
             // Cliente solo puede ver empleados asignados a sus puestos
-            else if (rlsContext.rol === 'cliente') {
+            else if (rlsContext.rol === 'cliente' && rlsContext.clienteId) {
                 await this.rlsValidation.validarAccesoEmpleadoCliente(rlsContext.clienteId, id);
             }
         }
@@ -193,12 +193,12 @@ export class EmpleadosServiceExample {
 
         if (rlsContext) {
             // Vigilante: solo su propio perfil
-            if (rlsContext.rol === 'vigilante') {
+            if (rlsContext.rol === 'vigilante' && rlsContext.empleadoId) {
                 query = query.eq('id', rlsContext.empleadoId);
             }
 
             // Cliente: solo empleados asignados a sus puestos
-            else if (rlsContext.rol === 'cliente') {
+            else if (rlsContext.rol === 'cliente' && rlsContext.clienteId) {
                 const empleadoIds = await this.empleadosHelper.getEmpleadosAsignadosCliente(rlsContext.clienteId);
                 if (empleadoIds.length > 0) {
                     query = query.in('id', empleadoIds);
