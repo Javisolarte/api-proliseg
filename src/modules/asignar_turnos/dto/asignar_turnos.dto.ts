@@ -1,26 +1,25 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNumber, IsOptional, IsDateString } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
+import { IsNumber, IsDateString } from 'class-validator';
 
 export class AsignarTurnosDto {
-  @ApiPropertyOptional({ example: 1, description: 'ID del puesto al que se asignan los turnos (opcional si se usa subpuesto)' })
-  @IsOptional()
+  @ApiProperty({
+    example: 5,
+    description: 'ID del subpuesto para el cual se generarán los turnos. El subpuesto debe tener configuración de turnos asignada.'
+  })
   @IsNumber()
-  puesto_id?: number;
+  subpuesto_id: number;
 
-  @ApiProperty({ example: 2, description: 'ID de la configuración de turnos a usar' })
-  @IsNumber()
-  configuracion_id: number;
-
-  @ApiProperty({ example: '2025-10-22', description: 'Fecha de inicio para asignar turnos' })
+  @ApiProperty({
+    example: '2025-01-01',
+    description: 'Fecha de inicio para la generación de turnos (formato YYYY-MM-DD)'
+  })
   @IsDateString()
   fecha_inicio: string;
 
-  @ApiProperty({ example: 1, description: 'ID del usuario que realiza la asignación' })
+  @ApiProperty({
+    example: 1,
+    description: 'ID del usuario que realiza la asignación de turnos'
+  })
   @IsNumber()
   asignado_por: number;
-
-  @ApiPropertyOptional({ example: 5, description: 'ID opcional de subpuesto, si aplica' })
-  @IsOptional()
-  @IsNumber()
-  subpuesto_id?: number;
 }

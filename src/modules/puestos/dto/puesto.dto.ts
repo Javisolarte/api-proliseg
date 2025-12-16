@@ -65,18 +65,9 @@ export class CreatePuestoDto {
   longitud?: number;
 
   @ApiProperty({
-    example: 5,
-    required: false,
-    description: "Número de guardas asignados al puesto",
-  })
-  @IsOptional()
-  @IsInt()
-  numero_guardas?: number;
-
-  @ApiProperty({
     example: 1,
     required: false,
-    description: "ID del puesto padre (si es un subpuesto)",
+    description: "ID del puesto padre (para jerarquías de puestos)",
   })
   @IsOptional()
   @IsInt()
@@ -90,15 +81,6 @@ export class CreatePuestoDto {
   @IsOptional()
   @IsBoolean()
   activo?: boolean;
-
-  @ApiProperty({
-    example: 2,
-    required: false,
-    description: "Configuración de turnos asociada al puesto",
-  })
-  @IsOptional()
-  @IsInt()
-  configuracion_id?: number;
 }
 
-export class UpdatePuestoDto extends PartialType(CreatePuestoDto) {}
+export class UpdatePuestoDto extends PartialType(CreatePuestoDto) { }

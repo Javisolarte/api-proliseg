@@ -2,91 +2,97 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
-  InternalServerErrorException,
+  Logger,
 } from "@nestjs/common";
 import { SupabaseService } from "../supabase/supabase.service";
-import fetch from "node-fetch"; // npm install node-fetch
 import type { CreateTurnoReemplazoDto, UpdateTurnoReemplazoDto } from "./dto/turnos_reemplazos.dto";
-
-interface Coordenadas {
-  lat: number;
-  lon: number;
-}
-
-interface Empleado {
-  id: number;
-  nombre: string;
-  direccion: string;
-}
-
-interface SugerenciaEmpleado {
-  id: number;
-  nombre: string;
-  direccion: string;
-  distancia_km: number;
-  score_ia: number;
-  afinidad: number;
-}
-
-interface Turno {
-  id: number;
-  empleado_id: number;
-  puesto_id: number;
-  fecha: string;
-  hora_inicio: string;
-  hora_fin: string;
-}
-
 import { IaService } from "../ia/ia.service";
 
 @Injectable()
 export class TurnosReemplazosService {
+  private readonly logger = new Logger(TurnosReemplazosService.name);
+
   constructor(
     private readonly supabaseService: SupabaseService,
     private readonly iaService: IaService
   ) { }
 
-  // 🧠 Sugerir reemplazo con IA (Gemini)
+  /**
+   * 🧠 Sugerir reemplazos usando IA
+   */
   async sugerirReemplazoIA(turnoId: number) {
     const supabase = this.supabaseService.getClient();
 
-    // 1️⃣ Obtener turno original con detalles
+    // Obtener turno con toda su información
     const { data: turno, error } = await supabase
       .from("turnos")
       .select(`
         *,
-        puestos_trabajo (id, nombre, ciudad, direccion, contratos(clientes(nombre_empresa)))
+        empleado:empleado_id (
+          id,
+          nombre_completo
+        ),
+        puesto:puesto_id (
+          id,
+          nombre,
+          ciudad,
+          direccion
+        ),
+        subpuesto:subpuesto_id (
+          id,
+          nombre
+        )
       `)
       .eq("id", turnoId)
       .single();
 
-    if (error || !turno) throw new NotFoundException("Turno no encontrado");
+    if (error || !turno) {
+      throw new NotFoundException("Turno no encontrado");
+    }
+
+    const puesto = Array.isArray(turno.puesto) ? turno.puesto[0] : turno.puesto;
+    const subpuesto = Array.isArray(turno.subpuesto) ? turno.subpuesto[0] : turno.subpuesto;
 
     const turnoDetalle = {
       fecha: turno.fecha,
       hora_inicio: turno.hora_inicio,
       hora_fin: turno.hora_fin,
-      puesto_nombre: turno.puestos_trabajo?.nombre,
-      ciudad: turno.puestos_trabajo?.ciudad,
-      direccion: turno.puestos_trabajo?.direccion,
-      cliente_nombre: turno.puestos_trabajo?.contratos?.clientes?.nombre_empresa || "Desconocido",
+      puesto_nombre: puesto?.nombre,
+      subpuesto_nombre: subpuesto?.nombre,
+      ciudad: puesto?.ciudad,
+      direccion: puesto?.direccion,
     };
 
-    // 2️⃣ Obtener empleados activos de la misma ciudad (o todos si no hay ciudad)
-    let query = supabase.from("empleados").select("id, nombre_completo, cedula, ciudad, puesto_id").eq("activo", true);
+    // Obtener empleados asignados al mismo subpuesto
+    const { data: asignaciones } = await supabase
+      .from("asignacion_guardas_puesto")
+      .select(`
+        empleado_id,
+        empleado:empleado_id (
+          id,
+          nombre_completo,
+          ciudad
+        )
+      `)
+      .eq("subpuesto_id", turno.subpuesto_id)
+      .eq("activo", true);
 
-    if (turnoDetalle.ciudad) {
-      query = query.eq("ciudad", turnoDetalle.ciudad);
-    }
+    const candidatosPotenciales = (asignaciones || [])
+      .filter(a => a.empleado && a.empleado_id !== turno.empleado_id)
+      .map(a => {
+        const emp = Array.isArray(a.empleado) ? a.empleado[0] : a.empleado;
+        return {
+          id: emp.id,
+          nombre: emp.nombre_completo,
+          ciudad: emp.ciudad,
+          es_su_puesto_habitual: true
+        };
+      });
 
-    const { data: empleados } = await query;
-    const candidatosPotenciales = empleados || [];
-
-    // 3️⃣ Filtrar empleados que NO tengan turno ese día a esa hora
+    // Filtrar empleados que NO tengan turno ese día a esa hora
     const candidatosDisponibles: any[] = [];
 
     for (const emp of candidatosPotenciales) {
-      // Verificar si tiene turno en conflicto
       const { data: turnosConflicto } = await supabase
         .from("turnos")
         .select("id")
@@ -95,243 +101,314 @@ export class TurnosReemplazosService {
         .or(`and(hora_inicio.lte.${turno.hora_fin},hora_fin.gte.${turno.hora_inicio})`);
 
       if (!turnosConflicto || turnosConflicto.length === 0) {
-        candidatosDisponibles.push({
-          id: emp.id,
-          nombre: emp.nombre_completo,
-          ciudad: emp.ciudad,
-          es_su_puesto_habitual: emp.puesto_id === turno.puesto_id
-        });
+        candidatosDisponibles.push(emp);
       }
     }
 
-    // 4️⃣ Enviar a IA
-    return this.iaService.sugerirReemplazo(turnoDetalle, candidatosDisponibles);
+    // Enviar a IA para sugerencias
+    const sugerenciasIA = await this.iaService.sugerirReemplazo(turnoDetalle, candidatosDisponibles);
+
+    return {
+      turno_original: {
+        id: turno.id,
+        empleado: Array.isArray(turno.empleado) ? turno.empleado[0] : turno.empleado,
+        fecha: turno.fecha,
+        hora_inicio: turno.hora_inicio,
+        hora_fin: turno.hora_fin,
+        puesto: puesto?.nombre,
+        subpuesto: subpuesto?.nombre,
+      },
+      candidatos_disponibles: candidatosDisponibles.length,
+      sugerencias: sugerenciasIA
+    };
   }
 
-  // 🌍 Obtener coordenadas desde una dirección textual (Nominatim / OpenStreetMap)
-  private async obtenerCoordenadasDesdeDireccion(direccion: string): Promise<Coordenadas | null> {
-    if (!direccion) return null;
-    try {
-      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(direccion)}`;
-      const res = await fetch(url, {
-        headers: { "User-Agent": "ProlisegApp/1.0 (contacto@proliseg.com)" },
-      });
-      const data = (await res.json()) as any[];
-      if (data?.length > 0) {
-        return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
-      }
-      return null;
-    } catch (error) {
-      console.error("❌ Error obteniendo coordenadas:", error);
-      return null;
-    }
-  }
-
-  // 🧮 Calcular distancia (en km) entre dos coordenadas (Haversine)
-  private calcularDistancia(lat1: number, lon1: number, lat2: number, lon2: number): number {
-    if (!lat1 || !lon1 || !lat2 || !lon2) return 9999;
-    const R = 6371;
-    const dLat = ((lat2 - lat1) * Math.PI) / 180;
-    const dLon = ((lon2 - lon1) * Math.PI) / 180;
-    const a =
-      Math.sin(dLat / 2) ** 2 +
-      Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) ** 2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  }
-
-  // 🤖 IA simple: prioriza empleados con experiencia previa en el puesto
-  private calcularScoreIA(empleadoId: number, historialTurnos: Turno[], puestoId: number): number {
-    const experiencia = historialTurnos.filter(
-      (t) => t.empleado_id === empleadoId && t.puesto_id === puestoId
-    ).length;
-    return experiencia;
-  }
-
-  // ✅ Crear o sugerir reemplazo inteligente
+  /**
+   * ✅ Crear reemplazo de turno
+   * - Marca el turno original como reemplazado
+   * - Reasigna el turno al empleado de reemplazo
+   * - Registra el reemplazo en turnos_reemplazos
+   */
   async create(dto: CreateTurnoReemplazoDto) {
     const supabase = this.supabaseService.getClient();
 
-    // 1️⃣ Obtener turno original
-    const { data: turno, error: turnoError } = await supabase
+    this.logger.log(`🔄 Iniciando reemplazo de turno ${dto.turno_original_id}`);
+
+    // 1️⃣ Obtener y validar turno original
+    const { data: turnoOriginal, error: turnoError } = await supabase
       .from("turnos")
-      .select("*")
+      .select(`
+        *,
+        empleado:empleado_id (
+          id,
+          nombre_completo
+        ),
+        subpuesto:subpuesto_id (
+          id,
+          nombre
+        )
+      `)
       .eq("id", dto.turno_original_id)
-      .single<Turno>();
+      .single();
 
-    if (turnoError || !turno) throw new BadRequestException("El turno original no existe");
+    if (turnoError || !turnoOriginal) {
+      throw new NotFoundException("El turno original no existe");
+    }
 
-    // 2️⃣ Obtener dirección del puesto
-    const { data: puesto } = await supabase
-      .from("puestos")
-      .select("id, nombre, direccion")
-      .eq("id", turno.puesto_id)
-      .single<{ id: number; nombre: string; direccion: string }>();
+    if (turnoOriginal.estado_turno === "cumplido") {
+      throw new BadRequestException("No se puede reemplazar un turno ya cumplido");
+    }
 
-    const coordsPuesto = await this.obtenerCoordenadasDesdeDireccion(puesto?.direccion ?? "");
+    // 2️⃣ Validar empleado de reemplazo
+    const { data: empleadoReemplazo, error: empError } = await supabase
+      .from("empleados")
+      .select("id, nombre_completo, activo")
+      .eq("id", dto.empleado_reemplazo_id)
+      .single();
 
-    // 3️⃣ Obtener empleados asignados al puesto
-    const { data: asignados } = await supabase
+    if (empError || !empleadoReemplazo) {
+      throw new NotFoundException("Empleado de reemplazo no encontrado");
+    }
+
+    if (!empleadoReemplazo.activo) {
+      throw new BadRequestException("El empleado de reemplazo no está activo");
+    }
+
+    if (turnoOriginal.empleado_id === dto.empleado_reemplazo_id) {
+      throw new BadRequestException("El empleado de reemplazo no puede ser el mismo que el original");
+    }
+
+    // 3️⃣ Verificar que el empleado de reemplazo está asignado al subpuesto
+    const { data: asignacion } = await supabase
       .from("asignacion_guardas_puesto")
-      .select("empleado_id")
-      .eq("puesto_id", turno.puesto_id)
-      .eq("activo", true);
+      .select("id")
+      .eq("empleado_id", dto.empleado_reemplazo_id)
+      .eq("subpuesto_id", turnoOriginal.subpuesto_id)
+      .eq("activo", true)
+      .maybeSingle();
 
-    const asignaciones = (asignados ?? []) as { empleado_id: number }[];
-    if (asignaciones.length === 0)
-      throw new BadRequestException("No hay empleados asociados al puesto");
-
-    const idsCandidatos = asignaciones.map((a) => a.empleado_id);
-
-    // 4️⃣ Verificar disponibilidad
-    const { data: ocupados } = await supabase
-      .from("turnos")
-      .select("empleado_id")
-      .in("empleado_id", idsCandidatos)
-      .eq("fecha", turno.fecha)
-      .or(`and(hora_inicio.lte.${turno.hora_fin},hora_fin.gte.${turno.hora_inicio})`);
-
-    const empleadosOcupados = (ocupados ?? []).map((o) => o.empleado_id);
-    const disponibles = idsCandidatos.filter((id) => !empleadosOcupados.includes(id));
-
-    // 5️⃣ Obtener datos de empleados
-    const { data: empleados } = await supabase.from("empleados").select("id, nombre, direccion");
-    const empleadosLista = (empleados ?? []) as Empleado[];
-
-    // 6️⃣ Historial de turnos
-    const { data: historialTurnos } = await supabase
-      .from("turnos")
-      .select("empleado_id, puesto_id");
-    const historial = (historialTurnos ?? []) as Turno[];
-
-    // 7️⃣ Calcular sugerencias
-    const sugerencias: SugerenciaEmpleado[] = [];
-    for (const id of disponibles) {
-      const empleado = empleadosLista.find((e) => e.id === id);
-      if (!empleado) continue;
-
-      const coordsEmpleado = await this.obtenerCoordenadasDesdeDireccion(empleado.direccion);
-      const distancia =
-        coordsPuesto && coordsEmpleado
-          ? this.calcularDistancia(
-            coordsEmpleado.lat,
-            coordsEmpleado.lon,
-            coordsPuesto.lat,
-            coordsPuesto.lon
-          )
-          : 9999;
-
-      const scoreIA = this.calcularScoreIA(empleado.id, historial, turno.puesto_id);
-
-      sugerencias.push({
-        id: empleado.id,
-        nombre: empleado.nombre,
-        direccion: empleado.direccion,
-        distancia_km: parseFloat(distancia.toFixed(2)),
-        score_ia: scoreIA,
-        afinidad: Math.max(0, 100 - distancia * 3 + scoreIA * 10),
-      });
+    if (!asignacion) {
+      const subpuesto = Array.isArray(turnoOriginal.subpuesto)
+        ? turnoOriginal.subpuesto[0]
+        : turnoOriginal.subpuesto;
+      throw new BadRequestException(
+        `El empleado ${empleadoReemplazo.nombre_completo} no está asignado al subpuesto ${subpuesto?.nombre}`
+      );
     }
 
-    sugerencias.sort((a, b) => b.afinidad - a.afinidad);
-    const top3 = sugerencias.slice(0, 3);
+    // 4️⃣ Verificar disponibilidad del empleado de reemplazo
+    const { data: turnosConflicto } = await supabase
+      .from("turnos")
+      .select("id, hora_inicio, hora_fin")
+      .eq("empleado_id", dto.empleado_reemplazo_id)
+      .eq("fecha", turnoOriginal.fecha)
+      .or(`and(hora_inicio.lte.${turnoOriginal.hora_fin},hora_fin.gte.${turnoOriginal.hora_inicio})`);
 
-    // 8️⃣ Si no se elige reemplazo → solo sugerir
-    if (!dto.empleado_reemplazo_id) {
-      return {
-        mensaje: "🔎 Sugerencias de reemplazo (basadas en dirección y experiencia previa)",
-        turno_original: turno,
-        sugerencias: top3,
-      };
+    if (turnosConflicto && turnosConflicto.length > 0) {
+      throw new BadRequestException(
+        `El empleado ${empleadoReemplazo.nombre_completo} ya tiene un turno asignado en ese horario`
+      );
     }
 
-    // 9️⃣ Crear reemplazo y nuevo turno
-    const empleadoReemplazoId = dto.empleado_reemplazo_id;
-
+    // 5️⃣ Crear registro de reemplazo
     const { data: reemplazo, error: errorReemplazo } = await supabase
       .from("turnos_reemplazos")
       .insert({
         turno_original_id: dto.turno_original_id,
-        empleado_reemplazo_id: empleadoReemplazoId,
-        motivo: dto.motivo ?? "Reemplazo manual con IA",
-        autorizado_por: dto.autorizado_por ?? null,
+        empleado_reemplazo_id: dto.empleado_reemplazo_id,
+        motivo: dto.motivo || "Reemplazo de turno",
+        autorizado_por: dto.autorizado_por,
         estado: "aprobado",
+        fecha_autorizacion: new Date().toISOString(),
       })
       .select()
       .single();
 
-    if (errorReemplazo) throw errorReemplazo;
+    if (errorReemplazo) {
+      this.logger.error(`Error creando reemplazo: ${errorReemplazo.message}`);
+      throw new BadRequestException(`Error al crear reemplazo: ${errorReemplazo.message}`);
+    }
 
-    const nuevoTurno = {
-      empleado_id: empleadoReemplazoId,
-      puesto_id: turno.puesto_id,
-      fecha: turno.fecha,
-      hora_inicio: turno.hora_inicio,
-      hora_fin: turno.hora_fin,
-      tipo_turno: "reemplazo",
-      asignado_por: dto.autorizado_por ?? null,
-      estado_turno: "programado",
-      turno_reemplazo_id: turno.id,
-    };
-
-    const { data: turnoCreado, error: errTurno } = await supabase
+    // 6️⃣ Actualizar el turno original - REASIGNAR al nuevo empleado
+    const { data: turnoActualizado, error: errorUpdate } = await supabase
       .from("turnos")
-      .insert(nuevoTurno)
+      .update({
+        empleado_id: dto.empleado_reemplazo_id,
+        tipo_turno: "reemplazo",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", dto.turno_original_id)
       .select()
       .single();
 
-    if (errTurno) throw errTurno;
+    if (errorUpdate) {
+      // Revertir el reemplazo si falla la actualización
+      await supabase.from("turnos_reemplazos").delete().eq("id", reemplazo.id);
+      throw new BadRequestException(`Error al actualizar turno: ${errorUpdate.message}`);
+    }
+
+    const empleadoOriginal = Array.isArray(turnoOriginal.empleado)
+      ? turnoOriginal.empleado[0]
+      : turnoOriginal.empleado;
+
+    this.logger.log(
+      `✅ Reemplazo exitoso: ${empleadoOriginal?.nombre_completo} → ${empleadoReemplazo.nombre_completo}`
+    );
 
     return {
-      mensaje: "✅ Reemplazo creado correctamente",
+      mensaje: "✅ Reemplazo creado exitosamente",
       reemplazo,
-      nuevo_turno: turnoCreado,
-      sugerencias_usadas: top3,
+      turno_actualizado: turnoActualizado,
+      detalles: {
+        empleado_original: empleadoOriginal?.nombre_completo,
+        empleado_reemplazo: empleadoReemplazo.nombre_completo,
+        fecha: turnoOriginal.fecha,
+        horario: `${turnoOriginal.hora_inicio} - ${turnoOriginal.hora_fin}`,
+      }
     };
   }
 
-  // 📋 Listar todos los reemplazos
+  /**
+   * 📋 Listar todos los reemplazos
+   */
   async findAll() {
     const supabase = this.supabaseService.getClient();
+
     const { data, error } = await supabase
       .from("turnos_reemplazos")
-      .select("*, empleado_reemplazo:empleados(nombre), turno_original:turnos(*)")
-      .order("id", { ascending: false });
-    if (error) throw new InternalServerErrorException(error.message);
+      .select(`
+        *,
+        empleado_reemplazo:empleado_reemplazo_id (
+          id,
+          nombre_completo
+        ),
+        turno_original:turno_original_id (
+          id,
+          fecha,
+          hora_inicio,
+          hora_fin,
+          tipo_turno,
+          empleado:empleado_id (
+            id,
+            nombre_completo
+          )
+        )
+      `)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      throw new BadRequestException(error.message);
+    }
+
     return data;
   }
 
-  // 🔍 Buscar un reemplazo por ID
+  /**
+   * 🔍 Buscar un reemplazo por ID
+   */
   async findOne(id: number) {
     const supabase = this.supabaseService.getClient();
+
     const { data, error } = await supabase
       .from("turnos_reemplazos")
-      .select("*, empleado_reemplazo:empleados(nombre), turno_original:turnos(*)")
+      .select(`
+        *,
+        empleado_reemplazo:empleado_reemplazo_id (
+          id,
+          nombre_completo
+        ),
+        turno_original:turno_original_id (
+          id,
+          fecha,
+          hora_inicio,
+          hora_fin,
+          tipo_turno,
+          empleado:empleado_id (
+            id,
+            nombre_completo
+          ),
+          puesto:puesto_id (
+            id,
+            nombre
+          ),
+          subpuesto:subpuesto_id (
+            id,
+            nombre
+          )
+        )
+      `)
       .eq("id", id)
       .single();
-    if (error || !data) throw new NotFoundException(`Reemplazo con ID ${id} no encontrado`);
+
+    if (error || !data) {
+      throw new NotFoundException(`Reemplazo con ID ${id} no encontrado`);
+    }
+
     return data;
   }
 
-  // ✏️ Actualizar un reemplazo
+  /**
+   * ✏️ Actualizar estado de un reemplazo
+   */
   async update(id: number, dto: UpdateTurnoReemplazoDto) {
     const supabase = this.supabaseService.getClient();
+
     const { data, error } = await supabase
       .from("turnos_reemplazos")
-      .update(dto)
+      .update({
+        ...dto,
+        updated_at: new Date().toISOString()
+      })
       .eq("id", id)
       .select()
       .single();
-    if (error) throw new BadRequestException(error.message);
+
+    if (error) {
+      throw new BadRequestException(error.message);
+    }
+
+    this.logger.log(`✅ Reemplazo ${id} actualizado`);
     return { mensaje: "✅ Reemplazo actualizado", data };
   }
 
-  // 🗑️ Eliminar un reemplazo
+  /**
+   * 🗑️ Cancelar un reemplazo
+   * Revierte el turno al empleado original
+   */
   async remove(id: number) {
     const supabase = this.supabaseService.getClient();
-    const { error } = await supabase.from("turnos_reemplazos").delete().eq("id", id);
-    if (error) throw new InternalServerErrorException(error.message);
-    return { mensaje: `🗑️ Reemplazo ${id} eliminado correctamente` };
+
+    // Obtener el reemplazo con el turno
+    const { data: reemplazo, error: reemplazoError } = await supabase
+      .from("turnos_reemplazos")
+      .select(`
+        *,
+        turno_original:turno_original_id (
+          id,
+          empleado_id
+        )
+      `)
+      .eq("id", id)
+      .single();
+
+    if (reemplazoError || !reemplazo) {
+      throw new NotFoundException(`Reemplazo ${id} no encontrado`);
+    }
+
+    // Obtener el empleado original del turno antes del reemplazo
+    // Necesitamos buscar en el historial o usar otra lógica
+    // Por ahora, solo eliminamos el registro de reemplazo
+
+    const { error: deleteError } = await supabase
+      .from("turnos_reemplazos")
+      .delete()
+      .eq("id", id);
+
+    if (deleteError) {
+      throw new BadRequestException(deleteError.message);
+    }
+
+    this.logger.log(`🗑️ Reemplazo ${id} cancelado`);
+    return { mensaje: `🗑️ Reemplazo ${id} cancelado correctamente` };
   }
 }

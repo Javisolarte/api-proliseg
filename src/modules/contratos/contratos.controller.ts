@@ -80,4 +80,76 @@ export class ContratosController {
     const rlsContext = this.rlsHelper.createRlsContext(user);
     return this.contratosService.getPuestos(id, rlsContext);
   }
+
+  @Get(':id/guardas-requeridos')
+  @RequirePermissions('contratos.read')
+  @ApiOperation({
+    summary: 'Obtener cálculo de guardas requeridos del contrato',
+    description: 'Retorna guardas activos, guardas necesarios calculados según ciclos de turnos, empleados asignados y cupos disponibles'
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Cálculo de guardas requeridos',
+    schema: {
+      example: {
+        contrato_id: 1,
+        total_guardas_activos: 5,
+        total_guardas_necesarios: 15,
+        total_empleados_asignados: 12,
+        cupos_disponibles: 3
+      }
+    }
+  })
+  async getGuardasRequeridos(@Param('id') id: number, @CurrentUser() user: any) {
+    const rlsContext = this.rlsHelper.createRlsContext(user);
+    return this.contratosService.getGuardasRequeridos(id, rlsContext);
+  }
+
+  @Get(':id/resumen-guardas')
+  @RequirePermissions('contratos.read')
+  @ApiOperation({
+    summary: 'Obtener resumen detallado de guardas del contrato',
+    description: 'Retorna un resumen completo mostrando guardas del contrato, guardas asignados en subpuestos, empleados asignados y cupos disponibles por puesto y subpuesto'
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Resumen de guardas',
+    schema: {
+      example: {
+        contrato_id: 1,
+        cliente: "Empresa ABC",
+        guardas_activos_contrato: 10,
+        guardas_asignados_subpuestos: 8,
+        guardas_disponibles_contrato: 2,
+        empleados_asignados_total: 7,
+        puestos: [
+          {
+            id: 1,
+            nombre: "Sede Principal",
+            total_guardas: 5,
+            total_asignados: 4,
+            subpuestos: [
+              {
+                id: 1,
+                nombre: "Entrada Principal",
+                guardas_activos: 3,
+                empleados_asignados: 3,
+                cupos_disponibles: 0
+              },
+              {
+                id: 2,
+                nombre: "Parqueadero",
+                guardas_activos: 2,
+                empleados_asignados: 1,
+                cupos_disponibles: 1
+              }
+            ]
+          }
+        ]
+      }
+    }
+  })
+  async getResumenGuardas(@Param('id') id: number) {
+    return this.contratosService.getResumenGuardas(id);
+  }
 }

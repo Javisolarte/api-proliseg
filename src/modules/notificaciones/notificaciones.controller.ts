@@ -26,7 +26,7 @@ import { RequirePermissions } from "../auth/decorators/permissions.decorator";
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth("JWT-auth")
 export class NotificacionesController {
-  constructor(private readonly notificacionesService: NotificacionesService) {}
+  constructor(private readonly notificacionesService: NotificacionesService) { }
 
   @Get()
   @RequirePermissions("notificaciones")
@@ -71,5 +71,25 @@ export class NotificacionesController {
   @ApiResponse({ status: 200, description: "Notificación eliminada exitosamente" })
   async remove(@Param("id") id: string) {
     return this.notificacionesService.remove(Number(id));
+  }
+
+  @Post("verificar-asignaciones")
+  @RequirePermissions("notificaciones")
+  @ApiOperation({
+    summary: "Verificar asignaciones incompletas manualmente",
+    description: "Verifica todos los subpuestos activos y crea notificaciones para aquellos que tengan empleados faltantes por asignar"
+  })
+  @ApiResponse({
+    status: 201,
+    description: "Verificación completada",
+    schema: {
+      example: {
+        verificados: 15,
+        notificaciones_creadas: 3
+      }
+    }
+  })
+  async verificarAsignaciones() {
+    return this.notificacionesService.verificarAsignacionesIncompletas();
   }
 }

@@ -22,7 +22,7 @@ import { ApiBearerAuth, ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagg
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth("JWT-auth")
 export class PuestosController {
-  constructor(private readonly puestosService: PuestosService) {}
+  constructor(private readonly puestosService: PuestosService) { }
 
   @Get()
   @RequirePermissions("puestos")
@@ -61,5 +61,38 @@ export class PuestosController {
   @ApiOperation({ summary: "Eliminar (soft delete) un puesto" })
   softDelete(@Param("id", ParseIntPipe) id: number, @Request() req) {
     return this.puestosService.softDelete(id, req.user.id);
+  }
+
+  @Get(":id/subpuestos")
+  @RequirePermissions("puestos")
+  @ApiOperation({
+    summary: "Obtener subpuestos de un puesto",
+    description: "Lista todos los subpuestos (unidades operativas) asociados a un puesto de trabajo. Los subpuestos contienen la lógica operativa real: guardas activos, configuración de turnos, etc."
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Lista de subpuestos con su configuración de turnos",
+    schema: {
+      example: [
+        {
+          id: 1,
+          puesto_id: 5,
+          nombre: "Subpuesto General",
+          descripcion: "Subpuesto principal",
+          guardas_activos: 1,
+          configuracion_id: 2,
+          activo: true,
+          configuracion: {
+            id: 2,
+            nombre: "2D-2N-2Z",
+            dias_ciclo: 6,
+            activo: true
+          }
+        }
+      ]
+    }
+  })
+  getSubpuestos(@Param("id", ParseIntPipe) id: number) {
+    return this.puestosService.getSubpuestos(id);
   }
 }

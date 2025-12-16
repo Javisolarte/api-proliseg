@@ -11,7 +11,7 @@ import { RequirePermissions } from "../auth/decorators/permissions.decorator";
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth("JWT-auth")
 export class AsignacionesController {
-  constructor(private readonly asignacionesService: AsignacionesService) {}
+  constructor(private readonly asignacionesService: AsignacionesService) { }
 
   @Get()
   @RequirePermissions("asignaciones")
@@ -49,5 +49,54 @@ export class AsignacionesController {
   @ApiOperation({ summary: "Eliminar (soft delete) una asignación" })
   async remove(@Param("id") id: number) {
     return this.asignacionesService.remove(id);
+  }
+
+  @Post(":id/desasignar")
+  @RequirePermissions("asignaciones")
+  @ApiOperation({
+    summary: "Desasignar empleado de un subpuesto",
+    description: "Desasigna un empleado de un subpuesto especificando el motivo. Los turnos futuros quedan pendientes de asignación y serán reasignados automáticamente cuando se asigne un nuevo empleado."
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['motivo'],
+      properties: {
+        motivo: {
+          type: 'string',
+          enum: ['renuncia', 'despido', 'cambio_lugar', 'incapacidad', 'otro'],
+          description: 'Motivo de la desasignación'
+        },
+        motivo_detalle: {
+          type: 'string',
+          description: 'Detalles adicionales sobre el motivo (opcional)'
+        }
+      }
+    }
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Empleado desasignado exitosamente',
+    schema: {
+      example: {
+        message: "Empleado desasignado exitosamente",
+        asignacion: { id: 1, activo: false },
+        turnos_pendientes: 25,
+        detalles: {
+          empleado: "Juan Pérez",
+          subpuesto: "Entrada Principal",
+          motivo: "renuncia",
+          fecha_desasignacion: "2025-01-15",
+          turnos_afectados: 25
+        }
+      }
+    }
+  })
+  async desasignar(
+    @Param("id") id: number,
+    @Body("motivo") motivo: string,
+    @Body("motivo_detalle") motivo_detalle?: string
+  ) {
+    return this.asignacionesService.desasignar(id, motivo, motivo_detalle);
   }
 }

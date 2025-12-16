@@ -6,7 +6,7 @@ import type { CreatePuestoDto, UpdatePuestoDto } from "./dto/puesto.dto";
 export class PuestosService {
   private readonly logger = new Logger(PuestosService.name);
 
-  constructor(private readonly supabaseService: SupabaseService) {}
+  constructor(private readonly supabaseService: SupabaseService) { }
 
   // 🔹 Obtener todos los puestos
   async findAll() {
@@ -80,8 +80,32 @@ export class PuestosService {
       throw new NotFoundException(`Puesto de trabajo con ID ${id} no encontrado`);
     }
 
-    this.logger.log(`✅ Puesto encontrado: ${data.nombre || "(sin nombre)"}`);
-    return data;
+    // Obtener subpuestos activos del puesto
+    const { data: subpuestos } = await supabase
+      .from("subpuestos_trabajo")
+      .select(`
+        *,
+        configuracion:configuracion_id (
+          id,
+          nombre,
+          dias_ciclo
+        )
+      `)
+      .eq("puesto_id", id)
+      .eq("activo", true);
+
+    // Calcular resumen operativo desde subpuestos
+    const totalGuardasActivos = subpuestos?.reduce(
+      (sum, s) => sum + (s.guardas_activos || 0), 0
+    ) || 0;
+
+    this.logger.log(`✅ Puesto encontrado: ${data.nombre || "(sin nombre)"} con ${subpuestos?.length || 0} subpuestos`);
+
+    return {
+      ...data,
+      subpuestos: subpuestos || [],
+      total_guardas_activos: totalGuardasActivos
+    };
   }
 
   // 🔹 Crear puesto
@@ -205,5 +229,48 @@ export class PuestosService {
 
     this.logger.log(`✅ Puesto ID ${id} marcado como inactivo correctamente`);
     return { message: "Puesto marcado como inactivo exitosamente", data };
+  }
+
+  // 🔹 Obtener subpuestos de un puesto
+  async getSubpuestos(puestoId: number) {
+    this.logger.log(`🔍 Obteniendo subpuestos del puesto ID ${puestoId}`);
+
+    const supabase = this.supabaseService.getClient();
+
+    // Verificar que el puesto existe
+    const { data: puesto, error: puestoError } = await supabase
+      .from("puestos_trabajo")
+      .select("id, nombre, activo")
+      .eq("id", puestoId)
+      .single();
+
+    if (puestoError || !puesto) {
+      this.logger.warn(`⚠️ Puesto con ID ${puestoId} no encontrado`);
+      throw new NotFoundException(`Puesto con ID ${puestoId} no encontrado`);
+    }
+
+    // Obtener subpuestos
+    const { data, error } = await supabase
+      .from("subpuestos_trabajo")
+      .select(`
+        *,
+        configuracion:configuracion_id (
+          id,
+          nombre,
+          dias_ciclo,
+          activo
+        )
+      `)
+      .eq("puesto_id", puestoId)
+      .eq("activo", true)
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      this.logger.error(`❌ Error al obtener subpuestos: ${error.message}`);
+      throw error;
+    }
+
+    this.logger.log(`✅ ${data?.length || 0} subpuestos encontrados para el puesto ID ${puestoId}`);
+    return data;
   }
 }

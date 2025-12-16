@@ -18,41 +18,35 @@ export class CreateSubpuestoDto {
   @IsString()
   nombre: string;
 
-  @ApiPropertyOptional({
-    example: "Av. Las Palmas #45-67",
-    description: "Dirección física o descripción del subpuesto (opcional)",
+  @ApiProperty({
+    example: "Vigilancia en la entrada principal del edificio",
+    description: "Descripción detallada del subpuesto y sus responsabilidades",
+    required: false,
   })
   @IsOptional()
   @IsString()
-  direccion?: string;
-
-  @ApiPropertyOptional({
-    example: "Cali",
-    description: "Ciudad donde se ubica el subpuesto (opcional)",
-  })
-  @IsOptional()
-  @IsString()
-  ciudad?: string;
+  descripcion?: string;
 
   @ApiProperty({
-    example: 3,
+    example: 1,
     description:
-      "Número de guardas asignados a este subpuesto. El total no debe superar el límite del contrato.",
-    minimum: 0,
+      "Cantidad de personas que deben estar activas simultáneamente en este subpuesto. NO representa empleados totales, solo demanda operativa.",
+    minimum: 1,
   })
   @IsInt()
-  @Min(0)
-  numero_guardas: number;
+  @Min(1)
+  guardas_activos: number;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     example: 5,
     description:
-      "ID de la configuración de turnos asociada (referencia a turnos_configuracion.id). Opcional.",
+      "ID de la configuración de turnos asociada (referencia a turnos_configuracion.id). OBLIGATORIO para calcular guardas necesarios.",
   })
-  @IsOptional()
+  @IsNotEmpty()
   @IsInt()
-  configuracion_id?: number;
+  configuracion_id: number;
 }
+
 
 export class UpdateSubpuestoDto {
   @ApiPropertyOptional({
@@ -64,29 +58,22 @@ export class UpdateSubpuestoDto {
   nombre?: string;
 
   @ApiPropertyOptional({
-    example: "Carrera 80 #20-50",
-    description: "Dirección o descripción del subpuesto (opcional)",
+    example: "Control de acceso vehicular",
+    description: "Descripción del subpuesto (opcional)",
   })
   @IsOptional()
   @IsString()
-  direccion?: string;
-
-  @ApiPropertyOptional({
-    example: "Bogotá",
-    description: "Ciudad donde se ubica el subpuesto (opcional)",
-  })
-  @IsOptional()
-  @IsString()
-  ciudad?: string;
+  descripcion?: string;
 
   @ApiPropertyOptional({
     example: 2,
     description:
-      "Número de guardas asignados al subpuesto (opcional, debe respetar el límite del contrato padre)",
+      "Cantidad de personas activas simultáneamente en el subpuesto (opcional)",
   })
   @IsOptional()
   @IsInt()
-  numero_guardas?: number;
+  @Min(1)
+  guardas_activos?: number;
 
   @ApiPropertyOptional({
     example: 4,
@@ -103,4 +90,52 @@ export class UpdateSubpuestoDto {
   @IsOptional()
   @IsBoolean()
   activo?: boolean;
+}
+
+/**
+ * DTO de respuesta para guardas necesarios por subpuesto
+ * Basado en la vista vw_guardas_necesarios_subpuesto
+ */
+export class GuardasNecesariosSubpuestoDto {
+  @ApiProperty({
+    example: 1,
+    description: "ID del subpuesto",
+  })
+  subpuesto_id: number;
+
+  @ApiProperty({
+    example: "Subpuesto A - Entrada Principal",
+    description: "Nombre del subpuesto",
+  })
+  nombre: string;
+
+  @ApiProperty({
+    example: 1,
+    description: "Cantidad de personas activas simultáneamente requeridas",
+  })
+  guardas_activos: number;
+
+  @ApiProperty({
+    example: 3,
+    description: "Cantidad de estados distintos en el ciclo de turnos (DIA, NOCHE, DESCANSO)",
+  })
+  estados_ciclo: number;
+
+  @ApiProperty({
+    example: 3,
+    description: "Guardas necesarios calculados (guardas_activos × estados_ciclo)",
+  })
+  guardas_necesarios: number;
+
+  @ApiProperty({
+    example: 2,
+    description: "Empleados actualmente asignados a este subpuesto",
+  })
+  empleados_asignados?: number;
+
+  @ApiProperty({
+    example: 1,
+    description: "Cupos disponibles (guardas_necesarios - empleados_asignados)",
+  })
+  cupos_disponibles?: number;
 }

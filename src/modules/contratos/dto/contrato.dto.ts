@@ -35,14 +35,14 @@ export class CreateContratoDto {
   valor?: number;
 
   @ApiProperty({
-    example: 10,
+    example: 2,
     required: false,
-    description: 'Número de guardas asignados al contrato',
+    description: 'Cantidad de personas que deben estar activas simultáneamente para cumplir el servicio. NO representa empleados totales, solo demanda operativa.',
   })
   @IsOptional()
   @IsInt()
   @Min(1)
-  numero_guardas?: number;
+  guardas_activos?: number;
 
   @ApiProperty({
     example: '2025-01-01',
@@ -72,4 +72,40 @@ export class CreateContratoDto {
   estado?: boolean;
 }
 
-export class UpdateContratoDto extends PartialType(CreateContratoDto) {}
+export class UpdateContratoDto extends PartialType(CreateContratoDto) { }
+
+/**
+ * DTO de respuesta para guardas requeridos por contrato
+ * Basado en la vista vw_guardas_requeridos_contrato
+ */
+export class GuardasRequeridosContratoDto {
+  @ApiProperty({
+    example: 1,
+    description: 'ID del contrato',
+  })
+  contrato_id: number;
+
+  @ApiProperty({
+    example: 5,
+    description: 'Total de guardas activos simultáneos requeridos por el contrato (suma de todos los subpuestos)',
+  })
+  total_guardas_activos: number;
+
+  @ApiProperty({
+    example: 15,
+    description: 'Total de guardas necesarios calculados según los ciclos de turnos (guardas_activos × estados_ciclo)',
+  })
+  total_guardas_necesarios: number;
+
+  @ApiProperty({
+    example: 12,
+    description: 'Total de empleados actualmente asignados al contrato',
+  })
+  total_empleados_asignados?: number;
+
+  @ApiProperty({
+    example: 3,
+    description: 'Cupos disponibles (guardas_necesarios - empleados_asignados)',
+  })
+  cupos_disponibles?: number;
+}

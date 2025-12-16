@@ -514,11 +514,11 @@ export class DashboardService {
 
         const { data } = await supabase
             .from('contratos')
-            .select('numero_guardas')
+            .select('guardas_activos')
             .eq('cliente_id', rlsContext.clienteId)
             .eq('estado', true);
 
-        const total = data?.reduce((sum, c) => sum + (c.numero_guardas || 0), 0) || 0;
+        const total = data?.reduce((sum, c) => sum + (c.guardas_activos || 0), 0) || 0;
 
         return {
             value: total,
@@ -743,7 +743,7 @@ export class DashboardService {
 
         const { data } = await supabase
             .from('contratos')
-            .select('id, fecha_inicio, fecha_fin, valor, numero_guardas, estado, tipo_servicio_id, tipo_servicio(nombre)')
+            .select('id, fecha_inicio, fecha_fin, valor, guardas_activos, estado, tipo_servicio_id, tipo_servicio(nombre)')
             .eq('cliente_id', rlsContext.clienteId)
             .order('created_at', { ascending: false });
 
@@ -753,7 +753,7 @@ export class DashboardService {
             fechaInicio: c.fecha_inicio,
             fechaFin: c.fecha_fin,
             valor: parseFloat(c.valor),
-            numeroGuardas: c.numero_guardas,
+            numeroGuardas: c.guardas_activos,
             activo: c.estado,
         })) || [];
     }
@@ -770,12 +770,21 @@ export class DashboardService {
 
         const { data } = await supabase
             .from('puestos_trabajo')
-            .select('id, nombre, ciudad, numero_guardas, activo')
+            .select('id, nombre, ciudad, activo')
             .in('contrato_id', contratos.map(c => c.id));
 
-        // Obtener guardas asignados por puesto
+        // Obtener guardas desde subpuestos y asignaciones por puesto
         const puestosConAsignaciones = await Promise.all(
             (data || []).map(async (p) => {
+                // Calcular guardas_activos desde subpuestos
+                const { data: subpuestos } = await supabase
+                    .from('subpuestos_trabajo')
+                    .select('guardas_activos')
+                    .eq('puesto_id', p.id)
+                    .eq('activo', true);
+
+                const numeroGuardas = subpuestos?.reduce((sum, s) => sum + (s.guardas_activos || 0), 0) || 0;
+
                 const { count } = await supabase
                     .from('asignacion_guardas_puesto')
                     .select('*', { count: 'exact', head: true })
@@ -786,7 +795,7 @@ export class DashboardService {
                     id: p.id,
                     nombre: p.nombre,
                     ciudad: p.ciudad,
-                    numeroGuardas: p.numero_guardas,
+                    numeroGuardas,
                     guardasAsignados: count || 0,
                     activo: p.activo,
                 };
@@ -1146,12 +1155,21 @@ export class DashboardService {
 
         const { data } = await supabase
             .from('puestos_trabajo')
-            .select('id, nombre, ciudad, numero_guardas, activo')
+            .select('id, nombre, ciudad, activo')
             .eq('activo', true)
             .limit(20);
 
         const puestosConAsignaciones = await Promise.all(
             (data || []).map(async (p) => {
+                // Calcular guardas desde subpuestos
+                const { data: subpuestos } = await supabase
+                    .from('subpuestos_trabajo')
+                    .select('guardas_activos')
+                    .eq('puesto_id', p.id)
+                    .eq('activo', true);
+
+                const numeroGuardas = subpuestos?.reduce((sum, s) => sum + (s.guardas_activos || 0), 0) || 0;
+
                 const { count } = await supabase
                     .from('asignacion_guardas_puesto')
                     .select('*', { count: 'exact', head: true })
@@ -1162,7 +1180,7 @@ export class DashboardService {
                     id: p.id,
                     nombre: p.nombre,
                     ciudad: p.ciudad,
-                    numeroGuardas: p.numero_guardas,
+                    numeroGuardas,
                     guardasAsignados: count || 0,
                     activo: p.activo,
                 };
@@ -1356,12 +1374,14 @@ export class DashboardService {
             .select('*', { count: 'exact', head: true })
             .eq('activo', true);
 
-        const { data } = await supabase
-            .from('puestos_trabajo')
-            .select('numero_guardas')
-            .eq('activo', true);
+        // Calcular total de guardas desde subpuestos
+        const { data: subpuestos } = await supabase
+            .from('subpuestos_trabajo')
+            .select('guardas_activos, puesto_id, puestos_trabajo!inner(activo)')
+            .eq('activo', true)
+            .eq('puestos_trabajo.activo', true);
 
-        const totalGuardas = data?.reduce((sum, p) => sum + (p.numero_guardas || 0), 0) || 0;
+        const totalGuardas = subpuestos?.reduce((sum, s) => sum + (s.guardas_activos || 0), 0) || 0;
 
         return {
             value: count || 0,

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD } from '@nestjs/core';
 
 // Configuration
@@ -55,6 +56,9 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
       validationSchema,
     }),
     SupabaseModule,
+
+    // Cron jobs
+    ScheduleModule.forRoot(),
 
     // Rate limiting
     ThrottlerModule.forRoot([

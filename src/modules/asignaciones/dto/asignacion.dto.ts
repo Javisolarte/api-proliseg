@@ -6,15 +6,21 @@ export class CreateAsignacionDto {
   @IsInt()
   empleado_id: number;
 
-  @ApiProperty({ example: 2, description: "ID del puesto de trabajo (opcional si se usa subpuesto)", required: false })
+  @ApiProperty({
+    example: 2,
+    description: "ID del puesto de trabajo (se obtiene automáticamente del subpuesto)",
+    required: false
+  })
   @IsOptional()
   @IsInt()
   puesto_id?: number;
 
-  @ApiProperty({ example: 3, description: "ID del subpuesto de trabajo (opcional)", required: false })
-  @IsOptional()
+  @ApiProperty({
+    example: 3,
+    description: "ID del subpuesto de trabajo (REQUERIDO - la configuración de turnos se obtiene del subpuesto)"
+  })
   @IsInt()
-  subpuesto_id?: number;
+  subpuesto_id: number;
 
   @ApiProperty({ example: 5, description: "Usuario que realiza la asignación" })
   @IsInt()
@@ -25,11 +31,11 @@ export class CreateAsignacionDto {
   @IsString()
   observaciones?: string;
 
-  @ApiProperty({ example: 1, description: "ID de la configuración de turnos que se aplicará" })
-  @IsInt()
-  configuracion_id: number;
-
-  @ApiProperty({ example: 10, description: "ID del contrato asociado a la asignación (opcional)", required: false })
+  @ApiProperty({
+    example: 10,
+    description: "ID del contrato asociado a la asignación (se obtiene automáticamente del puesto)",
+    required: false
+  })
   @IsOptional()
   @IsInt()
   contrato_id?: number;
