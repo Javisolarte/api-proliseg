@@ -154,10 +154,13 @@ export class TurnosHelperService {
             throw new Error(`Error obteniendo empleados: ${error?.message}`);
         }
 
-        const empleados = asignaciones.map((a) => ({
-            id: a.empleado_id,
-            ...(Array.isArray(a.empleado) ? a.empleado[0] : a.empleado),
-        }));
+        const empleados = asignaciones.map((a) => {
+            const empleadoData = Array.isArray(a.empleado) ? a.empleado[0] : a.empleado;
+            return {
+                ...empleadoData,
+                id: a.empleado_id, // Usar empleado_id como id principal
+            };
+        });
 
         // Calcular número de grupos (estados del ciclo)
         const estadosCiclo = await this.calcularEstadosCiclo(configuracionId);
