@@ -99,4 +99,68 @@ export class AsignacionesController {
   ) {
     return this.asignacionesService.desasignar(id, motivo, motivo_detalle);
   }
+
+  @Post(":id/reemplazar")
+  @RequirePermissions("asignaciones")
+  @ApiOperation({
+    summary: "Reemplazar empleado sin romper turnos",
+    description: "Reemplaza un empleado por otro manteniendo todos los turnos futuros activos. Útil cuando un empleado renuncia y necesitas asignar un reemplazo inmediato."
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['nuevo_empleado_id', 'motivo'],
+      properties: {
+        nuevo_empleado_id: {
+          type: 'number',
+          description: 'ID del empleado que reemplazará al actual'
+        },
+        motivo: {
+          type: 'string',
+          enum: ['renuncia', 'despido', 'cambio_lugar', 'incapacidad', 'otro'],
+          description: 'Motivo del reemplazo'
+        },
+        motivo_detalle: {
+          type: 'string',
+          description: 'Detalles adicionales sobre el motivo (opcional)'
+        }
+      }
+    }
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Empleado reemplazado exitosamente',
+    schema: {
+      example: {
+        message: "Empleado reemplazado exitosamente sin romper turnos",
+        asignacion_anterior: {
+          id: 1,
+          empleado: "Juan Pérez",
+          activo: false
+        },
+        asignacion_nueva: {
+          id: 2,
+          empleado: "María García",
+          activo: true
+        },
+        turnos_reasignados: 25,
+        detalles: {
+          subpuesto: "Entrada Principal",
+          empleado_anterior: "Juan Pérez",
+          empleado_nuevo: "María García",
+          motivo: "renuncia",
+          fecha_reemplazo: "2025-01-15",
+          turnos_afectados: 25
+        }
+      }
+    }
+  })
+  async reemplazar(
+    @Param("id") id: number,
+    @Body("nuevo_empleado_id") nuevoEmpleadoId: number,
+    @Body("motivo") motivo: string,
+    @Body("motivo_detalle") motivoDetalle?: string
+  ) {
+    return this.asignacionesService.reemplazarEmpleado(id, nuevoEmpleadoId, motivo, motivoDetalle);
+  }
 }

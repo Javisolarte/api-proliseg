@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { AsignarTurnosDto } from './dto/asignar_turnos.dto';
+import { TurnosHelperService } from '../../common/helpers/turnos-helper.service';
 
 interface Empleado {
   id: number;
@@ -22,7 +23,10 @@ interface DetalleTurno {
 export class AsignarTurnosService {
   private readonly logger = new Logger(AsignarTurnosService.name);
 
-  constructor(private readonly supabaseService: SupabaseService) { }
+  constructor(
+    private readonly supabaseService: SupabaseService,
+    private readonly turnosHelper: TurnosHelperService,
+  ) { }
 
   /**
    * 🧩 Generar turnos basados en SUBPUESTO
@@ -95,21 +99,24 @@ export class AsignarTurnosService {
       throw new BadRequestException(`No hay empleados activos asignados al subpuesto ${subpuesto.nombre}`);
     }
 
-    // ✅ 3. Validar que hay suficientes empleados
-    const { data: guardasInfo } = await supabase
-      .from('vw_guardas_necesarios_subpuesto')
-      .select('*')
-      .eq('subpuesto_id', subpuesto_id)
-      .maybeSingle();
+    // ✅ 3. VALIDAR que la asignación esté COMPLETA antes de generar turnos
+    const validacion = await this.turnosHelper.validarAsignacionCompleta(
+      subpuesto_id,
+      subpuesto.guardas_activos,
+      subpuesto.configuracion_id
+    );
 
-    if (guardasInfo) {
-      const guardasNecesarios = guardasInfo.guardas_necesarios || 0;
-      if (empleados.length < guardasNecesarios) {
-        this.logger.warn(
-          `⚠️ Subpuesto ${subpuesto.nombre} necesita ${guardasNecesarios} empleados pero solo tiene ${empleados.length} asignados`
-        );
-      }
+    if (!validacion.valido) {
+      this.logger.warn(
+        `⚠️ ${validacion.mensaje}. No se pueden generar turnos hasta que todos los empleados estén asignados.`
+      );
+      throw new BadRequestException(
+        `No se pueden generar turnos: ${validacion.mensaje}. ` +
+        `Asigna ${validacion.faltantes} empleado(s) más antes de generar turnos.`
+      );
     }
+
+    this.logger.log(`✅ Validación completa: ${empleados.length} empleados asignados correctamente`);
 
     // ✅ 4. Obtener detalles de la configuración de turnos
     const { data: detalles, error: detallesError } = await supabase

@@ -7,6 +7,7 @@ import {
 import { SupabaseService } from "../supabase/supabase.service";
 import type { CreateAsignacionDto, UpdateAsignacionDto } from "./dto/asignacion.dto";
 import { AsignarTurnosService } from "../asignar_turnos/asignar_turnos.service";
+import { TurnosHelperService } from "../../common/helpers/turnos-helper.service";
 
 @Injectable()
 export class AsignacionesService {
@@ -15,6 +16,7 @@ export class AsignacionesService {
   constructor(
     private readonly supabaseService: SupabaseService,
     private readonly asignarTurnosService: AsignarTurnosService,
+    private readonly turnosHelper: TurnosHelperService,
   ) { }
 
   // 🔹 Listar todas las asignaciones
@@ -169,30 +171,29 @@ export class AsignacionesService {
       );
     }
 
-    // ✅ 4. Verificar cupos disponibles en el subpuesto
+    // ✅ 4. Calcular empleados necesarios usando TurnosHelperService
+    const empleadosNecesarios = await this.turnosHelper.calcularEmpleadosNecesarios(
+      subpuesto.guardas_activos,
+      subpuesto.configuracion_id
+    );
+
+    // Contar asignaciones activas actuales
     const { count: asignacionesActivas } = await supabase
       .from("asignacion_guardas_puesto")
       .select("*", { count: "exact", head: true })
       .eq("subpuesto_id", dto.subpuesto_id)
       .eq("activo", true);
 
-    // Obtener guardas necesarios desde la vista
-    const { data: guardasInfo } = await supabase
-      .from("vw_guardas_necesarios_subpuesto")
-      .select("guardas_necesarios")
-      .eq("subpuesto_id", dto.subpuesto_id)
-      .maybeSingle();
-
-    const guardasNecesarios = guardasInfo?.guardas_necesarios || subpuesto.guardas_activos;
-    const cuposDisponibles = guardasNecesarios - (asignacionesActivas || 0);
+    const empleadosAsignados = asignacionesActivas || 0;
+    const cuposDisponibles = empleadosNecesarios - empleadosAsignados;
 
     if (cuposDisponibles <= 0) {
       this.logger.warn(
-        `⚠️ Subpuesto ${subpuesto.nombre} sin cupos: ${asignacionesActivas}/${guardasNecesarios} asignados`
+        `⚠️ Subpuesto ${subpuesto.nombre} sin cupos: ${empleadosAsignados}/${empleadosNecesarios} asignados`
       );
       throw new BadRequestException(
         `El subpuesto "${subpuesto.nombre}" ya tiene todos sus cupos ocupados ` +
-        `(${asignacionesActivas}/${guardasNecesarios} guardas asignados)`
+        `(${empleadosAsignados}/${empleadosNecesarios} empleados asignados)`
       );
     }
 
@@ -222,7 +223,18 @@ export class AsignacionesService {
       throw new BadRequestException(`Error al crear asignación: ${insertError.message}`);
     }
 
-    // ✅ 6. Verificar si hay turnos pendientes de asignación y reasignarlos
+    // ✅ 6. Verificar si la asignación está completa DESPUÉS de esta nueva asignación
+    const validacion = await this.turnosHelper.validarAsignacionCompleta(
+      dto.subpuesto_id,
+      subpuesto.guardas_activos,
+      subpuesto.configuracion_id
+    );
+
+    this.logger.log(
+      `📊 Estado de asignación: ${empleadosAsignados + 1}/${empleadosNecesarios} empleados asignados`
+    );
+
+    // ✅ 7. Si hay turnos pendientes de reasignación, reasignarlos
     const turnosReasignados = await this.reasignarTurnosPendientes(
       dto.subpuesto_id,
       dto.empleado_id
@@ -230,45 +242,60 @@ export class AsignacionesService {
 
     if (turnosReasignados > 0) {
       this.logger.log(
-        `✅ Empleado ${empleado.nombre_completo} asignado y ${turnosReasignados} turnos pendientes reasignados`
+        `✅ ${turnosReasignados} turnos pendientes reasignados a ${empleado.nombre_completo}`
       );
-
-      return {
-        message: "Asignación creada exitosamente y turnos pendientes reasignados",
-        asignacion,
-        turnos_reasignados: turnosReasignados,
-        cupos_restantes: cuposDisponibles - 1,
-      };
     }
 
-    // ✅ 7. Si no hay turnos pendientes, generar turnos automáticamente
-    try {
-      this.logger.log(`🔄 Generando turnos automáticos para subpuesto ${subpuesto.nombre}...`);
+    // ✅ 8. SOLO generar turnos si la asignación está COMPLETA
+    if (validacion.valido) {
+      try {
+        this.logger.log(
+          `🎉 ¡Asignación completa! Generando turnos automáticamente para ${subpuesto.nombre}...`
+        );
 
-      const turnosResult = await this.asignarTurnosService.asignarTurnos({
-        subpuesto_id: dto.subpuesto_id,
-        fecha_inicio: new Date().toISOString().split('T')[0],
-        asignado_por: dto.asignado_por,
-      });
+        const turnosResult = await this.asignarTurnosService.asignarTurnos({
+          subpuesto_id: dto.subpuesto_id,
+          fecha_inicio: new Date().toISOString().split('T')[0],
+          asignado_por: dto.asignado_por,
+        });
 
+        this.logger.log(
+          `✅ Turnos generados: ${turnosResult.total_turnos} turnos para ${turnosResult.empleados} empleados`
+        );
+
+        return {
+          message: "¡Asignación completada! Todos los empleados asignados y turnos generados exitosamente",
+          asignacion,
+          turnos_generados: turnosResult,
+          asignacion_completa: true,
+          empleados_asignados: empleadosAsignados + 1,
+          empleados_necesarios: empleadosNecesarios,
+        };
+      } catch (err: any) {
+        this.logger.warn(`⚠️ Error generando turnos: ${err.message}`);
+        return {
+          message: "Asignación completa pero no se pudieron generar turnos automáticamente",
+          asignacion,
+          warning: err.message,
+          asignacion_completa: true,
+          empleados_asignados: empleadosAsignados + 1,
+          empleados_necesarios: empleadosNecesarios,
+        };
+      }
+    } else {
+      // Asignación incompleta - NO generar turnos
       this.logger.log(
-        `✅ Turnos generados automáticamente: ${turnosResult.total_turnos} turnos para ${turnosResult.empleados} empleados`
+        `⏳ Asignación incompleta. ${validacion.mensaje}. Los turnos se generarán automáticamente cuando se complete la asignación.`
       );
 
       return {
-        message: "Asignación creada exitosamente y turnos generados automáticamente",
+        message: `Empleado asignado exitosamente. ${validacion.mensaje}`,
         asignacion,
-        turnos_generados: turnosResult,
-        cupos_restantes: cuposDisponibles - 1,
-      };
-    } catch (err: any) {
-      this.logger.warn(`⚠️ Asignación creada pero no se pudieron generar turnos: ${err.message}`);
-
-      return {
-        message: "Asignación creada exitosamente (turnos no generados automáticamente)",
-        asignacion,
-        warning: err.message,
-        cupos_restantes: cuposDisponibles - 1,
+        turnos_reasignados: turnosReasignados > 0 ? turnosReasignados : undefined,
+        asignacion_completa: false,
+        empleados_asignados: empleadosAsignados + 1,
+        empleados_necesarios: empleadosNecesarios,
+        faltantes: validacion.faltantes,
       };
     }
   }
@@ -462,5 +489,176 @@ export class AsignacionesService {
     }
 
     return reasignados;
+  }
+
+  /**
+   * 🔁 Reemplazar empleado sin romper turnos
+   * Permite cambiar un empleado por otro manteniendo los turnos activos
+   */
+  async reemplazarEmpleado(
+    asignacionId: number,
+    nuevoEmpleadoId: number,
+    motivo: string,
+    motivoDetalle?: string
+  ) {
+    const supabase = this.supabaseService.getClient();
+
+    // 1. Obtener asignación actual
+    const { data: asignacionActual, error: asignError } = await supabase
+      .from("asignacion_guardas_puesto")
+      .select(`
+        id,
+        empleado_id,
+        subpuesto_id,
+        puesto_id,
+        contrato_id,
+        asignado_por,
+        observaciones,
+        empleado:empleado_id (
+          id,
+          nombre_completo
+        ),
+        subpuesto:subpuesto_id (
+          id,
+          nombre,
+          guardas_activos,
+          configuracion_id
+        )
+      `)
+      .eq("id", asignacionId)
+      .eq("activo", true)
+      .single();
+
+    if (asignError || !asignacionActual) {
+      throw new NotFoundException(`Asignación con ID ${asignacionId} no encontrada o inactiva`);
+    }
+
+    const empleadoAnterior = Array.isArray(asignacionActual.empleado)
+      ? asignacionActual.empleado[0]
+      : asignacionActual.empleado;
+    const subpuesto = Array.isArray(asignacionActual.subpuesto)
+      ? asignacionActual.subpuesto[0]
+      : asignacionActual.subpuesto;
+
+    // 2. Verificar que el nuevo empleado exista y esté activo
+    const { data: nuevoEmpleado, error: empError } = await supabase
+      .from("empleados")
+      .select("id, nombre_completo, activo")
+      .eq("id", nuevoEmpleadoId)
+      .single();
+
+    if (empError || !nuevoEmpleado) {
+      throw new NotFoundException("Nuevo empleado no encontrado");
+    }
+
+    if (!nuevoEmpleado.activo) {
+      throw new BadRequestException("No se puede asignar un empleado inactivo");
+    }
+
+    // 3. Verificar que el nuevo empleado no esté ya asignado al mismo subpuesto
+    const { data: existing } = await supabase
+      .from("asignacion_guardas_puesto")
+      .select("id")
+      .eq("empleado_id", nuevoEmpleadoId)
+      .eq("subpuesto_id", asignacionActual.subpuesto_id)
+      .eq("activo", true)
+      .maybeSingle();
+
+    if (existing) {
+      throw new BadRequestException(
+        `El empleado ${nuevoEmpleado.nombre_completo} ya está asignado a este subpuesto`
+      );
+    }
+
+    const fechaActual = new Date().toISOString().split('T')[0];
+    const horaActual = new Date().toISOString().split('T')[1].split('.')[0];
+
+    // 4. Desactivar asignación anterior
+    const { error: updateError } = await supabase
+      .from("asignacion_guardas_puesto")
+      .update({
+        activo: false,
+        fecha_fin: fechaActual,
+        hora_fin: horaActual,
+        motivo_finalizacion: `Reemplazo: ${motivo}`,
+        observaciones: `${asignacionActual.observaciones || ''}\n[${fechaActual}] Reemplazado por ${nuevoEmpleado.nombre_completo}: ${motivoDetalle || motivo}`.trim(),
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", asignacionId);
+
+    if (updateError) {
+      throw new BadRequestException(`Error al desactivar asignación anterior: ${updateError.message}`);
+    }
+
+    // 5. Crear nueva asignación para el empleado de reemplazo
+    const { data: nuevaAsignacion, error: insertError } = await supabase
+      .from("asignacion_guardas_puesto")
+      .insert({
+        empleado_id: nuevoEmpleadoId,
+        puesto_id: asignacionActual.puesto_id,
+        subpuesto_id: asignacionActual.subpuesto_id,
+        contrato_id: asignacionActual.contrato_id,
+        asignado_por: asignacionActual.asignado_por,
+        observaciones: `Reemplazo de ${empleadoAnterior?.nombre_completo} - ${motivo}`,
+        activo: true,
+        fecha_asignacion: fechaActual,
+        hora_asignacion: horaActual,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (insertError) {
+      throw new BadRequestException(`Error al crear nueva asignación: ${insertError.message}`);
+    }
+
+    // 6. Reasignar TODOS los turnos futuros del empleado anterior al nuevo empleado
+    const { data: turnosReasignados, error: turnosError } = await supabase
+      .from("turnos")
+      .update({
+        empleado_id: nuevoEmpleadoId,
+        updated_at: new Date().toISOString()
+      })
+      .eq("empleado_id", asignacionActual.empleado_id)
+      .eq("subpuesto_id", asignacionActual.subpuesto_id)
+      .gte("fecha", fechaActual)
+      .in("estado_turno", ["programado", "pendiente"])
+      .select("id, fecha, tipo_turno");
+
+    const turnosActualizados = turnosReasignados?.length || 0;
+
+    if (turnosError) {
+      this.logger.warn(`⚠️ Error reasignando turnos: ${turnosError.message}`);
+    } else {
+      this.logger.log(`✅ ${turnosActualizados} turnos reasignados al nuevo empleado`);
+    }
+
+    this.logger.log(
+      `🔁 Empleado ${empleadoAnterior?.nombre_completo} reemplazado por ${nuevoEmpleado.nombre_completo} en ${subpuesto?.nombre}`
+    );
+
+    return {
+      message: "Empleado reemplazado exitosamente sin romper turnos",
+      asignacion_anterior: {
+        id: asignacionId,
+        empleado: empleadoAnterior?.nombre_completo,
+        activo: false
+      },
+      asignacion_nueva: {
+        id: nuevaAsignacion.id,
+        empleado: nuevoEmpleado.nombre_completo,
+        activo: true
+      },
+      turnos_reasignados: turnosActualizados,
+      detalles: {
+        subpuesto: subpuesto?.nombre,
+        empleado_anterior: empleadoAnterior?.nombre_completo,
+        empleado_nuevo: nuevoEmpleado.nombre_completo,
+        motivo,
+        fecha_reemplazo: fechaActual,
+        turnos_afectados: turnosActualizados
+      }
+    };
   }
 }
