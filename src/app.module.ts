@@ -46,6 +46,11 @@ import { RolesModule } from './modules/roles/roles.module';
 import { NovedadesModule } from './modules/novedades/novedades.module';
 import { IncidentesModule } from './modules/incidentes/incidentes.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { CategoriasDotacionModule } from './modules/categorias-dotacion/categorias-dotacion.module';
+import { ArticulosDotacionModule } from './modules/articulos-dotacion/articulos-dotacion.module';
+import { ProveedoresModule } from './modules/proveedores/proveedores.module';
+import { InventarioModule } from './modules/inventario/inventario.module';
+import { DotacionesModule } from './modules/dotaciones/dotaciones.module';
 
 @Module({
   imports: [
@@ -103,6 +108,11 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
     NovedadesModule,
     IncidentesModule,
     DashboardModule,
+    CategoriasDotacionModule,
+    ArticulosDotacionModule,
+    ProveedoresModule,
+    InventarioModule,
+    DotacionesModule,
     HelpersModule,
   ],
   providers: [],
