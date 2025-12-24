@@ -1,5 +1,5 @@
-import { Controller, Get, Post, Body, Param, UseGuards, Request } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { Controller, Get, Post, Body, Param, UseGuards, Request, Query } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { DotacionesService } from './dotaciones.service';
 import { CreateDotacionEmpleadoDto } from './dto/dotacion.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -20,8 +20,9 @@ export class DotacionesController {
     // @RequirePermissions('dotacion.read')
     @ApiOperation({ summary: 'Listar historial de entregas de dotación' })
     @ApiResponse({ status: 200, description: 'Lista de entregas' })
-    async findAllEntregas() {
-        return this.dotacionesService.findAllEntregas();
+    @ApiQuery({ name: 'condicion', required: false, enum: ['nuevo', 'segunda'], description: 'Filtrar por condición' })
+    async findAllEntregas(@Query('condicion') condicion?: string) {
+        return this.dotacionesService.findAllEntregas(condicion);
     }
 
     @Get('entregas/empleado/:id')

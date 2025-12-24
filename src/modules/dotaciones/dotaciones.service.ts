@@ -8,9 +8,9 @@ export class DotacionesService {
 
     // --- ASIGNACIONES (ENTREGAS) ---
 
-    async findAllEntregas() {
+    async findAllEntregas(condicion?: string) {
         const supabase = this.supabaseService.getClient();
-        const { data, error } = await supabase
+        const query = supabase
             .from('dotaciones_empleado')
             .select(`
         *,
@@ -23,6 +23,12 @@ export class DotacionesService {
         usuario:usuarios_externos(id, nombre_completo)
       `)
             .order('fecha_entrega', { ascending: false });
+
+        if (condicion) {
+            query.eq('condicion', condicion);
+        }
+
+        const { data, error } = await query;
 
         if (error) throw error;
         return data;

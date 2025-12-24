@@ -56,4 +56,12 @@ export class InventarioController {
     async createMovimiento(@Body() createDto: CreateInventarioMovimientoDto) {
         return this.inventarioService.createMovimiento(createDto);
     }
+
+    @Get('resumen-stock/:varianteId')
+    // @RequirePermissions('inventario.read')
+    @ApiOperation({ summary: 'Obtener resumen de stock estimado (Nuevo vs Segunda)' })
+    @ApiResponse({ status: 200, description: 'Resumen de stock' })
+    async getResumenStock(@Param('varianteId') varianteId: string) {
+        return this.inventarioService.getResumenStock(Number(varianteId));
+    }
 }

@@ -81,6 +81,12 @@ export class CreateVarianteArticuloDto {
     @IsOptional()
     stock_minimo?: number;
 
+    @ApiProperty({ description: 'Stock actual inicial', example: 10, default: 0 })
+    @IsInt()
+    @Min(0)
+    @IsOptional()
+    stock_actual?: number;
+
     // Note: stock_actual should ideally not be set directly on create, but managed via movements.
     // However, for initialization it might be useful. The prompt doesn't strictly forbid it,
     // but implies logic flows through 'inventario_movimientos'.
@@ -104,4 +110,10 @@ export class UpdateVarianteArticuloDto {
     @IsBoolean()
     @IsOptional()
     notificar?: boolean;
+
+    @ApiProperty({ description: 'Stock actual', required: false })
+    @IsInt()
+    @Min(0)
+    @IsOptional()
+    stock_actual?: number;
 }
