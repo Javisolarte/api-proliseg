@@ -316,15 +316,39 @@ export class NominaService {
         }
 
         // Auditar generación
+        const totalDevengado = resultados.reduce((sum, item) => sum + (item.devengado || 0), 0); // Need to accumulate these from loop or re-query
+        // Better: re-query totals to be safe and accurate
+        const { data: resumen } = await supabase
+            .from('nomina_empleado')
+            .select('total_pagar, total_devengado, total_deducciones')
+            .eq('periodo_id', periodo.id);
+
+        const sumPagar = resumen?.reduce((acc, curr) => acc + Number(curr.total_pagar), 0) || 0;
+        const sumDevengado = resumen?.reduce((acc, curr) => acc + Number(curr.total_devengado), 0) || 0;
+        const sumDeducido = resumen?.reduce((acc, curr) => acc + Number(curr.total_deducciones), 0) || 0;
+
+        // Actualizar totales en nomina_periodos
+        await supabase
+            .from('nomina_periodos')
+            .update({
+                total_pagar: sumPagar,
+                total_devengado: sumDevengado,
+                total_deducciones: sumDeducido
+            })
+            .eq('id', periodo.id);
+
         await this.auditoriaService.create({
             tabla_afectada: 'nomina_periodos',
             registro_id: periodo.id,
             accion: 'UPDATE', // Generación
-            datos_nuevos: { generated_count: resultados.length },
+            datos_nuevos: {
+                generated_count: resultados.length,
+                total_pagar: sumPagar
+            },
             usuario_id: userId,
         });
 
-        return { message: 'Nómina generada exitosamente', total_procesados: resultados.length };
+        return { message: 'Nómina generada exitosamente', total_procesados: resultados.length, total_pagar: sumPagar };
     }
 
     // 🔹 Listar Nominas Periodo
@@ -559,10 +583,10 @@ export class NominaService {
 
         if (error) throw error;
 
-        return {
-            periodo,
-            empleados
-        };
+        if (error) throw error;
+
+        // Frontend request: Return pure array
+        return empleados;
     }
 
     // 🔹 Descargar Desprendible (Admin)
