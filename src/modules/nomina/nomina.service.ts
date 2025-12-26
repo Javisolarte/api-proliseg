@@ -57,8 +57,10 @@ export class NominaService {
     }
 
     // 🔹 Generar Nómina
+    // 🔹 Generar Nómina
     async generarNomina(anio: number, mes: number, userId: number) {
-        const supabase = this.supabaseService.getClient();
+        // Usar Admin Client para evitar restricciones RLS (ver todos los contratos)
+        const supabase = this.supabaseService.getSupabaseAdminClient();
 
         // 1. Verificar periodo nomina
         const { data: periodo } = await supabase
@@ -70,6 +72,8 @@ export class NominaService {
 
         if (!periodo) throw new NotFoundException('Periodo de nómina no encontrado. Debe crearlo primero.');
         if (periodo.cerrado) throw new BadRequestException('El periodo de nómina ya está cerrado.');
+
+        this.logger.log(`>> Generando Nómina: ${anio}-${mes} | Periodo: ${periodo.fecha_inicio} al ${periodo.fecha_fin} | Usuario: ${userId}`);
 
         // 2. Obtener Parámetros Anuales
         const { data: parametros } = await supabase
@@ -92,10 +96,11 @@ export class NominaService {
             .select('*')
             .eq('activo', true);
 
-        // 4. Obtener Empleados Activos con Contrato
-        // 4. Obtener Contratos Activos (Source of Truth)
-        // Corregido: Consultar contratos_personal directamente en lugar de empleados para evitar errores si empleados.contrato_personal_id es nulo.
-        const { data: contratos } = await supabase
+        // 4. Obtener Contratos Validos (Lógica de Fechas)
+        // Buscamos contratos que se solapen con el periodo:
+        // (Contrato.Inicio <= Periodo.Fin) AND (Contrato.Fin >= Periodo.Inicio OR Contrato.Fin IS NULL)
+
+        const { data: contratosRaw, error: errContratos } = await supabase
             .from('contratos_personal')
             .select(`
                 *,
@@ -107,9 +112,26 @@ export class NominaService {
                     valor
                 )
             `)
-            .eq('estado', 'activo');
+            .lte('fecha_inicio', periodo.fecha_fin); // Optimization: Start date must be before or on period end
 
-        if (!contratos || contratos.length === 0) throw new BadRequestException('No hay contratos activos para generar nómina.');
+        if (errContratos) {
+            this.logger.error(`Error buscando contratos: ${errContratos.message}`);
+            throw new InternalServerErrorException(errContratos.message);
+        }
+
+        // Filtrado en memoria para la parte del "Fin" (para manejar NULL facilmente)
+        const periodStart = new Date(periodo.fecha_inicio);
+        const contratos = contratosRaw?.filter(c => {
+            // Si no tiene fin (indefinido activo) O si su fin es despues del inicio del periodo
+            return !c.fecha_fin || new Date(c.fecha_fin) >= periodStart;
+        }) || [];
+
+        this.logger.log(`>> Contratos Totales (Inicio <= FinPer): ${contratosRaw?.length} | Filtrados (Fin >= IniPer): ${contratos.length}`);
+
+        if (contratos.length === 0) {
+            this.logger.warn(`No se encontraron contratos para el periodo ${periodo.fecha_inicio} - ${periodo.fecha_fin}`);
+            throw new BadRequestException('No hay contratos activos para generar nómina.');
+        }
 
         const resultados: any[] = [];
 
