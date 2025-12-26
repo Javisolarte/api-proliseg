@@ -34,7 +34,7 @@ export class ContratosPersonalController {
     async create(
         @Body() createDto: CreateContratoPersonalDto,
         @CurrentUser() user: any,
-        @UploadedFile() file?: Express.Multer.File,
+        @UploadedFile() file?: any,
     ) {
         return this.contratosService.create(createDto, user.id, file);
     }
@@ -46,7 +46,7 @@ export class ContratosPersonalController {
     async terminate(
         @Body() terminateDto: TerminateContratoPersonalDto,
         @CurrentUser() user: any,
-        @UploadedFile() file?: Express.Multer.File,
+        @UploadedFile() file?: any,
     ) {
         return this.contratosService.terminate(terminateDto, user.id, file);
     }
