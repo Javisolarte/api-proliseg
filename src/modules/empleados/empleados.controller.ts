@@ -115,6 +115,13 @@ Todos los archivos se guardan directamente en sus respectivos buckets de Supabas
         rh: { type: 'string', example: 'O+' },
         lugar_expedicion: { type: 'string', example: 'Bogotá' },
         telefono_2: { type: 'string', example: '3109876543' },
+
+        // Nuevos campos
+        tiene_discapacidad: { type: 'boolean', example: false },
+        descripcion_discapacidad: { type: 'string', example: 'Ninguna' },
+        experiencia: { type: 'string', example: '5 años en seguridad' },
+        observaciones: { type: 'string', example: 'Sin observaciones' },
+
         rol: { type: 'string', example: 'empleado' },
         verificado_documentos: { type: 'boolean', example: false },
         verificado_por: { type: 'number', example: 1 },
