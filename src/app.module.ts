@@ -51,6 +51,9 @@ import { ArticulosDotacionModule } from './modules/articulos-dotacion/articulos-
 import { ProveedoresModule } from './modules/proveedores/proveedores.module';
 import { InventarioModule } from './modules/inventario/inventario.module';
 import { DotacionesModule } from './modules/dotaciones/dotaciones.module';
+import { ContratosPersonalModule } from './modules/contratos-personal/contratos-personal.module';
+import { NominaModule } from './modules/nomina/nomina.module';
+import { AutoservicioModule } from './modules/autoservicio/autoservicio.module';
 
 @Module({
   imports: [
@@ -113,6 +116,9 @@ import { DotacionesModule } from './modules/dotaciones/dotaciones.module';
     ProveedoresModule,
     InventarioModule,
     DotacionesModule,
+    ContratosPersonalModule,
+    NominaModule,
+    AutoservicioModule,
     HelpersModule,
   ],
   providers: [],

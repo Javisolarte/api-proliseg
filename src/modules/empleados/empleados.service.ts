@@ -45,13 +45,13 @@ export class EmpleadosService {
              eps.nombre AS eps_nombre,
              arl.nombre AS arl_nombre,
              fp.nombre AS fondo_pension_nombre,
-             p.nombre AS puesto_nombre,
+             cp.nombre AS contrato_personal_nombre, 
              u.nombre_completo AS creado_por_nombre
       FROM empleados e
       LEFT JOIN eps ON e.eps_id = eps.id
       LEFT JOIN arl ON e.arl_id = arl.id
       LEFT JOIN fondos_pension fp ON e.fondo_pension_id = fp.id
-      LEFT JOIN puestos_trabajo p ON e.puesto_id = p.id
+      LEFT JOIN contratos_personal cp ON e.contrato_personal_id = cp.id
       LEFT JOIN usuarios_externos u ON e.creado_por = u.id
       WHERE 1=1
     `;
@@ -90,14 +90,14 @@ export class EmpleadosService {
              eps.nombre AS eps_nombre,
              arl.nombre AS arl_nombre,
              fp.nombre AS fondo_pension_nombre,
-             p.nombre AS puesto_nombre,
+             cp.nombre AS contrato_personal_nombre,
              u.nombre_completo AS creado_por_nombre,
              uv.nombre_completo AS actualizado_por_nombre
       FROM empleados e
       LEFT JOIN eps ON e.eps_id = eps.id
       LEFT JOIN arl ON e.arl_id = arl.id
       LEFT JOIN fondos_pension fp ON e.fondo_pension_id = fp.id
-      LEFT JOIN puestos_trabajo p ON e.puesto_id = p.id
+      LEFT JOIN contratos_personal cp ON e.contrato_personal_id = cp.id
       LEFT JOIN usuarios_externos u ON e.creado_por = u.id
       LEFT JOIN usuarios_externos uv ON e.actualizado_por = uv.id
       WHERE e.id = ${id}
@@ -176,7 +176,7 @@ export class EmpleadosService {
         for (let i = 0; i < files.certificados.length; i++) {
           const file = files.certificados[i];
           const path = `${createEmpleadoDto.cedula}_cert${i + 1}.pdf`;
-          const url = await this.uploadFile(file, 'empleados/cerificados', path);
+          const url = await this.uploadFile(file, 'empleados/certificados', path);
           certificadosUrls.push(url);
         }
         fileUrls.certificados_urls = certificadosUrls;
@@ -256,7 +256,7 @@ export class EmpleadosService {
         for (let i = 0; i < files.certificados.length; i++) {
           const file = files.certificados[i];
           const path = `${existing.cedula}_cert${startIndex + i + 1}.pdf`;
-          const url = await this.uploadFile(file, 'empleados/cerificados', path);
+          const url = await this.uploadFile(file, 'empleados/certificados', path);
           certificadosUrls.push(url);
         }
         fileUrls.certificados_urls = certificadosUrls;

@@ -100,17 +100,25 @@ Todos los archivos se guardan directamente en sus respectivos buckets de Supabas
         ciudad: { type: 'string', example: 'Bogotá' },
         estado_civil: { type: 'string', example: 'Soltero' },
         genero: { type: 'string', example: 'Masculino' },
-        tipo_contrato: { type: 'string', example: 'Indefinido' },
-        fecha_ingreso: { type: 'string', format: 'date', example: '2023-01-01' },
-        fecha_salida: { type: 'string', format: 'date', example: '2024-01-01' },
-        motivo_salida: { type: 'string', example: 'Renuncia voluntaria' },
-        puesto_id: { type: 'number', example: 1 },
+        contrato_personal_id: { type: 'number', example: 1 },
         eps_id: { type: 'number', example: 1 },
         arl_id: { type: 'number', example: 1 },
         fondo_pension_id: { type: 'number', example: 1 },
+        fecha_afiliacion_eps: { type: 'string', format: 'date', example: '2023-01-01' },
+        fecha_fin_eps: { type: 'string', format: 'date', example: '2024-01-01' },
+        fecha_afiliacion_arl: { type: 'string', format: 'date', example: '2023-01-01' },
+        fecha_fin_arl: { type: 'string', format: 'date', example: '2024-01-01' },
+        fecha_afiliacion_pension: { type: 'string', format: 'date', example: '2023-01-01' },
+        fecha_fin_pension: { type: 'string', format: 'date', example: '2024-01-01' },
         salario_id: { type: 'number', example: 1 },
         formacion_academica: { type: 'string', example: 'Bachiller' },
+        rh: { type: 'string', example: 'O+' },
+        lugar_expedicion: { type: 'string', example: 'Bogotá' },
+        telefono_2: { type: 'string', example: '3109876543' },
         rol: { type: 'string', example: 'empleado' },
+        verificado_documentos: { type: 'boolean', example: false },
+        verificado_por: { type: 'number', example: 1 },
+        fecha_verificacion: { type: 'string', format: 'date-time', example: '2023-01-01T10:00:00Z' },
         activo: { type: 'boolean', example: true },
         // Campos de archivos
         foto_perfil: { type: 'string', format: 'binary', description: '📸 Foto de perfil (JPG, PNG)' },
@@ -119,7 +127,7 @@ Todos los archivos se guardan directamente en sus respectivos buckets de Supabas
         certificados: { type: 'array', items: { type: 'string', format: 'binary' }, description: '🎓 Certificados (hasta 5 PDFs)' },
         documentos_adicionales: { type: 'array', items: { type: 'string', format: 'binary' }, description: '📎 Documentos adicionales (hasta 5 PDFs)' },
       },
-      required: ['nombre_completo', 'cedula', 'fecha_ingreso']
+      required: ['nombre_completo', 'cedula']
     }
   })
   @UseInterceptors(

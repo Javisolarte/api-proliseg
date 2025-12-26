@@ -70,30 +70,11 @@ export class CreateEmpleadoDto {
   @IsString()
   genero?: string;
 
-  @ApiProperty({ example: "Indefinido", required: false })
-  @IsOptional()
-  @IsString()
-  tipo_contrato?: string;
-
-  @ApiProperty({ example: "2023-01-01", description: "Fecha de ingreso (obligatoria)" })
-  @IsDateString()
-  fecha_ingreso: string;
-
-  @ApiProperty({ example: "2024-01-01", required: false })
-  @IsOptional()
-  @IsDateString()
-  fecha_salida?: string;
-
-  @ApiProperty({ example: "Renuncia voluntaria", required: false })
-  @IsOptional()
-  @IsString()
-  motivo_salida?: string;
-
-  @ApiProperty({ example: 1, required: false, description: "ID del puesto (column 'puesto_id')" })
+  @ApiProperty({ example: 1, required: false, description: "ID del contrato personal (FK a contratos_personal)" })
   @IsOptional()
   @IsInt()
   @Transform(({ value }) => parseInt(value))
-  puesto_id?: number;
+  contrato_personal_id?: number;
 
   @ApiProperty({ example: 1, required: false })
   @IsOptional()
@@ -142,12 +123,6 @@ export class CreateEmpleadoDto {
   @IsOptional()
   @IsDateString()
   fecha_fin_pension?: string;
-
-  @ApiProperty({ example: 48, required: false })
-  @IsOptional()
-  @IsInt()
-  @Transform(({ value }) => parseInt(value))
-  horas_trabajadas_semana?: number;
 
   @ApiProperty({ example: true, required: false })
   @IsOptional()
@@ -220,6 +195,44 @@ export class CreateEmpleadoDto {
   @IsOptional()
   @IsString()
   formacion_academica?: string;
+
+  @ApiProperty({ example: "O+", required: false, description: "Grupo sanguíneo y RH (ej: O+, A-, etc)" })
+  @IsOptional()
+  @IsString()
+  rh?: string;
+
+  @ApiProperty({ example: "Bogotá", required: false, description: "Lugar de expedición del documento" })
+  @IsOptional()
+  @IsString()
+  lugar_expedicion?: string;
+
+  @ApiProperty({ example: "3109876543", required: false, description: "Teléfono alternativo" })
+  @IsOptional()
+  @IsString()
+  telefono_2?: string;
+
+  @ApiProperty({ example: "url/foto.jpg", required: false })
+  @IsOptional()
+  @IsString()
+  foto_perfil_url?: string;
+
+  @ApiProperty({ example: "url/cedula.pdf", required: false })
+  @IsOptional()
+  @IsString()
+  cedula_pdfurl?: string;
+
+  @ApiProperty({ example: "url/hv.pdf", required: false })
+  @IsOptional()
+  @IsString()
+  hoja_de_vida_url?: string;
+
+  @ApiProperty({ example: ["url1.pdf", "url2.pdf"], required: false })
+  @IsOptional()
+  certificados_urls?: string[];
+
+  @ApiProperty({ example: ["url1.pdf", "url2.pdf"], required: false })
+  @IsOptional()
+  documentos_adicionales_urls?: string[];
 }
 
 export class UpdateEmpleadoDto extends PartialType(CreateEmpleadoDto) { }

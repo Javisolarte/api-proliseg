@@ -32,4 +32,20 @@ export class AuditoriaService {
         if (error || !data) throw new NotFoundException(`Registro de auditoría con ID ${id} no encontrado`);
         return data;
     }
+
+    async getByRegistro(tabla: string, registroId: number) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('auditoria')
+            .select(`
+                *,
+                usuarios_externos(nombre_completo)
+            `)
+            .eq('tabla_afectada', tabla)
+            .eq('registro_id', registroId)
+            .order('created_at', { ascending: false });
+
+        if (error) throw error;
+        return data;
+    }
 }
