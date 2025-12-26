@@ -45,7 +45,7 @@ export class EmpleadosService {
              eps.nombre AS eps_nombre,
              arl.nombre AS arl_nombre,
              fp.nombre AS fondo_pension_nombre,
-             cp.nombre AS contrato_personal_nombre, 
+             cp.tipo_contrato AS contrato_personal_nombre, 
              u.nombre_completo AS creado_por_nombre
       FROM empleados e
       LEFT JOIN eps ON e.eps_id = eps.id
@@ -90,7 +90,7 @@ export class EmpleadosService {
              eps.nombre AS eps_nombre,
              arl.nombre AS arl_nombre,
              fp.nombre AS fondo_pension_nombre,
-             cp.nombre AS contrato_personal_nombre,
+             cp.tipo_contrato AS contrato_personal_nombre,
              u.nombre_completo AS creado_por_nombre,
              uv.nombre_completo AS actualizado_por_nombre
       FROM empleados e
