@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { ParametrosNominaService } from './parametros-nomina.service';
@@ -21,8 +21,8 @@ export class ParametrosNominaController {
 
     @Get()
     @ApiOperation({ summary: 'Listar todos los parametros' })
-    async findAll() {
-        return this.parametrosService.findAll();
+    async findAll(@Query('anio') anio?: number) {
+        return this.parametrosService.findAll(anio);
     }
 
     @Get(':year')

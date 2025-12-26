@@ -37,15 +37,13 @@ export class HorasNominaService {
             const { data, error } = await supabase
                 .from('nomina_empleado')
                 .update({
-                    cantidad_hed: dto.cantidad_hed ?? existingRecord.cantidad_hed,
-                    cantidad_hen: dto.cantidad_hen ?? existingRecord.cantidad_hen,
-                    cantidad_hefd: dto.cantidad_hefd ?? existingRecord.cantidad_hefd,
-                    cantidad_hefn: dto.cantidad_hefn ?? existingRecord.cantidad_hefn,
-                    cantidad_rn: dto.cantidad_rn ?? existingRecord.cantidad_rn,
-                    cantidad_rfd: dto.cantidad_rfd ?? existingRecord.cantidad_rfd,
-                    cantidad_rfn: dto.cantidad_rfn ?? existingRecord.cantidad_rfn,
-                    // Note: Recalculation of totals should ideally happen here or trigger recalculate
-                    // For now we just save the hours. The 'recalcular' endpoint handles money.
+                    horas_extra_diurnas: dto.cantidad_hed ?? existingRecord.horas_extra_diurnas,
+                    horas_extra_nocturnas: dto.cantidad_hen ?? existingRecord.horas_extra_nocturnas,
+                    horas_extra_festivas: (dto.cantidad_hefd ?? 0) + (dto.cantidad_hefn ?? 0),
+                    horas_dominicales: (dto.cantidad_rfd ?? 0) + (dto.cantidad_rfn ?? 0), // Mapping rfd/rfn to Dominicales as best effort
+                    // Recargos (rn) - No specific column in schema for just RN count. 
+                    // We might need to rely on total value calculation or add column. 
+                    // For now, ignoring RN count persistence if column missing.
                 })
                 .eq('id', existingRecord.id)
                 .select()
@@ -62,13 +60,11 @@ export class HorasNominaService {
                 .insert({
                     periodo_id: dto.periodo_id,
                     empleado_id: dto.empleado_id,
-                    cantidad_hed: dto.cantidad_hed || 0,
-                    cantidad_hen: dto.cantidad_hen || 0,
-                    cantidad_hefd: dto.cantidad_hefd || 0,
-                    cantidad_hefn: dto.cantidad_hefn || 0,
-                    cantidad_rn: dto.cantidad_rn || 0,
-                    cantidad_rfd: dto.cantidad_rfd || 0,
-                    cantidad_rfn: dto.cantidad_rfn || 0,
+                    horas_extra_diurnas: dto.cantidad_hed || 0,
+                    horas_extra_nocturnas: dto.cantidad_hen || 0,
+                    horas_extra_festivas: (dto.cantidad_hefd || 0) + (dto.cantidad_hefn || 0),
+                    horas_dominicales: (dto.cantidad_rfd || 0) + (dto.cantidad_rfn || 0),
+                    // RN ignored due to missing column
                 })
                 .select()
                 .single();

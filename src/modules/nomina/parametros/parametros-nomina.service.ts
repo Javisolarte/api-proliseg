@@ -31,9 +31,15 @@ export class ParametrosNominaService {
         return data;
     }
 
-    async findAll() {
+    async findAll(anio?: number) {
         const supabase = this.supabaseService.getClient();
-        const { data, error } = await supabase.from('nomina_valores_hora').select('*').order('anio', { ascending: false });
+        let query = supabase.from('nomina_valores_hora').select('*');
+
+        if (anio) {
+            query = query.eq('anio', anio);
+        }
+
+        const { data, error } = await query;
         if (error) throw error;
         return data;
     }

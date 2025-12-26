@@ -10,11 +10,13 @@ import { HorasNominaService } from './horas/horas-nomina.service';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { AuditoriaModule } from '../auditoria/auditoria.module';
 import { AuthModule } from '../auth/auth.module';
+import { NovedadesNominaController } from './novedades/novedades-nomina.controller';
+import { NovedadesNominaService } from './novedades/novedades-nomina.service';
 
 @Module({
     imports: [SupabaseModule, AuditoriaModule, AuthModule],
-    controllers: [NominaController, ParametrosNominaController, DeduccionesNominaController, HorasNominaController],
-    providers: [NominaService, ParametrosNominaService, DeduccionesNominaService, HorasNominaService],
+    controllers: [NominaController, ParametrosNominaController, DeduccionesNominaController, HorasNominaController, NovedadesNominaController],
+    providers: [NominaService, ParametrosNominaService, DeduccionesNominaService, HorasNominaService, NovedadesNominaService],
     exports: [NominaService],
 })
 export class NominaModule { }

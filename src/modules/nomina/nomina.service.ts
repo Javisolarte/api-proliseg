@@ -17,6 +17,45 @@ export class NominaService {
         private readonly auditoriaService: AuditoriaService,
     ) { }
 
+    // 🔹 Crear Periodo
+    async createPeriod(dto: any, userId: number) {
+        const supabase = this.supabaseService.getClient();
+
+        // Validar duplicado
+        const { data: existing } = await supabase
+            .from('nomina_periodos')
+            .select('id')
+            .eq('anio', dto.anio)
+            .eq('mes', dto.mes)
+            .single();
+
+        if (existing) throw new BadRequestException(`El periodo ${dto.anio}-${dto.mes} ya existe.`);
+
+        const { data, error } = await supabase
+            .from('nomina_periodos')
+            .insert({
+                anio: dto.anio,
+                mes: dto.mes,
+                fecha_inicio: dto.fecha_inicio,
+                fecha_fin: dto.fecha_fin,
+                cerrado: dto.cerrado || false
+            })
+            .select()
+            .single();
+
+        if (error) throw new InternalServerErrorException(error.message);
+
+        await this.auditoriaService.create({
+            tabla_afectada: 'nomina_periodos',
+            registro_id: data.id,
+            accion: 'INSERT',
+            datos_nuevos: data,
+            usuario_id: userId
+        });
+
+        return data;
+    }
+
     // 🔹 Generar Nómina
     async generarNomina(anio: number, mes: number, userId: number) {
         const supabase = this.supabaseService.getClient();
@@ -121,47 +160,131 @@ export class NominaService {
 
             const netoPagar = totalDevengado - totalDeducciones;
 
-            // C. Guardar Nomina Empleado
-            // Verificar si ya existe para este periodo y borrarlo (recalculo)
-            await supabase
-                .from('nomina_empleado')
-                .delete()
-                .eq('empleado_id', emp.id)
-                .eq('periodo_id', periodo.id);
+            // C. Guardar Nomina Empleado (Upsert manual logic to preserve hours)
 
-            const { data: nominaEmp, error: insertError } = await supabase
+            // 1. Buscar registro existente para preservar horas/recargos manuales (si no es recalculo forzoso destructivo)
+            const { data: existingNomina } = await supabase
                 .from('nomina_empleado')
-                .insert({
-                    empleado_id: emp.id,
-                    contrato_id: emp.contrato_personal_id,
-                    salario_id: emp.salario_id,
-                    periodo_id: periodo.id,
-                    horas_normales: 240, // Asumido completo
-                    total_horas_extra: totalHorasExtraValor,
-                    total_recargos: 0,
-                    total_deducciones: totalDeducciones,
-                    total_devengado: totalDevengado,
-                    total_pagar: netoPagar,
-                    generado: true,
-                })
-                .select()
+                .select('*')
+                .eq('empleado_id', emp.id)
+                .eq('periodo_id', periodo.id)
                 .single();
 
-            if (insertError) {
-                this.logger.error(`Error insertando nomina empleado ${emp.id}: ${insertError.message}`);
-                continue;
+            // Si existe, usamos sus horas si son mayores a 0 (asumiendo que las registradas manualmente prevalecen o se suman)
+            // Aquí asumimos que si ya existen en DB, son las válidas. 
+            // Si queremos forzar recalculo de horas desde turnos, sería otra lógica.
+            // PERO el requerimiento es "Registrar variables del mes" (Novedades/Horas) y luego generar.
+            // Entonces, si ya están en DB, debemos respetarlas.
+
+            const currentHorasExtras = {
+                diurna: existingNomina?.horas_extra_diurnas ?? horasExtras.diurna,
+                nocturna: existingNomina?.horas_extra_nocturnas ?? horasExtras.nocturna,
+                festiva: existingNomina?.horas_extra_festivas ?? horasExtras.festiva,
+                dominical: existingNomina?.horas_dominicales ?? horasExtras.dominical,
+            };
+
+            // Recalcular devengado con horas preservadas
+            const totalHorasExtraValorPreservado =
+                (currentHorasExtras.diurna || 0) * valorHora * getMultiplicador('hora_extra_diurna') +
+                (currentHorasExtras.nocturna || 0) * valorHora * getMultiplicador('hora_extra_nocturna') +
+                (currentHorasExtras.festiva || 0) * valorHora * getMultiplicador('hora_extra_festiva') +
+                (currentHorasExtras.dominical || 0) * valorHora * getMultiplicador('hora_dominical');
+
+            // Recargos (si hubiera lógica de valor)
+            // Asumimos total_recargos viene de DB si existe, o 0.
+            const totalRecargos = existingNomina?.total_recargos || 0;
+
+            const totalDevengadoFinal = salarioBase + totalHorasExtraValorPreservado + auxilioTransporte + totalRecargos;
+
+            // Recalcular deducciones sobre nuevo devengado si aplica
+            let totalDeduccionesFinal = 0;
+            const deduccionesCalculadasFinal: any[] = [];
+            for (const ded of deducciones || []) {
+                let valor = 0;
+                if (ded.tipo === 'porcentaje') {
+                    const base = ded.aplica_a === 'salario' ? salarioBase : totalDevengadoFinal;
+                    valor = base * (Number(ded.valor) / 100);
+                } else {
+                    valor = Number(ded.valor);
+                }
+                totalDeduccionesFinal += valor;
+                deduccionesCalculadasFinal.push({
+                    deduccion_id: ded.id,
+                    valor_calculado: valor,
+                });
             }
 
-            // D. Guardar Detalle Deducciones
-            for (const dedCalc of deduccionesCalculadas) {
+            const netoPagarFinal = totalDevengadoFinal - totalDeduccionesFinal;
+
+            // Upsert Logica: Si existe update, si no insert.
+            let nominaId: number;
+
+            if (existingNomina) {
+                const { data: updated, error: updateError } = await supabase
+                    .from('nomina_empleado')
+                    .update({
+                        salario_id: emp.salario_id,
+                        contrato_id: emp.contrato_personal_id, // Ensure consistent
+                        horas_normales: 240,
+                        total_horas_extra: totalHorasExtraValorPreservado,
+                        total_recargos: totalRecargos,
+                        total_deducciones: totalDeduccionesFinal,
+                        total_devengado: totalDevengadoFinal,
+                        total_pagar: netoPagarFinal,
+                        generado: true,
+                        // No tocamos las columnas de horas individuales, se preservan.
+                    })
+                    .eq('id', existingNomina.id)
+                    .select()
+                    .single();
+
+                if (updateError) {
+                    this.logger.error(`Error actualizando nomina empleado ${emp.id}: ${updateError.message}`);
+                    continue;
+                }
+                nominaId = updated.id;
+            } else {
+                const { data: newNomina, error: insertError } = await supabase
+                    .from('nomina_empleado')
+                    .insert({
+                        empleado_id: emp.id,
+                        contrato_id: emp.contrato_personal_id,
+                        salario_id: emp.salario_id,
+                        periodo_id: periodo.id,
+                        horas_normales: 240,
+                        horas_extra_diurnas: currentHorasExtras.diurna,
+                        horas_extra_nocturnas: currentHorasExtras.nocturna,
+                        horas_extra_festivas: currentHorasExtras.festiva,
+                        horas_dominicales: currentHorasExtras.dominical,
+                        total_horas_extra: totalHorasExtraValorPreservado,
+                        total_recargos: totalRecargos,
+                        total_deducciones: totalDeduccionesFinal,
+                        total_devengado: totalDevengadoFinal,
+                        total_pagar: netoPagarFinal,
+                        generado: true,
+                    })
+                    .select()
+                    .single();
+
+                if (insertError) {
+                    this.logger.error(`Error insertando nomina empleado ${emp.id}: ${insertError.message}`);
+                    continue;
+                }
+                nominaId = newNomina.id;
+            }
+
+            // D. Guardar Detalle Deducciones (Reemplazar)
+            await supabase.from('nomina_empleado_deducciones').delete().eq('nomina_empleado_id', nominaId);
+
+            for (const dedCalc of deduccionesCalculadasFinal) {
                 await supabase.from('nomina_empleado_deducciones').insert({
-                    nomina_empleado_id: nominaEmp.id,
+                    nomina_empleado_id: nominaId,
                     deduccion_id: dedCalc.deduccion_id,
                     valor_calculado: dedCalc.valor_calculado,
                 });
             }
 
-            resultados.push(nominaEmp);
+            resultados.push({ id: nominaId });
         }
 
         // Auditar generación

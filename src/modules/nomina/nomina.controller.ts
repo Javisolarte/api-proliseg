@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, ParseIntPipe, Post, UseGuards } from '@ne
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { NominaService } from './nomina.service';
+import { CreatePeriodoDto } from './dto/create-periodo.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
 @ApiTags('Nomina - Contabilidad')
@@ -10,6 +11,12 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 @ApiBearerAuth('JWT-auth')
 export class NominaController {
     constructor(private readonly nominaService: NominaService) { }
+
+    @Post('periodos')
+    @ApiOperation({ summary: 'Crear periodo de nomina' })
+    async createPeriod(@Body() dto: CreatePeriodoDto, @CurrentUser() user: any) {
+        return this.nominaService.createPeriod(dto, user.id);
+    }
 
     @Post('generar')
     @ApiOperation({ summary: 'Generar nomina para un año y mes específico' })
