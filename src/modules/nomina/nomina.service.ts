@@ -251,8 +251,8 @@ export class NominaService {
                 const { data: updated, error: updateError } = await supabase
                     .from('nomina_empleado')
                     .update({
-                        salario_id: emp.salario_id,
-                        contrato_id: emp.contrato_personal_id, // Ensure consistent
+                        salario_id: contrato.salario_id,
+                        contrato_id: contrato.id, // Corrected: use contract.id source of truth
                         horas_normales: 240,
                         total_horas_extra: totalHorasExtraValorPreservado,
                         total_recargos: totalRecargos,
@@ -276,8 +276,8 @@ export class NominaService {
                     .from('nomina_empleado')
                     .insert({
                         empleado_id: emp.id,
-                        contrato_id: emp.contrato_personal_id,
-                        salario_id: emp.salario_id,
+                        contrato_id: contrato.id, // Corrected: use contract.id source of truth
+                        salario_id: contrato.salario_id, // Corrected: use contract.salario_id source of truth
                         periodo_id: periodo.id,
                         horas_normales: 240,
                         horas_extra_diurnas: currentHorasExtras.diurna,
