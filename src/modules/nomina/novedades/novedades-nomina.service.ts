@@ -1,6 +1,6 @@
 import { Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
-import { SupabaseService } from '../../../supabase/supabase.service';
-import { AuditoriaService } from '../../../auditoria/auditoria.service';
+import { SupabaseService } from '../../supabase/supabase.service';
+import { AuditoriaService } from '../../auditoria/auditoria.service';
 import { CreateNovedadNominaDto } from './dto/create-novedad-nomina.dto';
 
 @Injectable()

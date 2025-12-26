@@ -1,9 +1,9 @@
 import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { NovedadesNominaService } from './novedades-nomina.service';
 import { CreateNovedadNominaDto } from './dto/create-novedad-nomina.dto';
-import { CurrentUser } from '../../../auth/decorators/current-user.decorator';
+import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 
 @ApiTags('Nomina - Novedades')
 @Controller('nomina/novedades')
