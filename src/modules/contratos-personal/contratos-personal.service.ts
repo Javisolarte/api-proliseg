@@ -45,8 +45,8 @@ export class ContratosPersonalService {
             const { data: empleado } = await supabase.from('empleados').select('cedula').eq('id', createDto.empleado_id).single();
             if (!empleado) throw new NotFoundException('Empleado no encontrado');
 
-            const path = `${empleado.cedula}/contrato_${new Date().getTime()}.pdf`;
-            contratoPdfUrl = await this.uploadFile(file, 'contratos_personal', path);
+            const path = `contratos_empleados/${empleado.cedula}.pdf`;
+            contratoPdfUrl = await this.uploadFile(file, 'empleados', path);
         }
 
         // 3. Insertar contrato
@@ -112,8 +112,8 @@ export class ContratosPersonalService {
         if (file) {
             const { data: empleado } = await supabase.from('empleados').select('cedula').eq('id', contract.empleado_id).single();
             if (!empleado) throw new NotFoundException('Empleado no encontrado para subir archivo');
-            const path = `${empleado.cedula}/terminacion_${contract.id}_${new Date().getTime()}.pdf`;
-            terminacionPdfUrl = await this.uploadFile(file, 'contratos_personal', path);
+            const path = `contratos_empleados/${empleado.cedula}_terminacion_${contract.id}.pdf`;
+            terminacionPdfUrl = await this.uploadFile(file, 'empleados', path);
         }
 
         // 3. Actualizar contrato
