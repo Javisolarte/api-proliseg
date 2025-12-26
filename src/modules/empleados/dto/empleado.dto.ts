@@ -233,6 +233,27 @@ export class CreateEmpleadoDto {
   @ApiProperty({ example: ["url1.pdf", "url2.pdf"], required: false })
   @IsOptional()
   documentos_adicionales_urls?: string[];
+
+  @ApiProperty({ example: false, required: false, description: "Indica si tiene alguna discapacidad" })
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
+  tiene_discapacidad?: boolean;
+
+  @ApiProperty({ example: "Ninguna", required: false, description: "Descripción de la discapacidad si aplica" })
+  @IsOptional()
+  @IsString()
+  descripcion_discapacidad?: string;
+
+  @ApiProperty({ example: "5 años de experiencia en seguridad", required: false, description: "Resumen de experiencia laboral" })
+  @IsOptional()
+  @IsString()
+  experiencia?: string;
+
+  @ApiProperty({ example: "Observaciones generales", required: false, description: "Observaciones adicionales" })
+  @IsOptional()
+  @IsString()
+  observaciones?: string;
 }
 
 export class UpdateEmpleadoDto extends PartialType(CreateEmpleadoDto) { }
