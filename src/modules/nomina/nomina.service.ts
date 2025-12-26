@@ -93,30 +93,36 @@ export class NominaService {
             .eq('activo', true);
 
         // 4. Obtener Empleados Activos con Contrato
-        const { data: empleados } = await supabase
-            .from('empleados')
+        // 4. Obtener Contratos Activos (Source of Truth)
+        // Corregido: Consultar contratos_personal directamente en lugar de empleados para evitar errores si empleados.contrato_personal_id es nulo.
+        const { data: contratos } = await supabase
+            .from('contratos_personal')
             .select(`
-        id,
-        nombre_completo,
-        salario_id,
-        contrato_personal_id,
-        contratos_personal!inner(salario_id),
-        salarios!fk_salario_empleado(valor)
-      `)
-            .eq('activo', true)
-            .not('contrato_personal_id', 'is', null);
+                *,
+                empleados!inner (
+                    id,
+                    nombre_completo
+                ),
+                salarios (
+                    valor
+                )
+            `)
+            .eq('estado', 'activo');
 
-        if (!empleados || empleados.length === 0) throw new BadRequestException('No hay empleados activos para generar nómina.');
+        if (!contratos || contratos.length === 0) throw new BadRequestException('No hay contratos activos para generar nómina.');
 
         const resultados: any[] = [];
 
-        // 5. Calcular por Empleado
-        for (const emp of empleados) {
-            if (!emp.contrato_personal_id) continue;
+        // 5. Calcular por Empleado (Iterando contratos)
+        for (const contrato of contratos) {
+            const emp = contrato.empleados;
+            // Validacion de seguridad
+            if (!emp) continue;
 
-            const salarioData: any = emp.salarios;
+            const salarioData: any = contrato.salarios;
             const salarioBase = Array.isArray(salarioData) ? (salarioData[0]?.valor || 0) : (salarioData?.valor || 0);
             const valorHora = salarioBase / 240; // Base 30 dias * 8 horas = 240
+
 
             // A. Calcular Horas (Simulado o desde reportes de turnos)
             // TODO: Conectar con modulo de turnos para obtener horas reales.
