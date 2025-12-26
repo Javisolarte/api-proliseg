@@ -6,6 +6,7 @@ import {
     ParseIntPipe,
     Post,
     Put,
+    Delete,
     UploadedFile,
     UseGuards,
     UseInterceptors,
@@ -76,6 +77,12 @@ export class ContratosPersonalController {
         return this.contratosService.findExpiring();
     }
 
+    @Get('inactivos')
+    @ApiOperation({ summary: 'Listar contratos inactivos (vencidos, terminados, etc.)' })
+    async findInactive() {
+        return this.contratosService.findInactive();
+    }
+
     @Get(':id')
     @ApiOperation({ summary: 'Obtener detalle de contrato' })
     async findOne(@Param('id', ParseIntPipe) id: number) {
@@ -102,5 +109,11 @@ export class ContratosPersonalController {
         @CurrentUser() user: any
     ) {
         return this.contratosService.update(id, dto, user.id);
+    }
+
+    @Delete(':id')
+    @ApiOperation({ summary: 'Eliminar contrato completamente' })
+    async remove(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: any) {
+        return this.contratosService.remove(id, user.id);
     }
 }

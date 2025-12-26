@@ -193,7 +193,6 @@ export class ContratosPersonalService {
         return data;
     }
 
-
     // 🔹 Obtener Contrato por ID
     async findOne(id: number) {
         const supabase = this.supabaseService.getClient();
@@ -304,6 +303,22 @@ export class ContratosPersonalService {
         return data;
     }
 
+    // 🔹 Contratos Inactivos/Vencidos
+    async findInactive() {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('contratos_personal')
+            .select(`
+                *,
+                empleados!fk_contrato_empleado(nombre_completo, cedula),
+                salarios(nombre_salario, valor)
+            `)
+            .neq('estado', 'activo');
+
+        if (error) throw error;
+        return data;
+    }
+
     // 🔹 Vencimientos Próximos (30 dias)
     async findExpiring(days: number = 30) {
         const supabase = this.supabaseService.getClient();
@@ -357,6 +372,49 @@ export class ContratosPersonalService {
         });
 
         return { message: `Se actualizaron ${ids.length} contratos a estado finalizado`, contratos: ids };
+    }
+
+    // 🔹 Eliminar Contrato
+    async remove(id: number, userId: number) {
+        const supabase = this.supabaseService.getClient();
+
+        // 1. Verificar existencia
+        const { data: contract } = await supabase.from('contratos_personal').select('*').eq('id', id).single();
+        if (!contract) throw new NotFoundException('Contrato no encontrado');
+
+        // 2. Verificar si está asignado a un empleado como activo
+        const { data: empleado } = await supabase
+            .from('empleados')
+            .select('id, contrato_personal_id')
+            .eq('contrato_personal_id', id)
+            .single();
+
+        // 3. Si está asignado, desvincular
+        if (empleado) {
+            await supabase
+                .from('empleados')
+                .update({ contrato_personal_id: null })
+                .eq('id', empleado.id);
+        }
+
+        // 4. Eliminar
+        const { error } = await supabase
+            .from('contratos_personal')
+            .delete()
+            .eq('id', id);
+
+        if (error) throw new InternalServerErrorException('Error al eliminar el contrato');
+
+        // 5. Auditoría
+        await this.auditoriaService.create({
+            tabla_afectada: 'contratos_personal',
+            registro_id: id,
+            accion: 'DELETE',
+            datos_anteriores: contract,
+            usuario_id: userId
+        });
+
+        return { message: 'Contrato eliminado correctamente' };
     }
 
     // 🔹 Auditoria de Contrato
