@@ -104,7 +104,7 @@ export class NominaService {
             .from('contratos_personal')
             .select(`
                 *,
-                empleados!inner (
+                empleados!fk_contrato_empleado!inner (
                     id,
                     nombre_completo
                 ),
