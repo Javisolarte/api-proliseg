@@ -27,7 +27,8 @@ import { ServiciosModule } from './modules/servicios/servicios.module';
 import { PermisosModule } from './modules/permisos/permisos.module';
 import { AsignacionesModule } from './modules/asignaciones/asignaciones.module';
 import { PuestosModule } from './modules/puestos/puestos.module';
-import { SubpuestosModule } from './modules/subpuestos/subpuestos.module';
+import { SubpuestosModule } from "./modules/subpuestos/subpuestos.module";
+import { TiposCursoVigilanciaModule } from "./modules/tipos-curso-vigilancia/tipos-curso-vigilancia.module";
 import { TurnosConfiguracionModule } from './modules/turnos_configuracion/turnos_configuracion.module';
 import { NotificacionesModule } from './modules/notificaciones/notificaciones.module';
 import { ArlModule } from './modules/arl/arl.module';
@@ -95,6 +96,7 @@ import { TiposVigilanteModule } from './modules/tipos-vigilante/tipos-vigilante.
     AsignacionesModule,
     PuestosModule,
     SubpuestosModule,
+    TiposCursoVigilanciaModule,
     TurnosConfiguracionModule,
     NotificacionesModule,
     ArlModule,

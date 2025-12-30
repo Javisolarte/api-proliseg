@@ -46,13 +46,15 @@ export class EmpleadosService {
              arl.nombre AS arl_nombre,
              fp.nombre AS fondo_pension_nombre,
              cp.tipo_contrato AS contrato_personal_nombre, 
-             u.nombre_completo AS creado_por_nombre
+             u.nombre_completo AS creado_por_nombre,
+             tcv.nombre AS tipo_curso_vigilancia_nombre
       FROM empleados e
       LEFT JOIN eps ON e.eps_id = eps.id
       LEFT JOIN arl ON e.arl_id = arl.id
       LEFT JOIN fondos_pension fp ON e.fondo_pension_id = fp.id
       LEFT JOIN contratos_personal cp ON e.contrato_personal_id = cp.id
       LEFT JOIN usuarios_externos u ON e.creado_por = u.id
+      LEFT JOIN tipos_curso_vigilancia tcv ON e.tipo_curso_vigilancia_id = tcv.id
       WHERE 1=1
     `;
 
@@ -92,7 +94,8 @@ export class EmpleadosService {
              fp.nombre AS fondo_pension_nombre,
              cp.tipo_contrato AS contrato_personal_nombre,
              u.nombre_completo AS creado_por_nombre,
-             uv.nombre_completo AS actualizado_por_nombre
+             uv.nombre_completo AS actualizado_por_nombre,
+             tcv.nombre AS tipo_curso_vigilancia_nombre
       FROM empleados e
       LEFT JOIN eps ON e.eps_id = eps.id
       LEFT JOIN arl ON e.arl_id = arl.id
@@ -100,6 +103,7 @@ export class EmpleadosService {
       LEFT JOIN contratos_personal cp ON e.contrato_personal_id = cp.id
       LEFT JOIN usuarios_externos u ON e.creado_por = u.id
       LEFT JOIN usuarios_externos uv ON e.actualizado_por = uv.id
+      LEFT JOIN tipos_curso_vigilancia tcv ON e.tipo_curso_vigilancia_id = tcv.id
       WHERE e.id = ${id}
       LIMIT 1
     `;
@@ -425,5 +429,37 @@ export class EmpleadosService {
 
     if (error) throw error;
     return { asignado: data?.asignado || false };
+  }
+
+  // 🔹 Empleados con curso por vencer
+  async getCursosPorVencer(dias: number = 30) {
+    const supabase = this.supabaseService.getClient();
+    this.logger.debug(`🕒 Buscando cursos por vencer en los próximos ${dias} días`);
+
+    const hoy = new Date().toISOString().split('T')[0];
+    const fechaLimite = new Date();
+    fechaLimite.setDate(fechaLimite.getDate() + dias);
+    const fechaLimiteStr = fechaLimite.toISOString().split('T')[0];
+
+    const sql = `
+      SELECT e.id, e.nombre_completo, e.cedula, e.fecha_vencimiento_curso,
+             tcv.nombre AS tipo_curso_vigilancia_nombre
+      FROM empleados e
+      LEFT JOIN tipos_curso_vigilancia tcv ON e.tipo_curso_vigilancia_id = tcv.id
+      WHERE e.fecha_vencimiento_curso IS NOT NULL
+      AND e.fecha_vencimiento_curso >= '${hoy}'
+      AND e.fecha_vencimiento_curso <= '${fechaLimiteStr}'
+      AND e.activo = true
+      ORDER BY e.fecha_vencimiento_curso ASC
+    `;
+
+    const { data, error } = await supabase.rpc("exec_sql", { query: sql });
+
+    if (error) {
+      this.logger.error(`❌ Error en getCursosPorVencer: ${JSON.stringify(error, null, 2)}`);
+      throw error;
+    }
+
+    return Array.isArray(data) ? data : [];
   }
 }

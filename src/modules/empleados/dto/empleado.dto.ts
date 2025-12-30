@@ -259,6 +259,26 @@ export class CreateEmpleadoDto {
   @IsOptional()
   @IsString()
   observaciones?: string;
+
+  @ApiProperty({ example: false, required: false, description: "Indica si tiene curso de vigilancia" })
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
+  tiene_curso_vigilancia?: boolean;
+
+  @ApiProperty({ example: 1, required: false, description: "ID del tipo de curso de vigilancia" })
+  @IsOptional()
+  @IsInt()
+  @Transform(({ value }) => {
+    if (value === null || value === 'null' || value === '') return null;
+    return parseInt(value);
+  })
+  tipo_curso_vigilancia_id?: number | null;
+
+  @ApiProperty({ example: "2025-12-31", required: false, description: "Fecha de vencimiento del curso de vigilancia" })
+  @IsOptional()
+  @IsDateString()
+  fecha_vencimiento_curso?: string;
 }
 
 export class UpdateEmpleadoDto extends PartialType(CreateEmpleadoDto) { }

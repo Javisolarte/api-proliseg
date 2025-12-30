@@ -12,6 +12,7 @@ import {
   BadRequestException,
   UseInterceptors,
   UploadedFiles,
+  Query,
 } from "@nestjs/common";
 import {
   ApiTags,
@@ -20,6 +21,7 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiConsumes,
+  ApiQuery,
 } from "@nestjs/swagger";
 import { FileFieldsInterceptor } from "@nestjs/platform-express";
 import { EmpleadosService } from "./empleados.service";
@@ -121,6 +123,9 @@ Todos los archivos se guardan directamente en sus respectivos buckets de Supabas
         descripcion_discapacidad: { type: 'string', example: 'Ninguna' },
         experiencia: { type: 'string', example: '5 años en seguridad' },
         observaciones: { type: 'string', example: 'Sin observaciones' },
+        tiene_curso_vigilancia: { type: 'boolean', example: false },
+        tipo_curso_vigilancia_id: { type: 'number', example: 1 },
+        fecha_vencimiento_curso: { type: 'string', format: 'date', example: '2025-12-31' },
 
         rol: { type: 'string', example: 'empleado' },
         verificado_documentos: { type: 'boolean', example: false },
@@ -206,6 +211,9 @@ Todos los archivos se guardan directamente en sus respectivos buckets de Supabas
         tipo_vigilante_id: { type: 'number', example: 1 },
         formacion_academica: { type: 'string', example: 'Técnico' },
         activo: { type: 'boolean', example: true },
+        tiene_curso_vigilancia: { type: 'boolean', example: false },
+        tipo_curso_vigilancia_id: { type: 'number', example: 1 },
+        fecha_vencimiento_curso: { type: 'string', format: 'date', example: '2025-12-31' },
         // Campos de archivos
         foto_perfil: { type: 'string', format: 'binary', description: '📸 Nueva foto de perfil' },
         cedula_pdf: { type: 'string', format: 'binary', description: '📄 Nueva cédula' },
@@ -310,9 +318,22 @@ Todos los archivos se guardan directamente en sus respectivos buckets de Supabas
   }
 
   /**
+   * 🔹 Obtener empleados con el curso de vigilancia por vencer
+   */
+  @Get("consultas/cursos-por-vencer")
+  @RequirePermissions("empleados")
+  @ApiOperation({ summary: "Obtener empleados con el curso de vigilancia por vencer" })
+  @ApiQuery({ name: 'dias', required: false, example: '30', description: 'Número de días anticipados para el vencimiento' })
+  @ApiResponse({ status: 200, description: "Lista de empleados con curso por vencer." })
+  getCursosPorVencer(@Query("dias") dias?: string) {
+    const numDias = dias ? parseInt(dias) : 30;
+    return this.empleadosService.getCursosPorVencer(numDias);
+  }
+
+  /**
    * 🔹 Obtener tipo de vigilante
    */
-  @Get(":id/tipo-vigilante")
+  @Get("consultas/tipo-vigilante/:id")
   @RequirePermissions("empleados")
   @ApiOperation({ summary: "Obtener tipo de vigilante" })
   async getTipoVigilante(@Param("id", ParseIntPipe) id: number) {

@@ -17,7 +17,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
-@ApiTags('Tipos de Vigilante')
+@ApiTags('Vigilancia')
 @ApiBearerAuth('JWT-auth')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('tipos-vigilante')

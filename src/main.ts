@@ -59,6 +59,7 @@ async function bootstrap() {
     .addTag("Seguridad", "Módulos de turnos, asistencias e incidentes")
     .addTag("Configuración", "Gestión de roles, usuarios y permisos")
     .addTag("Salarios", "Gestión de salarios")
+    .addTag("Vigilancia", "Gestión de cursos y tipos de vigilantes")
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
