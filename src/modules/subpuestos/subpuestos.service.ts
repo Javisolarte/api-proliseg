@@ -2,11 +2,16 @@ import { Injectable, BadRequestException, NotFoundException, Logger } from "@nes
 import { SupabaseService } from "../supabase/supabase.service";
 import type { CreateSubpuestoDto, UpdateSubpuestoDto } from "./dto/subpuesto.dto";
 
+import { AsignarTurnosService } from '../asignar_turnos/asignar_turnos.service';
+
 @Injectable()
 export class SubpuestosService {
   private readonly logger = new Logger(SubpuestosService.name);
 
-  constructor(private readonly supabaseService: SupabaseService) { }
+  constructor(
+    private readonly supabaseService: SupabaseService,
+    private readonly asignarTurnosService: AsignarTurnosService
+  ) { }
 
   // 🔹 Listar todos los subpuestos
   async findAll() {
@@ -236,7 +241,7 @@ export class SubpuestosService {
     if (dto.configuracion_id !== undefined) updateData.configuracion_id = dto.configuracion_id;
     if (dto.activo !== undefined) updateData.activo = dto.activo;
 
-    const { data, error } = await supabase
+    const { data: updatedSubpuesto, error } = await supabase
       .from("subpuestos_trabajo")
       .update(updateData)
       .eq("id", id)
@@ -244,7 +249,17 @@ export class SubpuestosService {
       .single();
 
     if (error) throw error;
-    return { message: "Subpuesto actualizado exitosamente", data };
+
+    // ✅ Hook: Si cambió la configuración, regenerar turnos futuros automáticamente
+    if (dto.configuracion_id !== undefined && dto.configuracion_id !== existing.configuracion_id) {
+      this.logger.log(`🔄 Cambio de configuración detectado en subpuesto ${id}. Regenerando turnos...`);
+      // Ejecutar en segundo plano para no bloquear respuesta
+      this.asignarTurnosService.regenerarTurnos(id, userId)
+        .then(res => this.logger.log(`✅ Turnos regenerados post-update: ${res.message}`))
+        .catch(err => this.logger.error(`❌ Error regenerando turnos post-update: ${err.message}`));
+    }
+
+    return { message: "Subpuesto actualizado exitosamente", data: updatedSubpuesto };
   }
 
   // 🔹 Soft delete (eliminar lógicamente)
