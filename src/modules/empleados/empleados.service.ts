@@ -198,6 +198,8 @@ export class EmpleadosService {
       .insert({
         ...createEmpleadoDto,
         ...fileUrls,
+        // Si no es vigilante, forzamos null en tipo_vigilante_id para mantener consistencia
+        tipo_vigilante_id: createEmpleadoDto.rol === 'vigilante' ? createEmpleadoDto.tipo_vigilante_id : null,
         creado_por: userId,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -279,6 +281,9 @@ export class EmpleadosService {
       .update({
         ...updateEmpleadoDto,
         ...fileUrls,
+        // Si el rol cambia y ya no es vigilante, se debería limpiar, pero aquí solo tenemos el parcial.
+        // Se asume que si el frontend envía rol != vigilante, también debería enviar tipo_vigilante_id: null o lo manejamos aquí si viene el rol.
+        ...(updateEmpleadoDto.rol && updateEmpleadoDto.rol !== 'vigilante' ? { tipo_vigilante_id: null } : {}),
         actualizado_por: userId,
         updated_at: new Date().toISOString(),
       })
@@ -352,5 +357,73 @@ export class EmpleadosService {
 
     this.logger.debug(`📦 Capacitaciones obtenidas: ${data.length}`);
     return data;
+  }
+
+  // 🔹 Utilidades Nuevas
+  async getSalario(id: number) {
+    const supabase = this.supabaseService.getClient();
+    // Buscar salario a través del contrato personal activo
+    const { data, error } = await supabase
+      .from('contratos_personal')
+      .select(`
+        salarios (
+          id, nombre_salario, valor
+        )
+      `)
+      .eq('empleado_id', id)
+      .eq('estado', 'activo')
+      .single();
+
+    if (error) {
+      // Si no tiene contrato activo, retornamos null o error
+      this.logger.warn(`No se encontró salario/contrato activo para empleado ${id}: ${error.message}`);
+      return null;
+    }
+    return data?.salarios;
+  }
+
+  async getRol(id: number) {
+    const supabase = this.supabaseService.getClient();
+    const { data, error } = await supabase
+      .from('empleados')
+      .select('rol')
+      .eq('id', id)
+      .single();
+
+    if (error) throw error;
+    return data;
+  }
+
+  async isVigilante(id: number) {
+    const rolData = await this.getRol(id);
+    return { es_vigilante: rolData?.rol === 'vigilante' };
+  }
+
+  async getTipoVigilante(id: number) {
+    const supabase = this.supabaseService.getClient();
+    const { data, error } = await supabase
+      .from('empleados')
+      .select(`
+        tipos_vigilante (
+          id, nombre, descripcion
+        )
+      `)
+      .eq('id', id)
+      .single();
+
+    if (error) throw error;
+    return data?.tipos_vigilante;
+  }
+
+  async checkAsignado(id: number) {
+    const supabase = this.supabaseService.getClient();
+    const { data, error } = await supabase
+      .from('empleados')
+      .select('asignado')
+      .eq('id', id)
+      .single();
+
+    if (error) throw error;
+    return { asignado: data?.asignado || false };
   }
 }

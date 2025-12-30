@@ -110,7 +110,7 @@ Todos los archivos se guardan directamente en sus respectivos buckets de Supabas
         fecha_fin_arl: { type: 'string', format: 'date', example: '2024-01-01' },
         fecha_afiliacion_pension: { type: 'string', format: 'date', example: '2023-01-01' },
         fecha_fin_pension: { type: 'string', format: 'date', example: '2024-01-01' },
-        salario_id: { type: 'number', example: 1 },
+        tipo_vigilante_id: { type: 'number', example: 1 },
         formacion_academica: { type: 'string', example: 'Bachiller' },
         rh: { type: 'string', example: 'O+' },
         lugar_expedicion: { type: 'string', example: 'Bogotá' },
@@ -203,7 +203,7 @@ Todos los archivos se guardan directamente en sus respectivos buckets de Supabas
         direccion: { type: 'string', example: 'Calle 123 #45-67' },
         departamento: { type: 'string', example: 'Cundinamarca' },
         ciudad: { type: 'string', example: 'Bogotá' },
-        salario_id: { type: 'number', example: 1 },
+        tipo_vigilante_id: { type: 'number', example: 1 },
         formacion_academica: { type: 'string', example: 'Técnico' },
         activo: { type: 'boolean', example: true },
         // Campos de archivos
@@ -268,5 +268,54 @@ Todos los archivos se guardan directamente en sus respectivos buckets de Supabas
   @ApiResponse({ status: 200, description: "Lista de capacitaciones" })
   async getCapacitaciones(@Param("id", ParseIntPipe) id: number) {
     return this.empleadosService.getCapacitaciones(id);
+  }
+  /**
+   * 🔹 Obtener salario del empleado (via contrato activo)
+   */
+  @Get(":id/salario")
+  @RequirePermissions("empleados")
+  @ApiOperation({ summary: "Obtener salario del empleado (via contrato activo)" })
+  async getSalario(@Param("id", ParseIntPipe) id: number) {
+    return this.empleadosService.getSalario(id);
+  }
+
+  /**
+   * 🔹 Obtener rol del empleado
+   */
+  @Get(":id/rol")
+  @RequirePermissions("empleados")
+  @ApiOperation({ summary: "Obtener rol del empleado" })
+  async getRol(@Param("id", ParseIntPipe) id: number) {
+    return this.empleadosService.getRol(id);
+  }
+
+  /**
+   * 🔹 Verificar si es vigilante
+   */
+  @Get(":id/es-vigilante")
+  @RequirePermissions("empleados")
+  @ApiOperation({ summary: "Verificar si es vigilante" })
+  async isVigilante(@Param("id", ParseIntPipe) id: number) {
+    return this.empleadosService.isVigilante(id);
+  }
+
+  /**
+   * 🔹 Verificar si está asignado
+   */
+  @Get(":id/esta-asignado")
+  @RequirePermissions("empleados")
+  @ApiOperation({ summary: "Verificar si el empleado está asignado actualmente" })
+  async checkAsignado(@Param("id", ParseIntPipe) id: number) {
+    return this.empleadosService.checkAsignado(id);
+  }
+
+  /**
+   * 🔹 Obtener tipo de vigilante
+   */
+  @Get(":id/tipo-vigilante")
+  @RequirePermissions("empleados")
+  @ApiOperation({ summary: "Obtener tipo de vigilante" })
+  async getTipoVigilante(@Param("id", ParseIntPipe) id: number) {
+    return this.empleadosService.getTipoVigilante(id);
   }
 }

@@ -9,6 +9,16 @@ export enum TipoContrato {
     OBRA_LABOR = 'obra_labor',
 }
 
+export enum ModalidadTrabajo {
+    TIEMPO_COMPLETO = 'tiempo_completo',
+    MEDIO_TIEMPO = 'medio_tiempo',
+    VIRTUAL = 'virtual',
+    POR_HORAS = 'por_horas',
+    TURNOS = 'turnos',
+    PRACTICAS = 'practicas',
+    OTRO = 'otro',
+}
+
 export class CreateContratoPersonalDto {
     @ApiProperty({ description: 'ID del empleado', example: 1 })
     @IsInt()
@@ -42,4 +52,14 @@ export class CreateContratoPersonalDto {
     @ApiProperty({ type: 'string', format: 'binary', required: false, description: 'PDF del contrato' })
     @IsOptional()
     contrato_pdf?: any;
+
+    @ApiProperty({
+        enum: ModalidadTrabajo,
+        description: 'Modalidad de trabajo',
+        example: ModalidadTrabajo.TIEMPO_COMPLETO,
+        default: ModalidadTrabajo.TIEMPO_COMPLETO
+    })
+    @IsOptional()
+    @IsEnum(ModalidadTrabajo)
+    modalidad_trabajo?: ModalidadTrabajo;
 }

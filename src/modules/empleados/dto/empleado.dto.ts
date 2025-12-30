@@ -7,6 +7,7 @@ import {
   IsDateString,
   IsEmail,
   IsNumber,
+  ValidateIf,
 } from "class-validator";
 import { Transform } from "class-transformer";
 
@@ -181,11 +182,15 @@ export class CreateEmpleadoDto {
   @IsDateString()
   ultima_evaluacion?: string;
 
-  @ApiProperty({ example: 1, required: false, description: "ID del salario asignado" })
+  @ApiProperty({ example: 1, required: false, description: "ID del tipo de vigilante (Requerido solo si rol es 'vigilante')" })
   @IsOptional()
+  @ValidateIf((o) => o.rol === 'vigilante')
   @IsInt()
-  @Transform(({ value }) => parseInt(value))
-  salario_id?: number;
+  @Transform(({ value }) => {
+    if (value === null || value === 'null' || value === '') return null;
+    return parseInt(value);
+  })
+  tipo_vigilante_id?: number | null;
 
   @ApiProperty({
     example: "Bachiller",

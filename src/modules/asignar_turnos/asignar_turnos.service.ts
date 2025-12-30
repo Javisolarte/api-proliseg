@@ -129,65 +129,121 @@ export class AsignarTurnosService {
       throw new BadRequestException('La configuración de turnos no tiene detalles definidos');
     }
 
-    // ✅ 5. Generar turnos para 30 días con distribución correcta
+    // ✅ 5. Generar turnos para 30 días
     const fechaBase = new Date(fecha_inicio);
     const turnosParaInsertar: any[] = [];
     const numeroDeDiasAGenerar = 30;
+
+    // Detectar si es horario de oficina
+    const isOficina = subpuesto.configuracion?.nombre?.toLowerCase().includes('oficina');
+
     const cicloLength = detalles.length;
     const guardasActivos = subpuesto.guardas_activos;
 
     this.logger.log(`📅 Generando turnos para ${empleados.length} empleados durante ${numeroDeDiasAGenerar} días`);
-    this.logger.log(`🔄 Ciclo de ${cicloLength} días: ${detalles.map(d => d.tipo).join(' → ')}`);
+    if (isOficina) {
+      this.logger.log(`🏢 MODO OFICINA DETECTADO: Lunes a Viernes (8-12, 14-18) + Sábados (8-12)`);
+    } else {
+      this.logger.log(`🔄 Ciclo de ${cicloLength} días: ${detalles.map(d => d.tipo).join(' → ')}`);
+    }
     this.logger.log(`👥 Guardas activos simultáneos: ${guardasActivos}`);
 
-    /**
-     * LÓGICA DE DISTRIBUCIÓN:
-     * - Con 1 activo y 3 empleados en ciclo 2D-2N-2Z:
-     *   Empleado 1: D,D,N,N,Z,Z,D,D,N,N,Z,Z...
-     *   Empleado 2: N,N,Z,Z,D,D,N,N,Z,Z,D,D...
-     *   Empleado 3: Z,Z,D,D,N,N,Z,Z,D,D,N,N...
-     * 
-     * - Con 2 activos y 6 empleados:
-     *   Cada día hay 2 guardas trabajando simultáneamente
-     *   Se distribuyen en 2 grupos de 3
-     */
-
-    // Calcular el offset inicial para cada empleado
-    // Offset = (índice del empleado * longitud del ciclo) / número de empleados
     const offsetPorEmpleado = Math.floor(cicloLength / empleados.length);
 
     empleados.forEach((empleado: Empleado, empleadoIndex) => {
-      // Calcular el offset inicial para este empleado
       const offsetInicial = (empleadoIndex * offsetPorEmpleado) % cicloLength;
 
       for (let dia = 0; dia < numeroDeDiasAGenerar; dia++) {
-        // Aplicar el offset para que cada empleado empiece en un punto diferente del ciclo
-        const diaDelCiclo = (dia + offsetInicial) % cicloLength;
-        const detalle = detalles[diaDelCiclo];
-
         const fechaTurno = new Date(fechaBase);
         fechaTurno.setDate(fechaTurno.getDate() + dia);
+        const diaSemana = fechaTurno.getDay(); // 0 = Domingo, 1 = Lunes...
 
-        const tipoTurno = detalle.tipo?.toUpperCase() || 'NORMAL';
-        const esDescanso = tipoTurno === 'DESCANSO' || tipoTurno === 'Z';
+        if (isOficina) {
+          // --- LÓGICA HORARIO DE OFICINA ---
+          // Domingo (0) -> Descanso (no se genera turno)
+          if (diaSemana === 0) continue;
 
-        const turno = {
-          empleado_id: empleado.id,
-          puesto_id: subpuesto.puesto_id,
-          subpuesto_id: subpuesto_id,
-          fecha: fechaTurno.toISOString().split('T')[0],
-          hora_inicio: esDescanso ? null : detalle.hora_inicio,
-          hora_fin: esDescanso ? null : detalle.hora_fin,
-          tipo_turno: tipoTurno,
-          configuracion_id: subpuesto.configuracion_id,
-          orden_en_ciclo: detalle.orden,
-          plaza_no: empleadoIndex + 1,
-          grupo: `GRUPO_${Math.floor(empleadoIndex / guardasActivos) + 1}`,
-          asignado_por,
-          estado_turno: 'programado',
-        };
+          // Sabado (6) -> 8:00 - 12:00
+          if (diaSemana === 6) {
+            turnosParaInsertar.push({
+              empleado_id: empleado.id,
+              puesto_id: subpuesto.puesto_id,
+              subpuesto_id: subpuesto_id,
+              fecha: fechaTurno.toISOString().split('T')[0],
+              hora_inicio: '08:00:00',
+              hora_fin: '12:00:00',
+              tipo_turno: 'NORMAL',
+              configuracion_id: subpuesto.configuracion_id,
+              orden_en_ciclo: diaSemana,
+              plaza_no: 1,
+              grupo: 'OFICINA',
+              asignado_por,
+              estado_turno: 'programado',
+            });
+            continue;
+          }
 
-        turnosParaInsertar.push(turno);
+          // Lunes (1) a Viernes (5) -> 8-12 y 14-18
+          // Turno AM
+          turnosParaInsertar.push({
+            empleado_id: empleado.id,
+            puesto_id: subpuesto.puesto_id,
+            subpuesto_id: subpuesto_id,
+            fecha: fechaTurno.toISOString().split('T')[0],
+            hora_inicio: '08:00:00',
+            hora_fin: '12:00:00',
+            tipo_turno: 'NORMAL',
+            configuracion_id: subpuesto.configuracion_id,
+            orden_en_ciclo: diaSemana,
+            plaza_no: 1,
+            grupo: 'OFICINA',
+            asignado_por,
+            estado_turno: 'programado',
+          });
+
+          // Turno PM
+          turnosParaInsertar.push({
+            empleado_id: empleado.id,
+            puesto_id: subpuesto.puesto_id,
+            subpuesto_id: subpuesto_id,
+            fecha: fechaTurno.toISOString().split('T')[0],
+            hora_inicio: '14:00:00',
+            hora_fin: '18:00:00',
+            tipo_turno: 'NORMAL',
+            configuracion_id: subpuesto.configuracion_id,
+            orden_en_ciclo: diaSemana,
+            plaza_no: 1,
+            grupo: 'OFICINA',
+            asignado_por,
+            estado_turno: 'programado',
+          });
+
+        } else {
+          // --- LÓGICA CICLO REGULAR ---
+          const diaDelCiclo = (dia + offsetInicial) % cicloLength;
+          const detalle = detalles[diaDelCiclo];
+
+          const tipoTurno = detalle.tipo?.toUpperCase() || 'NORMAL';
+          const esDescanso = tipoTurno === 'DESCANSO' || tipoTurno === 'Z';
+
+          const turno = {
+            empleado_id: empleado.id,
+            puesto_id: subpuesto.puesto_id,
+            subpuesto_id: subpuesto_id,
+            fecha: fechaTurno.toISOString().split('T')[0],
+            hora_inicio: esDescanso ? null : detalle.hora_inicio,
+            hora_fin: esDescanso ? null : detalle.hora_fin,
+            tipo_turno: tipoTurno,
+            configuracion_id: subpuesto.configuracion_id,
+            orden_en_ciclo: detalle.orden,
+            plaza_no: empleadoIndex + 1,
+            grupo: `GRUPO_${Math.floor(empleadoIndex / guardasActivos) + 1}`,
+            asignado_por,
+            estado_turno: 'programado',
+          };
+
+          turnosParaInsertar.push(turno);
+        }
       }
     });
 
@@ -498,5 +554,46 @@ export class AsignarTurnosService {
       rotacion,
       errores: resultados.errores.length > 0 ? resultados.errores : undefined
     };
+  }
+
+  /**
+   * 🔄 Regenerar turnos para un subpuesto
+   * Elimina turnos futuros y los vuelve a generar con la configuración actual
+   */
+  async regenerarTurnos(subpuesto_id: number, userId: number) {
+    this.logger.log(`♻️ Regenerando turnos para subpuesto ${subpuesto_id}`);
+
+    const fechaManana = new Date();
+    fechaManana.setDate(fechaManana.getDate() + 1);
+    const fechaInicioStr = fechaManana.toISOString().split('T')[0];
+
+    // 1. Eliminar turnos futuros (desde mañana en adelante)
+    const { message, eliminados } = await this.eliminarTurnos(
+      subpuesto_id,
+      fechaInicioStr,
+      '2099-12-31' // Fecha lejana
+    );
+
+    this.logger.log(`🗑️ Se eliminaron ${eliminados} turnos futuros`);
+
+    // 2. Generar nuevos turnos
+    try {
+      const resultadoGeneracion = await this.asignarTurnos({
+        subpuesto_id,
+        fecha_inicio: fechaInicioStr,
+        asignado_por: userId
+      });
+
+      return {
+        message: 'Turnos regenerados exitosamente',
+        eliminados,
+        generados: resultadoGeneracion.total_turnos,
+        detalle: resultadoGeneracion
+      };
+
+    } catch (error: any) {
+      this.logger.error(`❌ Error al regenerar turnos: ${error.message}`);
+      throw new BadRequestException(`Error al regenerar: ${error.message}`);
+    }
   }
 }

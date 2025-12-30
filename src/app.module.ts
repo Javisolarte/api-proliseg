@@ -53,7 +53,9 @@ import { InventarioModule } from './modules/inventario/inventario.module';
 import { DotacionesModule } from './modules/dotaciones/dotaciones.module';
 import { ContratosPersonalModule } from './modules/contratos-personal/contratos-personal.module';
 import { NominaModule } from './modules/nomina/nomina.module';
+
 import { AutoservicioModule } from './modules/autoservicio/autoservicio.module';
+import { TiposVigilanteModule } from './modules/tipos-vigilante/tipos-vigilante.module';
 
 @Module({
   imports: [
@@ -119,6 +121,7 @@ import { AutoservicioModule } from './modules/autoservicio/autoservicio.module';
     ContratosPersonalModule,
     NominaModule,
     AutoservicioModule,
+    TiposVigilanteModule,
     HelpersModule,
   ],
   providers: [],

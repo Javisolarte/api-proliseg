@@ -62,6 +62,7 @@ export class ContratosPersonalService {
                 contrato_pdf_url: contratoPdfUrl,
                 creado_por: userId,
                 estado: 'activo',
+                modalidad_trabajo: createDto.modalidad_trabajo || 'tiempo_completo',
             })
             .select()
             .single();

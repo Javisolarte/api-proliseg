@@ -223,6 +223,9 @@ export class AsignacionesService {
       throw new BadRequestException(`Error al crear asignación: ${insertError.message}`);
     }
 
+    // ✅ UPDATE EMPLEADO: Marcar como asignado
+    await supabase.from('empleados').update({ asignado: true }).eq('id', dto.empleado_id);
+
     // ✅ 6. Verificar si la asignación está completa DESPUÉS de esta nueva asignación
     const validacion = await this.turnosHelper.validarAsignacionCompleta(
       dto.subpuesto_id,
@@ -408,6 +411,18 @@ export class AsignacionesService {
 
     if (updateError) {
       throw new BadRequestException(`Error al desasignar: ${updateError.message}`);
+    }
+
+    // ✅ VERIFICAR OTRAS ASIGNACIONES ACTIVAS
+    // Si el empleado no tiene otras asignaciones activas, marcar asignado = false
+    const { count: otrasAsignaciones } = await supabase
+      .from('asignacion_guardas_puesto')
+      .select('*', { count: 'exact', head: true })
+      .eq('empleado_id', asignacion.empleado_id)
+      .eq('activo', true);
+
+    if (!otrasAsignaciones || otrasAsignaciones === 0) {
+      await supabase.from('empleados').update({ asignado: false }).eq('id', asignacion.empleado_id);
     }
 
     // 3. Marcar turnos futuros como "pendiente_asignar"
@@ -611,6 +626,20 @@ export class AsignacionesService {
 
     if (insertError) {
       throw new BadRequestException(`Error al crear nueva asignación: ${insertError.message}`);
+    }
+
+    // ✅ UPDATE NUEVO EMPLEADO: Marcar como asignado
+    await supabase.from('empleados').update({ asignado: true }).eq('id', nuevoEmpleadoId);
+
+    // ✅ UPDATE EMPLEADO ANTERIOR: Verificar si tiene otras asignaciones
+    const { count: asignacionesAnterior } = await supabase
+      .from('asignacion_guardas_puesto')
+      .select('*', { count: 'exact', head: true })
+      .eq('empleado_id', asignacionActual.empleado_id)
+      .eq('activo', true);
+
+    if (!asignacionesAnterior || asignacionesAnterior === 0) {
+      await supabase.from('empleados').update({ asignado: false }).eq('id', asignacionActual.empleado_id);
     }
 
     // 6. Reasignar TODOS los turnos futuros del empleado anterior al nuevo empleado

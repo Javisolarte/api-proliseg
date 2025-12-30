@@ -133,4 +133,31 @@ export class AsignarTurnosController {
   ) {
     return this.asignarTurnosService.rotarTurnos(subpuesto_id, desde, hasta);
   }
+
+  @Post('regenerar')
+  @ApiOperation({
+    summary: 'Regenerar turnos para un subpuesto',
+    description: 'Elimina los turnos futuros (desde mañana) y los vuelve a generar con la configuración actual. Útil cuando cambia la configuración de turnos.'
+  })
+  @ApiQuery({ name: 'subpuesto_id', type: Number, description: 'ID del subpuesto' })
+  @ApiResponse({
+    status: 201,
+    description: 'Turnos regenerados exitosamente',
+    schema: {
+      example: {
+        message: 'Turnos regenerados exitosamente',
+        eliminados: 25,
+        generados: 30,
+        detalle: {}
+      }
+    }
+  })
+  async regenerar(
+    @Query('subpuesto_id', ParseIntPipe) subpuesto_id: number,
+    @Body('user_id') userId: number // Idealmente obtener del token @CurrentUser
+  ) {
+    // Si no viene userId en body (puede ser ops), usar un default o requerir auth
+    const uid = userId || 1;
+    return this.asignarTurnosService.regenerarTurnos(subpuesto_id, uid);
+  }
 }
