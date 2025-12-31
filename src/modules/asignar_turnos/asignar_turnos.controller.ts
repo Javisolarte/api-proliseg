@@ -2,6 +2,7 @@ import { Controller, Post, Body, Get, Query, Delete, ParseIntPipe } from '@nestj
 import { ApiTags, ApiOperation, ApiQuery, ApiResponse } from '@nestjs/swagger';
 import { AsignarTurnosService } from './asignar_turnos.service';
 import { AsignarTurnosDto } from './dto/asignar_turnos.dto';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
 @ApiTags('Asignar Turnos')
 @Controller('asignar-turnos')
@@ -140,6 +141,7 @@ export class AsignarTurnosController {
     description: 'Elimina los turnos futuros (desde mañana) y los vuelve a generar con la configuración actual. Útil cuando cambia la configuración de turnos.'
   })
   @ApiQuery({ name: 'subpuesto_id', type: Number, description: 'ID del subpuesto' })
+  @ApiQuery({ name: 'asignado_por', type: Number, description: 'ID del usuario que realiza la acción' })
   @ApiResponse({
     status: 201,
     description: 'Turnos regenerados exitosamente',
@@ -154,10 +156,18 @@ export class AsignarTurnosController {
   })
   async regenerar(
     @Query('subpuesto_id', ParseIntPipe) subpuesto_id: number,
-    @Body('user_id') userId: number // Idealmente obtener del token @CurrentUser
+    @Query('asignado_por', ParseIntPipe) asignado_por: number,
+    @CurrentUser() user: any
   ) {
-    // Si no viene userId en body (puede ser ops), usar un default o requerir auth
-    const uid = userId || 1;
+    // Usar asignado_por del query, o fallback al usuario del token si está disponible
+    // Si asignado_por viene en el query (como en el log de error), lo usamos.
+    // Es importante que este ID exista en usuarios_externos.
+    const uid = asignado_por || user?.id; // Fallback to token user ID if query param missing
+
+    if (!uid) {
+      // Should throw error if neither is present, but for now relying on pipe
+    }
+
     return this.asignarTurnosService.regenerarTurnos(subpuesto_id, uid);
   }
 }

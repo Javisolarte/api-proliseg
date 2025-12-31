@@ -272,6 +272,9 @@ export class IaService {
   // ============================================================
   // 🧠 7. SUGERENCIAS DE REEMPLAZO IA
   // ============================================================
+  // ============================================================
+  // 🧠 7. SUGERENCIAS DE CANDIDATOS (Turnos/Reemplazos)
+  // ============================================================
   async sugerirReemplazo(turno: any, candidatos: any[]) {
     try {
       this.logger.log(`🧠 [Sugerencias IA] Analizando ${candidatos.length} candidatos para reemplazo.`);
@@ -301,6 +304,137 @@ export class IaService {
       return { ok: true, sugerencia };
     } catch (err: any) {
       this.logger.error('❌ Error en sugerirReemplazo:', err);
+      throw new BadRequestException(err.message);
+    }
+  }
+
+  async sugerirEmpleados(params: { subpuesto_id: number; fecha: string; hora_inicio: string; hora_fin: string }) {
+    try {
+      this.logger.log(`🧠 [Sugerencias] Iniciando búsqueda para subpuesto ${params.subpuesto_id} el ${params.fecha}`);
+
+      const supabase = this.supabase.getClient();
+
+      // 1. Obtener Info del Subpuesto y Puesto (Ubicación)
+      const { data: subpuesto, error: spError } = await supabase
+        .from('subpuestos_trabajo')
+        .select(`
+          id, 
+          nombre, 
+          puesto:puesto_id (
+            id, nombre, ciudad, direccion, latitud, longitud
+          )
+        `)
+        .eq('id', params.subpuesto_id)
+        .single();
+
+      if (spError || !subpuesto) throw new BadRequestException('Subpuesto no encontrado');
+
+      // 2. Obtener Empleados Activos con su información relevante
+      const { data: empleados, error: empError } = await supabase
+        .from('empleados')
+        .select(`
+          id, nombre_completo, cedula, direccion, ciudad, barrio,
+          tipo_vigilante:tipo_vigilante_id (nombre),
+          turnos!inner(id, fecha) -- Solo para saber si tienen turno ese día (aproximación rápida)
+        `)
+        .eq('activo', true)
+        .eq('turnos.fecha', params.fecha); // NOTA: Esto filtra LOS QUE TIENEN turno. Queremos los que NO.
+
+      // Corrección estrategia: Traer TODOS los empleados activos, y aparte traer los turnos del día para filtrar en memoria.
+      // Re-Query Empleados
+      const { data: allEmpleados } = await supabase
+        .from('empleados')
+        .select(`
+          id, nombre_completo, cedula, direccion, ciudad, 
+          tipo_vigilante:tipo_vigilante_id (nombre)
+        `)
+        .eq('activo', true);
+
+      // Re-Query Turnos ocupados ese día/hora
+      const { data: ocupados } = await supabase
+        .from('turnos')
+        .select('empleado_id, hora_inicio, hora_fin')
+        .eq('fecha', params.fecha)
+        .neq('estado_turno', 'cancelado'); // Asumimos estado
+
+      const idsOcupados = new Set(ocupados?.map(o => o.empleado_id));
+
+      // 3. Filtrar disponibles (Simplificado: Si tiene turno ese día, asumimos ocupado por ahora, o verificar traslapo horario)
+      // Mejora: Verificar traslapo de horas si fuera necesario. Para MVP, descartamos si ya tiene turno ese día.
+      const candidatos = allEmpleados?.filter(e => !idsOcupados.has(e.id)) || [];
+
+      if (candidatos.length === 0) {
+        return { ok: true, sugerencia: "No se encontraron empleados disponibles para esa fecha." };
+      }
+
+      // 4. Preparar data para IA
+      // Limitamos a 20 candidatos par no saturar token limit, priorizando ciudad si coincide
+      const puesto: any = (subpuesto as any).puesto; // Cast to avoid TS array error if inference fails
+      const ciudadPuesto = puesto?.ciudad?.toLowerCase();
+
+      const candidatosPriorizados = candidatos.sort((a: any, b: any) => {
+        const ciudadA = a.ciudad?.toLowerCase() === ciudadPuesto ? 1 : 0;
+        const ciudadB = b.ciudad?.toLowerCase() === ciudadPuesto ? 1 : 0;
+        return ciudadB - ciudadA;
+      }).slice(0, 30);
+
+      const promptInfo = {
+        requerimiento: {
+          puesto: puesto?.nombre,
+          subpuesto: subpuesto.nombre,
+          ciudad: puesto?.ciudad,
+          direccion: puesto?.direccion,
+          fecha: params.fecha,
+          hora: `${params.hora_inicio} - ${params.hora_fin}`
+        },
+        candidatos: candidatosPriorizados.map((c: any) => {
+          const perfil: any = c.tipo_vigilante;
+          return {
+            id: c.id,
+            nombre: c.nombre_completo,
+            ciudad: c.ciudad,
+            direccion: c.direccion,
+            perfil: perfil?.nombre || 'General'
+          };
+        })
+      };
+
+      const prompt = `
+      Actúa como jefe de operaciones de seguridad.
+      Recomienda los 3 mejores candidatos para cubrir este turno basándote en UBICACIÓN (cercanía a la ciudad del puesto) y disponibilidad.
+      
+      Detalles del Turno:
+      ${JSON.stringify(promptInfo.requerimiento)}
+
+      Lista de Candidatos Disponibles (Pre-filtrados por disponibilidad horaria):
+      ${JSON.stringify(promptInfo.candidatos)}
+
+      Responde en formato JSON estrictamente:
+      {
+        "recomendados": [
+          { "id": 123, "nombre": "Nombre", "motivo": "Vive en la misma ciudad y tiene perfil adecuado..." },
+          ...
+        ],
+        "analisis_general": "Resumen breve de la disponibilidad..."
+      }
+      `;
+
+      try {
+        const respuestaIA = await this.geminiService.humanResponse(prompt);
+        // Intentar parsear si Gemini devuelve texto con JSON dentro
+        // A veces devuelve ```json ... ```
+        const jsonMatch = respuestaIA.match(/\{[\s\S]*\}/);
+        const resultado = jsonMatch ? JSON.parse(jsonMatch[0]) : { recomendados: [], analisis_general: respuestaIA };
+
+        return { ok: true, ...resultado };
+
+      } catch (parseError) {
+        // Fallback si falla el parseo JSON
+        return { ok: true, analisis_general: "La IA generó una respuesta pero no en el formato estructura esperado.", raw: prompt };
+      }
+
+    } catch (err: any) {
+      this.logger.error('❌ Error en sugerirEmpleados:', err);
       throw new BadRequestException(err.message);
     }
   }

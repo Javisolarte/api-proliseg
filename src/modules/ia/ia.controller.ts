@@ -241,7 +241,30 @@ export class IaController {
   }
 
   // ============================================================
-  // 🔹 7. ESTADO DE API KEYS DE GEMINI
+  // 🔹 7. SUGERENCIAS DE CANDIDATOS (TURNOS)
+  // ============================================================
+  @Post('sugerir-candidatos')
+  @ApiOperation({
+    summary: 'Sugerir candidatos para un turno o asignación',
+    description: 'Analiza empleados disponibles, ubicación y perfil para sugerir los mejores candidatos.'
+  })
+  @ApiBody({
+    schema: {
+      example: {
+        subpuesto_id: 1,
+        fecha: '2024-03-20',
+        hora_inicio: '06:00',
+        hora_fin: '14:00'
+      }
+    }
+  })
+  async sugerirCandidatos(@Body() body: any, @CurrentUser() user: any) {
+    this.logger.log(`🧠 Generando sugerencias de candidatos para ${user.email}`);
+    return this.iaService.sugerirEmpleados(body);
+  }
+
+  // ============================================================
+  // 🔹 8. ESTADO DE API KEYS DE GEMINI
   // ============================================================
   @Get('api-keys-status')
   @ApiOperation({
