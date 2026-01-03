@@ -1,7 +1,8 @@
 import { ApiProperty, PartialType } from "@nestjs/swagger";
-import { IsInt, IsString, IsOptional, IsNumber, IsDateString, IsBoolean } from "class-validator";
-import { Transform } from "class-transformer";
+import { IsInt, IsString, IsOptional, IsNumber, IsDateString, IsBoolean, IsArray, ValidateNested } from "class-validator";
+import { Transform, Type } from "class-transformer";
 
+// --- DTOs Originales (Conservados) ---
 export class CreateRutaGpsDto {
     @ApiProperty({ example: 1 })
     @IsInt()
@@ -148,4 +149,102 @@ export class CreateRondaRonderoDto {
     @IsBoolean()
     @Transform(({ value }) => value === 'true' || value === true)
     validado?: boolean;
+}
+
+// --- Nuevos DTOs para Supervisión ---
+
+export class CreateRutaSupervisionDto {
+    @ApiProperty({ example: 'Ruta Zona Norte' })
+    @IsString()
+    nombre: string;
+
+    @ApiProperty({ example: 'Ruta de supervisión para puestos de la zona norte' })
+    @IsString()
+    @IsOptional()
+    descripcion?: string;
+
+    @ApiProperty({ example: true })
+    @IsBoolean()
+    @IsOptional()
+    activa?: boolean;
+}
+
+export class UpdateRutaSupervisionDto extends PartialType(CreateRutaSupervisionDto) { }
+
+export class CreateRutaPuntoDto {
+    @ApiProperty({ example: 1 })
+    @IsInt()
+    puesto_id: number;
+
+    @ApiProperty({ example: 1 })
+    @IsInt()
+    orden: number;
+
+    @ApiProperty({ example: 50 })
+    @IsInt()
+    @IsOptional()
+    radio_metros?: number;
+}
+
+export class CreateRutaAsignacionDto {
+    @ApiProperty({ example: 1 })
+    @IsInt()
+    ruta_id: number;
+
+    @ApiProperty({ example: 100 })
+    @IsInt()
+    turno_id: number;
+
+    @ApiProperty({ example: 1 })
+    @IsInt()
+    supervisor_id: number;
+
+    @ApiProperty({ example: 1, required: false })
+    @IsInt()
+    @IsOptional()
+    vehiculo_id?: number;
+}
+
+export class CreateRutaEjecucionDto {
+    @ApiProperty({ example: 1 })
+    @IsInt()
+    ruta_asignacion_id: number;
+
+    @ApiProperty({ example: 1 })
+    @IsInt()
+    supervisor_id: number;
+
+    @ApiProperty({ example: 1, required: false })
+    @IsInt()
+    @IsOptional()
+    vehiculo_id?: number;
+}
+
+export class FinalizarRutaEjecucionDto {
+    @ApiProperty({ example: 1 })
+    @IsInt()
+    ejecucion_id: number;
+}
+
+export class CreateRutaEventoDto {
+    @ApiProperty({ example: 1 })
+    @IsInt()
+    ejecucion_id: number;
+
+    @ApiProperty({ example: 4.6097 })
+    @IsNumber()
+    latitud: number;
+
+    @ApiProperty({ example: -74.0817 })
+    @IsNumber()
+    longitud: number;
+
+    @ApiProperty({ example: 'gps', enum: ['gps', 'llegada', 'salida', 'detencion', 'incidencia'] })
+    @IsString()
+    tipo_evento: string;
+
+    @ApiProperty({ required: false })
+    @IsString()
+    @IsOptional()
+    observacion?: string;
 }

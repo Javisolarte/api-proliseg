@@ -57,6 +57,10 @@ import { NominaModule } from './modules/nomina/nomina.module';
 
 import { AutoservicioModule } from './modules/autoservicio/autoservicio.module';
 import { TiposVigilanteModule } from './modules/tipos-vigilante/tipos-vigilante.module';
+import { VehiculosModule } from './modules/vehiculos/vehiculos.module';
+import { VisitasModule } from './modules/visitas/visitas.module';
+import { EvidenciasModule } from './modules/evidencias/evidencias.module';
+import { SupervisorModule } from './modules/supervisor/supervisor.module';
 
 @Module({
   imports: [
@@ -124,6 +128,10 @@ import { TiposVigilanteModule } from './modules/tipos-vigilante/tipos-vigilante.
     NominaModule,
     AutoservicioModule,
     TiposVigilanteModule,
+    VehiculosModule,
+    VisitasModule,
+    EvidenciasModule,
+    SupervisorModule,
     HelpersModule,
   ],
   providers: [],
