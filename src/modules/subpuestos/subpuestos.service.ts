@@ -262,22 +262,57 @@ export class SubpuestosService {
     return { message: "Subpuesto actualizado exitosamente", data: updatedSubpuesto };
   }
 
-  // 🔹 Soft delete (eliminar lógicamente)
-  async softDelete(id: number, userId: number) {
+  // 🔹 Hard delete (eliminar permanentemente)
+  async remove(id: number, userId: number) {
     const supabase = this.supabaseService.getClient();
 
+    // 1. Verificar que el subpuesto exista
+    const { data: subpuesto, error: findError } = await supabase
+      .from("subpuestos_trabajo")
+      .select("nombre")
+      .eq("id", id)
+      .single();
+
+    if (findError || !subpuesto) {
+      throw new NotFoundException("Subpuesto no encontrado");
+    }
+
+    this.logger.log(`🗑️ Eliminando permanentemente subpuesto ${id} (${subpuesto.nombre})...`);
+
+    // 2. Eliminar dependencias: Turnos
+    const { error: turnosError } = await supabase
+      .from("turnos")
+      .delete()
+      .eq("subpuesto_id", id);
+
+    if (turnosError) {
+      throw new BadRequestException(`Error eliminando turnos del subpuesto: ${turnosError.message}`);
+    }
+
+    // 3. Eliminar dependencias: Asignaciones
+    const { error: asignacionesError } = await supabase
+      .from("asignacion_guardas_puesto")
+      .delete()
+      .eq("subpuesto_id", id);
+
+    if (asignacionesError) {
+      throw new BadRequestException(`Error eliminando asignaciones del subpuesto: ${asignacionesError.message}`);
+    }
+
+    // 4. Eliminar el subpuesto
     const { data, error } = await supabase
       .from("subpuestos_trabajo")
-      .update({
-        activo: false,
-        updated_at: new Date().toISOString(),
-      })
+      .delete()
       .eq("id", id)
       .select()
       .single();
 
-    if (error) throw error;
-    return { message: "Subpuesto eliminado (soft delete) exitosamente", data };
+    if (error) {
+      throw new BadRequestException(`Error eliminando el subpuesto: ${error.message}`);
+    }
+
+    this.logger.log(`✅ Subpuesto ${id} eliminado permanentemente`);
+    return { message: "Subpuesto eliminado permanentemente", data };
   }
 
   /**

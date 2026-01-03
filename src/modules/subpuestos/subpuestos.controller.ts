@@ -67,10 +67,10 @@ export class SubpuestosController {
 
   @Delete(":id")
   @RequirePermissions("puestos")
-  @ApiOperation({ summary: "Eliminar (soft delete) un subpuesto" })
+  @ApiOperation({ summary: "Eliminar permanentemente un subpuesto" })
   @ApiResponse({ status: 200, description: "Subpuesto eliminado exitosamente" })
-  softDelete(@Param("id", ParseIntPipe) id: number, @Request() req) {
-    return this.subpuestosService.softDelete(id, req.user.id);
+  remove(@Param("id", ParseIntPipe) id: number, @Request() req) {
+    return this.subpuestosService.remove(id, req.user.id);
   }
 
   @Get(":id/guardas-necesarios")

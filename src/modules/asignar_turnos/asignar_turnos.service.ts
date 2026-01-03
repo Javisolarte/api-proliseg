@@ -96,7 +96,13 @@ export class AsignarTurnosService {
       .map((a: any) => a.empleado as Empleado);
 
     if (empleados.length === 0) {
-      throw new BadRequestException(`No hay empleados activos asignados al subpuesto ${subpuesto.nombre}`);
+      this.logger.warn(`⚠️ No hay empleados activos asignados al subpuesto ${subpuesto.nombre}. No se generaron turnos.`);
+      return {
+        message: 'No hay empleados activos asignados. Se eliminaron turnos futuros pero no se generaron nuevos.',
+        total_turnos: 0,
+        empleados: 0,
+        detalle: []
+      };
     }
 
     // ✅ 3. VALIDAR que la asignación esté COMPLETA antes de generar turnos
