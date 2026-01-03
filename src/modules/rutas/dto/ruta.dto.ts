@@ -167,6 +167,16 @@ export class CreateRutaSupervisionDto {
     @IsBoolean()
     @IsOptional()
     activa?: boolean;
+
+    @ApiProperty({ example: 'Bogotá', required: false })
+    @IsString()
+    @IsOptional()
+    ciudad?: string;
+
+    @ApiProperty({ example: 'Cundinamarca', required: false })
+    @IsString()
+    @IsOptional()
+    departamento?: string;
 }
 
 export class UpdateRutaSupervisionDto extends PartialType(CreateRutaSupervisionDto) { }
