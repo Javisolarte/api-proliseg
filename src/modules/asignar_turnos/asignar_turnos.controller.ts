@@ -99,8 +99,8 @@ export class AsignarTurnosController {
     description: 'Rota los turnos entre empleados de un subpuesto. El primer empleado toma los turnos del segundo, el segundo los del tercero, y así sucesivamente. El último empleado toma los turnos del primero. Solo modifica los turnos existentes, no crea nuevos.'
   })
   @ApiQuery({ name: 'subpuesto_id', type: Number, description: 'ID del subpuesto' })
-  @ApiQuery({ name: 'desde', type: String, description: 'Fecha inicio (YYYY-MM-DD)' })
-  @ApiQuery({ name: 'hasta', type: String, description: 'Fecha fin (YYYY-MM-DD)' })
+  @ApiQuery({ name: 'desde', type: String, description: 'Fecha inicio (YYYY-MM-DD)', required: false })
+  @ApiQuery({ name: 'hasta', type: String, description: 'Fecha fin (YYYY-MM-DD)', required: false })
   @ApiResponse({
     status: 201,
     description: 'Turnos rotados exitosamente',
