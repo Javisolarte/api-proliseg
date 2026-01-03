@@ -114,7 +114,7 @@ export class SupervisorController {
         description: 'Módulo de carga de evidencias',
         type: CargarEvidenciaDto,
     })
-    subirEvidencia(@Request() req, @UploadedFile() file: Express.Multer.File, @Body() dto: CargarEvidenciaDto) {
+    subirEvidencia(@Request() req, @UploadedFile() file: any, @Body() dto: CargarEvidenciaDto) {
         return this.supervisorService.uploadEvidencia(file, this.getUser(req), dto);
     }
 
