@@ -129,8 +129,8 @@ export class AsignarTurnosController {
   })
   async rotar(
     @Query('subpuesto_id', ParseIntPipe) subpuesto_id: number,
-    @Query('desde') desde: string,
-    @Query('hasta') hasta: string,
+    @Query('desde') desde?: string,
+    @Query('hasta') hasta?: string,
   ) {
     return this.asignarTurnosService.rotarTurnos(subpuesto_id, desde, hasta);
   }

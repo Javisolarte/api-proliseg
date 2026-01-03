@@ -428,13 +428,16 @@ export class AsignarTurnosService {
    * El segundo toma los del tercero
    * El último toma los del primero
    */
-  async rotarTurnos(subpuesto_id: number, desde: string, hasta: string) {
+  async rotarTurnos(subpuesto_id: number, desde?: string, hasta?: string) {
     const supabase = this.supabaseService.getClient();
 
     this.logger.log(`🔄 Iniciando rotación de turnos para subpuesto ${subpuesto_id}`);
 
+    // Si no se especifican fechas, usar desde HOY en adelante (turnos futuros)
+    const fechaInicio = desde || new Date().toISOString().split('T')[0];
+
     // 1. Obtener todos los turnos del período ordenados por empleado
-    const { data: turnos, error: turnosError } = await supabase
+    let query = supabase
       .from('turnos')
       .select(`
         id,
@@ -450,11 +453,16 @@ export class AsignarTurnosService {
         )
       `)
       .eq('subpuesto_id', subpuesto_id)
-      .gte('fecha', desde)
-      .lte('fecha', hasta)
+      .gte('fecha', fechaInicio)
       .eq('estado_turno', 'programado')
       .order('empleado_id', { ascending: true })
       .order('fecha', { ascending: true });
+
+    if (hasta) {
+      query = query.lte('fecha', hasta);
+    }
+
+    const { data: turnos, error: turnosError } = await query;
 
     if (turnosError) {
       throw new BadRequestException(`Error obteniendo turnos: ${turnosError.message}`);

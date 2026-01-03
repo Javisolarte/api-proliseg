@@ -253,17 +253,24 @@ export class AsignacionesService {
     if (validacion.valido) {
       try {
         this.logger.log(
-          `🎉 ¡Asignación completa! Generando turnos automáticamente para ${subpuesto.nombre}...`
+          `🎉 ¡Asignación completa! Regenerando turnos para asegurar consistencia en ${subpuesto.nombre}...`
         );
 
-        const turnosResult = await this.asignarTurnosService.asignarTurnos({
-          subpuesto_id: dto.subpuesto_id,
-          fecha_inicio: new Date().toISOString().split('T')[0],
-          asignado_por: dto.asignado_por,
-        });
+        // Usar regenerarTurnos para limpiar turnos desactualizados y generar nuevos con el equipo completo
+        const turnosResult = await this.asignarTurnosService.regenerarTurnos(
+          dto.subpuesto_id,
+          dto.asignado_por
+        );
+
+        // Mapear resultado para mantener consistencia con respuesta anterior
+        const resultadoMapeado = {
+          total_turnos: turnosResult.generados,
+          empleados: empleadosNecesarios, // Aproximado
+          detalle: turnosResult.detalle
+        };
 
         this.logger.log(
-          `✅ Turnos generados: ${turnosResult.total_turnos} turnos para ${turnosResult.empleados} empleados`
+          `✅ Turnos regenerados: ${turnosResult.generados} turnos creados`
         );
 
         return {
@@ -425,27 +432,23 @@ export class AsignacionesService {
       await supabase.from('empleados').update({ asignado: false }).eq('id', asignacion.empleado_id);
     }
 
-    // 3. Marcar turnos futuros como "pendiente_asignar"
-    const { data: turnosFuturos, error: turnosError } = await supabase
+    // 3. ELIMINAR turnos futuros (en lugar de marcarlos como pendientes)
+    // El usuario solicitó: "se eliminen los turnos asignados al empleado"
+    const { data: turnosEliminados, error: turnosError } = await supabase
       .from("turnos")
-      .update({
-        empleado_id: null,
-        estado_turno: "pendiente_asignar",
-        tipo_turno: "PENDIENTE",
-        updated_at: new Date().toISOString()
-      })
+      .delete()
       .eq("empleado_id", asignacion.empleado_id)
       .eq("subpuesto_id", asignacion.subpuesto_id)
       .gte("fecha", fechaActual)
       .in("estado_turno", ["programado", "pendiente"])
-      .select("id, fecha, hora_inicio, hora_fin");
+      .select("id");
 
-    const turnosActualizados = turnosFuturos?.length || 0;
+    const cantidadEliminados = turnosEliminados?.length || 0;
 
     if (turnosError) {
-      this.logger.warn(`⚠️ Error actualizando turnos: ${turnosError.message}`);
+      this.logger.warn(`⚠️ Error eliminando turnos: ${turnosError.message}`);
     } else {
-      this.logger.log(`📋 ${turnosActualizados} turnos marcados como pendientes de asignación`);
+      this.logger.log(`🗑️ ${cantidadEliminados} turnos futuros eliminados para el empleado`);
     }
 
     this.logger.log(
@@ -455,13 +458,13 @@ export class AsignacionesService {
     return {
       message: "Empleado desasignado exitosamente",
       asignacion: asignacionActualizada,
-      turnos_pendientes: turnosActualizados,
+      turnos_eliminados: cantidadEliminados,
       detalles: {
         empleado: empleado?.nombre_completo,
         subpuesto: subpuesto?.nombre,
         motivo,
         fecha_desasignacion: fechaActual,
-        turnos_afectados: turnosActualizados
+        turnos_eliminados: cantidadEliminados
       }
     };
   }
