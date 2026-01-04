@@ -339,8 +339,8 @@ export class AutoservicioService {
             .select(`
                 id,
                 fecha,
-                hora_entrada,
-                hora_salida,
+                hora_inicio,
+                hora_fin,
                 puesto_id,
                 subpuestos_trabajo(nombre),
                 empleado:empleado_id(nombre_completo)
