@@ -235,6 +235,7 @@ export class AutoservicioService {
         const cliente = await this.getClienteByUserId(userId);
         const supabase = this.supabaseService.getClient();
 
+        // Obtener historial completo de contratos (activos e inactivos)
         const { data, error } = await supabase
             .from('contratos')
             .select(`
@@ -243,10 +244,132 @@ export class AutoservicioService {
                 puestos_trabajo(nombre, direccion, ciudad)
             `)
             .eq('cliente_id', cliente.id)
-            .eq('estado', true);
+            .order('fecha_inicio', { ascending: false });
 
         if (error) throw error;
         return data;
+    }
+
+    async getDetalleContratoCliente(userId: number, contratoId: number) {
+        const cliente = await this.getClienteByUserId(userId);
+        const supabase = this.supabaseService.getClient();
+
+        // 1. Verificar que el contrato pertenezca al cliente
+        const { data: contrato, error: contratoError } = await supabase
+            .from('contratos')
+            .select(`
+                *,
+                tipo_servicio(nombre)
+            `)
+            .eq('id', contratoId)
+            .eq('cliente_id', cliente.id)
+            .single();
+
+        if (contratoError || !contrato) {
+            throw new ForbiddenException('Contrato no encontrado o no autorizado');
+        }
+
+        // 2. Obtener puestos asociados al contrato
+        const { data: puestos, error: puestosError } = await supabase
+            .from('puestos_trabajo')
+            .select('*')
+            .eq('contrato_id', contrato.id);
+
+        if (puestosError) throw puestosError;
+
+        // 3. Para cada puesto, obtener los vigilantes asignados ACTIVOS
+        const puestosConVigilantes = await Promise.all(puestos.map(async (puesto) => {
+            const { data: asignaciones } = await supabase
+                .from('asignacion_guardas_puesto')
+                .select(`
+                    id,
+                    empleado:empleado_id(
+                        id,
+                        nombre_completo,
+                        documento
+                    ),
+                    cargo
+                `)
+                .eq('puesto_id', puesto.id)
+                .eq('activo', true);
+
+            return {
+                ...puesto,
+                vigilantes_asignados: asignaciones ? asignaciones.map(a => ({
+                    empleado: a.empleado,
+                    cargo: a.cargo
+                })) : []
+            };
+        }));
+
+        return {
+            contrato,
+            puestos: puestosConVigilantes
+        };
+    }
+
+    async getHorariosContratoCliente(userId: number, contratoId: number, fechaInicio?: string, fechaFin?: string) {
+        const cliente = await this.getClienteByUserId(userId);
+        const supabase = this.supabaseService.getClient();
+
+        // 1. Verificar contrato
+        const { data: contrato } = await supabase
+            .from('contratos')
+            .select('id')
+            .eq('id', contratoId)
+            .eq('cliente_id', cliente.id)
+            .single();
+
+        if (!contrato) throw new ForbiddenException('Contrato no encontrado o no autorizado');
+
+        // 2. Obtener IDs de puestos
+        const { data: puestos } = await supabase
+            .from('puestos_trabajo')
+            .select('id, nombre')
+            .eq('contrato_id', contratoId);
+
+        if (!puestos || puestos.length === 0) return [];
+
+        const puestoIds = puestos.map(p => p.id);
+        const puestosMap = puestos.reduce((acc, p) => ({ ...acc, [p.id]: p.nombre }), {});
+
+        // 3. Consultar turnos
+        let query = supabase
+            .from('turnos')
+            .select(`
+                id,
+                fecha,
+                hora_entrada,
+                hora_salida,
+                puesto_id,
+                subpuestos_trabajo(nombre),
+                empleado:empleado_id(nombre_completo)
+            `)
+            .in('puesto_id', puestoIds)
+            .order('fecha', { ascending: true });
+
+        if (fechaInicio) {
+            query = query.gte('fecha', fechaInicio);
+        } else {
+            // Default: desde inicio de mes actual
+            const startOfMonth = new Date();
+            startOfMonth.setDate(1);
+            query = query.gte('fecha', startOfMonth.toISOString().split('T')[0]);
+        }
+
+        if (fechaFin) {
+            query = query.lte('fecha', fechaFin);
+        }
+
+        const { data: turnos, error } = await query;
+
+        if (error) throw error;
+
+        // Formatear respuesta para que sea amigable
+        return turnos.map(t => ({
+            ...t,
+            puesto_nombre: puestosMap[t.puesto_id]
+        }));
     }
 
     async getMinutasCliente(userId: number) {
