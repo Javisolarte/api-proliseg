@@ -61,6 +61,7 @@ import { VehiculosModule } from './modules/vehiculos/vehiculos.module';
 import { VisitasModule } from './modules/visitas/visitas.module';
 import { EvidenciasModule } from './modules/evidencias/evidencias.module';
 import { SupervisorModule } from './modules/supervisor/supervisor.module';
+import { PqrsfModule } from './modules/pqrsf/pqrsf.module';
 
 @Module({
   imports: [
@@ -132,6 +133,7 @@ import { SupervisorModule } from './modules/supervisor/supervisor.module';
     VisitasModule,
     EvidenciasModule,
     SupervisorModule,
+    PqrsfModule,
     HelpersModule,
   ],
   providers: [],
