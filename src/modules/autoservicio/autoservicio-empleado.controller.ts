@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { AutoservicioService } from './autoservicio.service';
+import { CreateMinutaDto } from '../minutas/dto/minuta.dto';
 
 @ApiTags('Autoservicio - Empleado')
 @Controller('mi-nomina')
@@ -66,6 +67,12 @@ export class AutoservicioEmpleadoController {
     }
 
     // --- OPERATIVO ---
+    @Get('mi-perfil')
+    @ApiOperation({ summary: 'Ver perfil del empleado (sin métricas sensibles)' })
+    async getMiPerfil(@CurrentUser() user: any) {
+        return this.autoservicioService.getMiPerfil(user.id);
+    }
+
     @Get('mi-puesto')
     @ApiOperation({ summary: 'Ver puesto asignado actual' })
     async getMiPuesto(@CurrentUser() user: any) {
@@ -84,7 +91,15 @@ export class AutoservicioEmpleadoController {
         return this.autoservicioService.getMisMinutas(user.id);
     }
 
-    // POST/PUT minutas could go here too? User asked: POST /api/mis-minutas
-    // We'll need a DTO for Minuta, potentially reusing one or creating a new one.
-    // For now, I'll stub it or use 'any'.
+    @Get('mis-minutas/puesto')
+    @ApiOperation({ summary: 'Ver historial de minutas del puesto actual' })
+    async getHistorialPuesto(@CurrentUser() user: any) {
+        return this.autoservicioService.getMinutasPuesto(user.id);
+    }
+
+    @Post('mis-minutas')
+    @ApiOperation({ summary: 'Crear minuta (solo si tiene turno activo)' })
+    async createMinuta(@CurrentUser() user: any, @Body() minutaDto: CreateMinutaDto) {
+        return this.autoservicioService.createMinuta(user.id, minutaDto);
+    }
 }

@@ -25,6 +25,19 @@ export class AutoservicioService {
     // ------------------------------------------------------------------
     // EMPLEADO
     // ------------------------------------------------------------------
+    async getMiPerfil(userId: number) {
+        const empleado = await this.getEmpleadoByUserId(userId);
+        // Retornar objeto limpio sin métricas sensibles
+        const {
+            nivel_confianza,
+            riesgo_ausencia,
+            rendimiento_promedio,
+            ultima_evaluacion,
+            ...perfilSeguro
+        } = empleado;
+        return perfilSeguro;
+    }
+
     async getMiNomina(userId: number) {
         const empleado = await this.getEmpleadoByUserId(userId);
         const supabase = this.supabaseService.getClient();
@@ -126,12 +139,13 @@ export class AutoservicioService {
             .from('turnos')
             .select(`
                 *,
-                puestos_trabajo(nombre),
+                puestos_trabajo(nombre, latitud, longitud, direccion),
                 subpuestos_trabajo(nombre)
             `)
             .eq('empleado_id', empleado.id)
-            .order('fecha', { ascending: false })
-            .limit(50); // Limit to recent
+            // Mostrar futuros y recientes (ej: ultimos 7 dias + futuros)
+            .or(`fecha.gte.${new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}`)
+            .order('fecha', { ascending: true });
 
         if (error) throw error;
         return data;
@@ -139,16 +153,76 @@ export class AutoservicioService {
 
     async getMisMinutas(userId: number) {
         const empleado = await this.getEmpleadoByUserId(userId);
-        // Security: verify assignment?
-        // Query minutas where employee is creator? Or by assigned post?
-        // Usually creator or 'creada_por'
         const supabase = this.supabaseService.getClient();
 
         const { data, error } = await supabase
             .from('minutas')
             .select('*')
-            .eq('creada_por', userId) // userId matches session
+            .eq('creada_por', userId)
             .order('created_at', { ascending: false });
+
+        if (error) throw error;
+        return data;
+    }
+
+    async getMinutasPuesto(userId: number) {
+        const empleado = await this.getEmpleadoByUserId(userId);
+        const supabase = this.supabaseService.getClient();
+
+        // 1. Obtener puesto asignado actual
+        const { data: asignacion } = await supabase
+            .from('asignacion_guardas_puesto')
+            .select('puesto_id')
+            .eq('empleado_id', empleado.id)
+            .eq('activo', true)
+            .single();
+
+        if (!asignacion) return []; // No asignado, no ve nada
+
+        // 2. Ver historial completo del puesto
+        const { data, error } = await supabase
+            .from('minutas')
+            .select(`
+                *,
+                creador:creada_por(nombre_completo) 
+            `)
+            .eq('puesto_id', asignacion.puesto_id)
+            .order('created_at', { ascending: false })
+            .limit(100);
+
+        if (error) throw error;
+        return data;
+    }
+
+    async createMinuta(userId: number, minutaDto: any) {
+        const empleado = await this.getEmpleadoByUserId(userId);
+        const supabase = this.supabaseService.getClient();
+
+        // VALIDACIÓN: Solo puede crear si tiene turno ACTIVO ('en_curso')
+        const { data: turnoActivo } = await supabase
+            .from('turnos')
+            .select('id, puesto_id')
+            .eq('empleado_id', empleado.id)
+            .eq('estado_turno', 'en_curso')
+            .single();
+
+        if (!turnoActivo) {
+            throw new ForbiddenException('Solo puedes crear minutas cuando tienes un turno activo (en curso).');
+        }
+
+        // Crear minuta vinculada al turno y puesto
+        const { data, error } = await supabase
+            .from('minutas')
+            .insert({
+                ...minutaDto,
+                creada_por: userId,
+                turno_id: turnoActivo.id,
+                puesto_id: turnoActivo.puesto_id,
+                fecha: new Date().toISOString().split('T')[0], // Fecha actual
+                hora: new Date().toLocaleTimeString('en-US', { hour12: false }) // Hora actual
+            })
+            .select()
+            .single();
 
         if (error) throw error;
         return data;

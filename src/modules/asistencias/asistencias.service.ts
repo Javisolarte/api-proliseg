@@ -82,6 +82,21 @@ export class AsistenciasService {
     // ✅ Verificar permiso de asistencia
     const { turno } = await this.verificarPermisoAsistencia(dto.empleado_id, dto.turno_id);
 
+    // 🕒 Verificar ventana de tiempo (20 minutos antes)
+    const now = new Date();
+    // Construir fecha inicio turno
+    const [h, m, s] = (turno.hora_inicio || '00:00:00').split(':');
+    const turnoFechaInicio = new Date(turno.fecha);
+    turnoFechaInicio.setHours(parseInt(h), parseInt(m), parseInt(s || '0'));
+
+    // Calcular diferencia en minutos
+    const diffMinutos = (turnoFechaInicio.getTime() - now.getTime()) / (1000 * 60);
+
+    // Si faltan más de 20 minutos, error (ej: faltan 30 min)
+    if (diffMinutos > 20) {
+      throw new BadRequestException('Aún no puedes marcar entrada. Se habilita 20 minutos antes del inicio del turno.');
+    }
+
     // Obtener información del subpuesto y puesto
     const { data: subpuesto, error: subpuestoError } = await db
       .from('subpuestos_trabajo')
@@ -115,6 +130,12 @@ export class AsistenciasService {
         parseFloat(puesto.latitud),
         parseFloat(puesto.longitud),
       );
+    }
+
+    // 📏 VALIDAR DISTANCIA (Max 200m estrictos)
+    const MAX_DISTANCIA_METROS = 200;
+    if (distancia > MAX_DISTANCIA_METROS) {
+      throw new BadRequestException(`Estás fuera del rango permitido (${Math.round(distancia)}m). Debes estar a menos de 200m del puesto.`);
     }
 
     // 🔍 Obtener historial de asistencias
@@ -154,6 +175,12 @@ export class AsistenciasService {
       throw new BadRequestException(insertError.message);
     }
 
+    // 🔄 ACTUALIZAR TURNO A 'EN CURSO'
+    await db.from('turnos').update({
+      estado_turno: 'en_curso',
+      hora_inicio: new Date().toLocaleTimeString('en-US', { hour12: false }) // Hora real de inicio
+    }).eq('id', dto.turno_id);
+
     // 🧩 Guardar análisis IA si hay anomalías
     if (analisisIA && (analisisIA.toLowerCase().includes('alto') || analisisIA.toLowerCase().includes('medio'))) {
       await this.registrarAnalisisIA(db, dto.empleado_id, dto.turno_id, analisisIA);
@@ -162,7 +189,7 @@ export class AsistenciasService {
     this.logger.log(`✅ Entrada registrada para empleado ${dto.empleado_id} en turno ${dto.turno_id}`);
 
     return {
-      message: '✅ Entrada registrada correctamente',
+      message: '✅ Entrada registrada correctamente. Turno iniciado.',
       analisis_ia: analisisIA,
       distancia_metros: distancia,
       asistencia,
@@ -200,7 +227,7 @@ export class AsistenciasService {
     }
 
     // Obtener información del subpuesto y puesto
-    const { data: subpuesto } = await db
+    const { data: subpuesto, error: queryError } = await db
       .from('subpuestos_trabajo')
       .select(`
         id,
@@ -209,16 +236,22 @@ export class AsistenciasService {
           id,
           nombre,
           latitud,
-          longitud
+          longitud,
+          direccion,
+          ciudad
         )
       `)
       .eq('id', turno.subpuesto_id)
       .single();
 
-    const puestoRaw = subpuesto?.puesto;
+    if (queryError || !subpuesto) {
+      throw new NotFoundException('Subpuesto no encontrado o error de consulta');
+    }
+
+    const puestoRaw = subpuesto.puesto;
     const puesto = Array.isArray(puestoRaw) ? puestoRaw[0] : puestoRaw;
 
-    // 📍 Calcular distancia de salida
+    // 📍 Calcular distancia de salida (VALIDACION ESTRICTA 200m)
     let distancia = 0;
     if (puesto?.latitud && puesto?.longitud && dto.latitud && dto.longitud) {
       distancia = calcularDistancia(
@@ -227,6 +260,29 @@ export class AsistenciasService {
         parseFloat(puesto.latitud),
         parseFloat(puesto.longitud),
       );
+    }
+
+    if (distancia > 200) {
+      throw new BadRequestException(`Estás demasiado lejos (${Math.round(distancia)}m). Debes estar en el puesto para marcar salida.`);
+    }
+
+    // 🕒 VERIFICAR HORARIO DE SALIDA (Tolerancia 10 mins antes)
+    const now = new Date();
+    const [hFin, mFin, sFin] = (turno.hora_fin || '23:59:59').split(':');
+    const turnoFechaFin = new Date(turno.fecha);
+    turnoFechaFin.setHours(parseInt(hFin), parseInt(mFin), parseInt(sFin || '0'));
+
+    // Si el turno termina al día siguiente (ej: noche), ajustar fecha
+    if (turno.hora_inicio && turno.hora_fin && turno.hora_fin < turno.hora_inicio) {
+      turnoFechaFin.setDate(turnoFechaFin.getDate() + 1);
+    }
+
+    // Diferencia en minutos
+    const minutosParaFin = (turnoFechaFin.getTime() - now.getTime()) / (1000 * 60);
+
+    // Si faltan más de 10 minutos, bloquear
+    if (minutosParaFin > 10) {
+      throw new BadRequestException('Aún es muy temprano para marcar salida. Solo se permite 10 minutos antes del fin del turno.');
     }
 
     // 🧠 Analizar salida con IA
@@ -257,18 +313,35 @@ export class AsistenciasService {
       throw new BadRequestException(insertError.message);
     }
 
+    // 🔄 CÁLCULO DE HORAS Y FINALIZACIÓN DE TURNO
+    const fechaEntrada = new Date(entradaPrevia.timestamp);
+    const fechaSalida = new Date();
+    const diffMs = fechaSalida.getTime() - fechaEntrada.getTime();
+    const horasExactas = diffMs / (1000 * 60 * 60); // Horas con decimales
+
+    // Actualizar turno a CUMPLIDO con duración exacta
+    await db.from('turnos').update({
+      estado_turno: 'cumplido',
+      fecha_fin: fechaSalida.toISOString(), // Fecha fin real
+      hora_fin: fechaSalida.toLocaleTimeString('en-US', { hour12: false }), // Hora real fin
+      horas_reportadas: horasExactas, // Guardar tiempo exacto
+      duracion_horas: horasExactas
+    }).eq('id', dto.turno_id);
+
+
     // 🧩 Guardar análisis IA si hay anomalías
     if (analisisIA && (analisisIA.toLowerCase().includes('alto') || analisisIA.toLowerCase().includes('medio'))) {
       await this.registrarAnalisisIA(db, (dto as any).empleado_id, dto.turno_id, analisisIA);
     }
 
-    this.logger.log(`✅ Salida registrada para empleado ${(dto as any).empleado_id} en turno ${dto.turno_id}`);
+    this.logger.log(`✅ Salida registrada para empleado ${(dto as any).empleado_id} en turno ${dto.turno_id}. Horas: ${horasExactas.toFixed(2)}`);
 
     return {
-      message: '✅ Salida registrada correctamente',
+      message: '✅ Salida registrada correctamente. Turno finalizado.',
       analisis_ia: analisisIA,
       distancia_metros: distancia,
       asistencia,
+      horas_trabajadas: horasExactas
     };
   }
 
