@@ -453,4 +453,31 @@ export class AsistenciasService {
       this.logger.log(`🧠 [IA] Análisis registrado (nivel: ${nivel}) para empleado ${empleado_id}`);
     }
   }
+
+  // ============================================================
+  // 📋 LISTAR ASISTENCIAS POR EMPLEADO
+  // ============================================================
+  async findAllByEmpleado(empleado_id: number) {
+    const db = this.supabase.getClient();
+
+    // Consultamos la tabla principal usada ahora: turnos_asistencia
+    const { data, error } = await db
+      .from('turnos_asistencia')
+      .select(`
+            *,
+            turno:turno_id(
+                id,
+                fecha,
+                hora_inicio,
+                hora_fin,
+                subpuesto:subpuesto_id(nombre)
+            )
+        `)
+      .eq('empleado_id', empleado_id)
+      .order('created_at', { ascending: false });
+
+    if (error) throw new BadRequestException(error.message);
+
+    return data;
+  }
 }

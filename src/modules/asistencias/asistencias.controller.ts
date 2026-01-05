@@ -153,4 +153,12 @@ export class AsistenciasController {
   async obtenerMetricaCumplimiento() {
     return this.asistenciasService.obtenerMetricaCumplimiento();
   }
+
+  @Get()
+  @RequirePermissions("asistencia.read")
+  @ApiOperation({ summary: "Listar asistencias por empleado" })
+  @ApiQuery({ name: "empleado_id", type: Number, required: true })
+  async findAll(@Query("empleado_id", ParseIntPipe) empleado_id: number) {
+    return this.asistenciasService.findAllByEmpleado(empleado_id);
+  }
 }
