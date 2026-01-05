@@ -60,6 +60,24 @@ export class CreatePqrsfDto {
     puesto_id?: number;
 }
 
+export class AsignarPqrsfDto {
+    @ApiProperty({ example: 3, description: 'ID del usuario interno a asignar' })
+    @IsInt()
+    @IsNotEmpty()
+    usuario_id: number;
+
+    @ApiProperty({ example: 'Asignación inicial', description: 'Motivo de la asignación' })
+    @IsOptional()
+    @IsString()
+    motivo?: string;
+}
+
+export class CambiarVisibilidadDto {
+    @ApiProperty({ example: true, description: 'Si es visible para el cliente' })
+    @IsBoolean()
+    visible_para_cliente: boolean;
+}
+
 export class UpdatePqrsfDto extends PartialType(CreatePqrsfDto) {
     @ApiProperty({ enum: PqrsfEstado, example: PqrsfEstado.EN_PROCESO, required: false })
     @IsOptional()
