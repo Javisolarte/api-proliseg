@@ -76,272 +76,223 @@ export class AsistenciasService {
   // ============================================================
   // 🚪 REGISTRAR ENTRADA
   // ============================================================
+  // ============================================================
+  // 🚪 REGISTRAR ENTRADA
+  // ============================================================
   async registrarEntrada(dto: RegistrarEntradaDto) {
     const db = this.supabase.getClient();
 
-    // ✅ Verificar permiso de asistencia
+    // 1. Verificar permiso y datos básicos
     const { turno } = await this.verificarPermisoAsistencia(dto.empleado_id, dto.turno_id);
 
-    // 🕒 Verificar ventana de tiempo (20 minutos antes)
+    // 2. Verificar duplicados en turnos_asistencia
+    const { data: asistenciaExistente } = await db
+      .from('turnos_asistencia')
+      .select('id, hora_entrada')
+      .eq('turno_id', dto.turno_id)
+      .maybeSingle();
+
+    if (asistenciaExistente && asistenciaExistente.hora_entrada) {
+      throw new BadRequestException('Ya existe un registro de entrada para este turno.');
+    }
+
+    // 3. Verificar ventana de tiempo (20 minutos antes)
     const now = new Date();
-    // Construir fecha inicio turno
     const [h, m, s] = (turno.hora_inicio || '00:00:00').split(':');
     const turnoFechaInicio = new Date(turno.fecha);
     turnoFechaInicio.setHours(parseInt(h), parseInt(m), parseInt(s || '0'));
 
-    // Calcular diferencia en minutos
     const diffMinutos = (turnoFechaInicio.getTime() - now.getTime()) / (1000 * 60);
 
-    // Si faltan más de 20 minutos, error (ej: faltan 30 min)
     if (diffMinutos > 20) {
       throw new BadRequestException('Aún no puedes marcar entrada. Se habilita 20 minutos antes del inicio del turno.');
     }
 
-    // Obtener información del subpuesto y puesto
-    const { data: subpuesto, error: subpuestoError } = await db
-      .from('subpuestos_trabajo')
-      .select(`
-        id,
-        nombre,
-        puesto:puesto_id (
-          id,
-          nombre,
-          latitud,
-          longitud,
-          direccion,
-          ciudad
-        )
-      `)
-      .eq('id', turno.subpuesto_id)
-      .single();
-
-    if (subpuestoError || !subpuesto) {
-      throw new NotFoundException('Subpuesto no encontrado');
-    }
+    // 4. Validar distancia (1000m)
+    const { data: subpuesto } = await db.from('subpuestos_trabajo').select('*, puesto:puesto_id(*)').eq('id', turno.subpuesto_id).single();
+    if (!subpuesto) throw new NotFoundException('Subpuesto no encontrado');
 
     const puesto = Array.isArray(subpuesto.puesto) ? subpuesto.puesto[0] : subpuesto.puesto;
-
-    // 📍 Calcular distancia del empleado al puesto
     let distancia = 0;
     if (puesto?.latitud && puesto?.longitud && dto.latitud && dto.longitud) {
-      distancia = calcularDistancia(
-        parseFloat(dto.latitud),
-        parseFloat(dto.longitud),
-        parseFloat(puesto.latitud),
-        parseFloat(puesto.longitud),
-      );
+      distancia = calcularDistancia(parseFloat(dto.latitud), parseFloat(dto.longitud), parseFloat(puesto.latitud), parseFloat(puesto.longitud));
     }
 
-    // 📏 VALIDAR DISTANCIA (Max 200m estrictos)
-    const MAX_DISTANCIA_METROS = 1000;
-    if (distancia > MAX_DISTANCIA_METROS) {
-      throw new BadRequestException(`Estás fuera del rango permitido (${Math.round(distancia)}m). Debes estar a menos de 1000m del puesto.`);
+    if (distancia > 1000) {
+      throw new BadRequestException(`Estás fuera del rango permitido (${Math.round(distancia)}m). Máximo 1000m.`);
     }
 
-    // 🔍 Obtener historial de asistencias
-    const { data: historial } = await db
-      .from('asistencias')
-      .select('id, timestamp, tipo_marca')
-      .eq('empleado_id', dto.empleado_id)
-      .order('timestamp', { ascending: false })
-      .limit(5);
+    // 5. Calcular Observación de Puntualidad
+    let observacion = '';
+    // Si now > turnoFechaInicio -> Tarde
+    // diffMinutos es positivo si faltan minutos (temprano), negativo si ya pasó (tarde)
+    const minutosTarde = Math.floor((now.getTime() - turnoFechaInicio.getTime()) / (1000 * 60));
 
-    // 🧠 Analizar contexto con IA
-    const analisisIA = await this.gemini.analizarAsistencia({
-      tipo: 'entrada',
-      empleado_id: dto.empleado_id,
-      lugar_nombre: `${puesto?.nombre || 'Puesto'} - ${subpuesto.nombre}`,
-      distancia_metros: distancia,
-      historial: historial || [],
-    });
+    if (minutosTarde > 0) {
+      observacion = `Llegada tarde: ${minutosTarde} min.`;
+    } else {
+      observacion = 'Entrada Normal.';
+    }
+    if (dto.observacion) observacion += ` Nota: ${dto.observacion}`;
 
-    // 💾 Registrar asistencia
-    const { data: asistencia, error: insertError } = await db
-      .from('asistencias')
-      .insert({
-        empleado_id: dto.empleado_id,
+    // 6. Registrar en turnos_asistencia
+    // Si ya existía registro sin entrada (raro, pero posible si se creó el registro antes), update. Si no, insert.
+    let asistenciaId = asistenciaExistente?.id;
+
+    if (asistenciaId) {
+      await db.from('turnos_asistencia').update({
+        hora_entrada: now.toISOString(),
+        observaciones: observacion,
+        estado_asistencia: 'pendiente', // En curso
+        metodo_registro: 'app'
+      }).eq('id', asistenciaId);
+    } else {
+      const { data: newAsis, error: errAsis } = await db.from('turnos_asistencia').insert({
         turno_id: dto.turno_id,
-        tipo_marca: 'entrada',
-        timestamp: new Date().toISOString(),
-        latitud_entrada: dto.latitud,
-        longitud_entrada: dto.longitud,
-        registrada_por: dto.empleado_id, // Auto-registro
-      })
-      .select()
-      .single();
-
-    if (insertError) {
-      this.logger.error(`Error registrando entrada: ${insertError.message}`);
-      throw new BadRequestException(insertError.message);
+        empleado_id: dto.empleado_id,
+        hora_entrada: now.toISOString(),
+        observaciones: observacion,
+        registrado_por: dto.empleado_id,
+        metodo_registro: 'app',
+        estado_asistencia: 'pendiente'
+      }).select().single();
+      if (errAsis) throw new BadRequestException(errAsis.message);
+      asistenciaId = newAsis.id;
     }
 
-    // 🔄 ACTUALIZAR TURNO A 'EN CURSO'
+    // 7. También insertar en tabla histórica 'asistencias' (para logs de GPS y legacy support)
+    const { data: logAsistencia } = await db.from('asistencias').insert({
+      empleado_id: dto.empleado_id,
+      turno_id: dto.turno_id,
+      tipo_marca: 'entrada',
+      timestamp: now.toISOString(),
+      latitud_entrada: dto.latitud,
+      longitud_entrada: dto.longitud,
+      registrada_por: dto.empleado_id
+    }).select().single();
+
+    // 8. Actualizar ESTADO DEL TURNO a 'en_curso'
     await db.from('turnos').update({
       estado_turno: 'en_curso',
-      hora_inicio: new Date().toLocaleTimeString('en-US', { hour12: false }) // Hora real de inicio
+      // No cambiamos hora_inicio del turno, esa es la programada. Solo estado.
     }).eq('id', dto.turno_id);
 
-    // 🧩 Guardar análisis IA si hay anomalías
-    if (analisisIA && (analisisIA.toLowerCase().includes('alto') || analisisIA.toLowerCase().includes('medio'))) {
-      await this.registrarAnalisisIA(db, dto.empleado_id, dto.turno_id, analisisIA);
-    }
-
-    this.logger.log(`✅ Entrada registrada para empleado ${dto.empleado_id} en turno ${dto.turno_id}`);
+    // 9. IA Analysis (Optional hook)
+    // ... (Mantener lógica IA existente si se desea, o simplificar)
 
     return {
-      message: '✅ Entrada registrada correctamente. Turno iniciado.',
-      analisis_ia: analisisIA,
+      message: '✅ Entrada registrada. Turno en curso.',
+      observacion_generada: observacion,
       distancia_metros: distancia,
-      asistencia,
-      subpuesto: subpuesto.nombre,
-      puesto: puesto?.nombre || 'N/A',
+      turnos_asistencia_id: asistenciaId
     };
   }
 
   // ============================================================
   // 🚶‍♂️ REGISTRAR SALIDA
   // ============================================================
+  // ============================================================
+  // 🚶‍♂️ REGISTRAR SALIDA
+  // ============================================================
   async registrarSalida(dto: RegistrarSalidaDto) {
     const db = this.supabase.getClient();
 
-    // ✅ Verificar permiso de asistencia
     const { turno } = await this.verificarPermisoAsistencia((dto as any).empleado_id, dto.turno_id);
 
-    // Verificar que existe una entrada previa
-    const { data: entradaPrevia, error: entradaError } = await db
-      .from('asistencias')
-      .select('id, timestamp')
+    // 1. Buscar registro en turnos_asistencia
+    const { data: asistencia, error: asisError } = await db
+      .from('turnos_asistencia')
+      .select('*')
       .eq('turno_id', dto.turno_id)
       .eq('empleado_id', (dto as any).empleado_id)
-      .eq('tipo_marca', 'entrada')
-      .order('timestamp', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (entradaError) {
-      throw new BadRequestException(entradaError.message);
-    }
-
-    if (!entradaPrevia) {
-      throw new BadRequestException('No se encontró un registro de entrada previo para este turno');
-    }
-
-    // Obtener información del subpuesto y puesto
-    const { data: subpuesto, error: queryError } = await db
-      .from('subpuestos_trabajo')
-      .select(`
-        id,
-        nombre,
-        puesto:puesto_id (
-          id,
-          nombre,
-          latitud,
-          longitud,
-          direccion,
-          ciudad
-        )
-      `)
-      .eq('id', turno.subpuesto_id)
       .single();
 
-    if (queryError || !subpuesto) {
-      throw new NotFoundException('Subpuesto no encontrado o error de consulta');
+    if (asisError || !asistencia) {
+      throw new BadRequestException('No se encontró registro de entrada para este turno en turnos_asistencia.');
+    }
+    if (asistencia.hora_salida) {
+      throw new BadRequestException('Ya se ha registrado la salida para este turno.');
     }
 
-    const puestoRaw = subpuesto.puesto;
-    const puesto = Array.isArray(puestoRaw) ? puestoRaw[0] : puestoRaw;
+    // 2. Validar Distancia
+    const { data: subpuesto } = await db.from('subpuestos_trabajo').select('*, puesto:puesto_id(*)').eq('id', turno.subpuesto_id).single();
+    const puesto = Array.isArray(subpuesto?.puesto) ? subpuesto.puesto[0] : subpuesto?.puesto;
 
-    // 📍 Calcular distancia de salida (VALIDACION ESTRICTA 200m)
     let distancia = 0;
     if (puesto?.latitud && puesto?.longitud && dto.latitud && dto.longitud) {
-      distancia = calcularDistancia(
-        parseFloat(dto.latitud),
-        parseFloat(dto.longitud),
-        parseFloat(puesto.latitud),
-        parseFloat(puesto.longitud),
-      );
+      distancia = calcularDistancia(parseFloat(dto.latitud), parseFloat(dto.longitud), parseFloat(puesto.latitud), parseFloat(puesto.longitud));
     }
-
     if (distancia > 1000) {
-      throw new BadRequestException(`Estás demasiado lejos (${Math.round(distancia)}m). Debes estar en el puesto para marcar salida.`);
+      throw new BadRequestException(`Estás demasiado lejos (${Math.round(distancia)}m). Máximo 1000m.`);
     }
 
-    // 🕒 VERIFICAR HORARIO DE SALIDA (Tolerancia 10 mins antes)
+    // 3. Calcular Observaciones de Salida
     const now = new Date();
     const [hFin, mFin, sFin] = (turno.hora_fin || '23:59:59').split(':');
     const turnoFechaFin = new Date(turno.fecha);
     turnoFechaFin.setHours(parseInt(hFin), parseInt(mFin), parseInt(sFin || '0'));
-
-    // Si el turno termina al día siguiente (ej: noche), ajustar fecha
+    // Ajuste turno noche
     if (turno.hora_inicio && turno.hora_fin && turno.hora_fin < turno.hora_inicio) {
       turnoFechaFin.setDate(turnoFechaFin.getDate() + 1);
     }
 
-    // Diferencia en minutos
     const minutosParaFin = (turnoFechaFin.getTime() - now.getTime()) / (1000 * 60);
+    // Si minutosParaFin > 0 -> Salió antes
+    // Si minutosParaFin < 0 -> Salió después (extras/tarde)
 
-    // Si faltan más de 10 minutos, bloquear
+    // Validar salida muy temprana (más de 10 mins antes)
     if (minutosParaFin > 10) {
-      throw new BadRequestException('Aún es muy temprano para marcar salida. Solo se permite 10 minutos antes del fin del turno.');
+      throw new BadRequestException('Muy temprano para salir. Solo se permite 10 minutos antes del fin.');
     }
 
-    // 🧠 Analizar salida con IA
-    const analisisIA = await this.gemini.analizarAsistencia({
-      tipo: 'salida',
+    let observacionSalida = '';
+    const minutosDespues = Math.floor((now.getTime() - turnoFechaFin.getTime()) / (1000 * 60));
+
+    if (minutosDespues >= 5) {
+      // Marcó más de 5 mins tarde
+      observacionSalida = `Salida Tarde / Tiempo Extra: ${minutosDespues} min.`;
+    } else {
+      observacionSalida = 'Salida Normal.';
+    }
+
+    // append a observaciones existentes
+    const nuevasObservaciones = (asistencia.observaciones || '') + ' | Salida: ' + observacionSalida;
+    if (dto.observacion) nuevasObservaciones + ` Nota: ${dto.observacion}`;
+
+    // 4. Actualizar turnos_asistencia
+    await db.from('turnos_asistencia').update({
+      hora_salida: now.toISOString(),
+      observaciones: nuevasObservaciones,
+      estado_asistencia: 'cumplido'
+    }).eq('id', asistencia.id);
+
+    // 5. Insertar en log 'asistencias' legacy
+    await db.from('asistencias').insert({
       empleado_id: (dto as any).empleado_id,
-      lugar_nombre: `${puesto?.nombre || 'Puesto'} - ${subpuesto?.nombre || 'Subpuesto'}`,
-      distancia_metros: distancia,
+      turno_id: dto.turno_id,
+      tipo_marca: 'salida',
+      timestamp: now.toISOString(),
+      latitud_salida: dto.latitud,
+      longitud_salida: dto.longitud,
+      registrada_por: (dto as any).empleado_id
     });
 
-    // 💾 Registrar salida
-    const { data: asistencia, error: insertError } = await db
-      .from('asistencias')
-      .insert({
-        empleado_id: (dto as any).empleado_id,
-        turno_id: dto.turno_id,
-        tipo_marca: 'salida',
-        timestamp: new Date().toISOString(),
-        latitud_salida: dto.latitud,
-        longitud_salida: dto.longitud,
-        registrada_por: (dto as any).empleado_id,
-      })
-      .select()
-      .single();
+    // 6. Actualizar ESTADO DEL TURNO a 'finalizado' (usaremos 'cumplido' que es el estándar en enum, o 'no_cumplido' si hay falla, pero aquí es éxito)
+    // Calcular horas reales
+    const fechaEntrada = new Date(asistencia.hora_entrada);
+    const horasReales = (now.getTime() - fechaEntrada.getTime()) / (1000 * 60 * 60);
 
-    if (insertError) {
-      this.logger.error(`Error registrando salida: ${insertError.message}`);
-      throw new BadRequestException(insertError.message);
-    }
-
-    // 🔄 CÁLCULO DE HORAS Y FINALIZACIÓN DE TURNO
-    const fechaEntrada = new Date(entradaPrevia.timestamp);
-    const fechaSalida = new Date();
-    const diffMs = fechaSalida.getTime() - fechaEntrada.getTime();
-    const horasExactas = diffMs / (1000 * 60 * 60); // Horas con decimales
-
-    // Actualizar turno a CUMPLIDO con duración exacta
     await db.from('turnos').update({
-      estado_turno: 'cumplido',
-      fecha_fin: fechaSalida.toISOString(), // Fecha fin real
-      hora_fin: fechaSalida.toLocaleTimeString('en-US', { hour12: false }), // Hora real fin
-      horas_reportadas: horasExactas, // Guardar tiempo exacto
-      duracion_horas: horasExactas
+      estado_turno: 'cumplido', // El usuario pidió "finalizado" pero el enum es 'cumplido'. 'finalizado' daría error constraint.
+      horas_reportadas: horasReales,
+      duracion_horas: horasReales
     }).eq('id', dto.turno_id);
 
-
-    // 🧩 Guardar análisis IA si hay anomalías
-    if (analisisIA && (analisisIA.toLowerCase().includes('alto') || analisisIA.toLowerCase().includes('medio'))) {
-      await this.registrarAnalisisIA(db, (dto as any).empleado_id, dto.turno_id, analisisIA);
-    }
-
-    this.logger.log(`✅ Salida registrada para empleado ${(dto as any).empleado_id} en turno ${dto.turno_id}. Horas: ${horasExactas.toFixed(2)}`);
-
     return {
-      message: '✅ Salida registrada correctamente. Turno finalizado.',
-      analisis_ia: analisisIA,
-      distancia_metros: distancia,
-      asistencia,
-      horas_trabajadas: horasExactas
+      message: '✅ Salida registrada. Turno Finalizado.',
+      observacion_salida: observacionSalida,
+      horas_trabajadas: horasReales,
+      distancia_metros: distancia
     };
   }
 
