@@ -77,7 +77,7 @@ export class MinutasController {
   })
   async addAdjuntos(
     @Param('id', ParseIntPipe) id: number,
-    @UploadedFiles() files: Array<Express.Multer.File>, // Removed raw body logging check
+    @UploadedFiles() files: Array<any>, // Changed from Express.Multer.File to any to fix TS2503
   ) {
     return this.minutasService.addAdjuntos(id, files);
   }
