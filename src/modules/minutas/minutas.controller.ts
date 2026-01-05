@@ -1,7 +1,9 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, UseGuards } from "@nestjs/common"
+import { Controller, Get, Post, Put, Delete, Body, Param, UseGuards, UseInterceptors, UploadedFiles, ParseIntPipe } from "@nestjs/common"
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from "@nestjs/swagger"
 import { MinutasService } from "./minutas.service"
 import { CreateMinutaDto, UpdateMinutaDto } from "./dto/minuta.dto"
+import { FilesInterceptor } from "@nestjs/platform-express" // Import from platform-express
+import { ApiConsumes, ApiBody } from "@nestjs/swagger"
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
 import { PermissionsGuard } from "../auth/guards/permissions.guard"
 import { RequirePermissions } from "../auth/decorators/permissions.decorator"
@@ -52,5 +54,31 @@ export class MinutasController {
   @ApiResponse({ status: 200, description: 'Minuta eliminada exitosamente' })
   async remove(@Param('id') id: number) {
     return this.minutasService.remove(id);
+  }
+
+  @Post(':id/adjuntos')
+  @RequirePermissions('minutas')
+  @UseInterceptors(FilesInterceptor('files', 5)) // Hasta 5 archivos
+  @ApiOperation({ summary: 'Subir adjuntos a una minuta (Fotos, Videos, PDF)' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        files: {
+          type: 'array',
+          items: {
+            type: 'string',
+            format: 'binary',
+          },
+        },
+      },
+    },
+  })
+  async addAdjuntos(
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFiles() files: Array<Express.Multer.File>, // Removed raw body logging check
+  ) {
+    return this.minutasService.addAdjuntos(id, files);
   }
 }
