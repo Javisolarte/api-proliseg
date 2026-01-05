@@ -12,7 +12,7 @@ import { LoginDto, RegisterDto } from './dto/auth.dto';
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
-  constructor(private readonly supabaseService: SupabaseService) {}
+  constructor(private readonly supabaseService: SupabaseService) { }
 
   // 🔹 Combinar y formatear permisos
   private formatearPermisos(permisos: any[]) {
@@ -31,175 +31,175 @@ export class AuthService {
     }));
   }
 
-/**
- * 🚪 LOGOUT: Marca la sesión como inactiva en la base de datos
- */
-async logout(user: any, accessToken?: string) {
-  const supabase = this.supabaseService.getClient();
+  /**
+   * 🚪 LOGOUT: Marca la sesión como inactiva en la base de datos
+   */
+  async logout(user: any, accessToken?: string) {
+    const supabase = this.supabaseService.getClient();
 
-  try {
-    this.logger.log(`🚪 Cerrando sesión del usuario ID: ${user?.id}`);
+    try {
+      this.logger.log(`🚪 Cerrando sesión del usuario ID: ${user?.id}`);
 
-    if (!user?.id) {
-      throw new BadRequestException('Usuario no válido para cerrar sesión.');
+      if (!user?.id) {
+        throw new BadRequestException('Usuario no válido para cerrar sesión.');
+      }
+
+      // ✅ Buscar la sesión activa del usuario con ese token
+      const { data: sesionActiva, error: findError } = await supabase
+        .from('sesiones_usuario')
+        .select('*')
+        .eq('usuario_id', user.id)
+        .eq('token_sesion', accessToken)
+        .eq('activa', true)
+        .maybeSingle();
+
+      if (findError) {
+        throw new InternalServerErrorException({
+          message: 'Error al buscar la sesión activa.',
+          supabase_error: findError.message,
+        });
+      }
+
+      if (!sesionActiva) {
+        this.logger.warn('⚠️ No se encontró una sesión activa para cerrar.');
+        return { success: false, message: 'No hay sesión activa para cerrar.' };
+      }
+
+      // 🔹 Actualizar sesión a inactiva
+      const { error: updateError } = await supabase
+        .from('sesiones_usuario')
+        .update({
+          activa: false,
+          fecha_ultimo_acceso: new Date().toISOString(),
+        })
+        .eq('id', sesionActiva.id);
+
+      if (updateError) {
+        throw new InternalServerErrorException({
+          message: 'Error al actualizar estado de la sesión.',
+          supabase_error: updateError.message,
+        });
+      }
+
+      this.logger.log(`✅ Sesión cerrada correctamente para usuario ID: ${user.id}`);
+
+      return {
+        success: true,
+        message: 'Sesión cerrada exitosamente.',
+      };
+    } catch (err) {
+      this.logger.error(`❌ Error en logout: ${err.message}`);
+      throw err instanceof BadRequestException
+        ? err
+        : new InternalServerErrorException('Error interno al cerrar sesión.');
     }
-
-    // ✅ Buscar la sesión activa del usuario con ese token
-    const { data: sesionActiva, error: findError } = await supabase
-      .from('sesiones_usuario')
-      .select('*')
-      .eq('usuario_id', user.id)
-      .eq('token_sesion', accessToken)
-      .eq('activa', true)
-      .maybeSingle();
-
-    if (findError) {
-      throw new InternalServerErrorException({
-        message: 'Error al buscar la sesión activa.',
-        supabase_error: findError.message,
-      });
-    }
-
-    if (!sesionActiva) {
-      this.logger.warn('⚠️ No se encontró una sesión activa para cerrar.');
-      return { success: false, message: 'No hay sesión activa para cerrar.' };
-    }
-
-    // 🔹 Actualizar sesión a inactiva
-    const { error: updateError } = await supabase
-      .from('sesiones_usuario')
-      .update({
-        activa: false,
-        fecha_ultimo_acceso: new Date().toISOString(),
-      })
-      .eq('id', sesionActiva.id);
-
-    if (updateError) {
-      throw new InternalServerErrorException({
-        message: 'Error al actualizar estado de la sesión.',
-        supabase_error: updateError.message,
-      });
-    }
-
-    this.logger.log(`✅ Sesión cerrada correctamente para usuario ID: ${user.id}`);
-
-    return {
-      success: true,
-      message: 'Sesión cerrada exitosamente.',
-    };
-  } catch (err) {
-    this.logger.error(`❌ Error en logout: ${err.message}`);
-    throw err instanceof BadRequestException
-      ? err
-      : new InternalServerErrorException('Error interno al cerrar sesión.');
   }
-}
 
-/**
- * 🔐 LOGIN: Autentica un usuario existente y obtiene todos sus permisos
- */
-async login(loginDto: LoginDto, req?: any) {
-  const supabase = this.supabaseService.getClient();
+  /**
+   * 🔐 LOGIN: Autentica un usuario existente y obtiene todos sus permisos
+   */
+  async login(loginDto: LoginDto, req?: any) {
+    const supabase = this.supabaseService.getClient();
 
-  try {
-    this.logger.log(`🟢 Intentando login de ${loginDto.email}`);
+    try {
+      this.logger.log(`🟢 Intentando login de ${loginDto.email}`);
 
-    if (!loginDto?.email || !loginDto?.password) {
-      throw new BadRequestException({
-        message: 'Faltan credenciales en la solicitud (email o password).',
-      });
-    }
+      if (!loginDto?.email || !loginDto?.password) {
+        throw new BadRequestException({
+          message: 'Faltan credenciales en la solicitud (email o password).',
+        });
+      }
 
-    // 🔹 Autenticación
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: loginDto.email,
-      password: loginDto.password,
-    });
-
-    if (error || !data?.user || !data?.session) {
-      throw new UnauthorizedException({
-        message: 'Credenciales inválidas',
-        supabase_error: error?.message,
-      });
-    }
-
-    // 🔹 Obtener datos del usuario externo
-    const { data: usuarioExterno, error: userError } = await supabase
-      .from('usuarios_externos')
-      .select('*')
-      .eq('user_id', data.user.id)
-      .single();
-
-    if (userError) {
-      throw new InternalServerErrorException({
-        message: 'Error al obtener datos del usuario externo',
-        supabase_error: userError.message,
-      });
-    }
-
-    // 🔹 Permisos del usuario
-    const { data: permisosUsuario, error: permisosError } = await supabase
-      .from('roles_modulos_usuarios_externos')
-      .select('modulo_id, modulos(*)')
-      .eq('usuario_id', usuarioExterno.id)
-      .eq('concedido', true);
-
-    if (permisosError) {
-      throw new InternalServerErrorException({
-        message: 'Error al obtener permisos del usuario',
-        supabase_error: permisosError.message,
-      });
-    }
-
-    const permisosFormateados = this.formatearPermisos(permisosUsuario || []);
-
-    // 📌 Registrar sesión en la tabla sesiones_usuario
-    const ipAddress =
-      req?.ip ||
-      req?.headers['x-forwarded-for'] ||
-      req?.connection?.remoteAddress ||
-      null;
-    const userAgent = req?.headers['user-agent'] || 'unknown';
-
-    const { error: sesionError } = await supabase
-      .from('sesiones_usuario')
-      .insert({
-        usuario_id: usuarioExterno.id,
-        token_sesion: data.session.access_token,
-        ip_address: ipAddress,
-        user_agent: userAgent,
-        activa: true,
+      // 🔹 Autenticación
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: loginDto.email,
+        password: loginDto.password,
       });
 
-    if (sesionError) {
-      this.logger.error(`⚠️ Error al registrar sesión: ${sesionError.message}`);
-      // No interrumpe el login, solo registra el error
-    } else {
-      this.logger.log(`🟢 Sesión registrada correctamente para ${loginDto.email}`);
+      if (error || !data?.user || !data?.session) {
+        throw new UnauthorizedException({
+          message: 'Credenciales inválidas',
+          supabase_error: error?.message,
+        });
+      }
+
+      // 🔹 Obtener datos del usuario externo
+      const { data: usuarioExterno, error: userError } = await supabase
+        .from('usuarios_externos')
+        .select('*')
+        .eq('user_id', data.user.id)
+        .single();
+
+      if (userError) {
+        throw new InternalServerErrorException({
+          message: 'Error al obtener datos del usuario externo',
+          supabase_error: userError.message,
+        });
+      }
+
+      // 🔹 Permisos del usuario
+      const { data: permisosUsuario, error: permisosError } = await supabase
+        .from('roles_modulos_usuarios_externos')
+        .select('modulo_id, modulos(*)')
+        .eq('usuario_id', usuarioExterno.id)
+        .eq('concedido', true);
+
+      if (permisosError) {
+        throw new InternalServerErrorException({
+          message: 'Error al obtener permisos del usuario',
+          supabase_error: permisosError.message,
+        });
+      }
+
+      const permisosFormateados = this.formatearPermisos(permisosUsuario || []);
+
+      // 📌 Registrar sesión en la tabla sesiones_usuario
+      const ipAddress =
+        req?.ip ||
+        req?.headers['x-forwarded-for'] ||
+        req?.connection?.remoteAddress ||
+        null;
+      const userAgent = req?.headers['user-agent'] || 'unknown';
+
+      const { error: sesionError } = await supabase
+        .from('sesiones_usuario')
+        .insert({
+          usuario_id: usuarioExterno.id,
+          token_sesion: data.session.access_token,
+          ip_address: ipAddress,
+          user_agent: userAgent,
+          activa: true,
+        });
+
+      if (sesionError) {
+        this.logger.error(`⚠️ Error al registrar sesión: ${sesionError.message}`);
+        // No interrumpe el login, solo registra el error
+      } else {
+        this.logger.log(`🟢 Sesión registrada correctamente para ${loginDto.email}`);
+      }
+
+      this.logger.log(`✅ Login exitoso: ${loginDto.email}`);
+
+      return {
+        success: true,
+        message: 'Inicio de sesión exitoso',
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+        user: {
+          id: data.user.id,
+          email: data.user.email,
+          ...usuarioExterno,
+          permisos: permisosFormateados,
+        },
+      };
+    } catch (err) {
+      this.logger.error(`❌ Error en login: ${err.message}`);
+      throw err instanceof UnauthorizedException ||
+        err instanceof BadRequestException
+        ? err
+        : new InternalServerErrorException('Error interno en el login.');
     }
-
-    this.logger.log(`✅ Login exitoso: ${loginDto.email}`);
-
-    return {
-      success: true,
-      message: 'Inicio de sesión exitoso',
-      access_token: data.session.access_token,
-      refresh_token: data.session.refresh_token,
-      user: {
-        id: data.user.id,
-        email: data.user.email,
-        ...usuarioExterno,
-        permisos: permisosFormateados,
-      },
-    };
-  } catch (err) {
-    this.logger.error(`❌ Error en login: ${err.message}`);
-    throw err instanceof UnauthorizedException ||
-      err instanceof BadRequestException
-      ? err
-      : new InternalServerErrorException('Error interno en el login.');
   }
-}
 
 
   /**
@@ -227,6 +227,7 @@ async login(loginDto: LoginDto, req?: any) {
         });
 
       if (authError) {
+        this.logger.error(`❌ Error de Supabase Auth: ${authError.message}`);
         throw new BadRequestException({
           message: 'Error al registrar usuario en Supabase Auth',
           supabase_error: authError.message,
@@ -255,6 +256,7 @@ async login(loginDto: LoginDto, req?: any) {
         .single();
 
       if (userError) {
+        this.logger.error(`❌ Error de Base de Datos (usuarios_externos): ${userError.message}`);
         // ❌ Revertir creación si falla
         await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
         throw new BadRequestException({
@@ -309,7 +311,7 @@ async login(loginDto: LoginDto, req?: any) {
         userUUID = userIdentifier;
       }
 
-      
+
       // 🔹 Obtener usuario externo
       const { data: usuarioExterno, error: userError } = await supabase
         .from('usuarios_externos')
