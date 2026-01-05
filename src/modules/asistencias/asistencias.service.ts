@@ -171,9 +171,9 @@ export class AsistenciasService {
       registrada_por: dto.empleado_id
     }).select().single();
 
-    // 8. Actualizar ESTADO DEL TURNO a 'en_curso'
+    // 8. Actualizar ESTADO DEL TURNO a 'parcial' (Significa En Curso según lógica usuario)
     await db.from('turnos').update({
-      estado_turno: 'en_curso',
+      estado_turno: 'parcial',
       // No cambiamos hora_inicio del turno, esa es la programada. Solo estado.
     }).eq('id', dto.turno_id);
 

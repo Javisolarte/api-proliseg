@@ -198,16 +198,16 @@ export class AutoservicioService {
         const empleado = await this.getEmpleadoByUserId(userId);
         const supabase = this.supabaseService.getClient();
 
-        // VALIDACIÓN: Solo puede crear si tiene turno ACTIVO ('en_curso')
+        // VALIDACIÓN: Solo puede crear si tiene turno ACTIVO ('parcial' es el estado "En Curso" según DB)
         const { data: turnoActivo } = await supabase
             .from('turnos')
             .select('id, puesto_id')
             .eq('empleado_id', empleado.id)
-            .eq('estado_turno', 'en_curso')
+            .eq('estado_turno', 'parcial') // Changed from 'en_curso'
             .single();
 
         if (!turnoActivo) {
-            throw new ForbiddenException('Solo puedes crear minutas cuando tienes un turno activo (en curso).');
+            throw new ForbiddenException('Solo puedes crear minutas cuando tienes un turno activo (en curso/parcial).');
         }
 
         // Crear minuta vinculada al turno y puesto
