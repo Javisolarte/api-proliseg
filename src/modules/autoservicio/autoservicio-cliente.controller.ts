@@ -114,7 +114,7 @@ export class AutoservicioClienteController {
                 ],
                 fileIsRequired: true
             }),
-        ) file: Express.Multer.File,
+        ) file: any,
     ) {
         return this.autoservicioService.addAdjuntoCliente(user.id, id, file);
     }
