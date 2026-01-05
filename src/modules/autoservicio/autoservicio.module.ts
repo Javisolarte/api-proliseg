@@ -4,9 +4,10 @@ import { AutoservicioClienteController } from './autoservicio-cliente.controller
 import { AutoservicioService } from './autoservicio.service';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { AuthModule } from '../auth/auth.module';
+import { PqrsfModule } from '../pqrsf/pqrsf.module';
 
 @Module({
-    imports: [SupabaseModule, AuthModule],
+    imports: [SupabaseModule, AuthModule, PqrsfModule],
     controllers: [AutoservicioEmpleadoController, AutoservicioClienteController],
     providers: [AutoservicioService],
 })

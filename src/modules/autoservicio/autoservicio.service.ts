@@ -1,9 +1,13 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { PqrsfService } from '../pqrsf/pqrsf.service';
 
 @Injectable()
 export class AutoservicioService {
-    constructor(private readonly supabaseService: SupabaseService) { }
+    constructor(
+        private readonly supabaseService: SupabaseService,
+        private readonly pqrsfService: PqrsfService
+    ) { }
 
     // ------------------------------------------------------------------
     // HELPERS
@@ -434,5 +438,171 @@ export class AutoservicioService {
 
         if (error) throw error;
         return data;
+    }
+
+    async getEmpleadosAsignadosCliente(userId: number) {
+        const cliente = await this.getClienteByUserId(userId);
+        const supabase = this.supabaseService.getClient();
+
+        // 1. Obtener todos los contratos del cliente
+        const { data: contratos } = await supabase
+            .from('contratos')
+            .select('id')
+            .eq('cliente_id', cliente.id);
+
+        if (!contratos || contratos.length === 0) return [];
+        const contratoIds = contratos.map(c => c.id);
+
+        // 2. Obtener puestos de esos contratos
+        const { data: puestos } = await supabase
+            .from('puestos_trabajo')
+            .select('id, nombre')
+            .in('contrato_id', contratoIds)
+            .eq('activo', true);
+
+        if (!puestos || puestos.length === 0) return [];
+        const puestoIds = puestos.map(p => p.id);
+
+        // 3. Obtener asignaciones activas
+        const { data: asignaciones, error } = await supabase
+            .from('asignacion_guardas_puesto')
+            .select(`
+                puesto_id,
+                empleado:empleado_id(
+                    id,
+                    nombre_completo,
+                    cedula,
+                    telefono,
+                    experiencia,
+                    foto_perfil_url
+                )
+            `)
+            .in('puesto_id', puestoIds)
+            .eq('activo', true);
+
+        if (error) throw error;
+
+        // 4. Mapear con información del puesto
+        const puestosMap = puestos.reduce((acc, p) => ({ ...acc, [p.id]: p.nombre }), {});
+
+        return asignaciones.map(a => ({
+            puesto_nombre: puestosMap[a.puesto_id],
+            empleado: a.empleado
+        }));
+    }
+
+    // ------------------------------------------------------------------
+    // PQRSF (CLIENTE)
+    // ------------------------------------------------------------------
+    async getPqrsCliente(userId: number, filters?: { estado?: string; fechaInicio?: string; fechaFin?: string }) {
+        const cliente = await this.getClienteByUserId(userId);
+        const supabase = this.supabaseService.getClient();
+
+        let query = supabase
+            .from('pqrsf')
+            .select(`
+                *,
+                contrato:contrato_id(id),
+                puesto:puesto_id(nombre)
+            `)
+            .eq('cliente_id', cliente.id)
+            .neq('estado', 'cancelado') // Excluir soft-deleted por defecto
+            .order('created_at', { ascending: false });
+
+        if (filters?.estado) query = query.eq('estado', filters.estado);
+        if (filters?.fechaInicio) query = query.gte('created_at', filters.fechaInicio);
+        if (filters?.fechaFin) query = query.lte('created_at', filters.fechaFin);
+
+        const { data, error } = await query;
+
+        if (error) throw error;
+        return data;
+    }
+
+    async getPqrsDetalleCliente(userId: number, pqrsfId: number) {
+        const cliente = await this.getClienteByUserId(userId);
+        const supabase = this.supabaseService.getClient();
+
+        const { data, error } = await supabase
+            .from('pqrsf')
+            .select(`
+                *,
+                contrato:contrato_id(id),
+                puesto:puesto_id(nombre),
+                respuestas:pqrsf_respuestas(
+                    id, mensaje, created_at, visible_para_cliente,
+                    respondido_por:respondido_por(nombre_completo, rol)
+                ),
+                adjuntos:pqrsf_adjuntos(*)
+            `)
+            .eq('id', pqrsfId)
+            // Ensure client owns this PQRS
+            .eq('cliente_id', cliente.id)
+            .single();
+
+        if (error) throw error;
+        if (!data) throw new NotFoundException('PQRSF no encontrado o no autorizado');
+
+        // Filtrar respuestas visibles para cliente
+        data.respuestas = data.respuestas.filter(r => r.visible_para_cliente);
+
+        return data;
+    }
+
+    async createPqrsCliente(userId: number, dto: any) {
+        const cliente = await this.getClienteByUserId(userId);
+        const supabase = this.supabaseService.getClient();
+
+        // Validar si contrato/puesto pertenecen al cliente si se envían
+        if (dto.contrato_id) {
+            const { data: contrato } = await supabase
+                .from('contratos')
+                .select('id')
+                .eq('id', dto.contrato_id)
+                .eq('cliente_id', cliente.id)
+                .single();
+            if (!contrato) throw new ForbiddenException('El contrato especificado no pertenece a su cuenta');
+        }
+
+        // TODO: Validar puesto si se envía (aunque puesto depende de contrato, doble check es bueno)
+
+        const { data, error } = await supabase
+            .from('pqrsf')
+            .insert({
+                ...dto,
+                cliente_id: cliente.id,
+                usuario_cliente_id: userId,
+                fecha_creacion: new Date().toISOString()
+            })
+            .select()
+            .single();
+
+        if (error) throw error;
+        return data;
+    }
+
+    async addAdjuntoCliente(userId: number, pqrsId: number, file: any) {
+        const cliente = await this.getClienteByUserId(userId);
+        const supabase = this.supabaseService.getClient();
+
+        // 1. Verificar que PQRS pertenezca al cliente
+        const { data: pqrs, error } = await supabase
+            .from('pqrsf')
+            .select('id')
+            .eq('id', pqrsId)
+            .eq('cliente_id', cliente.id)
+            .single();
+
+        if (error || !pqrs) {
+            throw new NotFoundException('PQRSF no encontrado o no autorizado');
+        }
+
+        // 2. Usar servicio de PQRSF para subir archivo
+        // Determinar tipo básico
+        let tipo = 'otro';
+        if (file.mimetype.startsWith('image/')) tipo = 'imagen';
+        else if (file.mimetype === 'application/pdf') tipo = 'pdf';
+
+        return this.pqrsfService.addAdjunto(pqrsId, userId, file, tipo);
     }
 }
