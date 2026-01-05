@@ -124,7 +124,7 @@ export class PqrsfController {
     @UseInterceptors(FileInterceptor('file'))
     addAdjunto(
         @Param('id') id: number,
-        @UploadedFile() file: Express.Multer.File,
+        @UploadedFile() file: any,
         @Body('tipo') tipo: string,
         @CurrentUser() user: any
     ) {
