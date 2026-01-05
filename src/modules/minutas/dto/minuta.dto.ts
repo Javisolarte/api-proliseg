@@ -45,10 +45,11 @@ export class CreateMinutaDto {
   @IsString()
   descripcion?: string
 
-  @ApiProperty({ example: [], required: false })
+  @ApiProperty({ example: ['https://example.com/foto1.jpg'], required: false, type: [String] })
   @IsOptional()
   @IsArray()
-  fotos?: any[]
+  @IsString({ each: true })
+  fotos?: string[]
 
   @ApiProperty({ example: 4.6097, required: false })
   @IsOptional()
@@ -109,15 +110,17 @@ export class CreateMinutaDto {
   @IsString()
   nivel_riesgo?: string
 
-  @ApiProperty({ example: [], required: false })
+  @ApiProperty({ example: ['https://example.com/video1.mp4'], required: false, type: [String] })
   @IsOptional()
   @IsArray()
-  videos?: any[]
+  @IsString({ each: true })
+  videos?: string[]
 
-  @ApiProperty({ example: [], required: false })
+  @ApiProperty({ example: ['https://example.com/doc1.pdf'], required: false, type: [String] })
   @IsOptional()
   @IsArray()
-  adjuntos?: any[]
+  @IsString({ each: true })
+  adjuntos?: string[]
 
   @ApiProperty({ example: 1, required: false })
   @IsOptional()
@@ -163,3 +166,12 @@ export class CreateMinutaDto {
 }
 
 export class UpdateMinutaDto extends PartialType(CreateMinutaDto) { }
+
+export class UploadMinutaAdjuntosDto {
+  @ApiProperty({
+    type: 'array',
+    items: { type: 'string', format: 'binary' },
+    description: 'Archivos a subir (Imágenes, Videos, PDFs). Máximo 5 archivos.'
+  })
+  files: any[];
+}
