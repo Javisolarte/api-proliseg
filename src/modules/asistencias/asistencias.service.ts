@@ -133,9 +133,9 @@ export class AsistenciasService {
     }
 
     // 📏 VALIDAR DISTANCIA (Max 200m estrictos)
-    const MAX_DISTANCIA_METROS = 200;
+    const MAX_DISTANCIA_METROS = 1000;
     if (distancia > MAX_DISTANCIA_METROS) {
-      throw new BadRequestException(`Estás fuera del rango permitido (${Math.round(distancia)}m). Debes estar a menos de 200m del puesto.`);
+      throw new BadRequestException(`Estás fuera del rango permitido (${Math.round(distancia)}m). Debes estar a menos de 1000m del puesto.`);
     }
 
     // 🔍 Obtener historial de asistencias
@@ -262,7 +262,7 @@ export class AsistenciasService {
       );
     }
 
-    if (distancia > 200) {
+    if (distancia > 1000) {
       throw new BadRequestException(`Estás demasiado lejos (${Math.round(distancia)}m). Debes estar en el puesto para marcar salida.`);
     }
 
