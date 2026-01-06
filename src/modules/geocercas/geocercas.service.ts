@@ -102,7 +102,7 @@ export class GeocercasService {
     async asociarPuesto(geocercaId: number, puestoId: number) {
         const db = this.supabase.getClient();
         const { data, error } = await db
-            .from("geocerca_puestos")
+            .from("geocercas_puestos")
             .insert({ geocerca_id: geocercaId, puesto_id: puestoId })
             .select()
             .single();
@@ -113,7 +113,7 @@ export class GeocercasService {
     async desasociarPuesto(geocercaId: number, puestoId: number) {
         const db = this.supabase.getClient();
         const { error } = await db
-            .from("geocerca_puestos")
+            .from("geocercas_puestos")
             .delete()
             .eq("geocerca_id", geocercaId)
             .eq("puesto_id", puestoId);
@@ -124,7 +124,7 @@ export class GeocercasService {
     async asociarRutaPunto(geocercaId: number, rutaPuntoId: number) {
         const db = this.supabase.getClient();
         const { data, error } = await db
-            .from("geocerca_ruta_puntos")
+            .from("geocercas_ruta_puntos")
             .insert({ geocerca_id: geocercaId, ruta_punto_id: rutaPuntoId })
             .select()
             .single();
@@ -135,7 +135,7 @@ export class GeocercasService {
     async desasociarRutaPunto(geocercaId: number, rutaPuntoId: number) {
         const db = this.supabase.getClient();
         const { error } = await db
-            .from("geocerca_ruta_puntos")
+            .from("geocercas_ruta_puntos")
             .delete()
             .eq("geocerca_id", geocercaId)
             .eq("ruta_punto_id", rutaPuntoId);
