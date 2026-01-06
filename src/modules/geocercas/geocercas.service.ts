@@ -18,7 +18,6 @@ export class GeocercasService {
             .insert({
                 ...dto,
                 created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
             })
             .select()
             .single();
@@ -54,10 +53,7 @@ export class GeocercasService {
         const db = this.supabase.getClient();
         const { data, error } = await db
             .from("geocercas")
-            .update({
-                ...dto,
-                updated_at: new Date().toISOString(),
-            })
+            .update(dto)
             .eq("id", id)
             .select()
             .single();
