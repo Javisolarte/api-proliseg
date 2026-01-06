@@ -54,6 +54,8 @@ import { InventarioModule } from './modules/inventario/inventario.module';
 import { DotacionesModule } from './modules/dotaciones/dotaciones.module';
 import { ContratosPersonalModule } from './modules/contratos-personal/contratos-personal.module';
 import { NominaModule } from './modules/nomina/nomina.module';
+import { EstudiosSeguridadModule } from './modules/estudios-seguridad/estudios-seguridad.module';
+import { GeocercasModule } from './modules/geocercas/geocercas.module';
 
 import { AutoservicioModule } from './modules/autoservicio/autoservicio.module';
 import { TiposVigilanteModule } from './modules/tipos-vigilante/tipos-vigilante.module';
@@ -138,6 +140,8 @@ import { UbicacionesModule } from './modules/ubicaciones/ubicaciones.module';
     PqrsfModule,
     BotonPanicoModule,
     UbicacionesModule,
+    EstudiosSeguridadModule,
+    GeocercasModule,
     HelpersModule,
   ],
   providers: [],

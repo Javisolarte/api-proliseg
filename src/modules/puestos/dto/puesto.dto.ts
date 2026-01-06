@@ -81,6 +81,44 @@ export class CreatePuestoDto {
   @IsOptional()
   @IsBoolean()
   activo?: boolean;
+
+  @ApiProperty({
+    example: false,
+    required: false,
+    description: "Indica si el puesto tiene armas",
+  })
+  @IsOptional()
+  @IsBoolean()
+  tiene_arma?: boolean;
+
+  @ApiProperty({
+    example: 0,
+    required: false,
+    description: "Cantidad de armas en el puesto",
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  cantidad_armas?: number;
+
+  @ApiProperty({
+    example: false,
+    required: false,
+    description: "Indica si el puesto tiene CCTV",
+  })
+  @IsOptional()
+  @IsBoolean()
+  tiene_cctv?: boolean;
+
+  @ApiProperty({
+    example: 0,
+    required: false,
+    description: "Cantidad de cámaras de CCTV",
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  cantidad_camaras?: number;
 }
 
 export class UpdatePuestoDto extends PartialType(CreatePuestoDto) { }

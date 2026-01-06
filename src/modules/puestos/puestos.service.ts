@@ -8,6 +8,21 @@ export class PuestosService {
 
   constructor(private readonly supabaseService: SupabaseService) { }
 
+  private validateAndCleanPuestoData(dto: any) {
+    if (dto.tiene_arma === false) {
+      dto.cantidad_armas = 0;
+    } else if (dto.tiene_arma === true && (dto.cantidad_armas === undefined || dto.cantidad_armas < 1)) {
+      dto.cantidad_armas = 1; // Default to 1 if not specified but marked as true
+    }
+
+    if (dto.tiene_cctv === false) {
+      dto.cantidad_camaras = 0;
+    } else if (dto.tiene_cctv === true && (dto.cantidad_camaras === undefined || dto.cantidad_camaras < 1)) {
+      dto.cantidad_camaras = 1; // Default to 1 if not specified but marked as true
+    }
+    return dto;
+  }
+
   // 🔹 Obtener todos los puestos
   async findAll() {
     this.logger.log("🔍 Iniciando búsqueda de todos los puestos de trabajo...");
@@ -115,8 +130,9 @@ export class PuestosService {
     const supabase = this.supabaseService.getClient();
 
     const now = new Date().toISOString();
+    const cleanedDto = this.validateAndCleanPuestoData({ ...dto });
     const payload = {
-      ...dto,
+      ...cleanedDto,
       creado_por: userId,
       updated_at: now,
       created_at: now,
@@ -163,8 +179,9 @@ export class PuestosService {
     }
 
     const now = new Date().toISOString();
+    const cleanedDto = this.validateAndCleanPuestoData({ ...dto });
     const payload = {
-      ...dto,
+      ...cleanedDto,
       actualizado_por: userId,
       updated_at: now,
     };
