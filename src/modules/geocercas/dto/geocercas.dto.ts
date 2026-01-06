@@ -8,7 +8,11 @@ import {
     Min,
     Max,
     IsEnum,
+    IsArray,
+    ArrayMinSize,
+    ValidateNested,
 } from "class-validator";
+import { Type } from "class-transformer";
 
 export enum TipoGeocerca {
     PUESTO = "puesto",
@@ -100,6 +104,10 @@ export class CreateGeocercaVerticesDto {
         type: [CreateGeocercaVertexDto],
         description: "Lista de vértices que componen el polígono",
     })
+    @IsArray({ message: "El campo vertices debe ser un arreglo" })
+    @ArrayMinSize(3, { message: "Un polígono requiere al menos 3 vértices" })
+    @ValidateNested({ each: true })
+    @Type(() => CreateGeocercaVertexDto)
     vertices: CreateGeocercaVertexDto[];
 }
 

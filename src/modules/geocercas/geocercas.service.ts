@@ -285,7 +285,7 @@ export class GeocercasService {
         const db = this.supabase.getClient();
 
         // Validar mínimo 3 vértices para polígono
-        if (dto.vertices.length < 3) {
+        if (!dto.vertices || dto.vertices.length < 3) {
             throw new BadRequestException("Un polígono requiere al menos 3 vértices");
         }
 
