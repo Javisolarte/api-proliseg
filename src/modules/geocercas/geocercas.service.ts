@@ -203,7 +203,7 @@ export class GeocercasService {
                 .select("evento")
                 .eq("geocerca_id", geo.id)
                 .eq("empleado_id", dto.empleado_id)
-                .order("fecha", { ascending: false })
+                .order("created_at", { ascending: false })
                 .limit(1)
                 .single();
 
@@ -235,7 +235,7 @@ export class GeocercasService {
                 geocerca_id: geocercaId,
                 empleado_id: empleadoId,
                 evento: tipo,
-                fecha: new Date().toISOString(),
+                created_at: new Date().toISOString(),
                 latitud: lat,
                 longitud: lng
             })
@@ -345,7 +345,7 @@ export class GeocercasService {
         empleado:empleado_id(nombre_completo, cedula)
       `)
             .eq("geocerca_id", geocercaId)
-            .order("fecha", { ascending: false });
+            .order("created_at", { ascending: false });
         if (error) throw error;
         return data;
     }
@@ -359,7 +359,7 @@ export class GeocercasService {
         geocerca:geocerca_id(nombre, tipo)
       `)
             .eq("empleado_id", empleadoId)
-            .order("fecha", { ascending: false });
+            .order("created_at", { ascending: false });
         if (error) throw error;
         return data;
     }
