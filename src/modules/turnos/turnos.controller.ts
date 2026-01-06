@@ -23,7 +23,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation } from "@nestjs/swagger";
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth("JWT-auth")
 export class TurnosController {
-  constructor(private readonly turnosService: TurnosService) {}
+  constructor(private readonly turnosService: TurnosService) { }
 
   // ✅ Listar todos los turnos (con filtros opcionales)
   @Get()
@@ -45,12 +45,32 @@ export class TurnosController {
     return this.turnosService.findByEmpleado(empleadoId);
   }
 
+  // ✅ Obtener un turno por ID
+  @Get(":id")
+  @RequirePermissions("turnos")
+  @ApiOperation({ summary: "Obtener un turno por ID" })
+  findOne(@Param("id", ParseIntPipe) id: number) {
+    return this.turnosService.findOne(id);
+  }
+
   // ✅ Crear un nuevo turno
   @Post()
   @RequirePermissions("turnos")
   @ApiOperation({ summary: "Crear un nuevo turno" })
   create(@Body() dto: CreateTurnoDto, @Request() req) {
     return this.turnosService.create(dto, req.user.id);
+  }
+
+  // ✅ Actualizar un turno por ID
+  @Put(":id")
+  @RequirePermissions("turnos")
+  @ApiOperation({ summary: "Actualizar un turno por ID" })
+  update(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: UpdateTurnoDto,
+    @Request() req
+  ) {
+    return this.turnosService.update(id, dto, req.user.id);
   }
 
   // ✅ Actualizar todos los turnos de un empleado
@@ -74,5 +94,13 @@ export class TurnosController {
     @Request() req
   ) {
     return this.turnosService.softDeleteByEmpleado(empleadoId, req.user.id);
+  }
+
+  // ✅ Desactivar (soft delete) un turno por ID
+  @Delete(":id")
+  @RequirePermissions("turnos")
+  @ApiOperation({ summary: "Desactivar (soft delete) un turno por ID" })
+  softDelete(@Param("id", ParseIntPipe) id: number, @Request() req) {
+    return this.turnosService.softDelete(id, req.user.id);
   }
 }

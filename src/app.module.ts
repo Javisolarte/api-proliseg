@@ -62,6 +62,8 @@ import { VisitasModule } from './modules/visitas/visitas.module';
 import { EvidenciasModule } from './modules/evidencias/evidencias.module';
 import { SupervisorModule } from './modules/supervisor/supervisor.module';
 import { PqrsfModule } from './modules/pqrsf/pqrsf.module';
+import { BotonPanicoModule } from './modules/boton-panico/boton-panico.module';
+import { UbicacionesModule } from './modules/ubicaciones/ubicaciones.module';
 
 @Module({
   imports: [
@@ -134,6 +136,8 @@ import { PqrsfModule } from './modules/pqrsf/pqrsf.module';
     EvidenciasModule,
     SupervisorModule,
     PqrsfModule,
+    BotonPanicoModule,
+    UbicacionesModule,
     HelpersModule,
   ],
   providers: [],

@@ -92,4 +92,13 @@ export class CreateTurnoDto {
   duracion_horas?: number;
 }
 
-export class UpdateTurnoDto extends PartialType(CreateTurnoDto) {}
+export class UpdateTurnoDto extends PartialType(CreateTurnoDto) { }
+
+export class TurnoDto extends CreateTurnoDto {
+  @ApiProperty({
+    example: 1,
+    description: "ID único del turno",
+  })
+  @IsInt()
+  id: number;
+}
