@@ -199,7 +199,7 @@ export class GeocercasService {
 
             // 3. Ver último evento de este empleado para esta geocerca
             const { data: ultimoEvento } = await db
-                .from("geocerca_eventos")
+                .from("geocercas_eventos")
                 .select("evento")
                 .eq("geocerca_id", geo.id)
                 .eq("empleado_id", dto.empleado_id)
@@ -230,7 +230,7 @@ export class GeocercasService {
     private async registrarEvento(geocercaId: number, empleadoId: number, tipo: "entrada" | "salida", lat: number, lng: number) {
         const db = this.supabase.getClient();
         const { data, error } = await db
-            .from("geocerca_eventos")
+            .from("geocercas_eventos")
             .insert({
                 geocerca_id: geocercaId,
                 empleado_id: empleadoId,
@@ -339,7 +339,7 @@ export class GeocercasService {
     async getEventosGeocerca(geocercaId: number) {
         const db = this.supabase.getClient();
         const { data, error } = await db
-            .from("geocerca_eventos")
+            .from("geocercas_eventos")
             .select(`
         *,
         empleado:empleado_id(nombre_completo, cedula)
@@ -353,7 +353,7 @@ export class GeocercasService {
     async getEventosEmpleado(empleadoId: number) {
         const db = this.supabase.getClient();
         const { data, error } = await db
-            .from("geocerca_eventos")
+            .from("geocercas_eventos")
             .select(`
         *,
         geocerca:geocerca_id(nombre, tipo)
