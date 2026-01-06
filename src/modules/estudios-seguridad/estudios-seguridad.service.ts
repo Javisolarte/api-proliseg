@@ -32,23 +32,30 @@ export class EstudiosSeguridadService {
             throw error;
         }
 
-        return data.path;
+        return path; // Retornar el path exacto usado para la subida
     }
 
     /**
      * 🔹 Obtener URL firmada
      */
     async getSignedUrl(path: string): Promise<string> {
+        this.logger.debug(`🔑 Generando URL firmada para path: ${path} en bucket: ${this.BUCKET}`);
         const supabase = this.supabaseService.getSupabaseAdminClient();
+
+        // Limpiar path de posibles slashes iniciales
+        const cleanPath = path.startsWith('/') ? path.substring(1) : path;
+
         const { data, error } = await supabase.storage
             .from(this.BUCKET)
-            .createSignedUrl(path, 3600); // 1 hora de validez
+            .createSignedUrl(cleanPath, 3600); // 1 hora de validez
 
         if (error) {
-            this.logger.error(`❌ Error generando URL firmada: ${error.message}`);
+            this.logger.error(`❌ Error generando URL firmada para ${cleanPath}: ${error.message}`);
+            // Retornar null o lanzar error según prefieras, aquí lanzamos para depurar
             throw error;
         }
 
+        this.logger.debug(`✅ URL firmada generada exitosamente`);
         return data.signedUrl;
     }
 
