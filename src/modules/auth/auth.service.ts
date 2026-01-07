@@ -6,7 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
-import { LoginDto, RegisterDto } from './dto/auth.dto';
+import { LoginDto, RegisterDto, UpdateUserDto, ForgotPasswordDto } from './dto/auth.dto';
 
 @Injectable()
 export class AuthService {
@@ -348,6 +348,143 @@ export class AuthService {
       throw new InternalServerErrorException(
         'Error interno al obtener perfil de usuario.'
       );
+    }
+  }
+
+  /**
+   * 🔄 UPDATE USER: Actualiza datos del usuario en la tabla y en Auth si cambia el email
+   */
+  async updateUser(id: number, updateUserDto: UpdateUserDto) {
+    const supabase = this.supabaseService.getClient();
+    const supabaseAdmin = this.supabaseService.getSupabaseAdminClient();
+
+    try {
+      this.logger.log(`🔄 Actualizando usuario ID: ${id}`);
+
+      // 1. Obtener el user_id (UUID) actual de la tabla usuarios_externos
+      const { data: currentUser, error: findError } = await supabase
+        .from('usuarios_externos')
+        .select('user_id, correo')
+        .eq('id', id)
+        .single();
+
+      if (findError || !currentUser) {
+        throw new BadRequestException('Usuario no encontrado.');
+      }
+
+      // 2. Si el email cambió, actualizarlo en Supabase Auth
+      if (updateUserDto.email && updateUserDto.email !== currentUser.correo) {
+        this.logger.log(`📧 Actualizando correo en Auth: ${currentUser.correo} -> ${updateUserDto.email}`);
+        const { error: authUpdateError } = await supabaseAdmin.auth.admin.updateUserById(
+          currentUser.user_id,
+          { email: updateUserDto.email }
+        );
+
+        if (authUpdateError) {
+          throw new BadRequestException({
+            message: 'Error al actualizar el correo en Supabase Auth',
+            supabase_error: authUpdateError.message,
+          });
+        }
+      }
+
+      // 3. Actualizar datos en la tabla usuarios_externos
+      const updateData: any = { ...updateUserDto };
+      if (updateUserDto.email) {
+        updateData.correo = updateUserDto.email;
+        delete updateData.email; // Asegurar que mapee a 'correo'
+      }
+
+      const { data: updatedUser, error: updateError } = await supabase
+        .from('usuarios_externos')
+        .update(updateData)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (updateError) {
+        throw new BadRequestException({
+          message: 'Error al actualizar usuario en base de datos',
+          supabase_error: updateError.message,
+        });
+      }
+
+      return {
+        success: true,
+        message: 'Usuario actualizado correctamente',
+        user: updatedUser,
+      };
+    } catch (err) {
+      this.logger.error(`❌ Error en updateUser: ${err.message}`);
+      throw err instanceof BadRequestException
+        ? err
+        : new InternalServerErrorException('Error interno al actualizar usuario.');
+    }
+  }
+
+  /**
+   * 🟢🔴 UPDATE STATUS: Cambia el estado (activo/inactivo) de un usuario
+   */
+  async updateStatus(id: number, status: boolean) {
+    const supabase = this.supabaseService.getClient();
+
+    try {
+      this.logger.log(`🏷️ Cambiando estado de usuario ID ${id} a ${status}`);
+
+      const { data, error } = await supabase
+        .from('usuarios_externos')
+        .update({ estado: status, updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) {
+        throw new BadRequestException({
+          message: 'Error al actualizar el estado del usuario',
+          supabase_error: error.message,
+        });
+      }
+
+      return {
+        success: true,
+        message: `Estado del usuario actualizado a ${status ? 'activo' : 'inactivo'}`,
+        user: data,
+      };
+    } catch (err) {
+      this.logger.error(`❌ Error en updateStatus: ${err.message}`);
+      throw err instanceof BadRequestException
+        ? err
+        : new InternalServerErrorException('Error interno al actualizar estado.');
+    }
+  }
+
+  /**
+   * 📧 FORGOT PASSWORD: Envía correo de recuperación de contraseña
+   */
+  async forgotPassword(forgotPasswordDto: ForgotPasswordDto) {
+    const supabase = this.supabaseService.getClient();
+
+    try {
+      this.logger.log(`📧 Enviando recuperación a: ${forgotPasswordDto.email}`);
+
+      const { error } = await supabase.auth.resetPasswordForEmail(forgotPasswordDto.email);
+
+      if (error) {
+        throw new BadRequestException({
+          message: 'Error al enviar correo de recuperación',
+          supabase_error: error.message,
+        });
+      }
+
+      return {
+        success: true,
+        message: 'Se ha enviado un correo para restablecer la contraseña.',
+      };
+    } catch (err) {
+      this.logger.error(`❌ Error en forgotPassword: ${err.message}`);
+      throw err instanceof BadRequestException
+        ? err
+        : new InternalServerErrorException('Error interno al procesar recuperación de contraseña.');
     }
   }
 }

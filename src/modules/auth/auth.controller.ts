@@ -8,6 +8,9 @@ import {
   BadRequestException,
   InternalServerErrorException,
   Req,
+  Patch,
+  Param,
+  ParseIntPipe,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -16,7 +19,7 @@ import {
   ApiBearerAuth,
 } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
-import { LoginDto, RegisterDto } from './dto/auth.dto';
+import { LoginDto, RegisterDto, UpdateUserDto, UpdateStatusDto, ForgotPasswordDto } from './dto/auth.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
 import type { Request } from 'express';
@@ -27,7 +30,7 @@ import type { Request } from 'express';
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);
 
-  constructor(private readonly authService: AuthService) {}
+  constructor(private readonly authService: AuthService) { }
 
   /**
    * 🔐 LOGIN - Autentica un usuario y devuelve tokens + permisos
@@ -125,5 +128,50 @@ export class AuthController {
       this.logger.error(`❌ [LOGOUT] Error: ${error.message}`);
       throw new InternalServerErrorException('Error al cerrar sesión.');
     }
+  }
+
+  /**
+   * 🔄 UPDATE USER - Actualiza los datos de un usuario por su ID (serial)
+   */
+  @Patch('update/:id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Actualizar datos de un usuario' })
+  @ApiResponse({ status: 200, description: 'Usuario actualizado correctamente' })
+  @ApiResponse({ status: 400, description: 'Datos inválidos o usuario no encontrado' })
+  async updateUser(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateUserDto: UpdateUserDto
+  ) {
+    this.logger.log(`📥 [UPDATE] ID: ${id}, Body: ${JSON.stringify(updateUserDto)}`);
+    return await this.authService.updateUser(id, updateUserDto);
+  }
+
+  /**
+   * 🏷️ STATUS - Cambia el estado activo/inactivo de un usuario
+   */
+  @Patch('status/:id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Cambiar estado (activo/inactivo) de un usuario' })
+  @ApiResponse({ status: 200, description: 'Estado actualizado correctamente' })
+  async updateStatus(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateStatusDto: UpdateStatusDto
+  ) {
+    this.logger.log(`📥 [STATUS] ID: ${id}, Estado: ${updateStatusDto.estado}`);
+    return await this.authService.updateStatus(id, updateStatusDto.estado);
+  }
+
+  /**
+   * 📧 FORGOT PASSWORD - Inicia el proceso de recuperación de contraseña
+   */
+  @Post('forgot-password')
+  @ApiOperation({ summary: 'Solicitar recuperación de contraseña por email' })
+  @ApiResponse({ status: 200, description: 'Correo de recuperación enviado' })
+  @ApiResponse({ status: 400, description: 'Email no válido o no encontrado' })
+  async forgotPassword(@Body() forgotPasswordDto: ForgotPasswordDto) {
+    this.logger.log(`📥 [FORGOT-PASSWORD] Email: ${forgotPasswordDto.email}`);
+    return await this.authService.forgotPassword(forgotPasswordDto);
   }
 }
