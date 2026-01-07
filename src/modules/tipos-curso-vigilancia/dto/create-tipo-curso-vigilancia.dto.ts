@@ -18,13 +18,5 @@ export class CreateTipoCursoVigilanciaDto {
     @IsString()
     descripcion?: string;
 
-    @ApiProperty({
-        description: 'Indica si el tipo de curso está activo',
-        example: true,
-        required: false,
-        default: true,
-    })
-    @IsOptional()
-    @IsBoolean()
-    activo?: boolean;
+
 }
