@@ -57,7 +57,7 @@ export class MemorandosService {
             .from("memorandos")
             .select(`
         *,
-        creado_por_usuario:usuarios_externos!creado_por(nombres, apellidos, email)
+        creado_por_usuario:usuarios_externos!creado_por(nombre_completo, correo)
       `)
             .order("created_at", { ascending: false });
 
@@ -78,7 +78,7 @@ export class MemorandosService {
             .from("memorandos")
             .select(`
         *,
-        creado_por_usuario:usuarios_externos!creado_por(nombres, apellidos, email),
+        creado_por_usuario:usuarios_externos!creado_por(nombre_completo, correo),
         adjuntos:memorandos_adjuntos(*),
         empleados_asignados:memorandos_empleados(
           *,
@@ -97,7 +97,7 @@ export class MemorandosService {
             .from("memorandos_historial")
             .select(`
         *,
-        realizado_por_usuario:usuarios_externos(nombres, apellidos)
+        realizado_por_usuario:usuarios_externos(nombre_completo)
       `)
             .eq("memorando_id", id)
             .order("created_at", { ascending: false });
