@@ -66,6 +66,7 @@ import { SupervisorModule } from './modules/supervisor/supervisor.module';
 import { PqrsfModule } from './modules/pqrsf/pqrsf.module';
 import { BotonPanicoModule } from './modules/boton-panico/boton-panico.module';
 import { UbicacionesModule } from './modules/ubicaciones/ubicaciones.module';
+import { MemorandosModule } from './modules/memorandos/memorandos.module';
 
 @Module({
   imports: [
@@ -140,6 +141,7 @@ import { UbicacionesModule } from './modules/ubicaciones/ubicaciones.module';
     PqrsfModule,
     BotonPanicoModule,
     UbicacionesModule,
+    MemorandosModule,
     EstudiosSeguridadModule,
     GeocercasModule,
     HelpersModule,
