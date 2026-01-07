@@ -25,5 +25,5 @@ export class RegistrarSalidaDto {
   @ApiProperty({ required: false, example: 'Salida normal' })
   @IsOptional()
   @IsString()
-  observacion?: string;
+  observaciones?: string;
 }

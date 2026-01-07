@@ -25,5 +25,5 @@ export class RegistrarEntradaDto {
   @ApiProperty({ example: 'Llegada tarde por tráfico', description: 'Observación opcional', required: false })
   @IsOptional()
   @IsString()
-  observacion?: string;
+  observaciones?: string;
 }
