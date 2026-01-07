@@ -355,20 +355,20 @@ export class AuthService {
    * 🔄 UPDATE USER: Actualiza datos del usuario en la tabla y en Auth si cambia el email
    */
   async updateUser(id: number, updateUserDto: UpdateUserDto) {
-    const supabase = this.supabaseService.getClient();
     const supabaseAdmin = this.supabaseService.getSupabaseAdminClient();
 
     try {
       this.logger.log(`🔄 Actualizando usuario ID: ${id}`);
 
       // 1. Obtener el user_id (UUID) actual de la tabla usuarios_externos
-      const { data: currentUser, error: findError } = await supabase
+      const { data: currentUser, error: findError } = await supabaseAdmin
         .from('usuarios_externos')
         .select('user_id, correo')
         .eq('id', id)
         .single();
 
       if (findError || !currentUser) {
+        this.logger.error(`❌ Error al buscar usuario: ${findError?.message}`);
         throw new BadRequestException('Usuario no encontrado.');
       }
 
@@ -381,6 +381,7 @@ export class AuthService {
         );
 
         if (authUpdateError) {
+          this.logger.error(`❌ Error Auth: ${authUpdateError.message}`);
           throw new BadRequestException({
             message: 'Error al actualizar el correo en Supabase Auth',
             supabase_error: authUpdateError.message,
@@ -395,7 +396,7 @@ export class AuthService {
         delete updateData.email; // Asegurar que mapee a 'correo'
       }
 
-      const { data: updatedUser, error: updateError } = await supabase
+      const { data: updatedUser, error: updateError } = await supabaseAdmin
         .from('usuarios_externos')
         .update(updateData)
         .eq('id', id)
@@ -403,6 +404,7 @@ export class AuthService {
         .single();
 
       if (updateError) {
+        this.logger.error(`❌ Error DB: ${updateError.message}`);
         throw new BadRequestException({
           message: 'Error al actualizar usuario en base de datos',
           supabase_error: updateError.message,
@@ -426,12 +428,12 @@ export class AuthService {
    * 🟢🔴 UPDATE STATUS: Cambia el estado (activo/inactivo) de un usuario
    */
   async updateStatus(id: number, status: boolean) {
-    const supabase = this.supabaseService.getClient();
+    const supabaseAdmin = this.supabaseService.getSupabaseAdminClient();
 
     try {
       this.logger.log(`🏷️ Cambiando estado de usuario ID ${id} a ${status}`);
 
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from('usuarios_externos')
         .update({ estado: status, updated_at: new Date().toISOString() })
         .eq('id', id)
@@ -439,6 +441,7 @@ export class AuthService {
         .single();
 
       if (error) {
+        this.logger.error(`❌ Error DB status: ${error.message}`);
         throw new BadRequestException({
           message: 'Error al actualizar el estado del usuario',
           supabase_error: error.message,
