@@ -23,6 +23,14 @@ export enum PqrsfEstado {
     CERRADO = 'cerrado'
 }
 
+export enum AdjuntoTipo {
+    IMAGEN = 'imagen',
+    PDF = 'pdf',
+    AUDIO = 'audio',
+    VIDEO = 'video',
+    OTRO = 'otro'
+}
+
 export class CreatePqrsfDto {
     @ApiProperty({ example: 1, description: 'ID del cliente asociado' })
     @IsInt()
@@ -98,10 +106,10 @@ export class AddRespuestaDto {
 }
 
 export class AddAdjuntoDto {
-    @ApiProperty({ example: 'imagen', description: 'Tipo de archivo (imagen, pdf, etc)' })
-    @IsString()
+    @ApiProperty({ enum: AdjuntoTipo, example: AdjuntoTipo.IMAGEN, description: 'Tipo de archivo (imagen, pdf, etc)' })
+    @IsEnum(AdjuntoTipo)
     @IsNotEmpty()
-    tipo: string;
+    tipo: AdjuntoTipo;
 
     @ApiProperty({ example: 'https://example.com/file.jpg', description: 'URL del archivo' })
     @IsUrl()

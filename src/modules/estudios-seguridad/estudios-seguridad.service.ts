@@ -36,27 +36,31 @@ export class EstudiosSeguridadService {
     }
 
     /**
-     * 🔹 Obtener URL firmada
+     * 🔹 Obtener URL del archivo (Pública dado que el bucket es public)
      */
-    async getSignedUrl(path: string): Promise<string> {
-        this.logger.debug(`🔑 Generando URL firmada para path: ${path} en bucket: ${this.BUCKET}`);
+    async getFileUrl(path: string): Promise<string> {
+        this.logger.debug(`🔗 Generando URL pública para path: ${path} en bucket: ${this.BUCKET}`);
         const supabase = this.supabaseService.getSupabaseAdminClient();
 
         // Limpiar path de posibles slashes iniciales
         const cleanPath = path.startsWith('/') ? path.substring(1) : path;
 
-        const { data, error } = await supabase.storage
+        const { data } = supabase.storage
             .from(this.BUCKET)
-            .createSignedUrl(cleanPath, 3600); // 1 hora de validez
+            .getPublicUrl(cleanPath);
 
-        if (error) {
-            this.logger.error(`❌ Error generando URL firmada para ${cleanPath}: ${error.message}`);
-            // Retornar null o lanzar error según prefieras, aquí lanzamos para depurar
-            throw error;
+        if (!data || !data.publicUrl) {
+            this.logger.error(`❌ Error obteniendo URL pública para ${cleanPath}`);
+            throw new Error(`Public URL not generated for ${cleanPath}`);
         }
 
-        this.logger.debug(`✅ URL firmada generada exitosamente`);
-        return data.signedUrl;
+        this.logger.debug(`✅ URL pública obtenida: ${data.publicUrl}`);
+        return data.publicUrl;
+    }
+
+    // Alias mantenido por compatibilidad si es necesario, pero usaremos el nuevo nombre semanticamente
+    async getSignedUrl(path: string): Promise<string> {
+        return this.getFileUrl(path);
     }
 
     /**

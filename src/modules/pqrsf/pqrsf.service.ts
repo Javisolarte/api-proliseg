@@ -297,6 +297,15 @@ export class PqrsfService {
     async addAdjunto(id: number, userId: number, file: any, tipo: string = 'otro') {
         if (!file) throw new BadRequestException('No file provided');
 
+        // Validar y normalizar el tipo para evitar errores de check constraint
+        const tiposPermitidos = ['imagen', 'pdf', 'audio', 'video', 'otro'];
+        let tipoNormalizado = tipo ? tipo.toLowerCase() : 'otro';
+
+        if (!tiposPermitidos.includes(tipoNormalizado)) {
+            this.logger.warn(`Tipo de adjunto desconocido recibido: ${tipo}. Mapeando a 'otro'.`);
+            tipoNormalizado = 'otro';
+        }
+
         const ext = file.originalname.split('.').pop();
         const filename = `pqrsf_${id}_${Date.now()}.${ext}`;
         const url = await this.uploadFile(file, filename);
@@ -306,7 +315,7 @@ export class PqrsfService {
             .from('pqrsf_adjuntos')
             .insert({
                 pqrsf_id: id,
-                tipo: tipo,
+                tipo: tipoNormalizado,
                 url: url,
                 creado_por: userId
             })
