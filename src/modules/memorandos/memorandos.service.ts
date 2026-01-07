@@ -57,7 +57,7 @@ export class MemorandosService {
             .from("memorandos")
             .select(`
         *,
-        creado_por_usuario:usuarios_externos!fk_memorando_creado_por(nombres, apellidos, email)
+        creado_por_usuario:usuarios_externos!creado_por(nombres, apellidos, email)
       `)
             .order("created_at", { ascending: false });
 
@@ -78,7 +78,7 @@ export class MemorandosService {
             .from("memorandos")
             .select(`
         *,
-        creado_por_usuario:usuarios_externos!fk_memorando_creado_por(nombres, apellidos, email),
+        creado_por_usuario:usuarios_externos!creado_por(nombres, apellidos, email),
         adjuntos:memorandos_adjuntos(*),
         empleados_asignados:memorandos_empleados(
           *,
