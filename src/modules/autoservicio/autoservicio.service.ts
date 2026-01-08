@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { PqrsfService } from '../pqrsf/pqrsf.service';
 import { GeminiService } from '../ia/gemini.service';
@@ -715,6 +715,37 @@ export class AutoservicioService {
         return data;
     }
 
+    async getMiHistorialAsistencia(userId: number) {
+        const empleado = await this.getEmpleadoByUserId(userId);
+        const supabase = this.supabaseService.getClient();
+
+        const { data, error } = await supabase
+            .from('turnos_asistencia')
+            .select(`
+                *,
+                turno:turno_id (
+                    id,
+                    fecha,
+                    hora_inicio,
+                    hora_fin,
+                    subpuesto:subpuesto_id (
+                        id,
+                        nombre,
+                        puesto:puesto_id (
+                            id,
+                            nombre
+                        )
+                    )
+                )
+            `)
+            .eq('empleado_id', empleado.id)
+            .order('hora_entrada', { ascending: false })
+            .limit(20);
+
+        if (error) throw error;
+        return data;
+    }
+
     async marcarAsistenciaEntrada(userId: number, dto: RegistrarMiAsistenciaEntradaDto) {
         const supabase = this.supabaseService.getClient();
 
@@ -819,10 +850,13 @@ export class AutoservicioService {
         if (!empBasic) throw new NotFoundException('Empleado no encontrado');
 
         // 2. Buscar registro de entrada previo
+        const asisId = dto.asistencia_id || dto.id;
+        if (!asisId) throw new BadRequestException('Debe proporcionar el ID de asistencia (asistencia_id o id)');
+
         const { data: asistencia, error: asisError } = await supabase
             .from('turnos_asistencia')
             .select('*')
-            .eq('id', dto.asistencia_id)
+            .eq('id', asisId)
             .eq('empleado_id', empBasic.id)
             .single();
 
@@ -875,7 +909,7 @@ export class AutoservicioService {
             hora_salida: now.toISOString(),
             observaciones: nuevasObservaciones,
             estado_asistencia: 'cumplido'
-        }).eq('id', dto.asistencia_id);
+        }).eq('id', asisId);
 
         // 8. Log legacy
         await supabase.from('asistencias').insert({

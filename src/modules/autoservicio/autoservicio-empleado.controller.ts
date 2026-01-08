@@ -41,7 +41,7 @@ export class AutoservicioEmpleadoController {
     constructor(private readonly autoservicioService: AutoservicioService) { }
 
     // --- MI NOMINA ---
-    @Get('mi-nomina')
+    @Get('')
     @ApiOperation({ summary: 'Obtener periodos de nómina del empleado autenticado' })
     async getMiNomina(@CurrentUser() user: any) {
         return this.autoservicioService.getMiNomina(user.id);
@@ -89,6 +89,12 @@ export class AutoservicioEmpleadoController {
     }
 
     // --- ASISTENCIA (AUTOSERVICIO) ---
+    @Get('mi-asistencia')
+    @ApiOperation({ summary: 'Obtener mi historial de asistencias (últimos 20)' })
+    async getAsistenciaHistorial(@CurrentUser() user: any) {
+        return this.autoservicioService.getMiHistorialAsistencia(user.id);
+    }
+
     @Get('mi-asistencia/activa')
     @ApiOperation({ summary: 'Obtener mi registro de asistencia activo (entrada sin salida)' })
     async getAsistenciaActiva(@CurrentUser() user: any) {

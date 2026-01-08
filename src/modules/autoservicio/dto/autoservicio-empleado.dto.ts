@@ -67,9 +67,14 @@ export class RegistrarMiAsistenciaSalidaDto {
     turno_id: number;
 
     @ApiProperty({ example: 125, description: 'ID del registro de asistencia (entrada) previo' })
+    @IsOptional()
     @IsNumber()
-    @IsNotEmpty()
-    asistencia_id: number;
+    asistencia_id?: number;
+
+    @ApiProperty({ example: 125, description: 'Alias para asistencia_id' })
+    @IsOptional()
+    @IsNumber()
+    id?: number;
 
     @ApiProperty({ example: '3.4516', description: 'Latitud GPS actual' })
     @IsString()
