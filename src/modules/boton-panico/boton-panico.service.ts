@@ -1,12 +1,16 @@
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { ActivarPanicoDto, AtenderPanicoDto, FilterPanicoDto } from './dto/boton-panico.dto';
+import { BotonPanicoGateway } from './boton-panico.gateway';
 
 @Injectable()
 export class BotonPanicoService {
     private readonly logger = new Logger(BotonPanicoService.name);
 
-    constructor(private readonly supabase: SupabaseService) { }
+    constructor(
+        private readonly supabase: SupabaseService,
+        private readonly gateway: BotonPanicoGateway
+    ) { }
 
     /**
      * 🚨 1. Activar Botón de Pánico
@@ -46,7 +50,13 @@ export class BotonPanicoService {
             });
         }
 
-        return evento;
+        // 3. Obtener evento enriquecido (con datos de usuario, puesto, etc.) para emitir
+        const eventoEnriquecido = await this.getDetalle(evento.id);
+
+        // 4. Emitir alerta en tiempo real vía WebSocket
+        this.gateway.emitPanicEvent(eventoEnriquecido);
+
+        return eventoEnriquecido;
     }
 
     /**
