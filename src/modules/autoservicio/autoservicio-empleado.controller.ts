@@ -89,6 +89,12 @@ export class AutoservicioEmpleadoController {
     }
 
     // --- ASISTENCIA (AUTOSERVICIO) ---
+    @Get('mi-asistencia/activa')
+    @ApiOperation({ summary: 'Obtener mi registro de asistencia activo (entrada sin salida)' })
+    async getAsistenciaActiva(@CurrentUser() user: any) {
+        return this.autoservicioService.getMiAsistenciaActiva(user.id);
+    }
+
     @Post('mi-asistencia/entrada')
     @ApiOperation({ summary: 'Registrar entrada (clock-in) con coordenadas GPS' })
     async registrarEntrada(
