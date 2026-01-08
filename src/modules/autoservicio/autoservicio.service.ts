@@ -6,7 +6,12 @@ import { calcularDistancia } from '../asistencias/utils/distancia.util';
 import { analizarAsistenciaIA } from '../asistencias/utils/ia.util';
 import { BotonPanicoService } from '../boton-panico/boton-panico.service';
 import { UbicacionesService } from '../ubicaciones/ubicaciones.service';
-import { ActivarMiPanicoDto, RegistrarMiUbicacionDto } from './dto/autoservicio-empleado.dto';
+import {
+    ActivarMiPanicoDto,
+    RegistrarMiUbicacionDto,
+    RegistrarMiAsistenciaEntradaDto,
+    RegistrarMiAsistenciaSalidaDto
+} from './dto/autoservicio-empleado.dto';
 
 @Injectable()
 export class AutoservicioService {
@@ -677,7 +682,40 @@ export class AutoservicioService {
     // AUTO-ASISTENCIA (SELF-SERVICE CLOCK-IN/OUT)
     // ------------------------------------------------------------------
 
-    async marcarAsistenciaEntrada(userId: number, dto: { turno_id: number; latitud: string; longitud: string; observaciones?: string }) {
+    async getMiAsistenciaActiva(userId: number) {
+        const empleado = await this.getEmpleadoByUserId(userId);
+        const supabase = this.supabaseService.getClient();
+
+        const { data, error } = await supabase
+            .from('turnos_asistencia')
+            .select(`
+                *,
+                turno:turno_id (
+                    id,
+                    fecha,
+                    hora_inicio,
+                    hora_fin,
+                    subpuesto:subpuesto_id (
+                        id,
+                        nombre,
+                        puesto:puesto_id (
+                            id,
+                            nombre
+                        )
+                    )
+                )
+            `)
+            .eq('empleado_id', empleado.id)
+            .is('hora_salida', null)
+            .order('hora_entrada', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+        if (error) throw error;
+        return data;
+    }
+
+    async marcarAsistenciaEntrada(userId: number, dto: RegistrarMiAsistenciaEntradaDto) {
         const supabase = this.supabaseService.getClient();
 
         // 1. Obtener datos del empleado y verificar permiso
@@ -773,7 +811,7 @@ export class AutoservicioService {
         };
     }
 
-    async marcarAsistenciaSalida(userId: number, dto: { turno_id: number; asistencia_id: number; latitud: string; longitud: string; observaciones?: string }) {
+    async marcarAsistenciaSalida(userId: number, dto: RegistrarMiAsistenciaSalidaDto) {
         const supabase = this.supabaseService.getClient();
 
         // 1. Obtener datos del empleado
