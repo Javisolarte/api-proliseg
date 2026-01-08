@@ -451,7 +451,7 @@ export class AsignarTurnosService {
       .eq('subpuesto_id', subpuesto_id)
       .gte('fecha', desde)
       .lte('fecha', hasta)
-      .eq('estado_turno', 'programado')
+      // .eq('estado_turno', 'programado') // Comentado para asegurar limpieza completa en rangos dados
       .select();
 
     if (error) {
@@ -463,7 +463,7 @@ export class AsignarTurnosService {
     this.logger.log(`✅ ${eliminados} turnos eliminados del subpuesto ${subpuesto_id}`);
 
     return {
-      message: `Se eliminaron ${eliminados} turnos programados`,
+      message: `Se eliminaron ${eliminados} turnos`,
       eliminados
     };
   }
