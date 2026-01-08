@@ -27,9 +27,10 @@ interface SesionActiva {
     respondiendo?: boolean;
     usuario_dashboard_id?: number;
     chunks_dashboard: number;
-    origen_inicial: OrigenAudio; // Quién inició la sesión
-    empleados_ids?: number[]; // Lista de empleados (si inicia dashboard)
-    target_sockets?: string[]; // Sockets de destino (si inicia dashboard)
+    origen_inicial: OrigenAudio;
+    empleados_ids?: number[];
+    target_sockets?: string[];
+    ultima_actividad: Date; // Timestamp de última actividad para GC
 }
 
 @WebSocketGateway({
@@ -48,8 +49,17 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
     // Mapeo de socket.id a sesion_id
     private socketToSesion: Map<string, string> = new Map();
 
-    // Mapeo de empleado_id a socket.id (para saber a quién llamar)
+    // Mapeo de empleado_id a socket.id
     private empleadoToSocket: Map<number, string> = new Map();
+
+    // Intervalo de limpieza
+    private cleanupInterval: NodeJS.Timeout;
+    private readonly SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutos
+
+    constructor() {
+        // Ejecutar limpieza cada minuto
+        this.cleanupInterval = setInterval(() => this.checkInactiveSessions(), 60 * 1000);
+    }
 
     handleConnection(client: Socket) {
         this.logger.log(`🔌 Cliente conectado: ${client.id}`);
@@ -136,6 +146,7 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
             chunks_recibidos: 0,
             chunks_dashboard: 0,
             origen_inicial: OrigenAudio.APP,
+            ultima_actividad: new Date(),
         };
 
         this.sesionesActivas.set(sesionId, sesion);
@@ -198,6 +209,7 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
             empleados_ids: data.empleados_ids,
             target_sockets: targetSockets,
             usuario_dashboard_id: data.usuario_dashboard_id,
+            ultima_actividad: new Date(),
         };
 
         this.sesionesActivas.set(sesionId, sesion);
@@ -249,12 +261,22 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
         const sesion = this.sesionesActivas.get(data.sesion_id);
 
         if (!sesion) {
-            this.logger.error(`❌ Sesión no encontrada: ${data.sesion_id}`);
-            client.emit('error', { message: 'Sesión no encontrada' });
+            // Solo logueamos como advertencia para no saturar
+            this.logger.warn(`⚠️ Chunk recibido para sesión cerrada/inexistente: ${data.sesion_id}`);
+
+            // Forzar al cliente a detenerse (por si se quedó transmitiendo)
+            client.emit('sesion_finalizada', {
+                sesion_id: data.sesion_id,
+                motivo: 'Sesión no encontrada en servidor',
+                estado: 'finalizada'
+            });
             return { success: false, error: 'Sesión no encontrada' };
         }
 
         const origen = data.origen || OrigenAudio.APP;
+
+        // Actualizar última actividad
+        sesion.ultima_actividad = new Date();
 
         // Incrementar contador según origen
         if (origen === OrigenAudio.APP) {
@@ -371,6 +393,7 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
         // Marcar sesión como respondiendo
         sesion.respondiendo = true;
         sesion.usuario_dashboard_id = data.usuario_dashboard_id;
+        sesion.ultima_actividad = new Date(); // Actualizar actividad
 
         this.logger.log(`📞 Dashboard usuario ${data.usuario_dashboard_id} respondiendo a sesión ${data.sesion_id}`);
 
@@ -454,5 +477,35 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
             sesiones_activas: this.sesionesActivas.size,
             clientes_conectados: this.server.sockets.sockets.size,
         };
+    }
+    /**
+     * 🧹 Garbage Collector: Limpiar sesiones inactivas
+     */
+    private checkInactiveSessions() {
+        const now = new Date().getTime();
+        let cleanedCount = 0;
+
+        for (const [sesionId, sesion] of this.sesionesActivas.entries()) {
+            const lastActivity = sesion.ultima_actividad.getTime();
+
+            if (now - lastActivity > this.SESSION_TIMEOUT_MS) {
+                this.logger.warn(`🧹 Limpiando sesión inactiva (Zombie): ${sesionId}`);
+
+                // Finalizar limpiamente
+                this.server.emit('sesion_finalizada', {
+                    sesion_id: sesionId,
+                    motivo: 'Inactividad (Timeout)',
+                    estado: 'finalizada'
+                });
+
+                this.sesionesActivas.delete(sesionId);
+                this.socketToSesion.delete(sesion.socket_id);
+                cleanedCount++;
+            }
+        }
+
+        if (cleanedCount > 0) {
+            this.logger.log(`🧹 GC: Se limpiaron ${cleanedCount} sesiones inactivas`);
+        }
     }
 }
