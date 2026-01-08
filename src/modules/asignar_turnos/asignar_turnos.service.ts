@@ -135,10 +135,18 @@ export class AsignarTurnosService {
       throw new BadRequestException('La configuración de turnos no tiene detalles definidos');
     }
 
-    // ✅ 5. Generar turnos para 30 días
-    const fechaBase = new Date(fecha_inicio);
+    // ✅ 5. Generar turnos para el MES COMPLETO
+    // Calcular el primer día del mes de la fecha de inicio para asegurar mes completo
+    // fecha_inicio viene formato YYYY-MM-DD
+    const [year, month, day] = fecha_inicio.split('-').map(Number);
+    // Nota: month en Date es 0-indexed (0 = Enero, 11 = Diciembre)
+    const fechaBase = new Date(year, month - 1, 1);
+
+    // Calcular el último día del mes para saber cuántos días generar
+    const ultimoDiaMes = new Date(year, month, 0);
+    const numeroDeDiasAGenerar = ultimoDiaMes.getDate();
+
     const turnosParaInsertar: any[] = [];
-    const numeroDeDiasAGenerar = 30;
 
     // Detectar si es horario de oficina
     const isOficina = subpuesto.configuracion?.nombre?.toLowerCase().includes('oficina');
@@ -146,7 +154,7 @@ export class AsignarTurnosService {
     const cicloLength = detalles.length;
     const guardasActivos = subpuesto.guardas_activos;
 
-    this.logger.log(`📅 Generando turnos para ${empleados.length} empleados durante ${numeroDeDiasAGenerar} días`);
+    this.logger.log(`📅 Generando turnos MENSUALES para ${empleados.length} empleados durante ${numeroDeDiasAGenerar} días (Mes: ${month}/${year})`);
     if (isOficina) {
       this.logger.log(`🏢 MODO OFICINA DETECTADO: Lunes a Viernes (8-12, 14-18) + Sábados (8-12)`);
     } else {
@@ -609,5 +617,50 @@ export class AsignarTurnosService {
       this.logger.error(`❌ Error al regenerar turnos: ${error.message}`);
       throw new BadRequestException(`Error al regenerar: ${error.message}`);
     }
+  }
+
+  /**
+   * 🚨 ELIMINA TODOS LOS TURNOS DE UN SUBPUESTO
+   * Borrado definitivo sin importar fecha ni estado
+   */
+  async eliminarTodosTurnos(subpuesto_id: number) {
+    const supabase = this.supabaseService.getClient();
+    this.logger.warn(`🚨 ELIMINANDO TODOS LOS TURNOS DEL SUBPUESTO ${subpuesto_id}`);
+
+    const { data, error } = await supabase
+      .from('turnos')
+      .delete()
+      .eq('subpuesto_id', subpuesto_id)
+      .select();
+
+    if (error) {
+      this.logger.error(`❌ Error eliminando todos los turnos: ${error.message}`);
+      throw new BadRequestException(`Error eliminando turnos: ${error.message}`);
+    }
+
+    const eliminados = data?.length || 0;
+    return {
+      message: `Se eliminaron DEFINITIVAMENTE ${eliminados} turnos.`,
+      eliminados
+    };
+  }
+
+  /**
+   * ⏭️ Genera los turnos del PRÓXIMO MES
+   * Lo hace con base en la fecha actual (si hoy es Enero, genera Febrero)
+   */
+  async generarTurnosProximoMes(subpuesto_id: number, asignado_por: number) {
+    // Calcular el 1 del mes siguiente
+    const hoy = new Date();
+    const proximoMes = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 1);
+    const fechaInicioStr = proximoMes.toISOString().split('T')[0];
+
+    this.logger.log(`⏭️ Generando turnos para el próximo mes (Inicio: ${fechaInicioStr})`);
+
+    return this.asignarTurnos({
+      subpuesto_id: subpuesto_id,
+      fecha_inicio: fechaInicioStr,
+      asignado_por: asignado_por
+    });
   }
 }

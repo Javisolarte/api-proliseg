@@ -170,4 +170,46 @@ export class AsignarTurnosController {
 
     return this.asignarTurnosService.regenerarTurnos(subpuesto_id, uid);
   }
+
+  @Delete('todos')
+  @ApiOperation({
+    summary: '🚨 ELIMINAR TODOS los turnos de un subpuesto',
+    description: 'Elimina DEFINITIVAMENTE todos los turnos asociados a un subpuesto, sin importar fecha ni estado. USAR CON PRECAUCIÓN.'
+  })
+  @ApiQuery({ name: 'subpuesto_id', type: Number, description: 'ID del subpuesto' })
+  @ApiResponse({
+    status: 200,
+    description: 'Turnos eliminados definitivamente',
+    schema: {
+      example: {
+        message: 'Se eliminaron DEFINITIVAMENTE 150 turnos.',
+        eliminados: 150
+      }
+    }
+  })
+  async eliminarTodos(
+    @Query('subpuesto_id', ParseIntPipe) subpuesto_id: number,
+  ) {
+    return this.asignarTurnosService.eliminarTodosTurnos(subpuesto_id);
+  }
+
+  @Post('proximo-mes')
+  @ApiOperation({
+    summary: 'Generar turnos para el próximo mes',
+    description: 'Genera turnos automáticamente para el mes siguiente al actual (ej: si es Enero, genera Febrero) para un subpuesto específico.'
+  })
+  @ApiQuery({ name: 'subpuesto_id', type: Number, description: 'ID del subpuesto' })
+  @ApiQuery({ name: 'asignado_por', type: Number, description: 'ID del usuario que realiza la acción', required: false })
+  @ApiResponse({
+    status: 201,
+    description: 'Turnos del próximo mes generados',
+  })
+  async generarProximoMes(
+    @Query('subpuesto_id', ParseIntPipe) subpuesto_id: number,
+    @Query('asignado_por') asignado_por?: number,
+    @CurrentUser() user?: any
+  ) {
+    const uid = asignado_por || user?.id || 1; // Fallback a 1 (sistema) si no hay usuario
+    return this.asignarTurnosService.generarTurnosProximoMes(subpuesto_id, uid);
+  }
 }
