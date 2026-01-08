@@ -155,9 +155,16 @@ export class BotonPanicoService {
      */
     async cerrar(id: number, dto: CerrarPanicoDto) {
         const db = this.supabase.getClient();
-        const { data: evento } = await this.getDetalle(id);
 
-        if (!evento) {
+        // Consulta simple sin joins para evitar problemas
+        const { data: evento, error: fetchError } = await db
+            .from('boton_panico_eventos')
+            .select('*')
+            .eq('id', id)
+            .single();
+
+        if (fetchError || !evento) {
+            this.logger.error(`Error al buscar evento ${id}: ${fetchError?.message || 'No encontrado'}`);
             throw new NotFoundException(`Evento de pánico con ID ${id} no encontrado`);
         }
 
