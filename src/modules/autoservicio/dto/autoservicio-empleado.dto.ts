@@ -38,6 +38,55 @@ export class ActivarMiPanicoDto {
     version_app?: string;
 }
 
+export class RegistrarMiAsistenciaEntradaDto {
+    @ApiProperty({ example: 10, description: 'ID del turno asignado' })
+    @IsNumber()
+    @IsNotEmpty()
+    turno_id: number;
+
+    @ApiProperty({ example: '3.4516', description: 'Latitud GPS actual' })
+    @IsString()
+    @IsNotEmpty()
+    latitud: string;
+
+    @ApiProperty({ example: '-76.5320', description: 'Longitud GPS actual' })
+    @IsString()
+    @IsNotEmpty()
+    longitud: string;
+
+    @ApiProperty({ example: 'Llegué puntual', description: 'Observaciones opcionales', required: false })
+    @IsOptional()
+    @IsString()
+    observaciones?: string;
+}
+
+export class RegistrarMiAsistenciaSalidaDto {
+    @ApiProperty({ example: 10, description: 'ID del turno' })
+    @IsNumber()
+    @IsNotEmpty()
+    turno_id: number;
+
+    @ApiProperty({ example: 125, description: 'ID del registro de asistencia (entrada) previo' })
+    @IsNumber()
+    @IsNotEmpty()
+    asistencia_id: number;
+
+    @ApiProperty({ example: '3.4516', description: 'Latitud GPS actual' })
+    @IsString()
+    @IsNotEmpty()
+    latitud: string;
+
+    @ApiProperty({ example: '-76.5320', description: 'Longitud GPS actual' })
+    @IsString()
+    @IsNotEmpty()
+    longitud: string;
+
+    @ApiProperty({ example: 'Turno finalizado sin novedad', description: 'Observaciones opcionales', required: false })
+    @IsOptional()
+    @IsString()
+    observaciones?: string;
+}
+
 export class RegistrarMiUbicacionDto {
     @ApiProperty({ example: 4.7109123, description: 'Latitud actual' })
     @IsNumber()

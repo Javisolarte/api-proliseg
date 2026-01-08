@@ -93,7 +93,7 @@ export class AsistenciasController {
   }
 
   @Get("turnos-habilitados")
-  @RequirePermissions("asistencia.read")
+  @RequirePermissions("asistencias.read")
   @ApiOperation({
     summary: "Obtener turnos con asistencias habilitadas",
     description: "Lista los turnos donde el empleado puede registrar asistencias (solo turnos de subpuestos donde está asignado)"
@@ -136,7 +136,7 @@ export class AsistenciasController {
   }
 
   @Get("metricas")
-  @RequirePermissions("asistencia.read")
+  @RequirePermissions("asistencias.read")
   @ApiOperation({
     summary: "Obtener métricas de cumplimiento",
     description: "Calcula métricas de cumplimiento de asistencias de los últimos 30 días"
@@ -161,7 +161,7 @@ export class AsistenciasController {
   }
 
   @Get()
-  @RequirePermissions("asistencia.read")
+  @RequirePermissions("asistencias.read")
   @ApiOperation({ summary: "Listar asistencias por empleado" })
   @ApiQuery({ name: "empleado_id", type: Number, required: true })
   @ApiResponse({
@@ -210,7 +210,7 @@ export class AsistenciasController {
   }
 
   @Get("turnos/:turno_id/resumen")
-  @RequirePermissions("asistencia.read")
+  @RequirePermissions("asistencias.read")
   @ApiOperation({ summary: "Obtener resumen calculado del turno" })
   @ApiResponse({
     status: 200,
@@ -235,7 +235,7 @@ export class AsistenciasController {
   }
 
   @Get("empleado/:id/laboral")
-  @RequirePermissions("asistencia.read")
+  @RequirePermissions("asistencias.read")
   @ApiOperation({ summary: "Obtener historial laboral detallado del empleado" })
   @ApiResponse({
     status: 200,
@@ -260,7 +260,7 @@ export class AsistenciasController {
   }
 
   @Get("puestos")
-  @RequirePermissions("asistencia.read")
+  @RequirePermissions("asistencias.read")
   @ApiOperation({ summary: "Listar puestos que tienen registros de asistencia" })
   @ApiResponse({
     status: 200,
@@ -276,7 +276,7 @@ export class AsistenciasController {
   }
 
   @Get("puesto/:puesto_id")
-  @RequirePermissions("asistencia.read")
+  @RequirePermissions("asistencias.read")
   @ApiOperation({ summary: "Listar asistencias filtradas por puesto" })
   @ApiQuery({ name: "fecha_inicio", required: false, type: String, description: "Fecha inicio ISO" })
   @ApiQuery({ name: "fecha_fin", required: false, type: String, description: "Fecha fin ISO" })
@@ -303,7 +303,7 @@ export class AsistenciasController {
   }
 
   @Get("monitoreo")
-  @RequirePermissions("asistencia.read")
+  @RequirePermissions("asistencias.read")
   @ApiOperation({ summary: "Monitoreo en tiempo real de los turnos de hoy" })
   @ApiResponse({
     status: 200,

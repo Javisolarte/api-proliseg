@@ -4,7 +4,12 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { AutoservicioService } from './autoservicio.service';
 import { CreateMinutaDto } from '../minutas/dto/minuta.dto';
-import { ActivarMiPanicoDto, RegistrarMiUbicacionDto } from './dto/autoservicio-empleado.dto';
+import {
+    ActivarMiPanicoDto,
+    RegistrarMiUbicacionDto,
+    RegistrarMiAsistenciaEntradaDto,
+    RegistrarMiAsistenciaSalidaDto
+} from './dto/autoservicio-empleado.dto';
 
 @ApiTags('Autoservicio - Empleado')
 @Controller('mi-nomina')
@@ -88,7 +93,7 @@ export class AutoservicioEmpleadoController {
     @ApiOperation({ summary: 'Registrar entrada (clock-in) con coordenadas GPS' })
     async registrarEntrada(
         @CurrentUser() user: any,
-        @Body() dto: { turno_id: number; latitud: string; longitud: string; observaciones?: string }
+        @Body() dto: RegistrarMiAsistenciaEntradaDto
     ) {
         return this.autoservicioService.marcarAsistenciaEntrada(user.id, dto);
     }
@@ -97,7 +102,7 @@ export class AutoservicioEmpleadoController {
     @ApiOperation({ summary: 'Registrar salida (clock-out) con coordenadas GPS' })
     async registrarSalida(
         @CurrentUser() user: any,
-        @Body() dto: { turno_id: number; asistencia_id: number; latitud: string; longitud: string; observaciones?: string }
+        @Body() dto: RegistrarMiAsistenciaSalidaDto
     ) {
         return this.autoservicioService.marcarAsistenciaSalida(user.id, dto);
     }
