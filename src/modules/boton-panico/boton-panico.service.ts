@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
-import { ActivarPanicoDto, AtenderPanicoDto, FilterPanicoDto } from './dto/boton-panico.dto';
+import { ActivarPanicoDto, AtenderPanicoDto, FilterPanicoDto, CerrarPanicoDto } from './dto/boton-panico.dto';
 import { BotonPanicoGateway } from './boton-panico.gateway';
 
 @Injectable()
@@ -153,7 +153,7 @@ export class BotonPanicoService {
     /**
      * ✅ 6. Cerrar Evento
      */
-    async cerrar(id: number) {
+    async cerrar(id: number, dto: CerrarPanicoDto) {
         const db = this.supabase.getClient();
         const { data: evento } = await this.getDetalle(id);
 
@@ -161,13 +161,24 @@ export class BotonPanicoService {
             throw new BadRequestException('El evento debe haber sido atendido antes de cerrarse');
         }
 
+        // Calcular tiempo total de respuesta (desde creación hasta cierre)
+        const createdAt = new Date(evento.created_at).getTime();
+        const now = new Date();
+        const tiempoTotalSegundos = Math.floor((now.getTime() - createdAt) / 1000);
+
         const { data, error } = await db
             .from('boton_panico_eventos')
-            .update({ estado: 'cerrado' })
+            .update({
+                estado: 'cerrado',
+                tiempo_respuesta_segundos: tiempoTotalSegundos,
+                atendido_por: dto.cerrado_por // Guardamos quién cerró el evento
+            })
             .eq('id', id)
             .select()
             .single();
         if (error) throw error;
+
+        this.logger.log(`Evento ${id} cerrado por empleado ${dto.cerrado_por}. Tiempo total: ${tiempoTotalSegundos}s`);
         return data;
     }
 

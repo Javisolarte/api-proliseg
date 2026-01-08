@@ -57,10 +57,20 @@ export class ActivarPanicoDto {
 }
 
 export class AtenderPanicoDto {
-    @ApiProperty({ example: 21 })
+    @ApiProperty({ example: 21, description: 'ID del usuario que atiende el evento' })
     @IsNumber()
     @IsNotEmpty()
     atendido_por: number;
+}
+
+export class CerrarPanicoDto {
+    @ApiProperty({
+        example: 21,
+        description: 'ID del empleado que cierra el evento (quien resolvió la situación)'
+    })
+    @IsNumber()
+    @IsNotEmpty()
+    cerrado_por: number;
 }
 
 export class FilterPanicoDto {

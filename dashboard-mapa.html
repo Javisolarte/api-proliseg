@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🗺️ Centro de Comando - Ubicaciones en Vivo</title>
+
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Socket.io -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            font-family: 'Segoe UI', sans-serif;
+        }
+
+        #map {
+            height: 100vh;
+            width: 100vw;
+            background: #0d1117;
+        }
+
+        /* Custom Marker Style */
+        .avatar-marker {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: 3px solid #2ea043;
+            /* Green = Online */
+            box-shadow: 0 0 10px rgba(46, 160, 67, 0.5);
+            object-fit: cover;
+            background: #fff;
+        }
+
+        .avatar-marker.panic {
+            border-color: #da3633;
+            /* Red = Panic */
+            box-shadow: 0 0 15px rgba(218, 54, 51, 0.8);
+            animation: pulse-red 1s infinite;
+        }
+
+        @keyframes pulse-red {
+            0% {
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(218, 54, 51, 0.7);
+            }
+
+            70% {
+                transform: scale(1.1);
+                box-shadow: 0 0 0 10px rgba(218, 54, 51, 0);
+            }
+
+            100% {
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(218, 54, 51, 0);
+            }
+        }
+
+        .info-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(13, 17, 23, 0.9);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            z-index: 1000;
+            border: 1px solid #30363d;
+            min-width: 250px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="map"></div>
+    <div class="info-panel">
+        <h3>📡 Estado de la Red</h3>
+        <div id="status">🔴 Desconectado</div>
+        <div style="margin-top: 10px; font-size: 0.9em; color: #8b949e;">
+            Personal Activo: <span id="count" style="color: white; font-weight: bold;">0</span>
+        </div>
+    </div>
+
+    <script>
+        // 1. Initialize Map
+        const map = L.map('map').setView([1.213610, -77.281110], 13); // Centered on Pasto (approx)
+
+        // Dark Mode Map Tiles
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+            subdomains: 'abcd',
+            maxZoom: 20
+        }).addTo(map);
+
+        // Store markers by Employee ID
+        const markers = {};
+
+        // 2. Connect to WebSocket (Namespace: tracking) - WE NEED TO CREATE THIS GATEWAY
+        // For now, let's look at the panic button events as a proof of concept too
+        const socket = io('http://localhost:3000/alerts');
+
+        /* 
+           NOTE: Once we implement UbicacionesGateway, we will connect to /tracking 
+           For this demo, I'll simulate the "tracking" behavior using the panic button events 
+           or manual injection to verify the visual logic.
+        */
+
+        const statusDiv = document.getElementById('status');
+        const countSpan = document.getElementById('count');
+
+        socket.on('connect', () => {
+            statusDiv.innerHTML = '<span style="color: #2ea043">🟢 Conectado al Comando</span>';
+        });
+
+        socket.on('disconnect', () => {
+            statusDiv.innerHTML = '<span style="color: #da3633">🔴 Desconectado</span>';
+        });
+
+        // Listen for Panic Events (Real)
+        socket.on('nuevo_panico', (data) => {
+            console.log("ALERTA:", data);
+            updateMarker(data, true);
+        });
+
+        // Function to update/create marker
+        function updateMarker(data, isPanic = false) {
+            const id = data.empleado_id || data.id; // Fallback
+            const lat = data.latitud;
+            const lng = data.longitud;
+            const name = data.empleados?.nombre_completo || "Agente Desconocido";
+            // Random avatar generator for demo if no photo provided
+            const photo = data.foto || `https://api.dicebear.com/7.x/avataaars/svg?seed=${id}`;
+
+            if (markers[id]) {
+                // Move existing marker
+                const marker = markers[id];
+                marker.setLatLng([lat, lng]);
+
+                if (isPanic) {
+                    const icon = marker.getIcon();
+                    // Basic way to add class to Leaflet icon wrapper (requires creating new icon in practice or DOM manipulation)
+                    marker.openPopup();
+                }
+            } else {
+                // Create new marker
+                const customIcon = L.divIcon({
+                    className: 'custom-div-icon',
+                    html: `<img src="${photo}" class="avatar-marker ${isPanic ? 'panic' : ''}" />`,
+                    iconSize: [40, 40],
+                    iconAnchor: [20, 20],
+                    popupAnchor: [0, -20]
+                });
+
+                const marker = L.marker([lat, lng], { icon: customIcon }).addTo(map);
+                marker.bindPopup(`<b>${name}</b><br>${isPanic ? '🚨 PÁNICO!' : '🟢 En línea'}<br>${new Date().toLocaleTimeString()}`);
+
+                markers[id] = marker;
+
+                // Audio effect for new appearance
+                if (isPanic) playSound();
+            }
+
+            // Update count
+            countSpan.innerText = Object.keys(markers).length;
+        }
+
+        function playSound() {
+            const audio = new Audio('https://assets.mixkit.co/sfx/preview/mixkit-alarm-digital-clock-beep-989.mp3');
+            audio.play().catch(e => console.log("Audio requires interaction"));
+        }
+
+    </script>
+</body>
+
+</html>
