@@ -1,10 +1,13 @@
-import { Controller, Post, Body, Get, Query, Delete, ParseIntPipe } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiQuery, ApiResponse } from '@nestjs/swagger';
+import { Controller, Post, Body, Get, Query, Delete, ParseIntPipe, BadRequestException, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiQuery, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AsignarTurnosService } from './asignar_turnos.service';
 import { AsignarTurnosDto } from './dto/asignar_turnos.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @ApiTags('Asignar Turnos')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard)
 @Controller('asignar-turnos')
 export class AsignarTurnosController {
   constructor(private readonly asignarTurnosService: AsignarTurnosService) { }
@@ -135,7 +138,12 @@ export class AsignarTurnosController {
     @Query('hasta') hasta?: string,
     @CurrentUser() user?: any
   ) {
-    const uid = asignado_por || user?.id || 1; // Fallback
+    const uid = asignado_por || user?.id;
+
+    if (!uid) {
+      throw new BadRequestException('Usuario no identificado. Envíe "asignado_por" o inicie sesión.');
+    }
+
     return this.asignarTurnosService.rotarTurnos(subpuesto_id, uid, desde, hasta);
   }
 
