@@ -475,7 +475,7 @@ export class AsignarTurnosService {
    * 3. Elimina turnos "programados" en el rango.
    * 4. Regenera turnos usando el nuevo orden pero respetando el ciclo del mes.
    */
-  async rotarTurnos(subpuesto_id: number, desde?: string, hasta?: string) {
+  async rotarTurnos(subpuesto_id: number, asignado_por: number, desde?: string, hasta?: string) {
     const supabase = this.supabaseService.getClient();
     this.logger.log(`🔄 Iniciando rotación de turnos INTELIGENTE para subpuesto ${subpuesto_id}`);
 
@@ -541,7 +541,7 @@ export class AsignarTurnosService {
     const resultado = await this.asignarTurnos({
       subpuesto_id,
       fecha_inicio: fechaInicio,
-      asignado_por: 1 // Sistema / Rotación
+      asignado_por: asignado_por // Usar ID pasado por parámetro
     }, empleadosRotados, false); // false = Partial Insert
 
     return {

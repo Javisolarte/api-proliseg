@@ -99,6 +99,7 @@ export class AsignarTurnosController {
     description: 'Rota los turnos entre empleados de un subpuesto. El primer empleado toma los turnos del segundo, el segundo los del tercero, y así sucesivamente. El último empleado toma los turnos del primero. Solo modifica los turnos existentes, no crea nuevos.'
   })
   @ApiQuery({ name: 'subpuesto_id', type: Number, description: 'ID del subpuesto' })
+  @ApiQuery({ name: 'asignado_por', type: Number, description: 'ID del usuario que realiza la acción', required: false })
   @ApiQuery({ name: 'desde', type: String, description: 'Fecha inicio (YYYY-MM-DD)', required: false })
   @ApiQuery({ name: 'hasta', type: String, description: 'Fecha fin (YYYY-MM-DD)', required: false })
   @ApiResponse({
@@ -129,10 +130,13 @@ export class AsignarTurnosController {
   })
   async rotar(
     @Query('subpuesto_id', ParseIntPipe) subpuesto_id: number,
+    @Query('asignado_por') asignado_por?: number,
     @Query('desde') desde?: string,
     @Query('hasta') hasta?: string,
+    @CurrentUser() user?: any
   ) {
-    return this.asignarTurnosService.rotarTurnos(subpuesto_id, desde, hasta);
+    const uid = asignado_por || user?.id || 1; // Fallback
+    return this.asignarTurnosService.rotarTurnos(subpuesto_id, uid, desde, hasta);
   }
 
   @Post('regenerar')
