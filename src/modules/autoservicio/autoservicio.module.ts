@@ -5,9 +5,12 @@ import { AutoservicioService } from './autoservicio.service';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { AuthModule } from '../auth/auth.module';
 import { PqrsfModule } from '../pqrsf/pqrsf.module';
+import { IaModule } from '../ia/ia.module';
+import { BotonPanicoModule } from '../boton-panico/boton-panico.module';
+import { UbicacionesModule } from '../ubicaciones/ubicaciones.module';
 
 @Module({
-    imports: [SupabaseModule, AuthModule, PqrsfModule],
+    imports: [SupabaseModule, AuthModule, PqrsfModule, IaModule, BotonPanicoModule, UbicacionesModule],
     controllers: [AutoservicioEmpleadoController, AutoservicioClienteController],
     providers: [AutoservicioService],
 })

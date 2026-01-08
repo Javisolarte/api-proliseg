@@ -1,9 +1,10 @@
-import { Controller, Get, Param, ParseIntPipe, Post, Body, Put, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, ParseIntPipe, Post, Body, Put, UseGuards, Ip } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { AutoservicioService } from './autoservicio.service';
 import { CreateMinutaDto } from '../minutas/dto/minuta.dto';
+import { ActivarMiPanicoDto, RegistrarMiUbicacionDto } from './dto/autoservicio-empleado.dto';
 
 @ApiTags('Autoservicio - Empleado')
 @Controller('mi-nomina')
@@ -71,6 +72,60 @@ export class AutoservicioEmpleadoController {
     @ApiOperation({ summary: 'Ver perfil del empleado (sin métricas sensibles)' })
     async getMiPerfil(@CurrentUser() user: any) {
         return this.autoservicioService.getMiPerfil(user.id);
+    }
+
+    @Get('mi-informacion')
+    @ApiOperation({
+        summary: 'Ver información completa del empleado',
+        description: 'Retorna todos los datos personales, profesionales y de afiliación (EPS, ARL, Fondo de Pensión, etc.) del empleado autenticado.'
+    })
+    async getMiInformacion(@CurrentUser() user: any) {
+        return this.autoservicioService.getMiInformacionCompleta(user.id);
+    }
+
+    // --- ASISTENCIA (AUTOSERVICIO) ---
+    @Post('mi-asistencia/entrada')
+    @ApiOperation({ summary: 'Registrar entrada (clock-in) con coordenadas GPS' })
+    async registrarEntrada(
+        @CurrentUser() user: any,
+        @Body() dto: { turno_id: number; latitud: string; longitud: string; observaciones?: string }
+    ) {
+        return this.autoservicioService.marcarAsistenciaEntrada(user.id, dto);
+    }
+
+    @Post('mi-asistencia/salida')
+    @ApiOperation({ summary: 'Registrar salida (clock-out) con coordenadas GPS' })
+    async registrarSalida(
+        @CurrentUser() user: any,
+        @Body() dto: { turno_id: number; asistencia_id: number; latitud: string; longitud: string; observaciones?: string }
+    ) {
+        return this.autoservicioService.marcarAsistenciaSalida(user.id, dto);
+    }
+
+    // --- SEGURIDAD & SEGUIMIENTO ---
+    @Post('mi-panico')
+    @ApiOperation({
+        summary: 'Activar botón de pánico',
+        description: 'Registra una alerta de pánico para el empleado autenticado.'
+    })
+    async activarPanico(
+        @CurrentUser() user: any,
+        @Body() dto: ActivarMiPanicoDto,
+        @Ip() ip: string
+    ) {
+        return this.autoservicioService.activarMiPanico(user.id, dto, ip);
+    }
+
+    @Post('mi-ubicacion')
+    @ApiOperation({
+        summary: 'Registrar ubicación constante (tracking)',
+        description: 'Permite que la aplicación envíe la ubicación del personal de manera periódica.'
+    })
+    async registrarUbicacion(
+        @CurrentUser() user: any,
+        @Body() dto: RegistrarMiUbicacionDto
+    ) {
+        return this.autoservicioService.registrarMiUbicacion(user.id, dto);
     }
 
     @Get('mi-puesto')
