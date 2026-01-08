@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Put, Body, Param, Query, UseGuards, Ip } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags, ApiQuery } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags, ApiQuery, ApiBody } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { BotonPanicoService } from './boton-panico.service';
 import { ActivarPanicoDto, AtenderPanicoDto, FilterPanicoDto, CerrarPanicoDto } from './dto/boton-panico.dto';
@@ -61,7 +61,19 @@ export class BotonPanicoController {
     @Put(':id/cerrar')
     @ApiOperation({
         summary: '6. Cerrar Evento',
-        description: 'Cierra un evento de pánico previamente atendido. Calcula el tiempo total de respuesta desde la activación hasta el cierre. El evento debe estar en estado "atendido" para poder cerrarse.'
+        description: 'Cierra un evento de pánico previamente atendido o marcado como falso. Calcula el tiempo total de respuesta desde la activación hasta el cierre. Requiere el ID del empleado que cierra el evento.'
+    })
+    @ApiBody({
+        type: CerrarPanicoDto,
+        description: 'Datos del cierre del evento',
+        examples: {
+            ejemplo1: {
+                summary: 'Cerrar evento',
+                value: {
+                    cerrado_por: 337
+                }
+            }
+        }
     })
     async cerrar(@Param('id') id: number, @Body() dto: CerrarPanicoDto) {
         return this.service.cerrar(id, dto);
