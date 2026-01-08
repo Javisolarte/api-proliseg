@@ -157,6 +157,10 @@ export class BotonPanicoService {
         const db = this.supabase.getClient();
         const { data: evento } = await this.getDetalle(id);
 
+        if (!evento) {
+            throw new NotFoundException(`Evento de pánico con ID ${id} no encontrado`);
+        }
+
         if (evento.estado !== 'atendido') {
             throw new BadRequestException('El evento debe haber sido atendido antes de cerrarse');
         }
