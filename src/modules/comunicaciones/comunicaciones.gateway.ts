@@ -9,24 +9,27 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
-import { AudioChunkDto, IniciarComunicacionDto, FinalizarComunicacionDto, MensajeTextoDto, ResponderComunicacionDto, OrigenAudio } from './dto/comunicacion.dto';
+import { AudioChunkDto, IniciarComunicacionDto, FinalizarComunicacionDto, MensajeTextoDto, ResponderComunicacionDto, OrigenAudio, IniciarComunicacionDashboardDto, RegistrarDispositivoDto } from './dto/comunicacion.dto';
 
 interface SesionActiva {
     sesion_id: string;
-    empleado_id: number;
+    empleado_id?: number; // Opcional si inicia dashboard
     empleado_nombre?: string;
     puesto_id?: number;
     cliente_id?: number;
     tipo: string;
     mensaje_inicial?: string;
     fecha_inicio: Date;
-    socket_id: string; // Socket ID de la app que inició la sesión
+    socket_id: string; // Socket ID del iniciador (App o Dashboard)
     latitud?: number;
     longitud?: number;
     chunks_recibidos: number;
-    respondiendo?: boolean; // Indica si el dashboard está respondiendo
-    usuario_dashboard_id?: number; // ID del usuario del dashboard que responde
-    chunks_dashboard: number; // Contador de chunks desde el dashboard
+    respondiendo?: boolean;
+    usuario_dashboard_id?: number;
+    chunks_dashboard: number;
+    origen_inicial: OrigenAudio; // Quién inició la sesión
+    empleados_ids?: number[]; // Lista de empleados (si inicia dashboard)
+    target_sockets?: string[]; // Sockets de destino (si inicia dashboard)
 }
 
 @WebSocketGateway({
@@ -45,6 +48,9 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
     // Mapeo de socket.id a sesion_id
     private socketToSesion: Map<string, string> = new Map();
 
+    // Mapeo de empleado_id a socket.id (para saber a quién llamar)
+    private empleadoToSocket: Map<number, string> = new Map();
+
     handleConnection(client: Socket) {
         this.logger.log(`🔌 Cliente conectado: ${client.id}`);
 
@@ -60,6 +66,21 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
         }));
 
         client.emit('sesiones_activas', sesiones);
+        client.emit('sesiones_activas', sesiones);
+    }
+
+    /**
+     * 📱 Registrar dispositivo/empleado al conectar
+     */
+    @SubscribeMessage('registrar_dispositivo')
+    handleRegistrarDispositivo(
+        @MessageBody() data: RegistrarDispositivoDto,
+        @ConnectedSocket() client: Socket,
+    ) {
+        this.empleadoToSocket.set(data.empleado_id, client.id);
+        this.logger.log(`📱 Dispositivo registrado: Empleado ${data.empleado_id} -> Socket ${client.id}`);
+        client.emit('dispositivo_registrado', { success: true });
+        return { success: true };
     }
 
     handleDisconnect(client: Socket) {
@@ -79,6 +100,14 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
                 this.sesionesActivas.delete(sesionId);
             }
             this.socketToSesion.delete(client.id);
+        }
+
+        // Eliminar del mapeo de empleados
+        for (const [empId, socketId] of this.empleadoToSocket.entries()) {
+            if (socketId === client.id) {
+                this.empleadoToSocket.delete(empId);
+                break;
+            }
         }
     }
 
@@ -106,6 +135,7 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
             longitud: data.longitud,
             chunks_recibidos: 0,
             chunks_dashboard: 0,
+            origen_inicial: OrigenAudio.APP,
         };
 
         this.sesionesActivas.set(sesionId, sesion);
@@ -130,6 +160,79 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
         client.emit('sesion_iniciada', {
             sesion_id: sesionId,
             estado: 'activa',
+        });
+
+        return { success: true, sesion_id: sesionId };
+        return { success: true, sesion_id: sesionId };
+    }
+
+    /**
+     * 🖥️ Iniciar comunicación desde Dashboard (Broadcast a empleados del puesto)
+     */
+    @SubscribeMessage('iniciar_comunicacion_dashboard')
+    handleIniciarComunicacionDashboard(
+        @MessageBody() data: IniciarComunicacionDashboardDto,
+        @ConnectedSocket() client: Socket,
+    ) {
+        const sesionId = `sesion_dash_${Date.now()}_${data.usuario_dashboard_id}`;
+
+        // Buscar sockets de los empleados
+        const targetSockets: string[] = [];
+        data.empleados_ids.forEach(empId => {
+            const socketId = this.empleadoToSocket.get(empId);
+            if (socketId) {
+                targetSockets.push(socketId);
+            }
+        });
+
+        const sesion: SesionActiva = {
+            sesion_id: sesionId,
+            puesto_id: data.puesto_id,
+            tipo: 'audio',
+            mensaje_inicial: `Comunicación desde Central (Usuario ${data.usuario_dashboard_id})`,
+            fecha_inicio: new Date(),
+            socket_id: client.id,
+            chunks_recibidos: 0,
+            chunks_dashboard: 0,
+            origen_inicial: OrigenAudio.DASHBOARD,
+            empleados_ids: data.empleados_ids,
+            target_sockets: targetSockets,
+            usuario_dashboard_id: data.usuario_dashboard_id,
+        };
+
+        this.sesionesActivas.set(sesionId, sesion);
+        this.socketToSesion.set(client.id, sesionId);
+
+        this.logger.log(`🖥️ Nueva sesión broadcast iniciada: ${sesionId} a ${targetSockets.length} empleados`);
+
+        // Notificar al Dashboard (confirmación)
+        client.emit('sesion_iniciada', {
+            sesion_id: sesionId,
+            estado: 'activa',
+            empleados_conectados: targetSockets.length
+        });
+
+        // Notificar a los empleados (Llamada entrante)
+        targetSockets.forEach(socketId => {
+            const empSocket = this.server.sockets.sockets.get(socketId);
+            if (empSocket) {
+                empSocket.emit('llamada_entrante', {
+                    sesion_id: sesionId,
+                    mensaje: sesion.mensaje_inicial,
+                    origen: 'central'
+                });
+            }
+        });
+
+        // Notificar a OTROS dashboards (para visibilidad)
+        client.broadcast.emit('nueva_comunicacion', {
+            sesion_id: sesionId,
+            tipo: 'audio',
+            mensaje_inicial: sesion.mensaje_inicial,
+            puesto_id: data.puesto_id,
+            fecha_inicio: sesion.fecha_inicio,
+            origen: 'dashboard',
+            usuario_dashboard_id: data.usuario_dashboard_id
         });
 
         return { success: true, sesion_id: sesionId };
@@ -176,22 +279,38 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
                 origen: OrigenAudio.APP,
             });
         } else {
-            // Audio de dashboard → Solo a la app de esa sesión
-            const appSocket = this.server.sockets.sockets.get(sesion.socket_id);
-            if (appSocket) {
-                appSocket.emit('audio_stream_dashboard', {
-                    sesion_id: data.sesion_id,
-                    audio_data: data.audio_data,
-                    sequence: data.sequence,
-                    formato: data.formato || 'webm',
-                    duracion_ms: data.duracion_ms,
-                    es_final: data.es_final,
-                    usuario_dashboard_id: sesion.usuario_dashboard_id,
-                    origen: OrigenAudio.DASHBOARD,
+            // Audio de dashboard
+            if (sesion.origen_inicial === OrigenAudio.DASHBOARD && sesion.target_sockets) {
+                // Es un broadcast del dashboard a varios empleados
+                sesion.target_sockets.forEach(socketId => {
+                    const empSocket = this.server.sockets.sockets.get(socketId);
+                    if (empSocket) {
+                        empSocket.emit('audio_stream_dashboard', {
+                            sesion_id: data.sesion_id,
+                            audio_data: data.audio_data,
+                            sequence: data.sequence,
+                            origen: OrigenAudio.DASHBOARD,
+                        });
+                    }
                 });
-                this.logger.debug(`📡 Audio enviado a app ${sesion.socket_id}`);
             } else {
-                this.logger.warn(`⚠️ App desconectada para sesión ${data.sesion_id}`);
+                // Es una RESPUESTA a una llamada de app
+                const appSocket = this.server.sockets.sockets.get(sesion.socket_id);
+                if (appSocket) {
+                    appSocket.emit('audio_stream_dashboard', {
+                        sesion_id: data.sesion_id,
+                        audio_data: data.audio_data,
+                        sequence: data.sequence,
+                        formato: data.formato || 'webm',
+                        duracion_ms: data.duracion_ms,
+                        es_final: data.es_final,
+                        usuario_dashboard_id: sesion.usuario_dashboard_id,
+                        origen: OrigenAudio.DASHBOARD,
+                    });
+                    this.logger.debug(`📡 Audio enviado a app ${sesion.socket_id}`);
+                } else {
+                    this.logger.warn(`⚠️ App desconectada para sesión ${data.sesion_id}`);
+                }
             }
         }
 

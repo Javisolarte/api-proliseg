@@ -69,6 +69,46 @@ export class IniciarComunicacionDto {
 }
 
 /**
+ * DTO para iniciar comunicación desde el dashboard (broadcast/grupo)
+ */
+export class IniciarComunicacionDashboardDto {
+    @ApiProperty({ description: 'ID del puesto objetivo' })
+    @IsNumber()
+    @IsNotEmpty()
+    puesto_id: number;
+
+    @ApiProperty({ description: 'IDs de los empleados destinatarios' })
+    @IsNumber({}, { each: true })
+    @IsNotEmpty()
+    empleados_ids: number[];
+
+    @ApiProperty({ description: 'ID del usuario del dashboard' })
+    @IsNumber()
+    @IsNotEmpty()
+    usuario_dashboard_id: number;
+}
+
+/**
+ * DTO para registrar dispositivo/empleado al conectar
+ */
+export class RegistrarDispositivoDto {
+    @ApiProperty({ description: 'ID del empleado' })
+    @IsNumber()
+    @IsNotEmpty()
+    empleado_id: number;
+
+    @ApiPropertyOptional({ description: 'ID del puesto' })
+    @IsNumber()
+    @IsOptional()
+    puesto_id?: number;
+
+    @ApiPropertyOptional({ description: 'Información del dispositivo' })
+    @IsString()
+    @IsOptional()
+    dispositivo?: string;
+}
+
+/**
  * DTO para transmitir un chunk de audio
  */
 export class AudioChunkDto {
