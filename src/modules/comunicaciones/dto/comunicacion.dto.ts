@@ -1,0 +1,212 @@
+import { IsNotEmpty, IsString, IsNumber, IsOptional, IsEnum, IsBoolean } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+export enum TipoComunicacion {
+    AUDIO = 'audio',
+    TEXTO = 'texto',
+    EMERGENCIA = 'emergencia'
+}
+
+export enum EstadoSesion {
+    ACTIVA = 'activa',
+    FINALIZADA = 'finalizada',
+    INTERRUMPIDA = 'interrumpida'
+}
+
+export enum OrigenAudio {
+    APP = 'app',
+    DASHBOARD = 'dashboard'
+}
+
+/**
+ * DTO para iniciar una sesión de comunicación
+ */
+export class IniciarComunicacionDto {
+    @ApiProperty({ description: 'ID del empleado que inicia la comunicación' })
+    @IsNumber()
+    @IsNotEmpty()
+    empleado_id: number;
+
+    @ApiPropertyOptional({ description: 'ID del puesto desde donde se comunica' })
+    @IsNumber()
+    @IsOptional()
+    puesto_id?: number;
+
+    @ApiPropertyOptional({ description: 'ID del cliente relacionado' })
+    @IsNumber()
+    @IsOptional()
+    cliente_id?: number;
+
+    @ApiProperty({ description: 'Tipo de comunicación', enum: TipoComunicacion })
+    @IsEnum(TipoComunicacion)
+    @IsNotEmpty()
+    tipo: TipoComunicacion;
+
+    @ApiPropertyOptional({ description: 'Mensaje inicial o identificación (ej: "Central reportándose")' })
+    @IsString()
+    @IsOptional()
+    mensaje_inicial?: string;
+
+    @ApiPropertyOptional({ description: 'Latitud de origen' })
+    @IsNumber()
+    @IsOptional()
+    latitud?: number;
+
+    @ApiPropertyOptional({ description: 'Longitud de origen' })
+    @IsNumber()
+    @IsOptional()
+    longitud?: number;
+
+    @ApiPropertyOptional({ description: 'Información del dispositivo' })
+    @IsString()
+    @IsOptional()
+    dispositivo?: string;
+
+    @ApiPropertyOptional({ description: 'Versión de la app' })
+    @IsString()
+    @IsOptional()
+    version_app?: string;
+}
+
+/**
+ * DTO para transmitir un chunk de audio
+ */
+export class AudioChunkDto {
+    @ApiProperty({ description: 'ID de la sesión de comunicación' })
+    @IsString()
+    @IsNotEmpty()
+    sesion_id: string;
+
+    @ApiProperty({ description: 'Audio en formato base64' })
+    @IsString()
+    @IsNotEmpty()
+    audio_data: string;
+
+    @ApiProperty({ description: 'Número de secuencia del chunk' })
+    @IsNumber()
+    @IsNotEmpty()
+    sequence: number;
+
+    @ApiPropertyOptional({ description: 'Formato del audio (webm, mp3, wav, etc.)' })
+    @IsString()
+    @IsOptional()
+    formato?: string;
+
+    @ApiPropertyOptional({ description: 'Origen del audio (app o dashboard)', enum: OrigenAudio })
+    @IsEnum(OrigenAudio)
+    @IsOptional()
+    origen?: OrigenAudio;
+
+    @ApiPropertyOptional({ description: 'Duración del chunk en milisegundos' })
+    @IsNumber()
+    @IsOptional()
+    duracion_ms?: number;
+
+    @ApiPropertyOptional({ description: 'Indica si es el último chunk' })
+    @IsBoolean()
+    @IsOptional()
+    es_final?: boolean;
+}
+
+/**
+ * DTO para que el dashboard inicie una respuesta
+ */
+export class ResponderComunicacionDto {
+    @ApiProperty({ description: 'ID de la sesión a la que se responde' })
+    @IsString()
+    @IsNotEmpty()
+    sesion_id: string;
+
+    @ApiProperty({ description: 'ID del usuario del dashboard que responde' })
+    @IsNumber()
+    @IsNotEmpty()
+    usuario_dashboard_id: number;
+
+    @ApiPropertyOptional({ description: 'Mensaje de respuesta inicial' })
+    @IsString()
+    @IsOptional()
+    mensaje_respuesta?: string;
+}
+
+/**
+ * DTO para finalizar una sesión de comunicación
+ */
+export class FinalizarComunicacionDto {
+    @ApiProperty({ description: 'ID de la sesión a finalizar' })
+    @IsString()
+    @IsNotEmpty()
+    sesion_id: string;
+
+    @ApiPropertyOptional({ description: 'Motivo de finalización' })
+    @IsString()
+    @IsOptional()
+    motivo?: string;
+
+    @ApiPropertyOptional({ description: 'Duración total en segundos' })
+    @IsNumber()
+    @IsOptional()
+    duracion_total_segundos?: number;
+}
+
+/**
+ * DTO para mensaje de texto rápido
+ */
+export class MensajeTextoDto {
+    @ApiProperty({ description: 'ID del empleado que envía el mensaje' })
+    @IsNumber()
+    @IsNotEmpty()
+    empleado_id: number;
+
+    @ApiProperty({ description: 'Contenido del mensaje' })
+    @IsString()
+    @IsNotEmpty()
+    mensaje: string;
+
+    @ApiPropertyOptional({ description: 'ID del puesto relacionado' })
+    @IsNumber()
+    @IsOptional()
+    puesto_id?: number;
+
+    @ApiPropertyOptional({ description: 'Prioridad del mensaje (normal, urgente, emergencia)' })
+    @IsString()
+    @IsOptional()
+    prioridad?: string;
+}
+
+/**
+ * DTO para respuesta de sesión activa
+ */
+export class SesionActivaResponseDto {
+    @ApiProperty()
+    sesion_id: string;
+
+    @ApiProperty()
+    empleado_id: number;
+
+    @ApiProperty()
+    empleado_nombre: string;
+
+    @ApiProperty()
+    tipo: TipoComunicacion;
+
+    @ApiProperty()
+    mensaje_inicial?: string;
+
+    @ApiProperty()
+    puesto_nombre?: string;
+
+    @ApiProperty()
+    cliente_nombre?: string;
+
+    @ApiProperty()
+    fecha_inicio: string;
+
+    @ApiProperty()
+    duracion_segundos: number;
+
+    @ApiProperty()
+    latitud?: number;
+
+    @ApiProperty()
+    longitud?: number;
+}

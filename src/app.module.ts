@@ -67,6 +67,7 @@ import { PqrsfModule } from './modules/pqrsf/pqrsf.module';
 import { BotonPanicoModule } from './modules/boton-panico/boton-panico.module';
 import { UbicacionesModule } from './modules/ubicaciones/ubicaciones.module';
 import { MemorandosModule } from './modules/memorandos/memorandos.module';
+import { ComunicacionesModule } from './modules/comunicaciones/comunicaciones.module';
 
 @Module({
   imports: [
@@ -142,6 +143,7 @@ import { MemorandosModule } from './modules/memorandos/memorandos.module';
     BotonPanicoModule,
     UbicacionesModule,
     MemorandosModule,
+    ComunicacionesModule,
     EstudiosSeguridadModule,
     GeocercasModule,
     HelpersModule,
