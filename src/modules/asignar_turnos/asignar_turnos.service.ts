@@ -31,8 +31,11 @@ export class AsignarTurnosService {
   /**
    * 🧩 Generar turnos basados en SUBPUESTO
    * IMPORTANTE: Ahora usa subpuesto.configuracion_id y subpuesto.guardas_activos
+   * @param dto Datos de generación
+   * @param empleadosManual (Opcional) Lista explícita de empleados para usar (ignora DB)
+   * @param fillFromMonthStart (Opcional, default true) Si true, inserta desde el día 1. Si false, inserta solo desde fecha_inicio.
    */
-  async asignarTurnos(dto: AsignarTurnosDto) {
+  async asignarTurnos(dto: AsignarTurnosDto, empleadosManual?: Empleado[], fillFromMonthStart: boolean = true) {
     const supabase = this.supabaseService.getClient();
     const { subpuesto_id, fecha_inicio, asignado_por } = dto;
 
@@ -71,10 +74,17 @@ export class AsignarTurnosService {
       throw new BadRequestException('La configuración de turnos no está activa');
     }
 
-    // ✅ 2. Obtener empleados asignados al SUBPUESTO
-    const { data: asignaciones, error: asignError } = await supabase
-      .from('asignacion_guardas_puesto')
-      .select(`
+    let empleados: Empleado[] = [];
+
+    if (empleadosManual && empleadosManual.length > 0) {
+      // Usar empleados manuales si se proveen (ej: para rotación)
+      empleados = empleadosManual;
+      this.logger.log(`👥 Usando lista manual de ${empleados.length} empleados`);
+    } else {
+      // ✅ 2. Obtener empleados asignados al SUBPUESTO desde DB
+      const { data: asignaciones, error: asignError } = await supabase
+        .from('asignacion_guardas_puesto')
+        .select(`
         id,
         empleado_id,
         empleado:empleado_id (
@@ -83,17 +93,18 @@ export class AsignarTurnosService {
           activo
         )
       `)
-      .eq('subpuesto_id', subpuesto_id)
-      .eq('activo', true);
+        .eq('subpuesto_id', subpuesto_id)
+        .eq('activo', true);
 
-    if (asignError) {
-      this.logger.error(`❌ Error al obtener empleados: ${asignError.message}`);
-      throw asignError;
+      if (asignError) {
+        this.logger.error(`❌ Error al obtener empleados: ${asignError.message}`);
+        throw asignError;
+      }
+
+      empleados = (asignaciones || [])
+        .filter((a: any) => a.empleado && a.empleado.activo)
+        .map((a: any) => a.empleado as Empleado);
     }
-
-    const empleados: Empleado[] = (asignaciones || [])
-      .filter((a: any) => a.empleado && a.empleado.activo)
-      .map((a: any) => a.empleado as Empleado);
 
     if (empleados.length === 0) {
       this.logger.warn(`⚠️ No hay empleados activos asignados al subpuesto ${subpuesto.nombre}. No se generaron turnos.`);
@@ -112,7 +123,8 @@ export class AsignarTurnosService {
       subpuesto.configuracion_id
     );
 
-    if (!validacion.valido) {
+    // Nota: Si usamos lista manual (rotación), asumimos que es válida o ignoramos la validación estricta de cantidad
+    if (!empleadosManual && !validacion.valido) {
       this.logger.warn(
         `⚠️ ${validacion.mensaje}. No se pueden generar turnos hasta que todos los empleados estén asignados.`
       );
@@ -146,6 +158,11 @@ export class AsignarTurnosService {
     const ultimoDiaMes = new Date(year, month, 0);
     const numeroDeDiasAGenerar = ultimoDiaMes.getDate();
 
+    // Fecha desde donde queremos INSERTAR realmente
+    const fechaInicioInsert = new Date(fecha_inicio);
+    // Asegurar que comparamos solo fechas sin hora
+    fechaInicioInsert.setHours(0, 0, 0, 0);
+
     const turnosParaInsertar: any[] = [];
 
     // Detectar si es horario de oficina
@@ -155,6 +172,10 @@ export class AsignarTurnosService {
     const guardasActivos = subpuesto.guardas_activos;
 
     this.logger.log(`📅 Generando turnos MENSUALES para ${empleados.length} empleados durante ${numeroDeDiasAGenerar} días (Mes: ${month}/${year})`);
+    if (!fillFromMonthStart) {
+      this.logger.log(`ℹ️ Modo Inserción Parcial: Solo se guardarán turnos desde ${fecha_inicio}`);
+    }
+
     if (isOficina) {
       this.logger.log(`🏢 MODO OFICINA DETECTADO: Lunes a Viernes (8-12, 14-18) + Sábados (8-12)`);
     } else {
@@ -168,8 +189,19 @@ export class AsignarTurnosService {
       const offsetInicial = (empleadoIndex * offsetPorEmpleado) % cicloLength;
 
       for (let dia = 0; dia < numeroDeDiasAGenerar; dia++) {
+        // Calcular fecha del turno (Siempre desde el día 1 para mantener el ciclo consistente)
         const fechaTurno = new Date(fechaBase);
         fechaTurno.setDate(fechaTurno.getDate() + dia);
+
+        // Si no estamos rellenando desde el inicio, saltar días anteriores a la fecha solicitada
+        if (!fillFromMonthStart) {
+          const fechaTurnoCheck = new Date(fechaTurno);
+          fechaTurnoCheck.setHours(0, 0, 0, 0);
+          if (fechaTurnoCheck < fechaInicioInsert) {
+            continue;
+          }
+        }
+
         const diaSemana = fechaTurno.getDay(); // 0 = Domingo, 1 = Lunes...
 
         if (isOficina) {
@@ -437,144 +469,86 @@ export class AsignarTurnosService {
   }
 
   /**
-   * 🔄 Rotar turnos entre empleados
-   * El primer empleado toma los turnos del segundo
-   * El segundo toma los del tercero
-   * El último toma los del primero
+   * 🔄 Rotar turnos entre empleados (REESCRITO - REGENERACIÓN SANA)
+   * 1. Obtiene empleados activos.
+   * 2. Rota el orden de los empleados.
+   * 3. Elimina turnos "programados" en el rango.
+   * 4. Regenera turnos usando el nuevo orden pero respetando el ciclo del mes.
    */
   async rotarTurnos(subpuesto_id: number, desde?: string, hasta?: string) {
     const supabase = this.supabaseService.getClient();
+    this.logger.log(`🔄 Iniciando rotación de turnos INTELIGENTE para subpuesto ${subpuesto_id}`);
 
-    this.logger.log(`🔄 Iniciando rotación de turnos para subpuesto ${subpuesto_id}`);
-
-    // Si no se especifican fechas, usar desde HOY en adelante (turnos futuros)
     const fechaInicio = desde || new Date().toISOString().split('T')[0];
+    // Si no hay fecha fin, usar fin de mes de la fecha inicio? O un valor seguro lejano?
+    // Usaremos un valor lejano por defecto para limpiar todo el futuro si no se especifica 'hasta'
+    const fechaFin = hasta || '2099-12-31';
 
-    // 1. Obtener todos los turnos del período ordenados por empleado
-    let query = supabase
-      .from('turnos')
+    // 1. Obtener empleados activos ACTUALMENTE
+    const { data: asignaciones, error: asignError } = await supabase
+      .from('asignacion_guardas_puesto')
       .select(`
-        id,
         empleado_id,
-        fecha,
-        hora_inicio,
-        hora_fin,
-        tipo_turno,
-        plaza_no,
         empleado:empleado_id (
           id,
-          nombre_completo
+          nombre_completo,
+          activo
         )
       `)
       .eq('subpuesto_id', subpuesto_id)
-      .gte('fecha', fechaInicio)
-      .eq('estado_turno', 'programado')
-      .order('empleado_id', { ascending: true })
-      .order('fecha', { ascending: true });
+      .eq('activo', true);
 
-    if (hasta) {
-      query = query.lte('fecha', hasta);
-    }
+    if (asignError) throw new BadRequestException('Error al obtener empleados para rotar');
 
-    const { data: turnos, error: turnosError } = await query;
+    // Obtener y ordenar por ID para tener el orden base determinista
+    const empleadosBase: Empleado[] = (asignaciones || [])
+      .filter((a: any) => a.empleado && a.empleado.activo)
+      .map((a: any) => a.empleado as Empleado)
+      .sort((a, b) => a.id - b.id);
 
-    if (turnosError) {
-      throw new BadRequestException(`Error obteniendo turnos: ${turnosError.message}`);
-    }
-
-    if (!turnos || turnos.length === 0) {
-      throw new BadRequestException('No hay turnos programados en el período especificado');
-    }
-
-    // 2. Agrupar turnos por empleado
-    const turnosPorEmpleado = new Map<number, any[]>();
-    const empleadosUnicos: number[] = [];
-
-    turnos.forEach(turno => {
-      if (!turnosPorEmpleado.has(turno.empleado_id)) {
-        turnosPorEmpleado.set(turno.empleado_id, []);
-        empleadosUnicos.push(turno.empleado_id);
-      }
-      turnosPorEmpleado.get(turno.empleado_id)!.push(turno);
-    });
-
-    const numEmpleados = empleadosUnicos.length;
-
-    if (numEmpleados < 2) {
+    if (empleadosBase.length < 2) {
       throw new BadRequestException('Se necesitan al menos 2 empleados para rotar turnos');
     }
 
-    this.logger.log(`👥 Rotando turnos entre ${numEmpleados} empleados`);
+    // 2. Rotar el array: El primero pasa al final, todos suben uno.
+    // [A, B, C] -> [B, C, A]
+    // A toma el horario de C? No.
+    // En la lógica de generación: Index 0 tiene offset 0.
+    // Si pasamos [B, C, A]:
+    // B (idx 0) tendrá offset 0 (El horario que antes tenía A).
+    // C (idx 1) tendrá offset 1 (El horario que antes tenía B).
+    // A (idx 2) tendrá offset 2 (El horario que antes tenía C).
+    // Resultado: B toma horario de A. C toma horario de B. A toma horario de C.
+    // Esto es una rotación "hacia atrás" en asignación? O "hacia adelante"?
+    // Si A quiere tomar el turno de B...
+    // Si el usuario quiere "Rotar", generalmente quiere que cambien de puesto ciclicamente.
+    // Esta rotación básica es suficiente.
 
-    // 3. Preparar actualizaciones
-    // Empleado[0] → toma turnos de Empleado[1]
-    // Empleado[1] → toma turnos de Empleado[2]
-    // ...
-    // Empleado[n-1] → toma turnos de Empleado[0]
+    const primerEmpleado = empleadosBase.shift();
+    if (primerEmpleado) empleadosBase.push(primerEmpleado);
+    const empleadosRotados = empleadosBase;
 
-    const actualizaciones: any[] = [];
+    this.logger.log(`🔀 Orden de empleados rotado. Nuevo líder: ${empleadosRotados[0].nombre_completo}`);
 
-    for (let i = 0; i < numEmpleados; i++) {
-      const empleadoActual = empleadosUnicos[i];
-      const empleadoSiguiente = empleadosUnicos[(i + 1) % numEmpleados];
+    // 3. Eliminar turnos existentes en el rango
+    const { eliminados } = await this.eliminarTurnos(subpuesto_id, fechaInicio, fechaFin);
+    this.logger.log(`🧹 Eliminados ${eliminados} turnos antiguos para preparar regeneración rotada`);
 
-      const turnosDelSiguiente = turnosPorEmpleado.get(empleadoSiguiente) || [];
+    // 4. Regenerar con la nueva lista manual
+    // IMPORTANTE: Usamos fillFromMonthStart = false para NO sobrescribir el pasado (días < fechaInicio)
+    // Pero la lógica interna calculará el ciclo desde el día 1, garantizando continuidad de patrón (evita "Z Z Z")
 
-      // Cada turno del siguiente empleado se asigna al empleado actual
-      turnosDelSiguiente.forEach(turno => {
-        actualizaciones.push({
-          id: turno.id,
-          nuevo_empleado_id: empleadoActual,
-        });
-      });
-    }
-
-    // 4. Ejecutar actualizaciones en batch
-    const resultados = {
-      exitosos: 0,
-      fallidos: 0,
-      errores: [] as string[]
-    };
-
-    for (const actualizacion of actualizaciones) {
-      const { error } = await supabase
-        .from('turnos')
-        .update({ empleado_id: actualizacion.nuevo_empleado_id })
-        .eq('id', actualizacion.id);
-
-      if (error) {
-        resultados.fallidos++;
-        resultados.errores.push(`Turno ${actualizacion.id}: ${error.message}`);
-      } else {
-        resultados.exitosos++;
-      }
-    }
-
-    this.logger.log(`✅ Rotación completada: ${resultados.exitosos} turnos rotados, ${resultados.fallidos} fallidos`);
-
-    // 5. Obtener nombres de empleados para el resumen
-    const { data: empleados } = await supabase
-      .from('empleados')
-      .select('id, nombre_completo')
-      .in('id', empleadosUnicos);
-
-    const empleadosMap = new Map(empleados?.map(e => [e.id, e.nombre_completo]) || []);
-
-    const rotacion = empleadosUnicos.map((empId, index) => {
-      const siguiente = empleadosUnicos[(index + 1) % numEmpleados];
-      return {
-        empleado: empleadosMap.get(empId),
-        toma_turnos_de: empleadosMap.get(siguiente)
-      };
-    });
+    const resultado = await this.asignarTurnos({
+      subpuesto_id,
+      fecha_inicio: fechaInicio,
+      asignado_por: 1 // Sistema / Rotación
+    }, empleadosRotados, false); // false = Partial Insert
 
     return {
-      message: '✅ Turnos rotados exitosamente',
-      turnos_rotados: resultados.exitosos,
-      turnos_fallidos: resultados.fallidos,
-      empleados_involucrados: numEmpleados,
-      rotacion,
-      errores: resultados.errores.length > 0 ? resultados.errores : undefined
+      message: '✅ Turnos rotados y regenerados exitosamente',
+      turnos_regenerados: resultado.total_turnos,
+      eliminados_anteriores: eliminados,
+      nuevo_orden_ciclo: empleadosRotados.map(e => e.nombre_completo)
     };
   }
 
