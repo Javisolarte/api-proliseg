@@ -168,9 +168,9 @@ export class BotonPanicoService {
             throw new NotFoundException(`Evento de pánico con ID ${id} no encontrado`);
         }
 
-        // Permitir cerrar eventos que están en estado 'atendido' o 'falso'
-        if (evento.estado !== 'atendido' && evento.estado !== 'falso') {
-            throw new BadRequestException(`El evento debe estar en estado 'atendido' o 'falso' para cerrarse. Estado actual: ${evento.estado}`);
+        // Si el evento ya está cerrado, no hacer nada
+        if (evento.estado === 'cerrado') {
+            throw new BadRequestException('El evento ya está cerrado');
         }
 
         // Calcular tiempo total de respuesta (desde creación hasta cierre)
