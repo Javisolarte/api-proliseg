@@ -7,7 +7,7 @@ import {
     MessageBody,
     ConnectedSocket,
 } from '@nestjs/websockets';
-import { Server, Socket } from 'socket.io';
+import { Server, Socket, Namespace } from 'socket.io';
 import { Logger } from '@nestjs/common';
 import { AudioChunkDto, IniciarComunicacionDto, FinalizarComunicacionDto, MensajeTextoDto, ResponderComunicacionDto, OrigenAudio, IniciarComunicacionDashboardDto, RegistrarDispositivoDto } from './dto/comunicacion.dto';
 
@@ -40,7 +40,7 @@ interface SesionActiva {
     namespace: 'comunicaciones',
 })
 export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisconnect {
-    @WebSocketServer() server: Server;
+    @WebSocketServer() server: Namespace;
     private logger: Logger = new Logger('ComunicacionesGateway');
 
     // Almacenamiento en memoria de sesiones activas
@@ -226,7 +226,7 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
 
         // Notificar a los empleados (Llamada entrante)
         targetSockets.forEach(socketId => {
-            const empSocket = this.server.sockets.sockets.get(socketId);
+            const empSocket = this.server.sockets.get(socketId);
             if (empSocket) {
                 empSocket.emit('llamada_entrante', {
                     sesion_id: sesionId,
@@ -305,7 +305,7 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
             if (sesion.origen_inicial === OrigenAudio.DASHBOARD && sesion.target_sockets) {
                 // Es un broadcast del dashboard a varios empleados
                 sesion.target_sockets.forEach(socketId => {
-                    const empSocket = this.server.sockets.sockets.get(socketId);
+                    const empSocket = this.server.sockets.get(socketId);
                     if (empSocket) {
                         empSocket.emit('audio_stream_dashboard', {
                             sesion_id: data.sesion_id,
@@ -317,7 +317,7 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
                 });
             } else {
                 // Es una RESPUESTA a una llamada de app
-                const appSocket = this.server.sockets.sockets.get(sesion.socket_id);
+                const appSocket = this.server.sockets.get(sesion.socket_id);
                 if (appSocket) {
                     appSocket.emit('audio_stream_dashboard', {
                         sesion_id: data.sesion_id,
@@ -398,7 +398,7 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
         this.logger.log(`📞 Dashboard usuario ${data.usuario_dashboard_id} respondiendo a sesión ${data.sesion_id}`);
 
         // Notificar a la app que el dashboard está respondiendo
-        const appSocket = this.server.sockets.sockets.get(sesion.socket_id);
+        const appSocket = this.server.sockets.get(sesion.socket_id);
         if (appSocket) {
             appSocket.emit('dashboard_respondiendo', {
                 sesion_id: data.sesion_id,
@@ -475,7 +475,7 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
     getEstadisticas() {
         return {
             sesiones_activas: this.sesionesActivas.size,
-            clientes_conectados: this.server.sockets.sockets.size,
+            clientes_conectados: this.server.sockets.size,
         };
     }
     /**

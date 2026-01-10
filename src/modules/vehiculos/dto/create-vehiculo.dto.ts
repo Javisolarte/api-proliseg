@@ -1,4 +1,5 @@
-import { IsString, IsNotEmpty, IsOptional, IsBoolean, IsDateString, IsInt, IsUrl } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsBoolean, IsDateString, IsInt } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateVehiculoDto {
@@ -25,6 +26,7 @@ export class CreateVehiculoDto {
     @ApiProperty({ example: 125, description: 'Cilindraje del vehículo' })
     @IsInt()
     @IsOptional()
+    @Transform(({ value }) => value ? parseInt(value) : undefined)
     cilindraje?: number;
 
     @ApiProperty({ example: '123456789', description: 'Número de tarjeta de propiedad' })
@@ -42,23 +44,24 @@ export class CreateVehiculoDto {
     @IsNotEmpty()
     tecnomecanica_vencimiento: string;
 
-    @ApiProperty({ example: 'https://example.com/soat.pdf', description: 'URL del documento SOAT' })
-    @IsUrl()
+    @ApiProperty({ example: 'https://example.com/soat.pdf', description: 'URL o path del documento SOAT', required: false })
+    @IsString()
     @IsOptional()
     url_soat?: string;
 
-    @ApiProperty({ example: 'https://example.com/tecno.pdf', description: 'URL del documento tecnomecánica' })
-    @IsUrl()
+    @ApiProperty({ example: 'https://example.com/tecno.pdf', description: 'URL o path del documento tecnomecánica', required: false })
+    @IsString()
     @IsOptional()
     url_tecnomecanica?: string;
 
-    @ApiProperty({ example: 'https://example.com/tarjeta.pdf', description: 'URL de la tarjeta de propiedad' })
-    @IsUrl()
+    @ApiProperty({ example: 'https://example.com/tarjeta.pdf', description: 'URL o path de la tarjeta de propiedad', required: false })
+    @IsString()
     @IsOptional()
     url_tarjeta_propiedad?: string;
 
     @ApiProperty({ example: true, description: 'Si el vehículo está activo' })
     @IsBoolean()
     @IsOptional()
+    @Transform(({ value }) => value === 'true' || value === true)
     activo?: boolean;
 }

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { CreateVehiculoDto } from './dto/create-vehiculo.dto';
 import { UpdateVehiculoDto } from './dto/update-vehiculo.dto';
@@ -6,13 +6,62 @@ import { CreateAsignacionVehiculoDto } from './dto/create-asignacion-vehiculo.dt
 
 @Injectable()
 export class VehiculosService {
+    private readonly logger = new Logger(VehiculosService.name);
+
     constructor(private readonly supabaseService: SupabaseService) { }
 
-    async create(createVehiculoDto: CreateVehiculoDto) {
+    private async uploadFile(file: any, bucket: string, path: string): Promise<string> {
+        const supabase = this.supabaseService.getSupabaseAdminClient();
+        const { data, error } = await supabase.storage
+            .from(bucket)
+            .upload(path, file.buffer, {
+                contentType: file.mimetype,
+                upsert: true,
+            });
+
+        if (error) {
+            this.logger.error(`❌ Error subiendo archivo a ${bucket}: ${JSON.stringify(error)}`);
+            throw error;
+        }
+
+        const { data: publicUrlData } = supabase.storage.from(bucket).getPublicUrl(path);
+        return publicUrlData.publicUrl;
+    }
+
+    async create(createVehiculoDto: CreateVehiculoDto, files?: Record<string, any[]>) {
         const supabase = this.supabaseService.getClient();
+
+        const fileUrls: any = {};
+        const placa = createVehiculoDto.placa.toUpperCase();
+
+        if (files) {
+            if (files.soat?.[0]) {
+                const file = files.soat[0];
+                const ext = file.originalname.split('.').pop();
+                const path = `${placa}/soat-${placa}.${ext}`;
+                fileUrls.url_soat = await this.uploadFile(file, 'vehiculos', path);
+            }
+            if (files.tecnomecanica?.[0]) {
+                const file = files.tecnomecanica[0];
+                const ext = file.originalname.split('.').pop();
+                const path = `${placa}/tecnomecanica-${placa}.${ext}`;
+                fileUrls.url_tecnomecanica = await this.uploadFile(file, 'vehiculos', path);
+            }
+            if (files.tarjeta_propiedad?.[0]) {
+                const file = files.tarjeta_propiedad[0];
+                const ext = file.originalname.split('.').pop();
+                const path = `${placa}/tarjetadepropiedad-${placa}.${ext}`;
+                fileUrls.url_tarjeta_propiedad = await this.uploadFile(file, 'vehiculos', path);
+            }
+        }
+
         const { data, error } = await supabase
             .from('vehiculos')
-            .insert(createVehiculoDto)
+            .insert({
+                ...createVehiculoDto,
+                ...fileUrls,
+                placa: placa // normalizar placa
+            })
             .select()
             .single();
 
@@ -50,11 +99,50 @@ export class VehiculosService {
         return data;
     }
 
-    async update(id: number, updateVehiculoDto: UpdateVehiculoDto) {
+    async update(id: number, updateVehiculoDto: UpdateVehiculoDto, files?: Record<string, any[]>) {
         const supabase = this.supabaseService.getClient();
+
+        const { data: existing, error: findError } = await supabase
+            .from('vehiculos')
+            .select('placa')
+            .eq('id', id)
+            .single();
+
+        if (findError || !existing) {
+            throw new NotFoundException(`Vehículo con ID ${id} no encontrado`);
+        }
+
+        const fileUrls: any = {};
+        const placa = (updateVehiculoDto.placa || existing.placa).toUpperCase();
+
+        if (files) {
+            if (files.soat?.[0]) {
+                const file = files.soat[0];
+                const ext = file.originalname.split('.').pop();
+                const path = `${placa}/soat-${placa}.${ext}`;
+                fileUrls.url_soat = await this.uploadFile(file, 'vehiculos', path);
+            }
+            if (files.tecnomecanica?.[0]) {
+                const file = files.tecnomecanica[0];
+                const ext = file.originalname.split('.').pop();
+                const path = `${placa}/tecnomecanica-${placa}.${ext}`;
+                fileUrls.url_tecnomecanica = await this.uploadFile(file, 'vehiculos', path);
+            }
+            if (files.tarjeta_propiedad?.[0]) {
+                const file = files.tarjeta_propiedad[0];
+                const ext = file.originalname.split('.').pop();
+                const path = `${placa}/tarjetadepropiedad-${placa}.${ext}`;
+                fileUrls.url_tarjeta_propiedad = await this.uploadFile(file, 'vehiculos', path);
+            }
+        }
+
         const { data, error } = await supabase
             .from('vehiculos')
-            .update(updateVehiculoDto)
+            .update({
+                ...updateVehiculoDto,
+                ...fileUrls,
+                placa: placa // normalizar placa si se actualiza
+            })
             .eq('id', id)
             .select()
             .single();
