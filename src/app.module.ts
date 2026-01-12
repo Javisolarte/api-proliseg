@@ -68,6 +68,7 @@ import { BotonPanicoModule } from './modules/boton-panico/boton-panico.module';
 import { UbicacionesModule } from './modules/ubicaciones/ubicaciones.module';
 import { MemorandosModule } from './modules/memorandos/memorandos.module';
 import { ComunicacionesModule } from './modules/comunicaciones/comunicaciones.module';
+import { AspirantesModule } from './modules/aspirantes/aspirantes.module';
 
 @Module({
   imports: [
@@ -146,6 +147,7 @@ import { ComunicacionesModule } from './modules/comunicaciones/comunicaciones.mo
     ComunicacionesModule,
     EstudiosSeguridadModule,
     GeocercasModule,
+    AspirantesModule,
     HelpersModule,
   ],
   providers: [],
