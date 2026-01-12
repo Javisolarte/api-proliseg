@@ -342,9 +342,104 @@ export class AsignacionesService {
     return { message: "Asignación actualizada exitosamente", data };
   }
 
-  // 🔹 Eliminar (soft delete) - Mantener para compatibilidad
+  /**
+   * 🗑️ Eliminar completamente una asignación (hard delete)
+   * - Elimina TODOS los turnos relacionados a esta asignación
+   * - Elimina la asignación de la base de datos permanentemente
+   * - Actualiza el estado del empleado si no tiene otras asignaciones
+   */
   async remove(id: number) {
-    return this.desasignar(id, "Eliminación manual");
+    const supabase = this.supabaseService.getClient();
+
+    // 1. Obtener asignación con detalles
+    const { data: asignacion, error: asignError } = await supabase
+      .from("asignacion_guardas_puesto")
+      .select(`
+        id,
+        activo,
+        empleado_id,
+        subpuesto_id,
+        empleado:empleado_id (
+          id,
+          nombre_completo
+        ),
+        subpuesto:subpuesto_id (
+          id,
+          nombre
+        )
+      `)
+      .eq("id", id)
+      .single();
+
+    if (asignError || !asignacion) {
+      throw new NotFoundException(`Asignación con ID ${id} no encontrada`);
+    }
+
+    const empleado = Array.isArray(asignacion.empleado)
+      ? asignacion.empleado[0]
+      : asignacion.empleado;
+    const subpuesto = Array.isArray(asignacion.subpuesto)
+      ? asignacion.subpuesto[0]
+      : asignacion.subpuesto;
+
+    // 2. Eliminar TODOS los turnos relacionados a esta asignación (pasados, presentes y futuros)
+    const { data: turnosEliminados, error: turnosError } = await supabase
+      .from("turnos")
+      .delete()
+      .eq("empleado_id", asignacion.empleado_id)
+      .eq("subpuesto_id", asignacion.subpuesto_id)
+      .select("id");
+
+    const cantidadTurnosEliminados = turnosEliminados?.length || 0;
+
+    if (turnosError) {
+      this.logger.warn(`⚠️ Error eliminando turnos: ${turnosError.message}`);
+    } else {
+      this.logger.log(`🗑️ ${cantidadTurnosEliminados} turnos eliminados completamente`);
+    }
+
+    // 3. Verificar si el empleado tiene otras asignaciones activas
+    const { count: otrasAsignaciones } = await supabase
+      .from('asignacion_guardas_puesto')
+      .select('*', { count: 'exact', head: true })
+      .eq('empleado_id', asignacion.empleado_id)
+      .eq('activo', true)
+      .neq('id', id); // Excluir la asignación actual
+
+    // 4. Si no tiene otras asignaciones activas, marcar empleado como no asignado
+    if (!otrasAsignaciones || otrasAsignaciones === 0) {
+      await supabase
+        .from('empleados')
+        .update({ asignado: false })
+        .eq('id', asignacion.empleado_id);
+
+      this.logger.log(`✅ Empleado ${empleado?.nombre_completo} marcado como no asignado`);
+    }
+
+    // 5. Eliminar la asignación permanentemente de la base de datos
+    const { error: deleteError } = await supabase
+      .from("asignacion_guardas_puesto")
+      .delete()
+      .eq("id", id);
+
+    if (deleteError) {
+      throw new BadRequestException(`Error al eliminar asignación: ${deleteError.message}`);
+    }
+
+    this.logger.log(
+      `🗑️ Asignación ${id} eliminada completamente - Empleado: ${empleado?.nombre_completo}, Subpuesto: ${subpuesto?.nombre}`
+    );
+
+    return {
+      message: "Asignación eliminada completamente",
+      detalles: {
+        asignacion_id: id,
+        empleado: empleado?.nombre_completo,
+        subpuesto: subpuesto?.nombre,
+        turnos_eliminados: cantidadTurnosEliminados,
+        empleado_desasignado: !otrasAsignaciones || otrasAsignaciones === 0
+      }
+    };
   }
 
   /**

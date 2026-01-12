@@ -46,7 +46,26 @@ export class AsignacionesController {
 
   @Delete(":id")
   @RequirePermissions("asignaciones")
-  @ApiOperation({ summary: "Eliminar (soft delete) una asignación" })
+  @ApiOperation({
+    summary: "Eliminar completamente una asignación",
+    description: "Elimina permanentemente una asignación y TODOS los turnos relacionados. Esta operación no se puede deshacer."
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Asignación y turnos eliminados completamente',
+    schema: {
+      example: {
+        message: "Asignación eliminada completamente",
+        detalles: {
+          asignacion_id: 1,
+          empleado: "Juan Pérez",
+          subpuesto: "Entrada Principal",
+          turnos_eliminados: 42,
+          empleado_desasignado: true
+        }
+      }
+    }
+  })
   async remove(@Param("id") id: number) {
     return this.asignacionesService.remove(id);
   }
