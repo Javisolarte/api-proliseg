@@ -4,7 +4,8 @@ import { RutasService } from "./rutas.service";
 import {
     CreateRutaGpsDto, CreateRecorridoSupervisorDto, CreateRondaRonderoDto,
     CreateRutaSupervisionDto, UpdateRutaSupervisionDto, CreateRutaPuntoDto,
-    CreateRutaAsignacionDto, CreateRutaEjecucionDto, FinalizarRutaEjecucionDto, CreateRutaEventoDto
+    CreateRutaAsignacionDto, CreateRutaEjecucionDto, FinalizarRutaEjecucionDto, CreateRutaEventoDto,
+    AsignarRutasPorFechaDto, AsignarRutaManualDto, ConsultarAsignacionesDto
 } from "./dto/ruta.dto";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { PermissionsGuard } from "../auth/guards/permissions.guard";
@@ -140,20 +141,172 @@ export class RutasController {
 export class RutasAsignacionController {
     constructor(private readonly rutasService: RutasService) { }
 
+    // ==========================================
+    // ASIGNACIÓN AUTO MÁTICA (NUEVOS ENDPOINTS)
+    // ==========================================
+
+    @Post("automatica")
+    @RequirePermissions("rutas")
+    @ApiOperation({
+        summary: "Asignar rutas automáticamente a supervisores por fecha",
+        description: `
+            Procesa todos los turnos de supervisores en la fecha especificada y asigna rutas automáticamente según el tipo_turno.
+            
+            **Lógica**:
+            1. Busca todos los turnos de supervisores para la fecha
+            2. Por cada turno, busca la ruta según tipo_turno (diurno → RUTA DÍA, nocturno → RUTA NOCHE)
+            3. Asigna el vehículo del supervisor automáticamente
+            4. Retorna resumen detallado con éxitos y errores
+            
+            **Casos especiales**:
+            - Si el supervisor no tiene vehículo, asigna la ruta sin vehículo
+            - Si ya existe asignación, la omite (a menos que forzar_reasignacion=true)
+            - Si no hay ruta para el tipo_turno, lo reporta como error
+        `
+    })
+    @ApiQuery({
+        name: "fecha",
+        required: true,
+        example: "2026-01-15",
+        description: "Fecha para procesar asignaciones (formato YYYY-MM-DD)"
+    })
+    @ApiQuery({
+        name: "forzar_reasignacion",
+        required: false,
+        type: Boolean,
+        example: false,
+        description: "Si es true, reemplaza asignaciones existentes"
+    })
+    @ApiResponse({
+        status: 200,
+        description: "Resumen de asignaciones procesadas",
+        schema: {
+            example: {
+                fecha: "2026-01-15",
+                total_turnos_procesados: 10,
+                total_asignaciones_exitosas: 8,
+                total_errores: 2,
+                asignaciones_exitosas: [
+                    {
+                        turno_id: 100,
+                        empleado_id: 5,
+                        empleado_nombre: "JUAN PEREZ",
+                        tipo_turno: "diurno",
+                        ruta_id: 1,
+                        ruta_nombre: "RUTA DIA",
+                        vehiculo_id: 2,
+                        vehiculo_placa: "ABC123",
+                        asignado: true,
+                        mensaje: "Ruta asignada correctamente"
+                    }
+                ],
+                errores: [
+                    {
+                        turno_id: 101,
+                        empleado_id: 6,
+                        empleado_nombre: "MARIA GOMEZ",
+                        tipo_turno: "nocturno",
+                        asignado: false,
+                        mensaje: "No se encontró ruta activa para tipo_turno: nocturno"
+                    }
+                ]
+            }
+        }
+    })
+    asignarPorFecha(@Query() dto: AsignarRutasPorFechaDto) {
+        return this.rutasService.asignarRutasPorFecha(dto);
+    }
+
+    @Post("manual")
+    @RequirePermissions("rutas")
+    @ApiOperation({
+        summary: "Asignar ruta manualmente a un turno específico",
+        description: `
+            Asigna una ruta a un turno de supervisor de forma manual.
+            
+            **Parámetros opcionales**:
+            - Si no se envía ruta_id, busca la ruta según el tipo_turno del turno
+            - Si no se envía vehiculo_id, busca el vehículo asignado al supervisor
+            
+            **Validaciones**:
+            - El turno debe existir
+            - El empleado del turno debe tener rol "supervisor"
+            - No debe existir una asignación activa previa (de lo contrario, eliminarla primero)
+        `
+    })
+    @ApiResponse({
+        status: 200,
+        description: "Resultado de la asignación",
+        schema: {
+            example: {
+                turno_id: 100,
+                empleado_id: 5,
+                empleado_nombre: "JUAN PEREZ",
+                tipo_turno: "diurno",
+                ruta_id: 1,
+                ruta_nombre: "RUTA DIA",
+                vehiculo_id: 2,
+                vehiculo_placa: "ABC123",
+                asignado: true,
+                mensaje: "Ruta asignada correctamente"
+            }
+        }
+    })
+    asignarManual(@Body() dto: AsignarRutaManualDto) {
+        return this.rutasService.asignarRutaManual(dto);
+    }
+
+    @Get("consultar")
+    @RequirePermissions("rutas")
+    @ApiOperation({
+        summary: "Consultar asignaciones de rutas con filtros",
+        description: `
+            Permite consultar asignaciones de rutas con filtros opcionales.
+            
+            **Filtros disponibles**:
+            - fecha: Filtra por fecha del turno
+            - supervisor_id: Filtra por supervisor específico
+            - solo_activas: true (default) solo activas, false incluye desactivadas
+        `
+    })
+    @ApiQuery({ name: "fecha", required: false, example: "2026-01-15" })
+    @ApiQuery({ name: "supervisor_id", required: false, type: Number })
+    @ApiQuery({ name: "solo_activas", required: false, type: Boolean, example: true })
+    consultarAsignaciones(@Query() dto: ConsultarAsignacionesDto) {
+        return this.rutasService.consultarAsignaciones(dto);
+    }
+
+    @Delete("desactivar/:id")
+    @RequirePermissions("rutas")
+    @ApiOperation({
+        summary: "Desactivar asignación de ruta",
+        description: "Marca la asignación como inactiva (no la elimina de la base de datos)"
+    })
+    desactivarAsignacion(@Param("id") id: string) {
+        return this.rutasService.desactivarAsignacion(+id);
+    }
+
+    // ==========================================
+    // ENDPOINTS EXISTENTES (Compatibilidad)
+    // ==========================================
+
     @Post()
-    @ApiOperation({ summary: "Asignar ruta a turno" })
+    @RequirePermissions("rutas")
+    @ApiOperation({ summary: "Asignar ruta a turno (método legacy/manual directo)" })
     asignar(@Body() dto: CreateRutaAsignacionDto) {
         return this.rutasService.asignarRuta(dto);
     }
 
     @Get("turno/:turno_id")
+    @RequirePermissions("rutas")
     @ApiOperation({ summary: "Obtener ruta asignada al turno" })
     getByTurno(@Param("turno_id") turnoId: string) {
         return this.rutasService.getAsignacionPorTurno(+turnoId);
     }
 
     @Delete(":id")
-    @ApiOperation({ summary: "Eliminar asignación" })
+    @RequirePermissions("rutas")
+    @ApiOperation({ summary: "Eliminar asignación (hard delete)" })
     delete(@Param("id") id: string) {
         return this.rutasService.deleteAsignacion(+id);
     }
