@@ -67,9 +67,9 @@ export class VisitasController {
 
     @Get('checkpoint-items')
     @ApiOperation({ summary: 'Listar ítems de un tipo de chequeo' })
-    @ApiQuery({ name: 'tipo_id', required: true })
-    getItems(@Query('tipo_id') tipoId: string) {
-        return this.visitasService.findItemsByTipo(+tipoId);
+    @ApiQuery({ name: 'tipo_id', required: false, description: 'ID del tipo de chequeo. Si no se envía, retorna todos los ítems activos.' })
+    getItems(@Query('tipo_id') tipoId?: number) {
+        return this.visitasService.findItemsByTipo(tipoId);
     }
 
     @Post('checkpoint-items')

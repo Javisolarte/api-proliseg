@@ -42,21 +42,21 @@ export class VisitasService {
     async createTipoChequeo(dto: CreateTipoChequeoDto) {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase.from('tipos_chequeo').insert(dto).select().single();
-        if (error) throw error;
+        if (error) throw new BadRequestException(`Error al crear tipo de chequeo: ${error.message}`);
         return data;
     }
 
     async findAllTiposChequeo() {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase.from('tipos_chequeo').select('*').eq('activo', true);
-        if (error) throw error;
+        if (error) throw new BadRequestException(`Error al obtener tipos de chequeo: ${error.message}`);
         return data;
     }
 
     async updateTipoChequeo(id: number, dto: UpdateTipoChequeoDto) {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase.from('tipos_chequeo').update(dto).eq('id', id).select().single();
-        if (error) throw error;
+        if (error) throw new BadRequestException(`Error al actualizar tipo de chequeo: ${error.message}`);
         return data;
     }
 
@@ -114,15 +114,23 @@ export class VisitasService {
 
     // --- ÍTEMS DE CHEQUEO (CONFIGURACIÓN) ---
 
-    async findItemsByTipo(tipoId: number) {
+    async findItemsByTipo(tipoId?: number) {
         const supabase = this.supabaseService.getClient();
-        const { data, error } = await supabase
-            .from('tipos_chequeo_items')
-            .select('*')
-            .eq('tipo_chequeo_id', tipoId)
+        let query = supabase.from('tipos_chequeo_items').select('*');
+
+        if (tipoId && !isNaN(tipoId) && tipoId > 0) {
+            query = query.eq('tipo_chequeo_id', tipoId);
+        }
+
+        const { data, error } = await query
+            .eq('activo', true)
             .order('orden', { ascending: true });
-        if (error) throw error;
-        return data;
+
+        if (error) {
+            console.error('Error fetching checkpoint items:', error);
+            throw new BadRequestException(`Error al obtener ítems: ${error.message}`);
+        }
+        return data || [];
     }
 
     async createItem(dto: CreateTipoChequeoItemDto) {
