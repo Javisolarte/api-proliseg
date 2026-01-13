@@ -76,7 +76,7 @@ export class AutoservicioEmpleadoController {
     @Get('mi-perfil')
     @ApiOperation({ summary: 'Ver perfil del empleado (sin métricas sensibles)' })
     async getMiPerfil(@CurrentUser() user: any) {
-        return this.autoservicioService.getMiPerfil(user.id);
+        return this.autoservicioService.getPerfilEmpleado(user.id);
     }
 
     @Get('mi-informacion')
