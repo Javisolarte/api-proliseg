@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
-import { CreateVisitaDto, CreateTipoChequeoDto, UpdateTipoChequeoDto, CreateChequeoDto } from './dto/create-visita.dto';
+import { CreateVisitaDto, CreateTipoChequeoDto, UpdateTipoChequeoDto, CreateChequeoDto, CreateTipoChequeoItemDto, UpdateTipoChequeoItemDto } from './dto/create-visita.dto';
 
 @Injectable()
 export class VisitasService {
@@ -85,7 +85,8 @@ export class VisitasService {
               tipo_chequeo:tipos_chequeo(*),
               puesto:puestos_trabajo(id, nombre),
               supervisor:empleados(id, nombre_completo),
-              evidencias:minutas_rutas_evidencias(*)
+              evidencias:minutas_rutas_evidencias(*),
+              resultados:minutas_rutas_check_resultados(*, item:tipos_chequeo_items(pregunta))
           `)
             .eq('id', id)
             .single();
@@ -109,5 +110,39 @@ export class VisitasService {
         // Dado el schema, obtendre por ejecucion_id.
 
         throw new BadRequestException("Endpoint no soportado directamente por schema actual. Use filtro por ejecución.");
+    }
+
+    // --- ÍTEMS DE CHEQUEO (CONFIGURACIÓN) ---
+
+    async findItemsByTipo(tipoId: number) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('tipos_chequeo_items')
+            .select('*')
+            .eq('tipo_chequeo_id', tipoId)
+            .order('orden', { ascending: true });
+        if (error) throw error;
+        return data;
+    }
+
+    async createItem(dto: CreateTipoChequeoItemDto) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase.from('tipos_chequeo_items').insert(dto).select().single();
+        if (error) throw error;
+        return data;
+    }
+
+    async updateItem(id: number, dto: UpdateTipoChequeoItemDto) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase.from('tipos_chequeo_items').update(dto).eq('id', id).select().single();
+        if (error) throw error;
+        return data;
+    }
+
+    async deleteItem(id: number) {
+        const supabase = this.supabaseService.getClient();
+        const { error } = await supabase.from('tipos_chequeo_items').delete().eq('id', id);
+        if (error) throw error;
+        return { message: 'Ítem eliminado correctamente' };
     }
 }

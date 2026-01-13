@@ -80,3 +80,36 @@ export class CreateChequeoDto {
     @IsOptional()
     mejoras_sugeridas?: string;
 }
+
+// --- Ítems de Chequeo (Preguntas del Checklist) ---
+export class CreateTipoChequeoItemDto {
+    @ApiProperty({ example: 1, description: 'ID del tipo de chequeo padre' })
+    @IsInt()
+    tipo_chequeo_id: number;
+
+    @ApiProperty({ example: '¿Vigilante porta carnet?' })
+    @IsString()
+    pregunta: string;
+
+    @ApiProperty({ example: 'Verificar carnet físico', required: false })
+    @IsString()
+    @IsOptional()
+    descripcion?: string;
+
+    @ApiProperty({ example: true, required: false })
+    @IsBoolean()
+    @IsOptional()
+    obligatorio?: boolean;
+
+    @ApiProperty({ example: 0, required: false })
+    @IsInt()
+    @IsOptional()
+    orden?: number;
+
+    @ApiProperty({ example: true, required: false })
+    @IsBoolean()
+    @IsOptional()
+    activo?: boolean;
+}
+
+export class UpdateTipoChequeoItemDto extends PartialType(CreateTipoChequeoItemDto) { }

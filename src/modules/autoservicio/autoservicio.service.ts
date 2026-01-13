@@ -1339,15 +1339,23 @@ export class AutoservicioService {
                 .eq('empleado_id', supervisorId)
                 .single();
 
+            // Crear resumen de checklist para la minuta general
+            let resumenCheck = '';
+            if (dto.check_items && dto.check_items.length > 0) {
+                const cumplidos = dto.check_items.filter(i => i.resultado === 'cumple').length;
+                const noCumplidos = dto.check_items.filter(i => i.resultado === 'no_cumple').length;
+                resumenCheck = ` [Checklist: ${cumplidos} OK, ${noCumplidos} Fallos]`;
+            }
+
             await supabase.from('minutas').insert({
                 creada_por: usuario?.id,
                 turno_id: asignacion?.turno_id,
                 puesto_id: dto.puesto_id,
                 fecha: new Date().toISOString().split('T')[0],
                 hora: new Date().toLocaleTimeString('en-US', { hour12: false }),
-                novedades: `[SUPERVISOR] ${dto.detalle_operativo}. ${dto.novedades || ''}`,
+                novedades: `[SUPERVISOR] ${dto.detalle_operativo}. ${dto.novedades || ''}${resumenCheck}`,
                 fotos: dto.fotos || [],
-                videos: [], // TODO: mapping if needed
+                videos: [],
                 adjuntos: dto.audios || []
             });
         } catch (e) {

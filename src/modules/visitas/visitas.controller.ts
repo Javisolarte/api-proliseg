@@ -1,12 +1,12 @@
-import { Controller, Get, Post, Body, Param, Put, Delete, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { Controller, Get, Post, Body, Param, Put, Delete, UseGuards, Query } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { VisitasService } from './visitas.service';
-import { CreateVisitaDto, CreateTipoChequeoDto, UpdateTipoChequeoDto, CreateChequeoDto } from './dto/create-visita.dto';
+import { CreateVisitaDto, CreateTipoChequeoDto, UpdateTipoChequeoDto, CreateChequeoDto, CreateTipoChequeoItemDto, UpdateTipoChequeoItemDto } from './dto/create-visita.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 
 @ApiTags('Visitas y Chequeos')
-@Controller()
+@Controller('visitas')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth("JWT-auth")
 export class VisitasController {
@@ -19,7 +19,7 @@ export class VisitasController {
         return this.visitasService.registrarVisita(dto);
     }
 
-    @Get('visitas/ejecucion/:id')
+    @Get('ejecucion/:id')
     @ApiOperation({ summary: 'Listar visitas de una ejecución' })
     getVisitas(@Param('id') id: string) {
         return this.visitasService.getVisitasPorEjecucion(+id);
@@ -61,5 +61,32 @@ export class VisitasController {
     @ApiOperation({ summary: 'Obtener detalle de chequeo' })
     getChequeo(@Param('id') id: string) {
         return this.visitasService.getChequeo(+id);
+    }
+
+    // --- Ítems de Chequeo (Gestión Administrativa) ---
+
+    @Get('checkpoint-items')
+    @ApiOperation({ summary: 'Listar ítems de un tipo de chequeo' })
+    @ApiQuery({ name: 'tipo_id', required: true })
+    getItems(@Query('tipo_id') tipoId: string) {
+        return this.visitasService.findItemsByTipo(+tipoId);
+    }
+
+    @Post('checkpoint-items')
+    @ApiOperation({ summary: 'Crear ítem de chequeo' })
+    createItem(@Body() dto: CreateTipoChequeoItemDto) {
+        return this.visitasService.createItem(dto);
+    }
+
+    @Put('checkpoint-items/:id')
+    @ApiOperation({ summary: 'Actualizar ítem de chequeo' })
+    updateItem(@Param('id') id: string, @Body() dto: UpdateTipoChequeoItemDto) {
+        return this.visitasService.updateItem(+id, dto);
+    }
+
+    @Delete('checkpoint-items/:id')
+    @ApiOperation({ summary: 'Eliminar ítem de chequeo' })
+    deleteItem(@Param('id') id: string) {
+        return this.visitasService.deleteItem(+id);
     }
 }
