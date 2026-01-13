@@ -84,8 +84,8 @@ export class IaController {
     this.logger.debug(`✅ [IAController] Query recibido correctamente: ${query}`);
     this.logger.debug(`👤 [IAController] Rol del usuario: ${user?.rol}`);
 
-    // Pasar el objeto user completo y el historial
-    const response = await this.iaService.processQuery(query, user, body.history);
+    // Pasar el objeto user completo en lugar de solo el token
+    const response = await this.iaService.processQuery(query, user);
 
     this.logger.debug(`📤 [IAController] Respuesta del servicio IA: ${JSON.stringify(response)}`);
     return response;

@@ -12,16 +12,6 @@ import { Type } from 'class-transformer';
 // =========================================================
 // 🧠 DTO 1: CONSULTAS EN LENGUAJE NATURAL → SQL
 // =========================================================
-export class ChatMessageDto {
-  @ApiProperty({ example: 'user', enum: ['user', 'assistant'] })
-  @IsString()
-  role: 'user' | 'assistant';
-
-  @ApiProperty({ example: '¿Quién es el más viejo?' })
-  @IsString()
-  content: string;
-}
-
 export class IaDto {
   @ApiProperty({
     example: 'Muéstrame todos los empleados activos',
@@ -30,16 +20,6 @@ export class IaDto {
   @IsString()
   @MinLength(3)
   query: string;
-
-  @ApiPropertyOptional({
-    type: [ChatMessageDto],
-    description: 'Historial de la conversación para mantener el contexto.',
-  })
-  @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => ChatMessageDto)
-  history?: ChatMessageDto[];
 }
 
 // =========================================================
