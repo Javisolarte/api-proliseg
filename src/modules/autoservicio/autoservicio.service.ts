@@ -29,7 +29,8 @@ import {
     ReportarNovedadDto,
     ConfirmacionAckDto,
     DispositivoInfoDto,
-    MisHorariosResponseDto
+    MisHorariosResponseDto,
+    ResolverNovedadDto
 } from './dto/autoservicio-supervisor.dto';
 
 @Injectable()
@@ -2232,6 +2233,25 @@ export class AutoservicioService {
             .maybeSingle();
 
         return { registrado: !!data, detalle: data?.observacion || 'No registrado' };
+    }
+
+    /**
+     * Resuelve una novedad crítica desde Central
+     */
+    async resolverNovedad(dto: ResolverNovedadDto, adminId: number) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('rutas_supervision_eventos')
+            .update({
+                observacion: `✅ RESUELTO: ${dto.resolucion} (por admin ID ${adminId})`,
+                fecha: new Date()
+            })
+            .eq('id', dto.evento_id)
+            .select()
+            .single();
+
+        if (error) throw error;
+        return data;
     }
 }
 

@@ -30,7 +30,8 @@ import {
     ConfirmacionAckDto,
     DispositivoInfoDto,
     MisHorariosResponseDto,
-    CargarEvidenciaDto
+    CargarEvidenciaDto,
+    ResolverNovedadDto
 } from './dto/autoservicio-supervisor.dto';
 
 @ApiTags('Autoservicio - Supervisor (Móvil)')
@@ -199,6 +200,13 @@ export class AutoservicioSupervisorController {
     reportarNovedad(@Body() dto: ReportarNovedadDto, @Request() req) {
         const supervisorId = req.user.empleadoId;
         return this.autoservicioService.reportarNovedadInmediata(dto, supervisorId);
+    }
+
+    @Put('novedades/resolver')
+    @ApiOperation({ summary: 'Resolver novedad desde Central (Admin/Operador)' })
+    resolverNovedad(@Body() dto: ResolverNovedadDto, @Request() req) {
+        const userId = req.user.id;
+        return this.autoservicioService.resolverNovedad(dto, userId);
     }
 
     @Get('geocerca/validar')

@@ -656,7 +656,18 @@ export class VehiculoAsignadoResponseDto {
     @ApiProperty({ example: 'Honda' })
     marca: string;
     @ApiProperty({ example: 'XRE 300' })
+    @IsString()
     modelo: string;
+}
+
+export class ResolverNovedadDto {
+    @ApiProperty({ example: 123, description: 'ID del evento de novedad' })
+    @IsNumber()
+    evento_id: number;
+
+    @ApiProperty({ example: 'Se envió patrulla de apoyo y se controló la situación' })
+    @IsString()
+    resolucion: string;
 }
 
 // ==========================================
