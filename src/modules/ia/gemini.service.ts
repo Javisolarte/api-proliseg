@@ -202,18 +202,25 @@ export class GeminiService {
   }
 
   /**
+   * 📝 Formatea el historial de mensajes para el prompt
+   */
+  private formatHistory(history: any[]): string {
+    if (!history || history.length === 0) return '';
+    return history.map(m => `${m.role === 'user' ? 'Usuario' : 'Asistente'}: ${m.content}`).join('\n');
+  }
+
+  /**
    * 🔍 Detecta si la consulta del usuario requiere SQL o es general/conversacional.
    */
-  async detectIntent(prompt: string): Promise<'sql' | 'general'> {
+  async detectIntent(prompt: string, history?: any[]): Promise<'sql' | 'general'> {
     this.logger.debug(`🎯 Detectando intención para: "${prompt}"`);
     try {
       const result = await this.executeWithRetry(async (genAI) => {
         const model = genAI.getGenerativeModel({
-          model: 'models/gemini-2.5-flash',
+          model: 'models/gemini-2.0-flash',
         });
 
-        return await model.generateContent([
-          `Analiza la siguiente consulta del usuario y responde solo con una palabra:
+        const systemPrompt = `Analiza la siguiente consulta del usuario y responde solo con una palabra:
           "sql" si la pregunta requiere generar o ejecutar una consulta SQL,
           o "general" si es una pregunta sobre el sistema, sobre ti, o una conversación general.
 
@@ -224,9 +231,13 @@ export class GeminiService {
           - "¿Cómo funciona este sistema?" → general
           - "¿Qué base de datos usas?" → general
 
+          ${history && history.length > 0 ? `Contexto previo:\n${this.formatHistory(history)}` : ''}
+
+          ⚠️ TOLERANCIA A ERRORES: Ignora errores ortográficos al detectar la intención.
           Pregunta del usuario: "${prompt}"
-          Responde solo con "sql" o "general".`,
-        ]);
+          Responde solo con "sql" o "general".`;
+
+        return await model.generateContent(systemPrompt);
       });
 
       const text = result.response.text().toLowerCase().trim();
@@ -234,7 +245,6 @@ export class GeminiService {
       return text.includes('general') ? 'general' : 'sql';
     } catch (error: any) {
       this.logger.error('❌ Error detectando intención:', error);
-      // Por seguridad, asumimos que requiere SQL si hay fallo
       return 'sql';
     }
   }
@@ -242,23 +252,26 @@ export class GeminiService {
   /**
    * 🧠 Convierte lenguaje natural a SQL válido
    */
-  async naturalToSQL(prompt: string): Promise<string> {
+  async naturalToSQL(prompt: string, history?: any[]): Promise<string> {
     this.logger.debug(`🧠 Generando SQL para: ${prompt}`);
 
     try {
       const result = await this.executeWithRetry(async (genAI) => {
         const model = genAI.getGenerativeModel({
-          model: 'models/gemini-2.5-flash',
+          model: 'models/gemini-2.0-flash',
         });
 
-        return await model.generateContent([
-          `Eres un experto en SQL. Convierte la siguiente petición en una consulta SQL válida.
+        const systemPrompt = `Eres un experto en SQL. Convierte la siguiente petición en una consulta SQL válida.
           No expliques nada, solo responde con la consulta SQL.
-          Petición: "${prompt}"`,
-        ]);
+          ${history && history.length > 0 ? `Usa el siguiente historial para resolver entidades o referencias (ej: "él", "cuántos años tiene", etc.):\n${this.formatHistory(history)}` : ''}
+          
+          ⚠️ TOLERANCIA A ERRORES: El usuario puede escribir mal nombres de tablas o campos (ej: "emplaedos"). Interpreta según el esquema y corrige silenciosamente.
+          Petición: "${prompt}"`;
+
+        return await model.generateContent(systemPrompt);
       });
 
-      const text = result.response.text().trim();
+      const text = result.response.text().replace(/```sql|```/g, '').trim();
       this.logger.debug(`✅ SQL generado:\n${text}`);
       return text;
     } catch (error: any) {
@@ -270,17 +283,16 @@ export class GeminiService {
   /**
    * 💬 Genera una respuesta natural basada en el resultado de la base de datos
    */
-  async humanizeResponse(prompt: string, dbResult: any): Promise<string> {
+  async humanizeResponse(prompt: string, dbResult: any, history?: any[]): Promise<string> {
     this.logger.debug(`🗣️ Humanizando respuesta para: ${prompt}`);
 
     try {
       const result = await this.executeWithRetry(async (genAI) => {
         const model = genAI.getGenerativeModel({
-          model: 'models/gemini-2.5-flash',
+          model: 'models/gemini-2.0-flash',
         });
 
-        return await model.generateContent([
-          `Eres un asistente amable y experto en análisis de datos.
+        const systemPrompt = `Eres un asistente amable y experto en análisis de datos.
           El usuario hizo la siguiente pregunta: "${prompt}".
           Este es el resultado crudo de la base de datos: ${JSON.stringify(dbResult)}.
 
@@ -298,8 +310,12 @@ export class GeminiService {
           - "La persona más mayor es Marta López con 72 años."
           - "No encontré información que coincida con eso. ¿Quieres que busque de otra forma?"
 
-          No uses formato JSON, ni SQL, ni código.`,
-        ]);
+          ${history && history.length > 0 ? `Historial de la conversación:\n${this.formatHistory(history)}` : ''}
+
+          ⚠️ TOLERANCIA A ERRORES: Ignora errores ortográficos del usuario y enfócate en la intención.
+          No uses formato JSON, ni SQL, ni código.`;
+
+        return await model.generateContent(systemPrompt);
       });
 
       const text = result.response.text().trim();
@@ -310,8 +326,6 @@ export class GeminiService {
       throw new Error(`Error en la API de Gemini: ${error.message}`);
     }
   }
-
-
 
   /**
    * 🤖 Analiza la asistencia (entrada o salida) del empleado
@@ -327,27 +341,27 @@ export class GeminiService {
     const { tipo, empleado_id, lugar_nombre, distancia_metros, historial } = params;
 
     const prompt = `
-Eres una IA experta en control de asistencia de personal de seguridad.
-Analiza el siguiente evento de asistencia:
+      Eres una IA experta en control de asistencia de personal de seguridad.
+      Analiza el siguiente evento de asistencia:
 
-📋 Datos:
-- Empleado ID: ${empleado_id}
-- Lugar: ${lugar_nombre}
-- Distancia respecto al punto asignado: ${distancia_metros.toFixed(2)} metros
-- Tipo de registro: ${tipo}
-- Historial reciente: ${JSON.stringify(historial || [])}
+      📋 Datos:
+      - Empleado ID: ${empleado_id}
+      - Lugar: ${lugar_nombre}
+      - Distancia respecto al punto asignado: ${distancia_metros.toFixed(2)} metros
+      - Tipo de registro: ${tipo}
+      - Historial reciente: ${JSON.stringify(historial || [])}
 
-Indica:
-1. Nivel de riesgo (bajo, medio o alto).
-2. Si el comportamiento es normal o anómalo.
-3. Una breve explicación del porqué.
-Responde en una sola línea clara y concisa.
-`;
+      Indica:
+      1. Nivel de riesgo (bajo, medio o alto).
+      2. Si el comportamiento es normal o anómalo.
+      3. Una breve explicación del porqué.
+      Responde en una sola línea clara y concisa.
+    `;
 
     try {
       const result = await this.executeWithRetry(async (genAI) => {
         const model = genAI.getGenerativeModel({
-          model: 'models/gemini-2.5-flash',
+          model: 'models/gemini-2.0-flash',
         });
         return await model.generateContent(prompt);
       });
@@ -362,26 +376,29 @@ Responde en una sola línea clara y concisa.
     }
   }
 
-
   /**
    * 🤖 Responde de forma natural a preguntas generales (sin SQL)
    */
-  async humanResponse(prompt: string): Promise<string> {
+  async humanResponse(prompt: string, history?: any[]): Promise<string> {
     this.logger.debug(`💭 Respondiendo pregunta general: "${prompt}"`);
 
     try {
       const result = await this.executeWithRetry(async (genAI) => {
         const model = genAI.getGenerativeModel({
-          model: 'models/gemini-2.5-flash',
+          model: 'models/gemini-2.0-flash',
         });
 
-        return await model.generateContent([
-          `Eres un asistente de inteligencia artificial de PROLISEG LTDA, empresa de seguridad privada en Colombia.
+        const systemPrompt = `Eres un asistente de inteligencia artificial de PROLISEG LTDA, empresa de seguridad privada en Colombia.
           El usuario ha preguntado: "${prompt}".
           
+          ${history && history.length > 0 ? `Historial de la conversación:\n${this.formatHistory(history)}` : ''}
+
           Responde de forma breve, profesional y amigable en español.
-          Si te preguntan qué puedes hacer, responde: "Puedo ayudarte con todo lo que requieras de PROLISEG LTDA."`,
-        ]);
+          Si te preguntan qué puedes hacer, responde: "Puedo ayudarte con todo lo que requieras de PROLISEG LTDA."
+          
+          ⚠️ TOLERANCIA A ERRORES: El usuario puede cometer errores ortográficos o de digitación (ej: "emplaedo" en lugar de "empleado"). Intenta comprender la intención a pesar de los errores y responde correctamente sin mencionar los fallos de escritura directamente.`;
+
+        return await model.generateContent(systemPrompt);
       });
 
       const text = result.response.text().trim();

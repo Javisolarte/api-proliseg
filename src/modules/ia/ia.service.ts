@@ -42,7 +42,7 @@ export class IaService {
   // ============================================================
   // 🧠 1. PROCESAR CONSULTA NATURAL → SQL (ya existente)
   // ============================================================
-  async processQuery(userQuery: string, user: any) {
+  async processQuery(userQuery: string, user: any, history?: any[]) {
     try {
       this.logger.debug(`🧠 Recibida consulta natural: "${userQuery}"`);
 
@@ -60,12 +60,12 @@ export class IaService {
       }
 
       // 2️⃣ Detectar si requiere SQL
-      const intent = await this.geminiService.detectIntent(userQuery);
+      const intent = await this.geminiService.detectIntent(userQuery, history);
       this.logger.debug(`🎯 Intención detectada: ${intent}`);
 
       // 🗣️ Si es una pregunta general, responder sin SQL
       if (intent === 'general') {
-        const respuesta = await this.geminiService.humanResponse(userQuery);
+        const respuesta = await this.geminiService.humanResponse(userQuery, history);
         return {
           ok: true,
           message: respuesta
@@ -75,6 +75,7 @@ export class IaService {
       // 3️⃣ Generar SQL usando el esquema de Supabase
       const sqlResponse = await this.geminiService.naturalToSQL(
         `${userQuery}\n\nEsquema de la base de datos:\n${schema}`,
+        history,
       );
 
       // 4️⃣ Limpiar SQL
@@ -99,7 +100,7 @@ export class IaService {
       if (error) throw new Error(error.message);
 
       // 7️⃣ Humanizar la respuesta
-      const respuestaNatural = await this.geminiService.humanizeResponse(userQuery, data);
+      const respuestaNatural = await this.geminiService.humanizeResponse(userQuery, data, history);
 
       return {
         ok: true,
