@@ -1308,7 +1308,18 @@ export class AutoservicioService {
             observacion: `Llegada a puesto ${dto.puesto_id}. Minuta creada.`
         });
 
-        // 5. [NUEVO] Crear entrada en "Minuta de Minutas" (tabla general)
+        // 5. [NUEVO] Guardar resultados del Checklist Granular
+        if (dto.check_items && dto.check_items.length > 0) {
+            const resultados = dto.check_items.map(res => ({
+                minuta_id: minuta.id,
+                item_id: res.item_id,
+                resultado: res.resultado,
+                observacion: res.observacion
+            }));
+            await supabase.from('minutas_rutas_check_resultados').insert(resultados);
+        }
+
+        // 6. [NUEVO] Crear entrada en "Minuta de Minutas" (tabla general)
         try {
             const { data: ejecucion } = await supabase
                 .from('rutas_supervision_ejecucion')
@@ -1616,6 +1627,34 @@ export class AutoservicioService {
 
         if (error) throw error;
         return data;
+    }
+
+    /**
+     * Obtiene los ítems (preguntas) de un checklist granular
+     */
+    async getChecklistItems(tipoChequeoId: number) {
+        const supabase = this.supabaseService.getClient();
+
+        const { data: categoria } = await supabase
+            .from('tipos_chequeo')
+            .select('nombre')
+            .eq('id', tipoChequeoId)
+            .single();
+
+        const { data: items, error } = await supabase
+            .from('tipos_chequeo_items')
+            .select('*')
+            .eq('tipo_chequeo_id', tipoChequeoId)
+            .eq('activo', true)
+            .order('orden');
+
+        if (error) throw error;
+
+        return {
+            tipo_chequeo_id: tipoChequeoId,
+            nombre: categoria?.nombre || 'Categoría no encontrada',
+            items: items || []
+        };
     }
 
     /**

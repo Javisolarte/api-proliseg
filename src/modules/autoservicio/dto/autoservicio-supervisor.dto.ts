@@ -3,6 +3,58 @@ import { IsNotEmpty, IsNumber, IsOptional, IsString, IsBoolean, IsArray, Validat
 import { Type } from 'class-transformer';
 
 // ==========================================
+// CHECKLISTS GRANULARES (NUEVO)
+// ==========================================
+
+export class TipoChequeoItemDto {
+    @ApiProperty({ example: 1 })
+    id: number;
+
+    @ApiProperty({ example: 1 })
+    tipo_chequeo_id: number;
+
+    @ApiProperty({ example: '¿Vigilante porta carnet?' })
+    pregunta: string;
+
+    @ApiProperty({ example: 'Verificar carnet físico' })
+    descripcion: string;
+
+    @ApiProperty({ example: true })
+    obligatorio: boolean;
+
+    @ApiProperty({ example: 1 })
+    orden: number;
+}
+
+export class RespuestaCheckItemDto {
+    @ApiProperty({ example: 1, description: 'ID del ítem (pregunta)' })
+    @IsNotEmpty()
+    @IsNumber()
+    item_id: number;
+
+    @ApiProperty({ example: 'cumple', description: 'Resultado: cumple, no_cumple, na' })
+    @IsNotEmpty()
+    @IsString()
+    resultado: string;
+
+    @ApiPropertyOptional({ example: 'Carnet vencido', description: 'Observación por ítem' })
+    @IsOptional()
+    @IsString()
+    observacion?: string;
+}
+
+export class ChecklistResponseDto {
+    @ApiProperty({ example: 1, description: 'ID de la categoría' })
+    tipo_chequeo_id: number;
+
+    @ApiProperty({ example: 'Supervisión Nocturna' })
+    nombre: string;
+
+    @ApiProperty({ type: [TipoChequeoItemDto] })
+    items: TipoChequeoItemDto[];
+}
+
+// ==========================================
 // MI RUTA ASIGNADA
 // ==========================================
 
@@ -266,6 +318,16 @@ export class CrearMinutaRutaDto {
     @IsOptional()
     @IsNumber()
     longitud?: number;
+
+    @ApiPropertyOptional({
+        type: [RespuestaCheckItemDto],
+        description: 'Resultados del checklist granular (ítems Sí/No/NA)'
+    })
+    @IsOptional()
+    @IsArray()
+    @ValidateNested({ each: true })
+    @Type(() => RespuestaCheckItemDto)
+    check_items?: RespuestaCheckItemDto[];
 }
 
 export class CrearMinutaRutaResponseDto {

@@ -279,4 +279,11 @@ export class AutoservicioSupervisorController {
     getTiposChequeo() {
         return this.autoservicioService.obtenerTiposChequeo();
     }
+
+    @Get('checkeos/preguntas')
+    @ApiOperation({ summary: 'Obtener preguntas específicas del checklist por tipo' })
+    @ApiQuery({ name: 'tipo_chequeo_id', required: true, type: Number })
+    getChecklistItems(@Query('tipo_chequeo_id') tipoChequeoId: number) {
+        return this.autoservicioService.getChecklistItems(tipoChequeoId);
+    }
 }
