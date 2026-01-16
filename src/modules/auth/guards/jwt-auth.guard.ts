@@ -13,7 +13,7 @@ export class JwtAuthGuard implements CanActivate {
   constructor(
     private readonly supabaseService: SupabaseService,
     private readonly authService: AuthService
-  ) {}
+  ) { }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
@@ -40,16 +40,31 @@ export class JwtAuthGuard implements CanActivate {
         throw new InternalServerErrorException("No se pudo obtener el perfil completo del usuario.");
       }
 
+      // ✅ Obtener empleado_id si el usuario tiene uno asociado
+      let empleadoId = null;
+      const supabase = this.supabaseService.getClient();
+      const { data: empleado } = await supabase
+        .from('empleados')
+        .select('id')
+        .eq('usuario_id', perfil.user.id)
+        .maybeSingle();
+
+      if (empleado) {
+        empleadoId = empleado.id;
+      }
+
       // ✅ Inyectar usuario completo con permisos al request
       request.user = {
         ...user,
         ...perfil.user,
+        empleadoId: empleadoId, // 🔥 Agregado para endpoints de supervisor/empleado
         permisos: perfil.permisos, // 🔥 clave: el guard los podrá leer
       };
 
       console.log("🧩 [JwtAuthGuard] Usuario autenticado con permisos:", {
         id: perfil.user.id,
         nombre: perfil.user.nombre_completo,
+        empleadoId: empleadoId,
         totalPermisos: perfil.permisos?.length || 0,
       });
 

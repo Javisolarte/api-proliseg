@@ -1776,11 +1776,25 @@ export class AutoservicioService {
      */
     async getUltimaUbicacion(supervisorId: number) {
         const supabase = this.supabaseService.getClient();
+
+        // Primero obtener la ejecución activa del supervisor
+        const { data: ejecucion } = await supabase
+            .from('rutas_supervision_ejecucion')
+            .select('id')
+            .eq('supervisor_id', supervisorId)
+            .eq('estado', 'en_progreso')
+            .maybeSingle();
+
+        if (!ejecucion) {
+            throw new NotFoundException('No tienes supervisión activa');
+        }
+
+        // Ahora buscar el último evento de esa ejecución
         const { data, error } = await supabase
             .from('rutas_supervision_eventos')
             .select('*')
-            .eq('empleado_id', supervisorId)
-            .order('fecha', { ascending: false })
+            .eq('ejecucion_id', ejecucion.id)
+            .order('created_at', { ascending: false })
             .limit(1)
             .maybeSingle();
 
@@ -1790,7 +1804,7 @@ export class AutoservicioService {
         return {
             latitud: parseFloat(data.lat),
             longitud: parseFloat(data.lng),
-            fecha: data.fecha,
+            fecha: data.created_at,
             tipo_evento: data.tipo_evento
         };
     }
