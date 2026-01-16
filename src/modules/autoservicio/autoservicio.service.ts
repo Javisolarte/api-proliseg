@@ -1667,29 +1667,88 @@ export class AutoservicioService {
     }
 
     /**
-     * Obtiene supervisión activa del supervisor
+     * Obtiene el turno activo del supervisor (turno de hoy)
+     * CORREGIDO: Busca en tabla turnos con fecha de hoy
      */
     async obtenerSupervisionActiva(supervisorId: number) {
         const supabase = this.supabaseService.getClient();
+        const hoy = new Date().toISOString().split('T')[0];
 
-        const { data, error } = await supabase
-            .from('rutas_supervision_ejecucion')
-            .select(`
-                *,
-                rutas_supervision_asignacion (
-                    rutas_supervision (nombre)
-                )
-            `)
-            .eq('supervisor_id', supervisorId)
-            .eq('estado', 'en_progreso')
+        // Buscar turno del supervisor para hoy
+        const { data: turno, error } = await supabase
+            .from('turnos')
+            .select('*')
+            .eq('empleado_id', supervisorId)
+            .eq('fecha', hoy)
             .maybeSingle();
 
         if (error) throw error;
-        if (!data) {
-            throw new NotFoundException('No tienes supervisión activa');
+
+        if (!turno) {
+            throw new NotFoundException('No tienes turno programado para hoy');
         }
 
-        return data;
+        return turno;
+    }
+
+    /**
+     * Obtiene la ruta asignada al turno de hoy
+     * NUEVO: Método que busca correctamente en rutas_supervision_asignacion
+     */
+    async obtenerRutaAsignadaHoy(supervisorId: number) {
+        const supabase = this.supabaseService.getClient();
+
+        // 1. Obtener turno de hoy
+        const turno = await this.obtenerSupervisionActiva(supervisorId);
+
+        // 2. Buscar asignación de ruta para este turno
+        const { data: asignacion, error: errorAsign } = await supabase
+            .from('rutas_supervision_asignacion')
+            .select(`
+                *,
+                ruta:rutas_supervision!ruta_id(
+                    *,
+                    puntos:rutas_supervision_puntos(
+                        *,
+                        orden,
+                        puesto:puestos_trabajo(*)
+                    )
+                ),
+                vehiculo:vehiculos(*),
+                turno:turnos(*)
+            `)
+            .eq('turno_id', turno.id)
+            .eq('activo', true)
+            .maybeSingle();
+
+        if (errorAsign) throw errorAsign;
+
+        if (!asignacion) {
+            throw new NotFoundException('No tienes ruta asignada para tu turno de hoy');
+        }
+
+        // 3. Verificar si ya se inició la ejecución
+        const { data: ejecucion } = await supabase
+            .from('rutas_supervision_ejecucion')
+            .select('*')
+            .eq('ruta_asignacion_id', asignacion.id)
+            .in('estado', ['iniciada', 'en_progreso'])
+            .maybeSingle();
+
+        // 4. Ordenar puntos por orden
+        if (asignacion.ruta?.puntos) {
+            asignacion.ruta.puntos = asignacion.ruta.puntos.sort((a, b) => a.orden - b.orden);
+        }
+
+        return {
+            turno,
+            asignacion,
+            ruta: asignacion.ruta,
+            vehiculo: asignacion.vehiculo,
+            ejecucion: ejecucion || null,
+            estado: ejecucion ? (ejecucion.estado || 'en_progreso') : 'no_iniciada',
+            puntos: asignacion.ruta?.puntos || []
+        };
     }
 
     /**
@@ -2273,12 +2332,38 @@ export class AutoservicioService {
     }
 
     /**
-     * Obtiene el vehículo asignado al supervisor para hoy
+     * Obtiene el vehículo asignado al supervisor
+     * CORREGIDO: Busca primero en asignación de turno, luego en asignación permanente
      */
     async getVehiculoAsignadoHoy(supervisorId: number) {
         const supabase = this.supabaseService.getClient();
 
-        const { data: vehiculo, error } = await supabase
+        //  Opción 1: Buscar en asignación del turno
+        try {
+            const turno = await this.obtenerSupervisionActiva(supervisorId);
+
+            const { data: asignacion } = await supabase
+                .from('rutas_supervision_asignacion')
+                .select('vehiculo_id, vehiculo:vehiculos(*)')
+                .eq('turno_id', turno.id)
+                .eq('activo', true)
+                .not('vehiculo_id', 'is', null)
+                .maybeSingle();
+
+            if (asignacion?.vehiculo) {
+                return {
+                    vehiculo: asignacion.vehiculo,
+                    asignacion_tipo: 'turno',
+                    turno_id: turno.id,
+                    tiene_asignacion: true
+                };
+            }
+        } catch (error) {
+            // Si no hay turno hoy, continuar a verificar asignación permanente
+        }
+
+        // Opción 2: Fallback a asignación permanente
+        const { data: vehiculoPermanente, error } = await supabase
             .from('supervisor_vehiculos')
             .select(`
                 *,
@@ -2290,19 +2375,68 @@ export class AutoservicioService {
 
         if (error) throw error;
 
-        if (!vehiculo) {
+        if (!vehiculoPermanente || !vehiculoPermanente.vehiculo) {
             return {
                 mensaje: 'No tienes vehículo asignado',
-                vehiculo: null
+                vehiculo: null,
+                tiene_asignacion: false
             };
         }
 
         return {
-            vehiculo: vehiculo.vehiculo,
-            fecha_asignacion: vehiculo.fecha_asignacion
+            vehiculo: vehiculoPermanente.vehiculo,
+            asignacion_tipo: 'permanente',
+            fecha_asignacion: vehiculoPermanente.fecha_asignacion,
+            tiene_asignacion: true
+        };
+    }
+
+    /**
+     * Obtiene los documentos del vehículo asignado
+     * NUEVO: Endpoint para ver documentos del vehículo desde la app móvil
+     */
+    async getVehiculoDocumentos(supervisorId: number) {
+        const vehiculoData = await this.getVehiculoAsignadoHoy(supervisorId);
+
+        if (!vehiculoData.tiene_asignacion || !vehiculoData.vehiculo) {
+            throw new NotFoundException('No tienes vehículo asignado');
+        }
+
+        const v = vehiculoData.vehiculo;
+        const hoy = new Date();
+
+        return {
+            vehiculo: {
+                id: v.id,
+                placa: v.placa,
+                tipo: v.tipo,
+                marca: v.marca,
+                modelo: v.modelo,
+                cilindraje: v.cilindraje
+            },
+            asignacion_tipo: vehiculoData.asignacion_tipo,
+            documentos: {
+                soat: {
+                    url: v.url_soat,
+                    vencimiento: v.soat_vencimiento,
+                    vigente: v.soat_vencimiento ? new Date(v.soat_vencimiento) > hoy : false,
+                    dias_para_vencer: v.soat_vencimiento
+                        ? Math.ceil((new Date(v.soat_vencimiento).getTime() - hoy.getTime()) / (1000 * 60 * 60 * 24))
+                        : null
+                },
+                tecnomecanica: {
+                    url: v.url_tecnomecanica,
+                    vencimiento: v.tecnomecanica_vencimiento,
+                    vigente: v.tecnomecanica_vencimiento ? new Date(v.tecnomecanica_vencimiento) > hoy : false,
+                    dias_para_vencer: v.tecnomecanica_vencimiento
+                        ? Math.ceil((new Date(v.tecnomecanica_vencimiento).getTime() - hoy.getTime()) / (1000 * 60 * 60 * 24))
+                        : null
+                },
+                tarjeta_propiedad: {
+                    url: v.url_tarjeta_propiedad,
+                    numero: v.tarjeta_propietario
+                }
+            }
         };
     }
 }
-
-
-

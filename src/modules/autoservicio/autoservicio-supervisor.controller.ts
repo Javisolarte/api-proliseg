@@ -51,7 +51,25 @@ export class AutoservicioSupervisorController {
 
     // 2. Turno Activo
     @Get('turno-activo')
-    @ApiOperation({ summary: 'Obtener Turno Activo del Supervisor' })
+    @ApiOperation({
+        summary: 'Obtener Turno Activo',
+        description: 'Retorna el turno programado para el supervisor en la fecha actual'
+    })
+    @ApiResponse({
+        status: 200,
+        description: 'Turno encontrado',
+        schema: {
+            example: {
+                id: 123,
+                empleado_id: 45,
+                fecha: '2026-01-16',
+                hora_inicio: '07:00',
+                hora_fin: '19:00',
+                tipo_turno: 'diurno'
+            }
+        }
+    })
+    @ApiResponse({ status: 404, description: 'No tienes turno programado para hoy' })
     getTurnoActivo(@Request() req) {
         const supervisorId = req.user.empleadoId;
         return this.autoservicioService.obtenerSupervisionActiva(supervisorId);
@@ -59,7 +77,31 @@ export class AutoservicioSupervisorController {
 
     // 3. Ruta Actual del Turno
     @Get('ruta-actual')
-    @ApiOperation({ summary: 'Obtener Ruta Actual del Turno' })
+    @ApiOperation({
+        summary: 'Obtener Ruta Asignada',
+        description: 'Retorna la ruta asignada al turno del supervisor, incluyendo todos los puntos a visitar, vehículo asignado y estado de ejecución (iniciada o pendiente)'
+    })
+    @ApiResponse({
+        status: 200,
+        description: 'Ruta asignada',
+        schema: {
+            example: {
+                turno: { id: 123, fecha: '2026-01-16' },
+                ruta: {
+                    id: 5,
+                    nombre: 'Ruta Norte',
+                    puntos: [
+                        { orden: 1, puesto: { nombre: 'Puesto A', direccion: '...' } },
+                        { orden: 2, puesto: { nombre: 'Puesto B', direccion: '...' } }
+                    ]
+                },
+                vehiculo: { placa: 'ABC123', tipo: 'carro' },
+                estado: 'no_iniciada',
+                ejecucion: null
+            }
+        }
+    })
+    @ApiResponse({ status: 404, description: 'Sin turno o ruta asignada' })
     getRutaActual(@Request() req) {
         const supervisorId = req.user.empleadoId;
         return this.autoservicioService.obtenerRutaAsignadaHoy(supervisorId);
@@ -159,10 +201,65 @@ export class AutoservicioSupervisorController {
 
     // 16. Vehículo Asignado
     @Get('vehiculo')
-    @ApiOperation({ summary: 'Ver Vehículo Asignado al Turno' })
+    @ApiOperation({
+        summary: 'Ver Vehículo Asignado',
+        description: 'Obtiene el vehículo asignado al turno del supervisor. Busca primero en asignación del turno, luego en asignación permanente.'
+    })
+    @ApiResponse({
+        status: 200,
+        description: 'Vehículo encontrado',
+        schema: {
+            example: {
+                vehiculo: { id: 1, placa: 'ABC123', tipo: 'carro', marca: 'Toyota', modelo: 'Hilux' },
+                asignacion_tipo: 'turno',
+                tiene_asignacion: true
+            }
+        }
+    })
+    @ApiResponse({ status: 200, description: 'Sin vehículo asignado', schema: { example: { mensaje: 'No tienes vehículo asignado', vehiculo: null, tiene_asignacion: false } } })
     getVehiculoAsignado(@Request() req) {
         const supervisorId = req.user.empleadoId;
         return this.autoservicioService.getVehiculoAsignadoHoy(supervisorId);
+    }
+
+    // 17. Documentos del Vehículo (NUEVO)
+    @Get('vehiculo/documentos')
+    @ApiOperation({
+        summary: 'Ver Documentos del Vehículo',
+        description: 'Obtiene los documentos del vehículo asignado: SOAT, tecnomecánica y tarjeta de propiedad con estado de vigencia y URLs para visualización'
+    })
+    @ApiResponse({
+        status: 200,
+        description: 'Documentos del vehículo',
+        schema: {
+            example: {
+                vehiculo: { placa: 'ABC123', tipo: 'carro', marca: 'Toyota', modelo: 'Hilux' },
+                asignacion_tipo: 'turno',
+                documentos: {
+                    soat: {
+                        url: 'https://bucket.com/soat.pdf',
+                        vencimiento: '2026-12-31',
+                        vigente: true,
+                        dias_para_vencer: 349
+                    },
+                    tecnomecanica: {
+                        url: 'https://bucket.com/tecno.pdf',
+                        vencimiento: '2026-06-30',
+                        vigente: true,
+                        dias_para_vencer: 165
+                    },
+                    tarjeta_propiedad: {
+                        url: 'https://bucket.com/tarjeta.pdf',
+                        numero: 'TP123456789'
+                    }
+                }
+            }
+        }
+    })
+    @ApiResponse({ status: 404, description: 'No tiene vehículo asignado' })
+    getVehiculoDocumentos(@Request() req) {
+        const supervisorId = req.user.empleadoId;
+        return this.autoservicioService.getVehiculoDocumentos(supervisorId);
     }
 
     // --- NUEVOS ENDPOINTS AVANZADOS ---
