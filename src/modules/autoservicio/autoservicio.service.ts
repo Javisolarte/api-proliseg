@@ -979,14 +979,6 @@ export class AutoservicioService {
     // ------------------------------------------------------------------
 
     /**
-     * Obtiene la ruta asignada al supervisor para hoy
-     */
-    async obtenerRutaAsignadaHoy(supervisorId: number) {
-        const hoy = new Date().toISOString().split('T')[0];
-        return this.obtenerRutaAsignadaFecha(supervisorId, hoy);
-    }
-
-    /**
      * Obtiene la ruta asignada al supervisor para una fecha específica
      */
     async obtenerRutaAsignadaFecha(supervisorId: number, fecha: string) {
