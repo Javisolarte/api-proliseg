@@ -1747,10 +1747,10 @@ export class AutoservicioService {
         const empleado = await this.getEmpleadoByUserId(userId);
         const supabase = this.supabaseService.getClient();
 
-        // Obtener información del usuario para incluir email y rol
+        // Obtener información del usuario para incluir correo y rol
         const { data: usuario, error: userError } = await supabase
             .from('usuarios_externos')
-            .select('id, email, rol')
+            .select('id, correo, rol')
             .eq('id', userId)
             .single();
 
