@@ -1957,28 +1957,6 @@ export class AutoservicioService {
         return data;
     }
 
-    /**
-     * Obtiene datos del vehículo asignado hoy
-     */
-    async getVehiculoAsignadoHoy(supervisorId: number) {
-        const supabase = this.supabaseService.getClient();
-        const hoy = new Date().toISOString().split('T')[0];
-        const { data, error } = await supabase
-            .from('rutas_supervision_asignacion')
-            .select(`
-                vehiculo_id,
-                vehiculos (id, placa, tipo, marca, modelo)
-            `)
-            .eq('supervisor_id', supervisorId)
-            .eq('activo', true)
-            .gte('created_at', hoy)
-            .maybeSingle();
-
-        if (error) throw error;
-        if (!data || !data.vehiculos) throw new NotFoundException('No tienes vehículo asignado para hoy');
-        return Array.isArray(data.vehiculos) ? data.vehiculos[0] : data.vehiculos;
-    }
-
     // Helper: calcular duración
     private calcularDuracion(inicio: string, fin: string): string {
         const duracionMs = new Date(fin).getTime() - new Date(inicio).getTime();
@@ -1987,6 +1965,7 @@ export class AutoservicioService {
         const mins = minutos % 60;
         return `${horas}h ${mins}m`;
     }
+
 
     /**
      * Registra Heartbeat del supervisor (Estado del dispositivo)
@@ -2249,10 +2228,23 @@ export class AutoservicioService {
      */
     async getDispositivoInfo(supervisorId: number) {
         const supabase = this.supabaseService.getClient();
+
+        // Obtener la ejecución activa del supervisor
+        const { data: ejecucion } = await supabase
+            .from('rutas_supervision_ejecucion')
+            .select('id')
+            .eq('supervisor_id', supervisorId)
+            .eq('estado', 'en_progreso')
+            .maybeSingle();
+
+        if (!ejecucion) {
+            return { registrado: false, detalle: 'No hay supervisión activa' };
+        }
+
         const { data } = await supabase
             .from('rutas_supervision_eventos')
             .select('*')
-            .eq('empleado_id', supervisorId)
+            .eq('ejecucion_id', ejecucion.id)
             .ilike('observacion', '%DISPOSITIVO:%')
             .order('created_at', { ascending: false })
             .limit(1)
@@ -2278,6 +2270,37 @@ export class AutoservicioService {
 
         if (error) throw error;
         return data;
+    }
+
+    /**
+     * Obtiene el vehículo asignado al supervisor para hoy
+     */
+    async getVehiculoAsignadoHoy(supervisorId: number) {
+        const supabase = this.supabaseService.getClient();
+
+        const { data: vehiculo, error } = await supabase
+            .from('supervisor_vehiculos')
+            .select(`
+                *,
+                vehiculo:vehiculos(*)
+            `)
+            .eq('supervisor_id', supervisorId)
+            .eq('activo', true)
+            .maybeSingle();
+
+        if (error) throw error;
+
+        if (!vehiculo) {
+            return {
+                mensaje: 'No tienes vehículo asignado',
+                vehiculo: null
+            };
+        }
+
+        return {
+            vehiculo: vehiculo.vehiculo,
+            fecha_asignacion: vehiculo.fecha_asignacion
+        };
     }
 }
 
