@@ -1741,22 +1741,34 @@ export class AutoservicioService {
     }
 
     /**
-     * Obtiene el perfil operativo del supervisor
+     * Obtiene el perfil operativo completo del supervisor
      */
     async getPerfilSupervisor(userId: number) {
+        const empleado = await this.getEmpleadoByUserId(userId);
         const supabase = this.supabaseService.getClient();
-        const { data, error } = await supabase
+
+        // Obtener información del usuario para incluir email y rol
+        const { data: usuario, error: userError } = await supabase
             .from('usuarios_externos')
-            .select(`
-                id, email, rol,
-                empleados (
-                    id, nombre_completo, cedula, cargo, celular, foto_url
-                )
-            `)
+            .select('id, email, rol')
             .eq('id', userId)
             .single();
-        if (error) throw error;
-        return data;
+
+        if (userError) throw userError;
+
+        // Retornar perfil completo sin métricas sensibles
+        const {
+            nivel_confianza,
+            riesgo_ausencia,
+            rendimiento_promedio,
+            ultima_evaluacion,
+            ...perfilSeguro
+        } = empleado;
+
+        return {
+            ...usuario,
+            empleado: perfilSeguro
+        };
     }
 
     /**
