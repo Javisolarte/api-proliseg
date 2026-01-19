@@ -1,13 +1,17 @@
 ALTER TABLE public.turnos_configuracion 
 ADD COLUMN IF NOT EXISTS tipo_proyeccion varchar DEFAULT 'ciclico' 
-CHECK (tipo_proyeccion IN ('ciclico', 'semanal_reglas'));
+CHECK (tipo_proyeccion IN ('ciclico', 'semanal_reglas')),
+ADD COLUMN IF NOT EXISTS creado_por integer,
+ADD COLUMN IF NOT EXISTS actualizado_por integer,
+ADD COLUMN IF NOT EXISTS updated_at timestamp with time zone DEFAULT now();
 
 -- 2. MODIFICAR DETALLES
 ALTER TABLE public.turnos_detalle_configuracion
 ADD COLUMN IF NOT EXISTS dias_semana integer[], 
 ADD COLUMN IF NOT EXISTS aplica_festivos varchar DEFAULT 'indiferente' 
 CHECK (aplica_festivos IN ('indiferente', 'no_aplica', 'solo_festivos')),
-ADD COLUMN IF NOT EXISTS created_at timestamp with time zone DEFAULT now();
+ADD COLUMN IF NOT EXISTS created_at timestamp with time zone DEFAULT now(),
+ADD COLUMN IF NOT EXISTS actualizado_por integer;
 
 -- 3. MODIFICAR ASIGNACIÓN
 ALTER TABLE public.asignacion_guardas_puesto
@@ -17,6 +21,10 @@ ADD COLUMN IF NOT EXISTS patron_descanso varchar DEFAULT NULL,
 ADD COLUMN IF NOT EXISTS fecha_inicio_patron date DEFAULT CURRENT_DATE,
 ADD COLUMN IF NOT EXISTS created_at timestamp with time zone DEFAULT now(),
 ADD COLUMN IF NOT EXISTS updated_at timestamp with time zone DEFAULT now();
+
+-- 4. MODIFICAR TURNOS
+ALTER TABLE public.turnos
+ADD COLUMN IF NOT EXISTS observaciones text;
 
 -- A. CREAR CONFIGURACIÓN "MIXTA JACOME" (ITEM 14)
 INSERT INTO public.turnos_configuracion (nombre, descripcion, dias_ciclo, tipo_proyeccion, activo)

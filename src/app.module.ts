@@ -71,6 +71,7 @@ import { ComunicacionesModule } from './modules/comunicaciones/comunicaciones.mo
 import { AspirantesModule } from './modules/aspirantes/aspirantes.module';
 import { FileManagerModule } from './modules/file-manager/file-manager.module';
 import { FestivosModule } from './modules/festivos/festivos.module';
+import { CorreosCorporativosModule } from './modules/correos-corporativos/correos-corporativos.module';
 
 @Module({
   imports: [
@@ -153,6 +154,7 @@ import { FestivosModule } from './modules/festivos/festivos.module';
     FileManagerModule,
     FestivosModule,
     HelpersModule,
+    CorreosCorporativosModule,
   ],
   providers: [],
 })
