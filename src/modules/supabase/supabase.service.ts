@@ -74,7 +74,7 @@ export class SupabaseService implements OnModuleInit {
   }
   /** Sube un archivo a Supabase Storage */
   async uploadFile(bucket: string, path: string, file: Buffer, mimeType: string): Promise<string> {
-    const { data, error } = await this.supabaseClient.storage
+    const { data, error } = await this.supabaseAdmin.storage
       .from(bucket)
       .upload(path, file, {
         contentType: mimeType,
@@ -91,7 +91,7 @@ export class SupabaseService implements OnModuleInit {
 
   /** Obtiene una URL firmada para descarga temporal */
   async getSignedUrl(bucket: string, path: string, expiresIn: number = 3600): Promise<string> {
-    const { data, error } = await this.supabaseClient.storage
+    const { data, error } = await this.supabaseAdmin.storage
       .from(bucket)
       .createSignedUrl(path, expiresIn);
 
@@ -105,7 +105,7 @@ export class SupabaseService implements OnModuleInit {
 
   /** Elimina un archivo de Supabase Storage */
   async deleteFile(bucket: string, path: string): Promise<void> {
-    const { error } = await this.supabaseClient.storage
+    const { error } = await this.supabaseAdmin.storage
       .from(bucket)
       .remove([path]);
 
