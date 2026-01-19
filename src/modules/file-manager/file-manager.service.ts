@@ -1,5 +1,4 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger } from '@nestjs/common';
-import 'multer';
 import { SupabaseService } from '../../database/supabase.service';
 import { CreateFolderDto, UpdateFolderDto } from './dto/folder-operations.dto';
 import { MoveFolderDto, MoveFileDto } from './dto/move-item.dto';
@@ -142,7 +141,7 @@ export class FileManagerService {
 
     // --- C. Gestión de Archivos ---
 
-    async uploadFile(userId: number, file: Express.Multer.File, carpetaId: string | null) {
+    async uploadFile(userId: number, file: any, carpetaId: string | null) {
         const archivoId = randomUUID();
         const versionNum = 1;
         const extension = file.originalname.split('.').pop();
@@ -261,7 +260,7 @@ export class FileManagerService {
 
     // --- D. Versionamiento ---
 
-    async newVersion(userId: number, id: string, file: Express.Multer.File, dto: CreateVersionDto) {
+    async newVersion(userId: number, id: string, file: any, dto: CreateVersionDto) {
         const { data: lastVer } = await this.getDb().from('fm_versiones').select('version').eq('archivo_id', id).order('version', { ascending: false }).limit(1).single();
         const newVerNum = (lastVer?.version || 0) + 1;
         const storagePath = `${userId}/${id}/${newVerNum}_${file.originalname}`;

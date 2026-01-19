@@ -1,5 +1,4 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseInterceptors, UploadedFile, UseGuards, BadRequestException } from '@nestjs/common';
-import 'multer';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiResponse, ApiConsumes, ApiBody, ApiQuery, ApiParam, ApiBearerAuth } from '@nestjs/swagger';
 import { FileManagerService } from './file-manager.service';
@@ -100,7 +99,7 @@ export class FileManagerController {
     @UseInterceptors(FileInterceptor('file'))
     async uploadFile(
         @CurrentUser() user: any,
-        @UploadedFile() file: Express.Multer.File,
+        @UploadedFile() file: any,
         @Body('carpetaId') carpetaId?: string
     ) {
         return this.fileManagerService.uploadFile(user.id, file, carpetaId || null);
@@ -179,7 +178,7 @@ export class FileManagerController {
     async newVersion(
         @CurrentUser() user: any,
         @Param('id') id: string,
-        @UploadedFile() file: Express.Multer.File,
+        @UploadedFile() file: any,
         @Body() dto: CreateVersionDto
     ) {
         return this.fileManagerService.newVersion(user.id, id, file, dto);
