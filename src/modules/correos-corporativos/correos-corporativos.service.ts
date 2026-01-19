@@ -163,7 +163,7 @@ export class CorreosCorporativosService {
             .select(`
             *,
             correos_corporativos (direccion_correo, proveedor, estado),
-            empleados (id, nombre_completo, numero_documento),
+            empleados (id, nombre_completo),
             usuarios_externos:asignado_por (nombre)
         `);
 
