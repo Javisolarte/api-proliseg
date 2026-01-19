@@ -88,7 +88,6 @@ export class TurnosConfiguracionService {
         hora_fin: detalle.hora_fin,
         plazas: detalle.plazas ?? 1,
         dias_semana: detalle.dias_semana ?? null,
-        dias_semana: detalle.dias_semana ?? null,
         aplica_festivos: detalle.aplica_festivos ?? 'indiferente',
       }));
 

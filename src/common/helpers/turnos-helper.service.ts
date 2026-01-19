@@ -46,6 +46,14 @@ export class TurnosHelperService {
     async calcularEstadosCiclo(configuracionId: number): Promise<number> {
         const supabase = this.supabaseService.getClient();
 
+        // 1. Obtener el tipo de configuración para saber si sumamos relevos
+        const { data: config } = await supabase
+            .from('turnos_configuracion')
+            .select('tipo_proyeccion')
+            .eq('id', configuracionId)
+            .single();
+
+        // 2. Obtener detalles
         const { data: detalles, error } = await supabase
             .from('turnos_detalle_configuracion')
             .select('tipo')
@@ -55,15 +63,26 @@ export class TurnosHelperService {
             this.logger.warn(
                 `⚠️ No se encontraron detalles para configuración ${configuracionId}, usando valor por defecto 3`,
             );
-            return 3; // Valor por defecto para 2D-2N-2Z
+            return 3; // Valor por defecto para ciclo 2x2x2
         }
 
         // Contar estados únicos
         const estadosUnicos = new Set(detalles.map((d) => d.tipo));
-        const count = estadosUnicos.size;
+        let count = estadosUnicos.size;
+
+        // 3. Ajuste Crítico para Sistema Flexible (Semanal/Reglas)
+        // En este sistema, cada posición (Día/Noche) necesita cobertura de relevo por ley
+        if (config?.tipo_proyeccion === 'semanal_reglas') {
+            // Si no hay un estado de DESCANSO explícito en la configuración, 
+            // sumamos 1 virtualmente para permitir la asignación del "Relevante" (Turnero)
+            if (!estadosUnicos.has('DESCANSO')) {
+                count = count + 1;
+                this.logger.log(`➕ Sistema semanal detectado: sumando 1 cupo para relevante/turnero`);
+            }
+        }
 
         this.logger.log(
-            `📋 Configuración ${configuracionId} tiene ${count} estados: ${Array.from(estadosUnicos).join(', ')}`,
+            `📋 Configuración ${configuracionId} (${config?.tipo_proyeccion || 'ciclico'}) tiene ${count} estados efectivos: ${Array.from(estadosUnicos).join(', ')}`,
         );
 
         return count;
