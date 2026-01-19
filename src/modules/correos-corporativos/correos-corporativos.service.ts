@@ -164,7 +164,7 @@ export class CorreosCorporativosService {
             *,
             correos_corporativos (direccion_correo, proveedor, estado),
             empleados (id, nombre_completo),
-            usuarios_externos:asignado_por (nombre)
+            usuarios_externos:asignado_por (nombre_completo)
         `);
 
         if (correoId) query = query.eq('correo_id', correoId);
