@@ -14,14 +14,14 @@ export class CorreosCorporativosController {
     constructor(private readonly correosService: CorreosCorporativosService) { }
 
     @Get()
-    @RequirePermissions('correos_corporativos.read')
+    @RequirePermissions('correos')
     @ApiOperation({ summary: 'Listar todos los correos corporativos' })
     async findAll() {
         return this.correosService.findAll();
     }
 
     @Get('asignaciones')
-    @RequirePermissions('correos_corporativos.read')
+    @RequirePermissions('correos')
     @ApiOperation({ summary: 'Listar historial de asignaciones' })
     @ApiQuery({ name: 'empleadoId', required: false })
     @ApiQuery({ name: 'correoId', required: false })
@@ -33,42 +33,42 @@ export class CorreosCorporativosController {
     }
 
     @Get(':id')
-    @RequirePermissions('correos_corporativos.read')
+    @RequirePermissions('correos')
     @ApiOperation({ summary: 'Obtener un correo por ID' })
     async findOne(@Param('id') id: number) {
         return this.correosService.findOne(id);
     }
 
     @Post()
-    @RequirePermissions('correos_corporativos.create')
+    @RequirePermissions('correos')
     @ApiOperation({ summary: 'Crear nuevo correo corporativo' })
     async create(@Body() createCorreoDto: CreateCorreoDto) {
         return this.correosService.create(createCorreoDto);
     }
 
     @Put(':id')
-    @RequirePermissions('correos_corporativos.update')
+    @RequirePermissions('correos')
     @ApiOperation({ summary: 'Actualizar correo corporativo' })
     async update(@Param('id') id: number, @Body() updateCorreoDto: UpdateCorreoDto) {
         return this.correosService.update(id, updateCorreoDto);
     }
 
     @Delete(':id')
-    @RequirePermissions('correos_corporativos.delete')
+    @RequirePermissions('correos')
     @ApiOperation({ summary: 'Eliminar (soft delete) correo corporativo' })
     async remove(@Param('id') id: number) {
         return this.correosService.remove(id);
     }
 
     @Post('asignar')
-    @RequirePermissions('correos_corporativos.assign')
+    @RequirePermissions('correos')
     @ApiOperation({ summary: 'Asignar correo a empleado' })
     async asignar(@Body() dto: AsignarCorreoDto) {
         return this.correosService.asignarCorreo(dto);
     }
 
     @Post('devolver/:asignacionId')
-    @RequirePermissions('correos_corporativos.assign')
+    @RequirePermissions('correos')
     @ApiOperation({ summary: 'Registrar devolución de correo' })
     async devolver(@Param('asignacionId') asignacionId: number, @Body() dto: DevolverCorreoDto) {
         return this.correosService.devolverCorreo(asignacionId, dto);
