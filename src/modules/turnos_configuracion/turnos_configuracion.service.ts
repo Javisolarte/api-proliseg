@@ -67,8 +67,6 @@ export class TurnosConfiguracionService {
         ...configData,
         activo: dto.activo ?? true,
         tipo_proyeccion: dto.tipo_proyeccion ?? 'ciclico',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
       })
       .select()
       .single();
@@ -142,7 +140,6 @@ export class TurnosConfiguracionService {
       .from("turnos_configuracion")
       .update({
         ...dto,
-        updated_at: new Date().toISOString(),
       })
       .eq("id", id)
       .select()
@@ -179,7 +176,6 @@ export class TurnosConfiguracionService {
       .from("turnos_configuracion")
       .update({
         activo: false,
-        updated_at: new Date().toISOString(),
       })
       .eq("id", id)
       .select()

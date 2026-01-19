@@ -1,8 +1,6 @@
 ALTER TABLE public.turnos_configuracion 
 ADD COLUMN IF NOT EXISTS tipo_proyeccion varchar DEFAULT 'ciclico' 
-CHECK (tipo_proyeccion IN ('ciclico', 'semanal_reglas')),
-ADD COLUMN IF NOT EXISTS created_at timestamp with time zone DEFAULT now(),
-ADD COLUMN IF NOT EXISTS updated_at timestamp with time zone DEFAULT now();
+CHECK (tipo_proyeccion IN ('ciclico', 'semanal_reglas'));
 
 -- 2. MODIFICAR DETALLES
 ALTER TABLE public.turnos_detalle_configuracion
