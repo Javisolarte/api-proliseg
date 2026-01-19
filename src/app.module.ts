@@ -70,6 +70,7 @@ import { MemorandosModule } from './modules/memorandos/memorandos.module';
 import { ComunicacionesModule } from './modules/comunicaciones/comunicaciones.module';
 import { AspirantesModule } from './modules/aspirantes/aspirantes.module';
 import { FileManagerModule } from './modules/file-manager/file-manager.module';
+import { FestivosModule } from './modules/festivos/festivos.module';
 
 @Module({
   imports: [
@@ -150,6 +151,7 @@ import { FileManagerModule } from './modules/file-manager/file-manager.module';
     GeocercasModule,
     AspirantesModule,
     FileManagerModule,
+    FestivosModule,
     HelpersModule,
   ],
   providers: [],

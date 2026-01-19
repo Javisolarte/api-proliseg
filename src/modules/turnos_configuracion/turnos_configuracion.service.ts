@@ -9,7 +9,7 @@ import type {
 export class TurnosConfiguracionService {
   private readonly logger = new Logger(TurnosConfiguracionService.name);
 
-  constructor(private readonly supabaseService: SupabaseService) {}
+  constructor(private readonly supabaseService: SupabaseService) { }
 
   // 🔹 Listar todas las configuraciones
   async findAll() {
@@ -52,16 +52,21 @@ export class TurnosConfiguracionService {
     return data;
   }
 
-  // 🔹 Crear configuración
+  // 🔹 Crear configuración CON detalles
   async create(dto: CreateTurnoConfiguracionDto, userId: number) {
     const supabase = this.supabaseService.getClient();
     this.logger.log(`🟢 Creando nueva configuración de turno por usuario ${userId}`);
 
-    const { data, error } = await supabase
+    // Extraer detalles del DTO para insertarlos por separado
+    const { detalles, ...configData } = dto;
+
+    // 1. Insertar configuración principal
+    const { data: config, error: configError } = await supabase
       .from("turnos_configuracion")
       .insert({
-        ...dto,
+        ...configData,
         activo: dto.activo ?? true,
+        tipo_proyeccion: dto.tipo_proyeccion ?? 'ciclico',
         creado_por: userId,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -69,14 +74,54 @@ export class TurnosConfiguracionService {
       .select()
       .single();
 
-    if (error) {
-      this.logger.error("❌ Error al crear configuración de turno", error);
-      throw error;
+    if (configError) {
+      this.logger.error("❌ Error al crear configuración de turno", configError);
+      throw configError;
     }
 
-    this.logger.log(`✅ Configuración creada con ID: ${data.id}`);
-    return data;
+    this.logger.log(`✅ Configuración creada con ID: ${config.id}`);
+
+    // 2. Insertar detalles si existen
+    if (detalles && detalles.length > 0) {
+      const detallesConConfigId = detalles.map(detalle => ({
+        configuracion_id: config.id,
+        orden: detalle.orden,
+        tipo: detalle.tipo,
+        hora_inicio: detalle.hora_inicio,
+        hora_fin: detalle.hora_fin,
+        plazas: detalle.plazas ?? 1,
+        dias_semana: detalle.dias_semana ?? null,
+        aplica_festivos: detalle.aplica_festivos ?? 'indiferente',
+        created_at: new Date().toISOString(),
+      }));
+
+      const { error: detallesError } = await supabase
+        .from("turnos_detalle_configuracion")
+        .insert(detallesConConfigId);
+
+      if (detallesError) {
+        this.logger.error("❌ Error al crear detalles de configuración", detallesError);
+        // Rollback: Eliminar la configuración principal si fallan los detalles
+        await supabase.from("turnos_configuracion").delete().eq("id", config.id);
+        throw detallesError;
+      }
+
+      this.logger.log(`✅ ${detalles.length} detalles/reglas insertados para configuración ${config.id}`);
+    }
+
+    // 3. Retornar configuración con sus detalles
+    const { data: configCompleta } = await supabase
+      .from("turnos_configuracion")
+      .select(`
+        *,
+        detalles:turnos_detalle_configuracion (*)
+      `)
+      .eq("id", config.id)
+      .single();
+
+    return configCompleta || config;
   }
+
 
   // 🔹 Actualizar configuración
   async update(id: number, dto: UpdateTurnoConfiguracionDto, userId: number) {

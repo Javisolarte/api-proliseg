@@ -1,5 +1,5 @@
 import { ApiProperty, PartialType } from "@nestjs/swagger";
-import { IsInt, IsOptional, IsBoolean, IsString, IsDateString } from "class-validator";
+import { IsInt, IsOptional, IsBoolean, IsString, IsDateString, IsEnum } from "class-validator";
 
 export class CreateAsignacionDto {
   @ApiProperty({ example: 1, description: "ID del empleado asignado" })
@@ -39,7 +39,37 @@ export class CreateAsignacionDto {
   @IsOptional()
   @IsInt()
   contrato_id?: number;
+
+  // --- NUEVOS CAMPOS BIOLÓGICOS ---
+  @ApiProperty({
+    example: "titular",
+    description: "Rol del empleado: titular (dueño del puesto) o relevante (turnero/cubre huecos)",
+    required: false,
+    enum: ['titular', 'relevante']
+  })
+  @IsOptional()
+  @IsEnum(['titular', 'relevante'])
+  rol_puesto?: 'titular' | 'relevante';
+
+  @ApiProperty({
+    example: "4-2",
+    description: "Patrón de descanso biológico (días trabajo - días descanso). Ej: 4-2, 5-2, 6-1",
+    required: false
+  })
+  @IsOptional()
+  @IsString()
+  patron_descanso?: string;
+
+  @ApiProperty({
+    example: "2024-02-01",
+    description: "Fecha de referencia para calcular el ciclo de descanso (día 1 del patrón)",
+    required: false
+  })
+  @IsOptional()
+  @IsDateString()
+  fecha_inicio_patron?: string;
 }
+
 
 export class UpdateAsignacionDto extends PartialType(CreateAsignacionDto) {
   @ApiProperty({ example: false, description: "Indica si la asignación está activa o no", required: false })

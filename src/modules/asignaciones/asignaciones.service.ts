@@ -205,6 +205,11 @@ export class AsignacionesService {
       contrato_id: puesto.contrato_id,
       asignado_por: dto.asignado_por,
       observaciones: dto.observaciones,
+      // --- NUEVOS CAMPOS BIOLÓGICOS ---
+      rol_puesto: dto.rol_puesto ?? 'titular',
+      patron_descanso: dto.patron_descanso ?? null,
+      fecha_inicio_patron: dto.fecha_inicio_patron ?? new Date().toISOString().split('T')[0],
+      // ---
       activo: true,
       fecha_asignacion: new Date().toISOString().split('T')[0],
       hora_asignacion: new Date().toISOString().split('T')[1].split('.')[0],
