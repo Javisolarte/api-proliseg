@@ -5,11 +5,13 @@ import { FmCarpeta } from './entities/fm-carpeta.entity';
 import { FmArchivo } from './entities/fm-archivo.entity';
 import { FmVersion } from './entities/fm-version.entity';
 import { FmPermiso } from './entities/fm-permiso.entity';
-import { DatabaseModule } from '../../database/database.module';
+import { SupabaseModule } from '../supabase/supabase.module';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
     imports: [
-        DatabaseModule, // Ensure SupabaseService is available
+        SupabaseModule,
+        AuthModule,
     ],
     controllers: [FileManagerController],
     providers: [FileManagerService],

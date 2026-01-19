@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger } from '@nestjs/common';
-import { SupabaseService } from '../../database/supabase.service';
+import { SupabaseService } from '../supabase/supabase.service';
 import { CreateFolderDto, UpdateFolderDto } from './dto/folder-operations.dto';
 import { MoveFolderDto, MoveFileDto } from './dto/move-item.dto';
 import { ShareItemDto } from './dto/share-item.dto';

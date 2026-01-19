@@ -8,12 +8,13 @@ import { ShareItemDto } from './dto/share-item.dto';
 import { CreateVersionDto, RenameFileDto } from './dto/file-operations.dto';
 import { UpdateVisibilityDto, RenameFolderDto } from './dto/visibility.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { AuthGuard } from '@nestjs/passport';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
 
 @ApiTags('File Manager')
 @ApiBearerAuth()
 @Controller('file-manager')
-@UseGuards(AuthGuard('jwt'))
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 export class FileManagerController {
     constructor(private readonly fileManagerService: FileManagerService) { }
 
