@@ -20,11 +20,6 @@
     "forceConsistentCasingInFileNames": true,
     "noImplicitAny": false,
     "strictBindCallApply": false,
-    "noFallthroughCasesInSwitch": false,
-    "types": [
-      "multer",
-      "express",
-      "node"
-    ]
+    "noFallthroughCasesInSwitch": false
   }
 }

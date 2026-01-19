@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger } from '@nestjs/common';
+import 'multer';
 import { SupabaseService } from '../../database/supabase.service';
 import { CreateFolderDto, UpdateFolderDto } from './dto/folder-operations.dto';
 import { MoveFolderDto, MoveFileDto } from './dto/move-item.dto';
