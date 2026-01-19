@@ -66,23 +66,19 @@ export class TurnosHelperService {
             return 3; // Valor por defecto para ciclo 2x2x2
         }
 
-        // Contar estados únicos
-        const estadosUnicos = new Set(detalles.map((d) => d.tipo));
-        let count = estadosUnicos.size;
-
         // 3. Ajuste Crítico para Sistema Flexible (Semanal/Reglas)
-        // En este sistema, cada posición (Día/Noche) necesita cobertura de relevo por ley
+        // En este sistema, cada posición (plaza) requiere un Titular y un Relevante/Turnero
         if (config?.tipo_proyeccion === 'semanal_reglas') {
-            // Si no hay un estado de DESCANSO explícito en la configuración, 
-            // sumamos 1 virtualmente para permitir la asignación del "Relevante" (Turnero)
-            if (!estadosUnicos.has('DESCANSO')) {
-                count = count + 1;
-                this.logger.log(`➕ Sistema semanal detectado: sumando 1 cupo para relevante/turnero`);
-            }
+            this.logger.log(`📋 Sistema semanal detectado: estableciendo 2 estados efectivos (Titular + Relevo)`);
+            return 2;
         }
 
+        // Contar estados únicos para sistema Cíclico
+        const estadosUnicos = new Set(detalles.map((d) => d.tipo));
+        const count = estadosUnicos.size;
+
         this.logger.log(
-            `📋 Configuración ${configuracionId} (${config?.tipo_proyeccion || 'ciclico'}) tiene ${count} estados efectivos: ${Array.from(estadosUnicos).join(', ')}`,
+            `📋 Configuración cíclica ${configuracionId} tiene ${count} estados efectivos: ${Array.from(estadosUnicos).join(', ')}`,
         );
 
         return count;

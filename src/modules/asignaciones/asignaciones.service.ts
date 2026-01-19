@@ -243,6 +243,7 @@ export class AsignacionesService {
     );
 
     // ✅ 7. Si hay turnos pendientes de reasignación, reasignarlos
+    this.logger.log(`🔍 Buscando turnos pendientes para reasignar a empleado ${dto.empleado_id}...`);
     const turnosReasignados = await this.reasignarTurnosPendientes(
       dto.subpuesto_id,
       dto.empleado_id
@@ -256,9 +257,10 @@ export class AsignacionesService {
 
     // ✅ 8. SOLO generar turnos si la asignación está COMPLETA
     if (validacion.valido) {
+      this.logger.log(`🎊 ¡ASIGNACIÓN COMPLETA DETECTADA! (ID Subpuesto: ${dto.subpuesto_id})`);
       try {
         this.logger.log(
-          `🎉 ¡Asignación completa! Regenerando turnos para asegurar consistencia en ${subpuesto.nombre}...`
+          `🚀 Disparando regeneración automática de turnos para "${subpuesto.nombre}"...`
         );
 
         // Usar regenerarTurnos para limpiar turnos desactualizados y generar nuevos con el equipo completo

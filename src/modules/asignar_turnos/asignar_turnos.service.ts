@@ -88,7 +88,10 @@ export class AsignarTurnosService {
     const diffTime = fechaObj.getTime() - fechaInicio.getTime();
     const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
 
-    if (diffDays < 0) return false; // Fecha anterior al inicio del patrón
+    if (diffDays < 0) {
+      this.logger.debug(`📅 Empleado ${asignacion.empleado_id} aún no iniciaba su patrón en fecha ${fechaObj.toISOString()}`);
+      return false; // Fecha anterior al inicio del patrón
+    }
 
     // La magia matemática:
     const diaEnCiclo = diffDays % cicloTotal;
@@ -380,7 +383,7 @@ export class AsignarTurnosService {
       this.logger.log('🧠 Usando Estrategia Inteligente (Reglas + Turneros)');
 
       const equipo = (empleadosRaw || []).sort((a, b) => a.id - b.id);
-      const titulares = equipo.filter(e => e.rol_puesto === 'titular');
+      const titulares = equipo.filter(e => !e.rol_puesto || e.rol_puesto === 'titular');
       const relevantes = equipo.filter(e => e.rol_puesto === 'relevante');
 
       for (let dia = 0; dia < numeroDeDiasAGenerar; dia++) {
@@ -470,15 +473,19 @@ export class AsignarTurnosService {
     }
 
     // ✅ 7. Registrar en log de generación
-    await supabase.from('turnos_generacion_log').insert({
-      puesto_id: subpuesto.puesto_id,
-      subpuesto_id: subpuesto_id,
-      configuracion_id: subpuesto.configuracion_id,
-      mes: fechaBase.getMonth() + 1,
-      año: fechaBase.getFullYear(),
-      generado_por: asignado_por,
-      descripcion: `Generados ${turnosParaInsertar.length} turnos para ${empleados.length} empleados con ${guardasActivos} activos (incluye descansos)`,
-    });
+    try {
+      await supabase.from('turnos_generacion_log').insert({
+        puesto_id: subpuesto.puesto_id,
+        subpuesto_id: subpuesto_id,
+        configuracion_id: subpuesto.configuracion_id,
+        mes: fechaBase.getMonth() + 1,
+        año: fechaBase.getFullYear(),
+        generado_por: asignado_por,
+        descripcion: `Generados ${turnosParaInsertar.length} turnos para ${empleados.length} empleados con ${guardasActivos} activos (incluye descansos)`,
+      });
+    } catch (logError) {
+      this.logger.warn('⚠️ No se pudo registrar el log de generación, pero los turnos se insertaron.');
+    }
 
     this.logger.log(`✅ ${turnosParaInsertar.length} turnos generados exitosamente`);
     this.logger.log(`📊 Distribución: ${empleados.length} empleados en ${Math.ceil(empleados.length / guardasActivos)} grupos`);
