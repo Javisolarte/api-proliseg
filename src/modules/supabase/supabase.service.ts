@@ -8,7 +8,7 @@ export class SupabaseService implements OnModuleInit {
   private supabaseClient: SupabaseClient; // Cliente estándar (anon)
   private supabaseAdmin: SupabaseClient;  // Cliente admin (service role)
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(private readonly configService: ConfigService) { }
 
   onModuleInit() {
     const supabaseUrl = this.configService.get<string>('SUPABASE_URL');
@@ -71,5 +71,47 @@ export class SupabaseService implements OnModuleInit {
     const { data, error } = await this.supabaseAdmin.auth.getUser(token);
     if (error) throw error;
     return data.user;
+  }
+  /** Sube un archivo a Supabase Storage */
+  async uploadFile(bucket: string, path: string, file: Buffer, mimeType: string): Promise<string> {
+    const { data, error } = await this.supabaseClient.storage
+      .from(bucket)
+      .upload(path, file, {
+        contentType: mimeType,
+        upsert: true,
+      });
+
+    if (error) {
+      this.logger.error(`Error uploading file to ${bucket}/${path}: ${error.message}`);
+      throw error;
+    }
+
+    return data.path;
+  }
+
+  /** Obtiene una URL firmada para descarga temporal */
+  async getSignedUrl(bucket: string, path: string, expiresIn: number = 3600): Promise<string> {
+    const { data, error } = await this.supabaseClient.storage
+      .from(bucket)
+      .createSignedUrl(path, expiresIn);
+
+    if (error) {
+      this.logger.error(`Error getting signed URL for ${bucket}/${path}: ${error.message}`);
+      throw error;
+    }
+
+    return data.signedUrl;
+  }
+
+  /** Elimina un archivo de Supabase Storage */
+  async deleteFile(bucket: string, path: string): Promise<void> {
+    const { error } = await this.supabaseClient.storage
+      .from(bucket)
+      .remove([path]);
+
+    if (error) {
+      this.logger.error(`Error deleting file from ${bucket}/${path}: ${error.message}`);
+      throw error;
+    }
   }
 }

@@ -8,7 +8,7 @@ export class SupabaseService implements OnModuleInit {
   private client: SupabaseClient;
   private adminClient: SupabaseClient;
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(private readonly configService: ConfigService) { }
 
   onModuleInit() {
     const supabaseUrl = this.configService.get<string>('SUPABASE_URL');
@@ -115,5 +115,50 @@ export class SupabaseService implements OnModuleInit {
   async rpc<T = any>(functionName: string, params?: any): Promise<{ data: T | null; error: any }> {
     const { data, error } = await this.getSupabaseAdminClient().rpc(functionName, params);
     return { data: data ?? null, error };
+  }
+
+  // --- Storage Methods ---
+
+  /** Sube un archivo a Supabase Storage */
+  async uploadFile(bucket: string, path: string, file: Buffer, mimeType: string): Promise<string> {
+    const { data, error } = await this.getSupabaseAdminClient().storage
+      .from(bucket)
+      .upload(path, file, {
+        contentType: mimeType,
+        upsert: true,
+      });
+
+    if (error) {
+      this.logger.error(`Error uploading file to ${bucket}/${path}: ${error.message}`);
+      throw error;
+    }
+
+    return data.path;
+  }
+
+  /** Obtiene una URL firmada para descarga temporal */
+  async getSignedUrl(bucket: string, path: string, expiresIn: number = 3600): Promise<string> {
+    const { data, error } = await this.getSupabaseAdminClient().storage
+      .from(bucket)
+      .createSignedUrl(path, expiresIn);
+
+    if (error) {
+      this.logger.error(`Error getting signed URL for ${bucket}/${path}: ${error.message}`);
+      throw error;
+    }
+
+    return data.signedUrl;
+  }
+
+  /** Elimina un archivo de Supabase Storage */
+  async deleteFile(bucket: string, path: string): Promise<void> {
+    const { error } = await this.getSupabaseAdminClient().storage
+      .from(bucket)
+      .remove([path]);
+
+    if (error) {
+      this.logger.error(`Error deleting file from ${bucket}/${path}: ${error.message}`);
+      throw error;
+    }
   }
 }

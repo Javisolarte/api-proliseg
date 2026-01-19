@@ -69,6 +69,7 @@ import { UbicacionesModule } from './modules/ubicaciones/ubicaciones.module';
 import { MemorandosModule } from './modules/memorandos/memorandos.module';
 import { ComunicacionesModule } from './modules/comunicaciones/comunicaciones.module';
 import { AspirantesModule } from './modules/aspirantes/aspirantes.module';
+import { FileManagerModule } from './modules/file-manager/file-manager.module';
 
 @Module({
   imports: [
@@ -148,6 +149,7 @@ import { AspirantesModule } from './modules/aspirantes/aspirantes.module';
     EstudiosSeguridadModule,
     GeocercasModule,
     AspirantesModule,
+    FileManagerModule,
     HelpersModule,
   ],
   providers: [],
