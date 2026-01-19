@@ -8,10 +8,13 @@ import {
     RegistrarMinutaDto, CargarEvidenciaDto
 } from './dto/supervisor.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @ApiTags('Módulo Supervisor (Móvil)')
 @Controller('supervisor')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@RequirePermissions('supervisor')
 @ApiBearerAuth("JWT-auth")
 export class SupervisorController {
     constructor(private readonly supervisorService: SupervisorService) { }

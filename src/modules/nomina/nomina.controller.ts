@@ -4,10 +4,13 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { NominaService } from './nomina.service';
 import { CreatePeriodoDto } from './dto/create-periodo.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @ApiTags('Nomina - Contabilidad')
 @Controller('nomina')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@RequirePermissions('nomina')
 @ApiBearerAuth('JWT-auth')
 export class NominaController {
     constructor(private readonly nominaService: NominaService) { }

@@ -4,10 +4,13 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { HorasNominaService } from './horas-nomina.service';
 import { CreateHorasNominaDto } from './dto/create-horas-nomina.dto';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
+import { PermissionsGuard } from '../../auth/guards/permissions.guard';
+import { RequirePermissions } from '../../auth/decorators/permissions.decorator';
 
 @ApiTags('Nomina - Horas Extras')
 @Controller('nomina/horas')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@RequirePermissions('nomina')
 @ApiBearerAuth('JWT-auth')
 export class HorasNominaController {
     constructor(private readonly horasService: HorasNominaService) { }

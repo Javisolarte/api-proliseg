@@ -4,7 +4,7 @@ import { CategoriasDotacionService } from './categorias-dotacion.service';
 import { CreateCategoriaDotacionDto, UpdateCategoriaDotacionDto } from './dto/categoria-dotacion.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
-// import { RequirePermissions } from '../auth/decorators/permissions.decorator'; // Uncomment when permissions are defined
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @ApiTags('Categorias Dotacion')
 @Controller('categorias-dotacion')
@@ -14,7 +14,7 @@ export class CategoriasDotacionController {
     constructor(private readonly categoriasService: CategoriasDotacionService) { }
 
     @Get()
-    // @RequirePermissions('dotacion.read')
+    @RequirePermissions('dotaciones')
     @ApiOperation({ summary: 'Listar todas las categorías de dotación' })
     @ApiResponse({ status: 200, description: 'Lista de categorías' })
     async findAll() {
@@ -22,7 +22,7 @@ export class CategoriasDotacionController {
     }
 
     @Get(':id')
-    // @RequirePermissions('dotacion.read')
+    @RequirePermissions('dotaciones')
     @ApiOperation({ summary: 'Obtener categoría por ID' })
     @ApiResponse({ status: 200, description: 'Categoría encontrada' })
     async findOne(@Param('id') id: string) {
@@ -30,7 +30,7 @@ export class CategoriasDotacionController {
     }
 
     @Post()
-    // @RequirePermissions('dotacion.create')
+    @RequirePermissions('dotaciones')
     @ApiOperation({ summary: 'Crear nueva categoría' })
     @ApiResponse({ status: 201, description: 'Categoría creada exitosamente' })
     async create(@Body() createDto: CreateCategoriaDotacionDto) {
@@ -38,7 +38,7 @@ export class CategoriasDotacionController {
     }
 
     @Patch(':id')
-    // @RequirePermissions('dotacion.update')
+    @RequirePermissions('dotaciones')
     @ApiOperation({ summary: 'Actualizar categoría' })
     @ApiResponse({ status: 200, description: 'Categoría actualizada exitosamente' })
     async update(@Param('id') id: string, @Body() updateDto: UpdateCategoriaDotacionDto) {
@@ -46,7 +46,7 @@ export class CategoriasDotacionController {
     }
 
     @Delete(':id')
-    // @RequirePermissions('dotacion.delete')
+    @RequirePermissions('dotaciones')
     @ApiOperation({ summary: 'Eliminar categoría' })
     @ApiResponse({ status: 200, description: 'Categoría eliminada exitosamente' })
     async remove(@Param('id') id: string) {

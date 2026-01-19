@@ -5,10 +5,13 @@ import { DeduccionesNominaService } from './deducciones-nomina.service';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { CreateDeduccionNominaDto } from './dto/create-deduccion-nomina.dto';
 import { UpdateDeduccionNominaDto } from './dto/update-deduccion-nomina.dto';
+import { PermissionsGuard } from '../../auth/guards/permissions.guard';
+import { RequirePermissions } from '../../auth/decorators/permissions.decorator';
 
 @ApiTags('Nomina - Deducciones')
 @Controller('nomina/deducciones')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@RequirePermissions('nomina')
 @ApiBearerAuth('JWT-auth')
 export class DeduccionesNominaController {
     constructor(private readonly deduccionesService: DeduccionesNominaService) { }

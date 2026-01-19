@@ -20,10 +20,13 @@ import { TerminateContratoPersonalDto } from './dto/terminate-contrato-personal.
 import { RenovarContratoDto } from './dto/renovar-contrato.dto';
 import { UpdateContratoPersonalDto } from './dto/update-contrato-personal.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @ApiTags('Contratos Personal')
 @Controller('contratos-personal')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@RequirePermissions('empleados')
 @ApiBearerAuth('JWT-auth')
 export class ContratosPersonalController {
     constructor(private readonly contratosService: ContratosPersonalService) { }

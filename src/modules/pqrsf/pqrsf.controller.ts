@@ -2,13 +2,16 @@ import { Controller, Get, Post, Body, Patch, Param, UseGuards, Query, Delete, Us
 import { ApiBearerAuth, ApiOperation, ApiTags, ApiQuery, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { PqrsfService } from './pqrsf.service';
 import { CreatePqrsfDto, UpdatePqrsfDto, AddRespuestaDto, AsignarPqrsfDto, CambiarVisibilidadDto } from './dto/pqrsf.dto';
 
 @ApiTags('PQRSF')
 @Controller('pqrsf')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@RequirePermissions('pqrsf')
 @ApiBearerAuth('JWT-auth')
 export class PqrsfController {
     constructor(private readonly pqrsfService: PqrsfService) { }

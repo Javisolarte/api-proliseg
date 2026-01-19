@@ -7,10 +7,13 @@ import { CreatePreguntaDto } from './dto/create-pregunta.dto';
 import { CreateAspiranteDto } from './dto/create-aspirante.dto';
 import { ProgramarIntentoDto, ReprogramarIntentoDto } from './dto/programar-intento.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @ApiTags('Aspirantes (Admin)')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@RequirePermissions('aspirantes')
 @Controller('aspirantes')
 export class AspirantesController {
     constructor(private readonly aspirantesService: AspirantesService) { }

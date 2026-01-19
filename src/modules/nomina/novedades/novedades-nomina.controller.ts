@@ -4,10 +4,13 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { NovedadesNominaService } from './novedades-nomina.service';
 import { CreateNovedadNominaDto } from './dto/create-novedad-nomina.dto';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
+import { PermissionsGuard } from '../../auth/guards/permissions.guard';
+import { RequirePermissions } from '../../auth/decorators/permissions.decorator';
 
 @ApiTags('Nomina - Novedades')
 @Controller('nomina/novedades')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@RequirePermissions('nomina')
 @ApiBearerAuth('JWT-auth')
 export class NovedadesNominaController {
     constructor(private readonly novedadesService: NovedadesNominaService) { }

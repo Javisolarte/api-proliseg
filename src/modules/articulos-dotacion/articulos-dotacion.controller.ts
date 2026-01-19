@@ -9,7 +9,7 @@ import {
 } from './dto/articulo-dotacion.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
-// import { RequirePermissions } from '../auth/decorators/permissions.decorator'; 
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @ApiTags('Articulos Dotacion')
 @Controller('articulos-dotacion')
@@ -21,7 +21,7 @@ export class ArticulosDotacionController {
     // --- ARTICULOS ---
 
     @Get()
-    // @RequirePermissions('dotacion.read')
+    @RequirePermissions('dotaciones')
     @ApiOperation({ summary: 'Listar todos los artículos' })
     @ApiResponse({ status: 200, description: 'Lista de artículos' })
     async findAll() {
@@ -29,7 +29,7 @@ export class ArticulosDotacionController {
     }
 
     @Get(':id')
-    // @RequirePermissions('dotacion.read')
+    @RequirePermissions('dotaciones')
     @ApiOperation({ summary: 'Obtener artículo por ID (incluye variantes y categoría)' })
     @ApiResponse({ status: 200, description: 'Artículo encontrado' })
     async findOne(@Param('id') id: string) {
@@ -37,7 +37,7 @@ export class ArticulosDotacionController {
     }
 
     @Post()
-    // @RequirePermissions('dotacion.create')
+    @RequirePermissions('dotaciones')
     @ApiOperation({ summary: 'Crear nuevo artículo' })
     @ApiResponse({ status: 201, description: 'Artículo creado exitosamente' })
     async create(@Body() createDto: CreateArticuloDotacionDto) {
@@ -45,7 +45,7 @@ export class ArticulosDotacionController {
     }
 
     @Patch(':id')
-    // @RequirePermissions('dotacion.update')
+    @RequirePermissions('dotaciones')
     @ApiOperation({ summary: 'Actualizar artículo' })
     @ApiResponse({ status: 200, description: 'Artículo actualizado exitosamente' })
     async update(@Param('id') id: string, @Body() updateDto: UpdateArticuloDotacionDto) {
@@ -53,7 +53,7 @@ export class ArticulosDotacionController {
     }
 
     @Delete(':id')
-    // @RequirePermissions('dotacion.delete')
+    @RequirePermissions('dotaciones')
     @ApiOperation({ summary: 'Desactivar artículo' })
     @ApiResponse({ status: 200, description: 'Artículo desactivado exitosamente' })
     async remove(@Param('id') id: string) {
@@ -63,7 +63,7 @@ export class ArticulosDotacionController {
     // --- VARIANTES ---
 
     @Get(':id/variantes')
-    // @RequirePermissions('dotacion.read')
+    @RequirePermissions('dotaciones')
     @ApiOperation({ summary: 'Listar variantes de un artículo' })
     @ApiResponse({ status: 200, description: 'Lista de variantes del artículo' })
     async findVariantes(@Param('id') id: string) {
@@ -71,7 +71,7 @@ export class ArticulosDotacionController {
     }
 
     @Post('variantes')
-    // @RequirePermissions('dotacion.create')
+    @RequirePermissions('dotaciones')
     @ApiOperation({ summary: 'Crear variante para un artículo' })
     @ApiResponse({ status: 201, description: 'Variante creada exitosamente' })
     async createVariante(@Body() createDto: CreateVarianteArticuloDto) {
@@ -79,7 +79,7 @@ export class ArticulosDotacionController {
     }
 
     @Patch('variantes/:id')
-    // @RequirePermissions('dotacion.update')
+    @RequirePermissions('dotaciones')
     @ApiOperation({ summary: 'Actualizar variante' })
     @ApiResponse({ status: 200, description: 'Variante actualizada exitosamente' })
     async updateVariante(@Param('id') id: string, @Body() updateDto: UpdateVarianteArticuloDto) {

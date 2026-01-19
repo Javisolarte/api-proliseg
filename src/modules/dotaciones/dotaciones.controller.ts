@@ -5,7 +5,7 @@ import { CreateDotacionEmpleadoDto } from './dto/dotacion.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 // import { User } from '../usuarios/entities/user.entity';
-// import { RequirePermissions } from '../auth/decorators/permissions.decorator';
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @ApiTags('Dotaciones')
 @Controller('dotaciones')
@@ -17,7 +17,7 @@ export class DotacionesController {
     // --- ENTREGAS ---
 
     @Get('entregas')
-    // @RequirePermissions('dotacion.read')
+    @RequirePermissions('dotaciones')
     @ApiOperation({ summary: 'Listar historial de entregas de dotación' })
     @ApiResponse({ status: 200, description: 'Lista de entregas' })
     @ApiQuery({ name: 'condicion', required: false, enum: ['nuevo', 'segunda'], description: 'Filtrar por condición' })
@@ -26,7 +26,7 @@ export class DotacionesController {
     }
 
     @Get('entregas/empleado/:id')
-    // @RequirePermissions('dotacion.read')
+    @RequirePermissions('dotaciones')
     @ApiOperation({ summary: 'Obtener entregas por empleado' })
     @ApiResponse({ status: 200, description: 'Lista de entregas del empleado' })
     async findEntregasByEmpleado(@Param('id') id: string) {
@@ -34,7 +34,7 @@ export class DotacionesController {
     }
 
     @Post('entregas')
-    // @RequirePermissions('dotacion.create')
+    @RequirePermissions('dotaciones')
     @ApiOperation({ summary: 'Registrar nueva entrega de dotación (Reduce Stock y crea Movimiento)' })
     @ApiResponse({ status: 201, description: 'Entrega registrada exitosamente' })
     async registrarEntrega(@Body() createDto: CreateDotacionEmpleadoDto, @Request() req) {
@@ -48,7 +48,7 @@ export class DotacionesController {
     // --- PROGRAMACION ---
 
     @Get('programacion')
-    // @RequirePermissions('dotacion.read')
+    @RequirePermissions('dotaciones')
     @ApiOperation({ summary: 'Listar programación de dotaciones (alertas, vencimientos)' })
     @ApiResponse({ status: 200, description: 'Lista de programación' })
     async findAllProgramacion() {

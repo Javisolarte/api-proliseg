@@ -4,11 +4,12 @@ import { InventarioService } from './inventario.service';
 import { CreateInventarioDocumentoDto, CreateInventarioMovimientoDto } from './dto/inventario.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
-// import { RequirePermissions } from '../auth/decorators/permissions.decorator';
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @ApiTags('Inventario')
 @Controller('inventario')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
+@RequirePermissions('inventario')
 @ApiBearerAuth('JWT-auth')
 export class InventarioController {
     constructor(private readonly inventarioService: InventarioService) { }
@@ -16,7 +17,6 @@ export class InventarioController {
     // --- DOCUMENTOS ---
 
     @Get('documentos')
-    // @RequirePermissions('inventario.read')
     @ApiOperation({ summary: 'Listar documentos de inventario' })
     @ApiResponse({ status: 200, description: 'Lista de documentos' })
     async findAllDocumentos() {
@@ -24,7 +24,6 @@ export class InventarioController {
     }
 
     @Get('documentos/:id')
-    // @RequirePermissions('inventario.read')
     @ApiOperation({ summary: 'Obtener documento por ID' })
     @ApiResponse({ status: 200, description: 'Documento encontrado' })
     async findOneDocumento(@Param('id') id: string) {
@@ -32,7 +31,6 @@ export class InventarioController {
     }
 
     @Post('documentos')
-    // @RequirePermissions('inventario.create')
     @ApiOperation({ summary: 'Registrar documento de inventario (compra, remisión)' })
     @ApiResponse({ status: 201, description: 'Documento registrado exitosamente' })
     async createDocumento(@Body() createDto: CreateInventarioDocumentoDto) {
@@ -42,7 +40,6 @@ export class InventarioController {
     // --- MOVIMIENTOS ---
 
     @Get('movimientos')
-    // @RequirePermissions('inventario.read')
     @ApiOperation({ summary: 'Listar movimientos de inventario' })
     @ApiResponse({ status: 200, description: 'Lista de movimientos' })
     async findAllMovimientos() {
@@ -50,7 +47,6 @@ export class InventarioController {
     }
 
     @Post('movimientos')
-    // @RequirePermissions('inventario.create')
     @ApiOperation({ summary: 'Registrar movimiento de inventario (Entrada/Salida/Ajuste)' })
     @ApiResponse({ status: 201, description: 'Movimiento registrado exitosamente' })
     async createMovimiento(@Body() createDto: CreateInventarioMovimientoDto) {
@@ -58,7 +54,6 @@ export class InventarioController {
     }
 
     @Get('resumen-stock/:varianteId')
-    // @RequirePermissions('inventario.read')
     @ApiOperation({ summary: 'Obtener resumen de stock estimado (Nuevo vs Segunda)' })
     @ApiResponse({ status: 200, description: 'Resumen de stock' })
     async getResumenStock(@Param('varianteId') varianteId: string) {

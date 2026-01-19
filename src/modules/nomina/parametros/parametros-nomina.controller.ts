@@ -5,10 +5,13 @@ import { ParametrosNominaService } from './parametros-nomina.service';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { CreateParametroNominaDto } from './dto/create-parametro-nomina.dto';
 import { UpdateParametroNominaDto } from './dto/update-parametro-nomina.dto';
+import { PermissionsGuard } from '../../auth/guards/permissions.guard';
+import { RequirePermissions } from '../../auth/decorators/permissions.decorator';
 
 @ApiTags('Nomina - Parametros')
 @Controller('nomina/parametros')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@RequirePermissions('nomina')
 @ApiBearerAuth('JWT-auth')
 export class ParametrosNominaController {
     constructor(private readonly parametrosService: ParametrosNominaService) { }
