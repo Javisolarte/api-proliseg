@@ -65,4 +65,14 @@ export class CalendarioController {
     async removeReminder(@Param('id') id: number) {
         return this.calendarioService.removeRecordatorio(id);
     }
+
+    // --- FESTIVOS ---
+
+    @Get('festivos')
+    @RequirePermissions('calendario')
+    @ApiOperation({ summary: 'Obtener lista de festivos' })
+    @ApiQuery({ name: 'anio', required: false, type: Number })
+    async fetchFestivos(@Query('anio') anio?: number) {
+        return this.calendarioService.findFestivos(anio);
+    }
 }

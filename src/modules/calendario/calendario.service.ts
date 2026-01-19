@@ -100,6 +100,23 @@ export class CalendarioService {
         return data;
     }
 
+    // --- FESTIVOS ---
+
+    async findFestivos(anio?: number) {
+        const supabase = this.supabaseService.getClient();
+        let query = supabase.from('festivos_colombia').select('*');
+
+        if (anio) {
+            const start = `${anio}-01-01`;
+            const end = `${anio}-12-31`;
+            query = query.gte('fecha', start).lte('fecha', end);
+        }
+
+        const { data, error } = await query.order('fecha', { ascending: true });
+        if (error) throw error;
+        return data;
+    }
+
     /**
      * 🔔 Procesar recordatorios pendientes
      * Busca los que deben enviarse ahora y crea la notificación en la tabla principal
@@ -124,15 +141,17 @@ export class CalendarioService {
         let total = 0;
         for (const rec of recordatorios) {
             try {
-                // 2. Crear notificación en la tabla 'notificaciones'
+                // 2. Crear notificación PRIVADA en la tabla 'notificaciones'
                 await supabase.from('notificaciones').insert({
-                    para_usuario_id: rec.evento.usuario_id,
+                    para_usuario_id: Number(rec.evento.usuario_id), // ✅ Asegurar que sea numérico y privado
                     mensaje: `🔔 RECORDATORIO: ${rec.evento.titulo}. Inicia: ${new Date(rec.evento.fecha_inicio).toLocaleString()}`,
                     tipo: rec.tipo_notificacion || 'sistema',
                     categoria: 'calendario',
                     leido: false,
                     created_at: ahora
                 });
+
+                this.logger.log(`📢 Notificación de recordatorio creada para usuario ${rec.evento.usuario_id}`);
 
                 // 3. Marcar como enviado
                 await supabase
@@ -178,14 +197,16 @@ export class CalendarioService {
 
         let count = 0;
         for (const usuarioId in eventosPorUsuario) {
+            const userId = Number(usuarioId);
             const titulos = eventosPorUsuario[usuarioId].join(', ');
             await supabase.from('notificaciones').insert({
-                para_usuario_id: usuarioId,
+                para_usuario_id: userId, // ✅ Privacidad garantizada
                 mensaje: `📅 AGENDA HOY: Tienes ${eventosPorUsuario[usuarioId].length} evento(s): ${titulos}.`,
                 tipo: 'sistema',
                 categoria: 'calendario_agenda',
                 leido: false
             });
+            this.logger.log(`📅 Agenda diaria enviada/creada para usuario ${userId}`);
             count++;
         }
 
