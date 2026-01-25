@@ -970,6 +970,7 @@ export class AutoservicioService {
             ...dto,
             empleado_id: empleado.id,
             usuario_id: userId,
+            timestamp: Date.now(),
             evento: 'tracking'
         });
     }
