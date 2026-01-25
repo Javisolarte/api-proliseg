@@ -3,9 +3,12 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export enum TipoComunicacion {
     AUDIO = 'audio',
+    VIDEO = 'video',
     TEXTO = 'texto',
     EMERGENCIA = 'emergencia'
 }
+
+
 
 export enum EstadoSesion {
     ACTIVA = 'activa',
@@ -61,6 +64,11 @@ export class IniciarComunicacionDto {
     @IsString()
     @IsOptional()
     dispositivo?: string;
+
+    @ApiPropertyOptional({ description: 'Indica si la llamada incluye video (default: false)' })
+    @IsBoolean()
+    @IsOptional()
+    con_video?: boolean;
 
     @ApiPropertyOptional({ description: 'Versión de la app' })
     @IsString()
