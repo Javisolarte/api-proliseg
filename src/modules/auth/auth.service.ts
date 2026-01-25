@@ -490,4 +490,34 @@ export class AuthService {
         : new InternalServerErrorException('Error interno al procesar recuperación de contraseña.');
     }
   }
+
+  /**
+   * 🔐 Validar Token (Para WebSockets/Gateways)
+   */
+  async validateToken(token: string) {
+    const supabase = this.supabaseService.getClient();
+
+    try {
+      if (!token) {
+        throw new UnauthorizedException('Token no proporcionado');
+      }
+
+      const { data, error } = await supabase.auth.getUser(token);
+
+      if (error || !data.user) {
+        this.logger.warn(`❌ Token inválido en WebSocket: ${error?.message}`);
+        throw new UnauthorizedException('Token inválido');
+      }
+
+      // Obtener rol del usuario desde metadata o tabla usuarios_externos
+      // Esto es opcional, pero útil para RBAC en el gateway
+      return {
+        user_id: data.user.id,
+        email: data.user.email,
+        valid: true
+      };
+    } catch (error) {
+      return null;
+    }
+  }
 }

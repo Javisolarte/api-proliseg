@@ -24,6 +24,18 @@ export class ComunicacionesController {
     }
 
     /**
+     * 🌍 Obtener configuración ICE (TURN/STUN)
+     */
+    @Get('ice-servers')
+    @UseGuards(JwtAuthGuard)
+    @ApiBearerAuth()
+    @ApiOperation({ summary: 'Obtener servidores ICE (STUN/TURN) para WebRTC' })
+    @ApiResponse({ status: 200, description: 'Lista de servidores ICE' })
+    async getIceServers() {
+        return this.comunicacionesService.getIceServers();
+    }
+
+    /**
      * 🚨 Endpoint de emergencia (alternativo al WebSocket)
      */
     @Post('emergencia')

@@ -9,33 +9,50 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket, Namespace } from 'socket.io';
 import { Logger } from '@nestjs/common';
-import { AudioChunkDto, IniciarComunicacionDto, FinalizarComunicacionDto, MensajeTextoDto, ResponderComunicacionDto, OrigenAudio, IniciarComunicacionDashboardDto, RegistrarDispositivoDto } from './dto/comunicacion.dto';
+import { AuthService } from '../auth/auth.service';
+import { IniciarComunicacionDto, FinalizarComunicacionDto, MensajeTextoDto, ResponderComunicacionDto, OrigenAudio, IniciarComunicacionDashboardDto, RegistrarDispositivoDto, WebRTCOfferDto, WebRTCAnswerDto, WebRTCCandidateDto, JoinRoomDto } from './dto/comunicacion.dto';
+
+// 🟢 Máquina de Estados (FSM)
+export enum SessionState {
+    INIT = 'INIT',                    // Sesión creada
+    WAITING_FOR_PEER = 'WAITING',     // Esperando a que el otro par se una
+    OFFER_SENT = 'OFFER_SENT',        // Oferta enviada
+    ANSWER_RECEIVED = 'ANSWER_RECEIVED', // Respuesta recibida (Conectando)
+    CONNECTED = 'CONNECTED',          // Conexión establecida (implícito por ICE)
+    RECONNECTING = 'RECONNECTING',    // Reconexión temporal
+    DISCONNECTED = 'DISCONNECTED',    // Desconectado
+    CLOSED = 'CLOSED'                 // Sesión finalizada
+}
 
 interface SesionActiva {
     sesion_id: string;
-    empleado_id?: number; // Opcional si inicia dashboard
+    empleado_id?: number;
     empleado_nombre?: string;
     puesto_id?: number;
     cliente_id?: number;
     tipo: string;
     mensaje_inicial?: string;
     fecha_inicio: Date;
-    socket_id: string; // Socket ID del iniciador (App o Dashboard)
+    socket_id: string; // Socket ID del iniciador (App)
     latitud?: number;
     longitud?: number;
-    chunks_recibidos: number;
-    respondiendo?: boolean;
+
+    // WebRTC & Estado
+    state: SessionState;
     usuario_dashboard_id?: number;
-    chunks_dashboard: number;
+    dashboard_socket_id?: string;
+
+    // Metadata
+    respondiendo?: boolean;
     origen_inicial: OrigenAudio;
     empleados_ids?: number[];
     target_sockets?: string[];
-    ultima_actividad: Date; // Timestamp de última actividad para GC
+    ultima_actividad: Date;
 }
 
 @WebSocketGateway({
     cors: {
-        origin: '*', // Ajustar según necesidades de seguridad en producción
+        origin: '*',
     },
     namespace: 'comunicaciones',
 })
@@ -43,93 +60,114 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
     @WebSocketServer() server: Namespace;
     private logger: Logger = new Logger('ComunicacionesGateway');
 
-    // Almacenamiento en memoria de sesiones activas
+    // Almacenamiento
     private sesionesActivas: Map<string, SesionActiva> = new Map();
-
-    // Mapeo de socket.id a sesion_id
     private socketToSesion: Map<string, string> = new Map();
-
-    // Mapeo de empleado_id a socket.id
     private empleadoToSocket: Map<number, string> = new Map();
 
-    // Intervalo de limpieza
     private cleanupInterval: NodeJS.Timeout;
-    private readonly SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutos
+    private readonly SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutos (aumentado para WebRTC)
 
-    constructor() {
-        // Ejecutar limpieza cada minuto
+    constructor(
+        // 🛡️ Inyección de Auth para validar tokens
+        private readonly authService: AuthService
+    ) {
         this.cleanupInterval = setInterval(() => this.checkInactiveSessions(), 60 * 1000);
     }
 
-    handleConnection(client: Socket) {
-        this.logger.log(`🔌 Cliente conectado: ${client.id}`);
+    /**
+     * 🔐 HANDSHAKE: Validación de Token JWT
+     */
+    async handleConnection(client: Socket) {
+        try {
+            // Extraer token del handshake (auth.token o query.token)
+            const token = client.handshake.auth?.token || client.handshake.query?.token;
 
-        // Enviar lista de sesiones activas al nuevo cliente
-        const sesiones = Array.from(this.sesionesActivas.values()).map(s => ({
-            sesion_id: s.sesion_id,
-            empleado_id: s.empleado_id,
-            empleado_nombre: s.empleado_nombre,
-            tipo: s.tipo,
-            mensaje_inicial: s.mensaje_inicial,
-            fecha_inicio: s.fecha_inicio,
-            duracion_segundos: Math.floor((Date.now() - s.fecha_inicio.getTime()) / 1000),
-        }));
+            if (!token) {
+                this.logger.warn(`⛔ Conexión rechazada: Sin token (ID: ${client.id})`);
+                client.disconnect();
+                return;
+            }
 
-        client.emit('sesiones_activas', sesiones);
-        client.emit('sesiones_activas', sesiones);
+            // Validar token
+            const user = await this.authService.validateToken(token as string);
+
+            if (!user || !user.valid) {
+                this.logger.warn(`⛔ Conexión rechazada: Token inválido (ID: ${client.id})`);
+                client.disconnect();
+                return;
+            }
+
+            // Guardar info del usuario en el socket
+            client.data.user = user;
+            this.logger.log(`🔌 Cliente conectado y autenticado: ${user.email} (${client.id})`);
+
+            // Notificar estado actual
+            this.emitirSesionesActivas(client);
+
+        } catch (error) {
+            this.logger.error(`Error en handshake: ${error.message}`);
+            client.disconnect();
+        }
     }
 
     /**
-     * 📱 Registrar dispositivo/empleado al conectar
+     * 📱 Registrar dispositivo/empleado
      */
     @SubscribeMessage('registrar_dispositivo')
     handleRegistrarDispositivo(
         @MessageBody() data: RegistrarDispositivoDto,
         @ConnectedSocket() client: Socket,
     ) {
+        // Limpiar socket anterior
+        const oldSocket = this.empleadoToSocket.get(data.empleado_id);
+        if (oldSocket && oldSocket !== client.id) {
+            this.socketToSesion.delete(oldSocket);
+        }
+
         this.empleadoToSocket.set(data.empleado_id, client.id);
-        this.logger.log(`📱 Dispositivo registrado: Empleado ${data.empleado_id} -> Socket ${client.id}`);
-        client.emit('dispositivo_registrado', { success: true });
+        client.data.empleado_id = data.empleado_id; // Vincular al socket
+
+        this.logger.log(`📱 Dispositivo registrado: Empleado ${data.empleado_id}`);
         return { success: true };
     }
 
     handleDisconnect(client: Socket) {
         this.logger.log(`🔌 Cliente desconectado: ${client.id}`);
 
-        // Si el cliente que se desconecta tenía una sesión activa, finalizarla
         const sesionId = this.socketToSesion.get(client.id);
         if (sesionId) {
             const sesion = this.sesionesActivas.get(sesionId);
             if (sesion) {
-                this.logger.warn(`⚠️ Sesión ${sesionId} interrumpida por desconexión`);
-                this.server.emit('sesion_finalizada', {
+                // Notificar al peer que se desconectó
+                client.to(sesionId).emit('peer_disconnected', {
                     sesion_id: sesionId,
-                    motivo: 'Desconexión del cliente',
-                    estado: 'interrumpida',
+                    socket_id: client.id
                 });
-                this.sesionesActivas.delete(sesionId);
+
+                // Si la sesión estaba activa, marcar como interrumpida o esperar reconexión
+                if (sesion.state !== SessionState.CLOSED) {
+                    sesion.state = SessionState.DISCONNECTED;
+                    this.logger.warn(`⚠️ Sesión ${sesionId} en estado DISCONNECTED`);
+                }
             }
             this.socketToSesion.delete(client.id);
         }
 
-        // Eliminar del mapeo de empleados
-        for (const [empId, socketId] of this.empleadoToSocket.entries()) {
-            if (socketId === client.id) {
-                this.empleadoToSocket.delete(empId);
-                break;
-            }
+        // Limpieza de empleado
+        if (client.data.empleado_id) {
+            this.empleadoToSocket.delete(client.data.empleado_id);
         }
     }
 
     /**
-     * 🎙️ Iniciar una nueva sesión de comunicación
+     * 🎙️ Iniciar Sesión (App -> Server)
      */
     @SubscribeMessage('iniciar_comunicacion')
     handleIniciarComunicacion(
         @MessageBody() data: IniciarComunicacionDto,
         @ConnectedSocket() client: Socket,
     ) {
-        // Generar ID único para la sesión
         const sesionId = `sesion_${Date.now()}_${data.empleado_id}`;
 
         const sesion: SesionActiva = {
@@ -143,8 +181,7 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
             socket_id: client.id,
             latitud: data.latitud,
             longitud: data.longitud,
-            chunks_recibidos: 0,
-            chunks_dashboard: 0,
+            state: SessionState.INIT, // Estado Inicial
             origen_inicial: OrigenAudio.APP,
             ultima_actividad: new Date(),
         };
@@ -152,231 +189,19 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
         this.sesionesActivas.set(sesionId, sesion);
         this.socketToSesion.set(client.id, sesionId);
 
-        this.logger.log(`🎙️ Nueva sesión de comunicación iniciada: ${sesionId} por empleado ${data.empleado_id}`);
+        // 🌐 Unirse a la sala WebRTC
+        client.join(sesionId);
 
-        // Notificar a todos los clientes (dashboard) que hay una nueva sesión
-        this.server.emit('nueva_comunicacion', {
-            sesion_id: sesionId,
-            empleado_id: data.empleado_id,
-            tipo: data.tipo,
-            mensaje_inicial: data.mensaje_inicial,
-            puesto_id: data.puesto_id,
-            cliente_id: data.cliente_id,
-            fecha_inicio: sesion.fecha_inicio,
-            latitud: data.latitud,
-            longitud: data.longitud,
-        });
+        this.logger.log(`🎙️ Sesión iniciada (${sesion.state}): ${sesionId}`);
 
-        // Confirmar al emisor
-        client.emit('sesion_iniciada', {
-            sesion_id: sesionId,
-            estado: 'activa',
-        });
-
-        return { success: true, sesion_id: sesionId };
-        return { success: true, sesion_id: sesionId };
-    }
-
-    /**
-     * 🖥️ Iniciar comunicación desde Dashboard (Broadcast a empleados del puesto)
-     */
-    @SubscribeMessage('iniciar_comunicacion_dashboard')
-    handleIniciarComunicacionDashboard(
-        @MessageBody() data: IniciarComunicacionDashboardDto,
-        @ConnectedSocket() client: Socket,
-    ) {
-        const sesionId = `sesion_dash_${Date.now()}_${data.usuario_dashboard_id}`;
-
-        // Buscar sockets de los empleados
-        const targetSockets: string[] = [];
-        data.empleados_ids.forEach(empId => {
-            const socketId = this.empleadoToSocket.get(empId);
-            if (socketId) {
-                targetSockets.push(socketId);
-            }
-        });
-
-        const sesion: SesionActiva = {
-            sesion_id: sesionId,
-            puesto_id: data.puesto_id,
-            tipo: 'audio',
-            mensaje_inicial: `Comunicación desde Central (Usuario ${data.usuario_dashboard_id})`,
-            fecha_inicio: new Date(),
-            socket_id: client.id,
-            chunks_recibidos: 0,
-            chunks_dashboard: 0,
-            origen_inicial: OrigenAudio.DASHBOARD,
-            empleados_ids: data.empleados_ids,
-            target_sockets: targetSockets,
-            usuario_dashboard_id: data.usuario_dashboard_id,
-            ultima_actividad: new Date(),
-        };
-
-        this.sesionesActivas.set(sesionId, sesion);
-        this.socketToSesion.set(client.id, sesionId);
-
-        this.logger.log(`🖥️ Nueva sesión broadcast iniciada: ${sesionId} a ${targetSockets.length} empleados`);
-
-        // Notificar al Dashboard (confirmación)
-        client.emit('sesion_iniciada', {
-            sesion_id: sesionId,
-            estado: 'activa',
-            empleados_conectados: targetSockets.length
-        });
-
-        // Notificar a los empleados (Llamada entrante)
-        targetSockets.forEach(socketId => {
-            const empSocket = this.server.sockets.get(socketId);
-            if (empSocket) {
-                empSocket.emit('llamada_entrante', {
-                    sesion_id: sesionId,
-                    mensaje: sesion.mensaje_inicial,
-                    origen: 'central'
-                });
-            }
-        });
-
-        // Notificar a OTROS dashboards (para visibilidad)
-        client.broadcast.emit('nueva_comunicacion', {
-            sesion_id: sesionId,
-            tipo: 'audio',
-            mensaje_inicial: sesion.mensaje_inicial,
-            puesto_id: data.puesto_id,
-            fecha_inicio: sesion.fecha_inicio,
-            origen: 'dashboard',
-            usuario_dashboard_id: data.usuario_dashboard_id
-        });
+        // Broadcast a Dashboards
+        this.server.emit('nueva_comunicacion', { ...sesion, chunks_recibidos: 0 });
 
         return { success: true, sesion_id: sesionId };
     }
 
     /**
-     * 🔊 Transmitir chunk de audio
-     */
-    @SubscribeMessage('audio_chunk')
-    handleAudioChunk(
-        @MessageBody() data: AudioChunkDto,
-        @ConnectedSocket() client: Socket,
-    ) {
-        const sesion = this.sesionesActivas.get(data.sesion_id);
-
-        if (!sesion) {
-            // Solo logueamos como advertencia para no saturar
-            this.logger.warn(`⚠️ Chunk recibido para sesión cerrada/inexistente: ${data.sesion_id}`);
-
-            // Forzar al cliente a detenerse (por si se quedó transmitiendo)
-            client.emit('sesion_finalizada', {
-                sesion_id: data.sesion_id,
-                motivo: 'Sesión no encontrada en servidor',
-                estado: 'finalizada'
-            });
-            return { success: false, error: 'Sesión no encontrada' };
-        }
-
-        const origen = data.origen || OrigenAudio.APP;
-
-        // Actualizar última actividad
-        sesion.ultima_actividad = new Date();
-
-        // Incrementar contador según origen
-        if (origen === OrigenAudio.APP) {
-            sesion.chunks_recibidos++;
-        } else {
-            sesion.chunks_dashboard++;
-        }
-
-        this.logger.debug(`🔊 Audio chunk recibido desde ${origen}: sesión ${data.sesion_id}, seq ${data.sequence}`);
-
-        // Routing selectivo según origen
-        if (origen === OrigenAudio.APP) {
-            // Audio de app → Broadcast a todos los dashboards (excepto emisor)
-            client.broadcast.emit('audio_stream', {
-                sesion_id: data.sesion_id,
-                audio_data: data.audio_data,
-                sequence: data.sequence,
-                formato: data.formato || 'webm',
-                duracion_ms: data.duracion_ms,
-                es_final: data.es_final,
-                empleado_id: sesion.empleado_id,
-                origen: OrigenAudio.APP,
-            });
-        } else {
-            // Audio de dashboard
-            if (sesion.origen_inicial === OrigenAudio.DASHBOARD && sesion.target_sockets) {
-                // Es un broadcast del dashboard a varios empleados
-                sesion.target_sockets.forEach(socketId => {
-                    const empSocket = this.server.sockets.get(socketId);
-                    if (empSocket) {
-                        empSocket.emit('audio_stream_dashboard', {
-                            sesion_id: data.sesion_id,
-                            audio_data: data.audio_data,
-                            sequence: data.sequence,
-                            origen: OrigenAudio.DASHBOARD,
-                        });
-                    }
-                });
-            } else {
-                // Es una RESPUESTA a una llamada de app
-                const appSocket = this.server.sockets.get(sesion.socket_id);
-                if (appSocket) {
-                    appSocket.emit('audio_stream_dashboard', {
-                        sesion_id: data.sesion_id,
-                        audio_data: data.audio_data,
-                        sequence: data.sequence,
-                        formato: data.formato || 'webm',
-                        duracion_ms: data.duracion_ms,
-                        es_final: data.es_final,
-                        usuario_dashboard_id: sesion.usuario_dashboard_id,
-                        origen: OrigenAudio.DASHBOARD,
-                    });
-                    this.logger.debug(`📡 Audio enviado a app ${sesion.socket_id}`);
-                } else {
-                    this.logger.warn(`⚠️ App desconectada para sesión ${data.sesion_id}`);
-                }
-            }
-        }
-
-        return { success: true, sequence: data.sequence, origen };
-    }
-
-    /**
-     * 🛑 Finalizar sesión de comunicación
-     */
-    @SubscribeMessage('finalizar_comunicacion')
-    handleFinalizarComunicacion(
-        @MessageBody() data: FinalizarComunicacionDto,
-        @ConnectedSocket() client: Socket,
-    ) {
-        const sesion = this.sesionesActivas.get(data.sesion_id);
-
-        if (!sesion) {
-            this.logger.error(`❌ Sesión no encontrada: ${data.sesion_id}`);
-            return { success: false, error: 'Sesión no encontrada' };
-        }
-
-        const duracion = Math.floor((Date.now() - sesion.fecha_inicio.getTime()) / 1000);
-
-        this.logger.log(`🛑 Sesión finalizada: ${data.sesion_id}, duración: ${duracion}s, chunks: ${sesion.chunks_recibidos}`);
-
-        // Notificar a todos los clientes
-        this.server.emit('sesion_finalizada', {
-            sesion_id: data.sesion_id,
-            empleado_id: sesion.empleado_id,
-            duracion_segundos: duracion,
-            chunks_totales: sesion.chunks_recibidos,
-            motivo: data.motivo,
-            estado: 'finalizada',
-        });
-
-        // Limpiar sesión
-        this.sesionesActivas.delete(data.sesion_id);
-        this.socketToSesion.delete(sesion.socket_id);
-
-        return { success: true, duracion_segundos: duracion };
-    }
-
-    /**
-     * 📞 Dashboard responde a una comunicación
+     * 📞 Dashboard Responde (Join Room)
      */
     @SubscribeMessage('responder_comunicacion')
     handleResponderComunicacion(
@@ -384,84 +209,158 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
         @ConnectedSocket() client: Socket,
     ) {
         const sesion = this.sesionesActivas.get(data.sesion_id);
+        if (!sesion) return { success: false, error: 'Sesión no encontrada' };
 
-        if (!sesion) {
-            this.logger.error(`❌ Sesión no encontrada: ${data.sesion_id}`);
-            return { success: false, error: 'Sesión no encontrada' };
-        }
-
-        // Marcar sesión como respondiendo
+        // Actualizar estado
         sesion.respondiendo = true;
         sesion.usuario_dashboard_id = data.usuario_dashboard_id;
-        sesion.ultima_actividad = new Date(); // Actualizar actividad
+        sesion.dashboard_socket_id = client.id;
+        sesion.state = SessionState.WAITING_FOR_PEER; // Esperando negociación
+        sesion.ultima_actividad = new Date();
 
-        this.logger.log(`📞 Dashboard usuario ${data.usuario_dashboard_id} respondiendo a sesión ${data.sesion_id}`);
+        // 🌐 Unirse a la sala
+        client.join(data.sesion_id);
+        this.socketToSesion.set(client.id, data.sesion_id);
 
-        // Notificar a la app que el dashboard está respondiendo
+        this.logger.log(`📞 Dashboard unido a ${data.sesion_id}. Estado: ${sesion.state}`);
+
+        // Notificar a App que dashboard está listo
         const appSocket = this.server.sockets.get(sesion.socket_id);
         if (appSocket) {
             appSocket.emit('dashboard_respondiendo', {
                 sesion_id: data.sesion_id,
-                usuario_dashboard_id: data.usuario_dashboard_id,
-                mensaje_respuesta: data.mensaje_respuesta,
-                timestamp: new Date(),
+                usuario_dashboard_id: data.usuario_dashboard_id
             });
         }
-
-        // Notificar a todos los dashboards
-        this.server.emit('respuesta_iniciada', {
-            sesion_id: data.sesion_id,
-            usuario_dashboard_id: data.usuario_dashboard_id,
-            mensaje_respuesta: data.mensaje_respuesta,
-        });
-
-        return { success: true, sesion_id: data.sesion_id };
-    }
-
-    /**
-     * 💬 Enviar mensaje de texto rápido
-     */
-    @SubscribeMessage('mensaje_texto')
-    handleMensajeTexto(
-        @MessageBody() data: MensajeTextoDto,
-        @ConnectedSocket() client: Socket,
-    ) {
-        this.logger.log(`💬 Mensaje de texto de empleado ${data.empleado_id}: ${data.mensaje}`);
-
-        // Broadcast a todos los clientes
-        this.server.emit('nuevo_mensaje', {
-            empleado_id: data.empleado_id,
-            mensaje: data.mensaje,
-            puesto_id: data.puesto_id,
-            prioridad: data.prioridad || 'normal',
-            timestamp: new Date(),
-        });
 
         return { success: true };
     }
 
+    // ==========================================
+    // 🌐 WebRTC Signaling Handlers (FSM Aware)
+    // ==========================================
+
+    @SubscribeMessage('join_room')
+    handleJoinRoom(@MessageBody() data: JoinRoomDto, @ConnectedSocket() client: Socket) {
+        // Validación de seguridad: Verificar si el usuario tiene permiso para unirse a esta sala (TODO)
+        client.join(data.sesion_id);
+        return { success: true };
+    }
+
+    @SubscribeMessage('webrtc_offer')
+    handleWebRTCOffer(@MessageBody() data: WebRTCOfferDto, @ConnectedSocket() client: Socket) {
+        const sesion = this.sesionesActivas.get(data.sesion_id);
+
+        if (sesion) {
+            sesion.state = SessionState.OFFER_SENT;
+            sesion.ultima_actividad = new Date();
+            this.logger.debug(`📨 Offer en ${data.sesion_id} -> Estado: ${sesion.state}`);
+        }
+
+        client.to(data.sesion_id).emit('webrtc_offer', {
+            offer: data.offer,
+            sesion_id: data.sesion_id,
+            sender_socket_id: client.id
+        });
+        return { success: true };
+    }
+
+    @SubscribeMessage('webrtc_answer')
+    handleWebRTCAnswer(@MessageBody() data: WebRTCAnswerDto, @ConnectedSocket() client: Socket) {
+        const sesion = this.sesionesActivas.get(data.sesion_id);
+
+        if (sesion) {
+            sesion.state = SessionState.ANSWER_RECEIVED; // Transición a connected implícita
+            sesion.ultima_actividad = new Date();
+            this.logger.debug(`📩 Answer en ${data.sesion_id} -> Estado: ${sesion.state}`);
+        }
+
+        client.to(data.sesion_id).emit('webrtc_answer', {
+            answer: data.answer,
+            sesion_id: data.sesion_id,
+            sender_socket_id: client.id
+        });
+        return { success: true };
+    }
+
+    @SubscribeMessage('webrtc_candidate')
+    handleWebRTCCandidate(@MessageBody() data: WebRTCCandidateDto, @ConnectedSocket() client: Socket) {
+        // Los candidatos fluyen libremente mientras la sesión esté activa
+        client.to(data.sesion_id).emit('webrtc_candidate', {
+            candidate: data.candidate,
+            sesion_id: data.sesion_id,
+            sender_socket_id: client.id
+        });
+        return { success: true };
+    }
+
     /**
-     * 📊 Obtener sesiones activas
+     * 🔄 ICE Restart Signaling
      */
-    @SubscribeMessage('obtener_sesiones_activas')
-    handleObtenerSesionesActivas(@ConnectedSocket() client: Socket) {
+    @SubscribeMessage('negotiation_needed')
+    handleNegotiationNeeded(@MessageBody() data: { sesion_id: string }, @ConnectedSocket() client: Socket) {
+        this.logger.log(`🔄 Renegociación solicitada en ${data.sesion_id}`);
+        client.to(data.sesion_id).emit('negotiation_needed', {
+            sesion_id: data.sesion_id,
+            sender_socket_id: client.id
+        });
+    }
+
+    // ==========================================
+    // 🛑 Finalización y Limpieza
+    // ==========================================
+
+    @SubscribeMessage('finalizar_comunicacion')
+    handleFinalizarComunicacion(
+        @MessageBody() data: FinalizarComunicacionDto,
+        @ConnectedSocket() client: Socket,
+    ) {
+        const sesion = this.sesionesActivas.get(data.sesion_id);
+        if (!sesion) return;
+
+        sesion.state = SessionState.CLOSED;
+
+        this.server.to(data.sesion_id).emit('sesion_finalizada', {
+            sesion_id: data.sesion_id,
+            motivo: data.motivo,
+            estado: 'finalizada'
+        });
+
+        // Desconectar sockets de la sala
+        this.server.in(data.sesion_id).socketsLeave(data.sesion_id);
+
+        this.sesionesActivas.delete(data.sesion_id);
+        this.socketToSesion.delete(sesion.socket_id);
+        if (sesion.dashboard_socket_id) this.socketToSesion.delete(sesion.dashboard_socket_id);
+
+        return { success: true };
+    }
+
+    private emitirSesionesActivas(client: Socket) {
         const sesiones = Array.from(this.sesionesActivas.values()).map(s => ({
             sesion_id: s.sesion_id,
             empleado_id: s.empleado_id,
-            empleado_nombre: s.empleado_nombre,
             tipo: s.tipo,
             mensaje_inicial: s.mensaje_inicial,
             fecha_inicio: s.fecha_inicio,
-            duracion_segundos: Math.floor((Date.now() - s.fecha_inicio.getTime()) / 1000),
-            chunks_recibidos: s.chunks_recibidos,
-            latitud: s.latitud,
-            longitud: s.longitud,
+            state: s.state // Incluir estado FSM
         }));
-
         client.emit('sesiones_activas', sesiones);
-        return { success: true, sesiones };
     }
 
+    private checkInactiveSessions() {
+        const now = new Date().getTime();
+        for (const [sesionId, sesion] of this.sesionesActivas.entries()) {
+            if (now - sesion.ultima_actividad.getTime() > this.SESSION_TIMEOUT_MS) {
+                this.logger.warn(`🧹 Timeout de sesión: ${sesionId}`);
+                this.server.to(sesionId).emit('sesion_finalizada', {
+                    sesion_id: sesionId,
+                    motivo: 'Inactividad (Timeout)',
+                });
+                this.sesionesActivas.delete(sesionId);
+            }
+        }
+    }
     /**
      * Método público para emitir eventos desde el servicio
      */
@@ -477,35 +376,5 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
             sesiones_activas: this.sesionesActivas.size,
             clientes_conectados: this.server.sockets.size,
         };
-    }
-    /**
-     * 🧹 Garbage Collector: Limpiar sesiones inactivas
-     */
-    private checkInactiveSessions() {
-        const now = new Date().getTime();
-        let cleanedCount = 0;
-
-        for (const [sesionId, sesion] of this.sesionesActivas.entries()) {
-            const lastActivity = sesion.ultima_actividad.getTime();
-
-            if (now - lastActivity > this.SESSION_TIMEOUT_MS) {
-                this.logger.warn(`🧹 Limpiando sesión inactiva (Zombie): ${sesionId}`);
-
-                // Finalizar limpiamente
-                this.server.emit('sesion_finalizada', {
-                    sesion_id: sesionId,
-                    motivo: 'Inactividad (Timeout)',
-                    estado: 'finalizada'
-                });
-
-                this.sesionesActivas.delete(sesionId);
-                this.socketToSesion.delete(sesion.socket_id);
-                cleanedCount++;
-            }
-        }
-
-        if (cleanedCount > 0) {
-            this.logger.log(`🧹 GC: Se limpiaron ${cleanedCount} sesiones inactivas`);
-        }
     }
 }

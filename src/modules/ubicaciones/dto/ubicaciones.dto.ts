@@ -40,6 +40,11 @@ export class RegistrarUbicacionDto {
     @IsNumber()
     bateria?: number;
 
+    @ApiProperty({ example: 1706240000000, description: 'Timestamp del cliente en MS' })
+    @IsNumber()
+    @IsNotEmpty()
+    timestamp: number;
+
     @ApiProperty({ example: 'tracking', description: 'tracking, entrada_turno, salida_turno, boton_panico' })
     @IsString()
     @IsNotEmpty()

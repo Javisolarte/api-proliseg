@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsString, IsNumber, IsOptional, IsEnum, IsBoolean } from 'class-validator';
+import { IsNotEmpty, IsString, IsNumber, IsOptional, IsEnum, IsBoolean, IsObject } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export enum TipoComunicacion {
@@ -249,4 +249,56 @@ export class SesionActivaResponseDto {
 
     @ApiProperty()
     longitud?: number;
+}
+
+// ==========================================
+// 🌐 WebRTC DTOs
+// ==========================================
+
+export class WebRTCOfferDto {
+    @IsString()
+    @IsNotEmpty()
+    sesion_id: string;
+
+    @IsObject()
+    @IsNotEmpty()
+    offer: RTCSessionDescriptionInit;
+
+    @IsNumber()
+    @IsOptional()
+    target_empleado_id?: number;
+}
+
+export class WebRTCAnswerDto {
+    @IsString()
+    @IsNotEmpty()
+    sesion_id: string;
+
+    @IsObject()
+    @IsNotEmpty()
+    answer: RTCSessionDescriptionInit;
+
+    @IsNumber()
+    @IsOptional()
+    target_usuario_dashboard_id?: number;
+}
+
+export class WebRTCCandidateDto {
+    @IsString()
+    @IsNotEmpty()
+    sesion_id: string;
+
+    @IsObject()
+    @IsNotEmpty()
+    candidate: RTCIceCandidateInit;
+
+    @IsNumber()
+    @IsOptional()
+    target_id?: number;
+}
+
+export class JoinRoomDto {
+    @IsString()
+    @IsNotEmpty()
+    sesion_id: string;
 }

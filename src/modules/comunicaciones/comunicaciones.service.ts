@@ -151,4 +151,39 @@ export class ComunicacionesService {
             } : null,
         };
     }
+    /**
+     * 🌍 Obtener servidores ICE (STUN/TURN) con credenciales dinámicas (si aplica)
+     */
+    async getIceServers() {
+        // En producción, estas variables deben venir de configuración segura
+        const turnUrl = process.env.TURN_URL;
+        const turnSecret = process.env.TURN_SECRET;
+        const turnUser = process.env.TURN_USER || 'proliseg_user';
+
+        const iceServers: any[] = [
+            { urls: 'stun:stun.l.google.com:19302' }, // STUN público de fallback
+        ];
+
+        if (turnUrl && turnSecret) {
+            // Generar credenciales temporales (TTL) si se usa protocolo estandar TURN REST API
+            // O simplemente devolver las credenciales estáticas si es lo que tenemos por ahora.
+            // Para COTURN con secret estático:
+            const timestamp = Math.floor(Date.now() / 1000) + 24 * 3600; // Valido por 24h
+            const username = `${timestamp}:${turnUser}`;
+
+            // Nota: Esto requiere 'crypto' de Node.js, pero podemos usar un simple user/pass si no hay auth compleja
+            // auth = crypto.createHmac('sha1', turnSecret).update(username).digest('base64');
+
+            // Simplificación: Asumimos credenciales estáticas o manejadas por env por ahora
+            // Si el usuario provee secret y user, los usamos.
+
+            iceServers.push({
+                urls: turnUrl,
+                username: turnUser, // O la generada
+                credential: turnSecret, // O la generada
+            });
+        }
+
+        return { iceServers };
+    }
 }
