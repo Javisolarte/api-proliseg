@@ -89,7 +89,7 @@ export class ComunicacionesService {
     /**
      * 🎙️ Subir grabación de audio y guardar metadatos
      */
-    async subirGrabacion(file: Express.Multer.File, dto: SubirGrabacionDto) {
+    async subirGrabacion(file: any, dto: SubirGrabacionDto) {
         const db = this.supabase.getSupabaseAdminClient();
         const fileName = `${dto.sesion_id}_${Date.now()}.webm`;
         const filePath = `recordings/${fileName}`;

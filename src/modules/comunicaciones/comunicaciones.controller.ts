@@ -71,7 +71,7 @@ export class ComunicacionesController {
     @UseInterceptors(FileInterceptor('audio'))
     @ApiOperation({ summary: 'Subir grabación de audio al finalizar la comunicación' })
     async subirGrabacion(
-        @UploadedFile() file: Express.Multer.File,
+        @UploadedFile() file: any,
         @Body() dto: SubirGrabacionDto
     ) {
         return this.comunicacionesService.subirGrabacion(file, dto);
