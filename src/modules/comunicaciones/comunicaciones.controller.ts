@@ -1,8 +1,10 @@
-import { Controller, Get, Post, Body, UseGuards, Logger } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { Controller, Get, Post, Body, UseGuards, Logger, UseInterceptors, UploadedFile, Query, Param, Delete } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiConsumes, ApiQuery } from '@nestjs/swagger';
 import { ComunicacionesService } from './comunicaciones.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { MensajeTextoDto } from './dto/comunicacion.dto';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { SubirGrabacionDto } from './dto/subir-grabacion.dto';
 
 @ApiTags('Comunicaciones')
 @Controller('comunicaciones')
@@ -60,15 +62,63 @@ export class ComunicacionesController {
     }
 
     /**
-     * 🔍 Validar empleado
+     * 🎙️ Subir grabación de audio
      */
-    @Get('validar-empleado/:id')
+    @Post('subir-grabacion')
     @UseGuards(JwtAuthGuard)
     @ApiBearerAuth()
-    @ApiOperation({ summary: 'Validar que un empleado existe' })
-    @ApiResponse({ status: 200, description: 'Empleado validado' })
-    async validarEmpleado(@Body('empleado_id') empleado_id: number) {
-        return this.comunicacionesService.validarEmpleado(empleado_id);
+    @ApiConsumes('multipart/form-data')
+    @UseInterceptors(FileInterceptor('audio'))
+    @ApiOperation({ summary: 'Subir grabación de audio al finalizar la comunicación' })
+    async subirGrabacion(
+        @UploadedFile() file: Express.Multer.File,
+        @Body() dto: SubirGrabacionDto
+    ) {
+        return this.comunicacionesService.subirGrabacion(file, dto);
+    }
+
+    /**
+     * 📜 Obtener historial
+     */
+    @Get('historial')
+    @UseGuards(JwtAuthGuard)
+    @ApiBearerAuth()
+    @ApiOperation({ summary: 'Obtener historial de grabaciones' })
+    @ApiQuery({ name: 'limit', required: false, type: Number })
+    @ApiQuery({ name: 'offset', required: false, type: Number })
+    @ApiQuery({ name: 'empleado_id', required: false, type: Number })
+    async getHistorial(
+        @Query('limit') limit?: number,
+        @Query('offset') offset?: number,
+        @Query('empleado_id') empleado_id?: number
+    ) {
+        return this.comunicacionesService.getHistorial({
+            limit: limit ? +limit : 10,
+            offset: offset ? +offset : 0,
+            empleado_id: empleado_id ? +empleado_id : undefined
+        });
+    }
+
+    /**
+     * 🔍 Obtener detalle de registro
+     */
+    @Get('historial/:id')
+    @UseGuards(JwtAuthGuard)
+    @ApiBearerAuth()
+    @ApiOperation({ summary: 'Obtener detalle de una grabación específica' })
+    async getHistorialDetalle(@Param('id') id: string) {
+        return this.comunicacionesService.getHistorialDetalle(+id);
+    }
+
+    /**
+     * 🗑️ Eliminar registro
+     */
+    @Delete('historial/:id')
+    @UseGuards(JwtAuthGuard)
+    @ApiBearerAuth()
+    @ApiOperation({ summary: 'Eliminar un registro del historial y su archivo' })
+    async eliminarHistorial(@Param('id') id: string) {
+        return this.comunicacionesService.eliminarHistorial(+id);
     }
 
     /**

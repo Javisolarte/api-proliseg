@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ComunicacionesGateway } from './comunicaciones.gateway';
 import { SupabaseService } from '../supabase/supabase.service';
+import { SubirGrabacionDto } from './dto/subir-grabacion.dto';
 
 @Injectable()
 export class ComunicacionesService {
@@ -63,39 +64,155 @@ export class ComunicacionesService {
     }
 
     /**
-     * 📝 Registrar evento de comunicación en minutas (opcional)
-     * Solo si se quiere dejar registro histórico sin el audio
+     * 🌍 Obtener servidores ICE (STUN/TURN)
      */
-    async registrarEnMinuta(data: {
-        empleado_id: number;
-        puesto_id?: number;
-        mensaje: string;
-        tipo: string;
-        latitud?: number;
-        longitud?: number;
-    }) {
-        const db = this.supabase.getClient();
+    async getIceServers() {
+        const turnUrl = process.env.TURN_URL;
+        const turnUser = process.env.TURN_USER || 'proliseg_user';
+        const turnSecret = process.env.TURN_SECRET;
 
-        try {
-            await db.from('minutas').insert({
-                puesto_id: data.puesto_id,
-                creada_por: data.empleado_id,
-                contenido: data.mensaje,
-                tipo: 'comunicacion',
-                titulo: `Comunicación ${data.tipo.toUpperCase()}`,
-                nivel_riesgo: data.tipo === 'emergencia' ? 'crítico' : 'bajo',
-                ubicacion_lat: data.latitud,
-                ubicacion_lng: data.longitud,
+        const iceServers: any[] = [
+            { urls: 'stun:stun.l.google.com:19302' },
+        ];
+
+        if (turnUrl && turnSecret) {
+            iceServers.push({
+                urls: turnUrl,
+                username: turnUser,
+                credential: turnSecret,
             });
-
-            this.logger.log(`✅ Comunicación registrada en minutas para empleado ${data.empleado_id}`);
-        } catch (error) {
-            this.logger.error(`Error al registrar en minutas: ${error.message}`);
         }
+
+        return { iceServers };
     }
 
     /**
-     * 🔔 Enviar notificación de emergencia
+     * 🎙️ Subir grabación de audio y guardar metadatos
+     */
+    async subirGrabacion(file: Express.Multer.File, dto: SubirGrabacionDto) {
+        const db = this.supabase.getSupabaseAdminClient();
+        const fileName = `${dto.sesion_id}_${Date.now()}.webm`;
+        const filePath = `recordings/${fileName}`;
+
+        // 1. Subir a Supabase Storage usando helper
+        await this.supabase.uploadFile('audio-calls', filePath, file.buffer, 'audio/webm');
+
+        // 2. Generar URL pública (asumiendo que el bucket es público)
+        const supabaseUrl = process.env.SUPABASE_URL;
+        const audioUrl = `${supabaseUrl}/storage/v1/object/public/audio-calls/${filePath}`;
+
+        // 3. Guardar en la base de datos
+        const { data, error: dbError } = await db
+            .from('comunicaciones_historial')
+            .insert({
+                sesion_id: dto.sesion_id,
+                empleado_id: dto.empleado_id,
+                puesto_id: dto.puesto_id,
+                usuario_dashboard_id: dto.usuario_dashboard_id,
+                tipo: dto.tipo,
+                duracion_segundos: dto.duracion_segundos,
+                audio_path: filePath,
+                audio_url: audioUrl,
+                latitud: dto.latitud,
+                longitud: dto.longitud,
+                fecha_inicio: dto.fecha_inicio,
+                fecha_fin: new Date().toISOString()
+            })
+            .select()
+            .single();
+
+        if (dbError) {
+            this.logger.error(`Error al guardar en historial: ${dbError.message}`);
+            throw new Error(`Error al registrar historial: ${dbError.message}`);
+        }
+
+        return data;
+    }
+
+    /**
+     * 📜 Obtener historial de comunicaciones
+     */
+    async getHistorial(query: { limit?: number, offset?: number, empleado_id?: number }) {
+        const db = this.supabase.getClient();
+        let q = db
+            .from('comunicaciones_historial')
+            .select(`
+                *,
+                empleados(nombre_completo),
+                puestos_trabajo(nombre)
+            `)
+            .order('created_at', { ascending: false });
+
+        if (query.empleado_id) {
+            q = q.eq('empleado_id', query.empleado_id);
+        }
+
+        if (query.limit) q = q.limit(query.limit);
+        if (query.offset) q = q.range(query.offset || 0, (query.offset || 0) + (query.limit || 10) - 1);
+
+        const { data, error } = await q;
+
+        if (error) {
+            this.logger.error(`Error al obtener historial: ${error.message}`);
+            throw new Error('No se pudo obtener el historial');
+        }
+
+        return data;
+    }
+
+    /**
+     * 🔍 Obtener detalle de una grabación
+     */
+    async getHistorialDetalle(id: number) {
+        const db = this.supabase.getClient();
+        const { data, error } = await db
+            .from('comunicaciones_historial')
+            .select(`
+                *,
+                empleados(nombre_completo, cedula, telefono),
+                puestos_trabajo(nombre, direccion, ciudad)
+            `)
+            .eq('id', id)
+            .single();
+
+        if (error) {
+            throw new Error(`Registro no encontrado: ${error.message}`);
+        }
+
+        return data;
+    }
+
+    /**
+     * 🗑️ Eliminar registro y archivo
+     */
+    async eliminarHistorial(id: number) {
+        const db = this.supabase.getSupabaseAdminClient();
+
+        // 1. Obtener registro para saber la ruta del archivo
+        const { data: registro } = await db
+            .from('comunicaciones_historial')
+            .select('audio_path')
+            .eq('id', id)
+            .single();
+
+        // 2. Eliminar de Storage si existe
+        if (registro?.audio_path) {
+            await this.supabase.deleteFile('audio-calls', registro.audio_path);
+        }
+
+        // 3. Eliminar de DB
+        const { error } = await db
+            .from('comunicaciones_historial')
+            .delete()
+            .eq('id', id);
+
+        if (error) throw new Error(`Error al eliminar: ${error.message}`);
+
+        return { success: true };
+    }
+
+    /**
+     * 🔔 Notificar emergencia
      */
     async notificarEmergencia(data: {
         empleado_id: number;
@@ -104,86 +221,11 @@ export class ComunicacionesService {
         latitud?: number;
         longitud?: number;
     }) {
-        // Emitir evento especial de emergencia
         this.gateway.emitEvent('emergencia_comunicacion', {
-            empleado_id: data.empleado_id,
-            mensaje: data.mensaje,
-            puesto_id: data.puesto_id,
-            latitud: data.latitud,
-            longitud: data.longitud,
+            ...data,
             timestamp: new Date(),
         });
 
-        // Opcionalmente registrar en minutas
-        await this.registrarEnMinuta({
-            ...data,
-            tipo: 'emergencia',
-        });
-
         this.logger.warn(`🚨 EMERGENCIA: ${data.mensaje} - Empleado ${data.empleado_id}`);
-    }
-
-    /**
-     * 📡 Obtener información de sesión enriquecida
-     */
-    async obtenerInfoSesion(sesion_id: string, empleado_id: number, puesto_id?: number) {
-        const empleado = await this.validarEmpleado(empleado_id);
-        let puesto: any = null;
-
-        if (puesto_id) {
-            puesto = await this.obtenerInfoPuesto(puesto_id);
-        }
-
-        return {
-            sesion_id,
-            empleado: {
-                id: empleado.id,
-                nombre: empleado.nombre_completo,
-                cedula: empleado.cedula,
-                telefono: empleado.telefono,
-            },
-            puesto: puesto ? {
-                id: puesto.id,
-                nombre: puesto.nombre,
-                direccion: puesto.direccion,
-                ciudad: puesto.ciudad,
-                cliente: puesto.clientes?.nombre_empresa,
-            } : null,
-        };
-    }
-    /**
-     * 🌍 Obtener servidores ICE (STUN/TURN) con credenciales dinámicas (si aplica)
-     */
-    async getIceServers() {
-        // En producción, estas variables deben venir de configuración segura
-        const turnUrl = process.env.TURN_URL;
-        const turnSecret = process.env.TURN_SECRET;
-        const turnUser = process.env.TURN_USER || 'proliseg_user';
-
-        const iceServers: any[] = [
-            { urls: 'stun:stun.l.google.com:19302' }, // STUN público de fallback
-        ];
-
-        if (turnUrl && turnSecret) {
-            // Generar credenciales temporales (TTL) si se usa protocolo estandar TURN REST API
-            // O simplemente devolver las credenciales estáticas si es lo que tenemos por ahora.
-            // Para COTURN con secret estático:
-            const timestamp = Math.floor(Date.now() / 1000) + 24 * 3600; // Valido por 24h
-            const username = `${timestamp}:${turnUser}`;
-
-            // Nota: Esto requiere 'crypto' de Node.js, pero podemos usar un simple user/pass si no hay auth compleja
-            // auth = crypto.createHmac('sha1', turnSecret).update(username).digest('base64');
-
-            // Simplificación: Asumimos credenciales estáticas o manejadas por env por ahora
-            // Si el usuario provee secret y user, los usamos.
-
-            iceServers.push({
-                urls: turnUrl,
-                username: turnUser, // O la generada
-                credential: turnSecret, // O la generada
-            });
-        }
-
-        return { iceServers };
     }
 }
