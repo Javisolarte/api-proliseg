@@ -244,15 +244,23 @@ export class AspirantesService {
             throw new BadRequestException('Esta prueba ya fue presentada o finalizada.');
         }
 
-        // 2. Validar Fecha
-        const hoy = new Date().toISOString().split('T')[0];
+        // 2. Validar Fecha - Using Colombia timezone (UTC-5)
+        const ahora = new Date();
+        const colombiaOffset = -5 * 60; // Colombia is UTC-5 in minutes
+        const localDate = new Date(ahora.getTime() + (colombiaOffset + ahora.getTimezoneOffset()) * 60000);
+        const hoy = localDate.toISOString().split('T')[0];
+
         if (intento.fecha_programada !== hoy) {
             throw new BadRequestException(`La prueba está programada para el ${intento.fecha_programada}. Hoy es ${hoy}.`);
         }
 
-        // 3. Validar Hora
+        // 3. Validar Hora - Using Colombia timezone (UTC-5)
         const ahora = new Date();
-        const horaActual = ahora.toTimeString().split(' ')[0]; // HH:MM:SS
+        // Get current time in Colombia (UTC-5)
+        const colombiaOffset = -5 * 60; // Colombia is UTC-5 in minutes
+        const localTime = new Date(ahora.getTime() + (colombiaOffset + ahora.getTimezoneOffset()) * 60000);
+        const horaActual = localTime.toTimeString().split(' ')[0]; // HH:MM:SS in Colombia time
+
         if (horaActual < intento.hora_inicio || horaActual > intento.hora_fin) {
             throw new BadRequestException(`La prueba está disponible entre ${intento.hora_inicio} y ${intento.hora_fin}.`);
         }
