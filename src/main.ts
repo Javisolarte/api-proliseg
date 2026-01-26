@@ -6,7 +6,6 @@ import {
   SwaggerCustomOptions,
 } from "@nestjs/swagger";
 import { AppModule } from "./app.module";
-import * as bodyParser from "body-parser";
 import { NestExpressApplication } from "@nestjs/platform-express";
 import "dotenv/config";
 
@@ -17,8 +16,8 @@ async function bootstrap() {
 
   app.set("trust proxy", true);
 
-  app.use(bodyParser.json({ limit: "10mb" }));
-  app.use(bodyParser.urlencoded({ limit: "10mb", extended: true }));
+  // NOTA: Se eliminan bodyParser.json() y urlencoded() manuales para evitar conflictos con Multer.
+  // NestJS maneja esto internamente. Si necesitas límites mayores, usa la config de factory.create.
 
   app.setGlobalPrefix("api");
 
@@ -30,7 +29,7 @@ async function bootstrap() {
     }),
   );
 
-  // ✅ CORS abierto para desarrollo (puedes limitar luego)
+  // ✅ CORS abierto para desarrollo
   app.enableCors({
     origin: "*",
     methods: "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS",
