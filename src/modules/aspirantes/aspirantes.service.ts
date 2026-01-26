@@ -255,9 +255,7 @@ export class AspirantesService {
         }
 
         // 3. Validar Hora - Using Colombia timezone (UTC-5)
-        const ahora = new Date();
         // Get current time in Colombia (UTC-5)
-        const colombiaOffset = -5 * 60; // Colombia is UTC-5 in minutes
         const localTime = new Date(ahora.getTime() + (colombiaOffset + ahora.getTimezoneOffset()) * 60000);
         const horaActual = localTime.toTimeString().split(' ')[0]; // HH:MM:SS in Colombia time
 
