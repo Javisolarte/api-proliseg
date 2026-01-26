@@ -94,6 +94,12 @@ export class ComunicacionesService {
         const fileName = `${dto.sesion_id}_${Date.now()}.webm`;
         const filePath = `recordings/${fileName}`;
 
+        // Validación defensiva final en el servicio
+        if (!file || !file.buffer) {
+            this.logger.error('❌ Servicio recibió un archivo inválido');
+            throw new Error('El objeto de archivo es inválido o no tiene contenido (buffer)');
+        }
+
         const audioBuffer = file.buffer;
 
         // 1. Subir a Supabase Storage usando helper

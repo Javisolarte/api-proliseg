@@ -71,9 +71,16 @@ export class ComunicacionesController {
     @UseInterceptors(FileInterceptor('audio'))
     @ApiOperation({ summary: 'Subir grabación de audio al finalizar la comunicación' })
     async subirGrabacion(
-        @UploadedFile() file: any,
+        @UploadedFile('audio') file: any,
         @Body() dto: SubirGrabacionDto
     ) {
+        this.logger.log(`📤 Petición para subir grabación. Sesión: ${dto.sesion_id}`);
+
+        if (!file || !file.buffer) {
+            this.logger.error(`❌ Archivo '${file ? 'sin buffer' : 'null'}' en la petición`);
+            throw new Error('No se recibió el archivo de audio con contenido válido');
+        }
+
         return this.comunicacionesService.subirGrabacion(file, dto);
     }
 
