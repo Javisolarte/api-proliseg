@@ -94,10 +94,12 @@ export class ComunicacionesService {
         const fileName = `${dto.sesion_id}_${Date.now()}.webm`;
         const filePath = `recordings/${fileName}`;
 
-        // 1. Subir a Supabase Storage usando helper
-        await this.supabase.uploadFile('audio-calls', filePath, file.buffer, 'audio/webm');
+        const audioBuffer = file.buffer;
 
-        // 2. Generar URL pública (asumiendo que el bucket es público)
+        // 1. Subir a Supabase Storage usando helper
+        await this.supabase.uploadFile('audio-calls', filePath, audioBuffer, 'audio/webm');
+
+        // 2. Generar URL pública
         const supabaseUrl = process.env.SUPABASE_URL;
         const audioUrl = `${supabaseUrl}/storage/v1/object/public/audio-calls/${filePath}`;
 
