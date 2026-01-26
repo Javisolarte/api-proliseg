@@ -38,7 +38,7 @@ export class ComunicacionesController {
     }
 
     /**
-     * 🚨 Endpoint de emergencia (alternativo al WebSocket)
+     * 🚨 Endpoint de emergencia
      */
     @Post('emergencia')
     @UseGuards(JwtAuthGuard)
@@ -74,11 +74,19 @@ export class ComunicacionesController {
         @UploadedFile('audio') file: any,
         @Body() dto: SubirGrabacionDto
     ) {
-        this.logger.log(`📤 Petición para subir grabación. Sesión: ${dto.sesion_id}`);
+        // Logs de diagnóstico para saber qué falla exactamente
+        this.logger.log(`📥 Petición de subida recibida. Sesión ID: ${dto?.sesion_id}`);
+        this.logger.log(`📄 Estado del archivo (campo 'audio'): ${file ? 'RECIBIDO (' + file.originalname + ')' : 'NO ENCONTRADO (NULL)'}`);
 
-        if (!file || !file.buffer) {
-            this.logger.error(`❌ Archivo '${file ? 'sin buffer' : 'null'}' en la petición`);
-            throw new Error('No se recibió el archivo de audio con contenido válido');
+        if (!file) {
+            this.logger.error('❌ Error crítico: El archivo no llegó en el campo "audio".');
+            this.logger.warn('💡 RECOMENDACIÓN: Asegúrate de que el frontend haga: formData.append("audio", blob, "audio.webm")');
+            throw new Error('No se recibió el archivo de audio. Verifica el nombre del campo en el FormData (debe ser "audio").');
+        }
+
+        if (!file.buffer || file.buffer.length === 0) {
+            this.logger.error(`❌ Error crítico: El archivo llegó pero el buffer está vacío.`);
+            throw new Error('El archivo de audio está vacío o corrupto.');
         }
 
         return this.comunicacionesService.subirGrabacion(file, dto);
@@ -129,7 +137,7 @@ export class ComunicacionesController {
     }
 
     /**
-     * 🏥 Health check del módulo
+     * 🏥 Health check
      */
     @Get('health')
     @ApiOperation({ summary: 'Verificar estado del módulo de comunicaciones' })
