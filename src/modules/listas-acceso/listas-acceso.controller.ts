@@ -83,7 +83,7 @@ export class ListasAccesoController {
     @RequirePermissions("listas_acceso", "crear")
     @UseInterceptors(FileInterceptor("file"))
     @ApiOperation({ summary: "Importación masiva via Excel (.xlsx)" })
-    async importarExcel(@UploadedFile() file: Express.Multer.File, @CurrentUser() user: any) {
+    async importarExcel(@UploadedFile() file: any, @CurrentUser() user: any) {
         return this.listasService.importarExcel(file.buffer, user.id);
     }
 

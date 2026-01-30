@@ -393,7 +393,7 @@ export class AsistenciasController {
     }
   })
   async uploadFoto(
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFile() file: any,
     @Body("empleado_id") empleado_id: string
   ) {
     return this.asistenciasService.uploadFoto(file, parseInt(empleado_id));
