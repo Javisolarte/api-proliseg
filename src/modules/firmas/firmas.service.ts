@@ -1,4 +1,4 @@
-import { Injectable, Logger, BadRequestException, ConflictException, NotFoundException } from "@nestjs/common";
+import { Injectable, Logger, BadRequestException, ConflictException, NotFoundException, Inject, forwardRef } from "@nestjs/common";
 import { SupabaseService } from "../supabase/supabase.service";
 import type { CreateFirmaDto } from "./dto/firma.dto";
 import { DocumentosGeneradosService } from "../documentos-generados/documentos-generados.service";
@@ -9,6 +9,7 @@ export class FirmasService {
 
     constructor(
         private readonly supabaseService: SupabaseService,
+        @Inject(forwardRef(() => DocumentosGeneradosService))
         private readonly documentosService: DocumentosGeneradosService
     ) { }
 
@@ -67,6 +68,7 @@ export class FirmasService {
                 .insert({
                     documento_id: docId,
                     usuario_id: createDto.usuario_id || null,
+                    empleado_id: createDto.empleado_id || null, // Link directo al empleado
                     nombre_firmante: createDto.nombre_firmante,
                     documento_identidad_firmante: createDto.documento_identidad_firmante,
                     cargo_firmante: createDto.cargo_firmante || null,
@@ -152,7 +154,7 @@ export class FirmasService {
     async getEstadoFirmas(docId: number) {
         const firmas: any[] = await this.findByDocumento(docId);
         const total = firmas.length;
-        const firmadas = firmas.filter(f => f.firmado_en || f.estado === 'firmado').length;
+        const firmadas = firmas.filter(f => f.fecha_firma || f.estado === 'firmado').length;
         const pendientes = total - firmadas;
 
         return {
@@ -166,10 +168,61 @@ export class FirmasService {
                 id: f.id,
                 nombre: f.nombre_firmante,
                 cargo: f.cargo_firmante,
-                estado: f.firmado_en ? 'firmado' : 'pendiente',
-                fecha_firma: f.firmado_en,
+                estado: f.fecha_firma ? 'firmado' : 'pendiente',
+                fecha_firma: f.fecha_firma,
                 orden: f.orden
             }))
         };
+    }
+
+    /**
+     * ✍️ AUTO-SIGN: Firma un documento usando la firma guardada del empleado
+     */
+    async autoSign(documentoId: number, empleadoId: number, ipAddress: string = '127.0.0.1') {
+        const supabase = this.supabaseService.getClient();
+
+        // 1. Obtener datos del empleado y su firma maestra
+        const { data: empleado, error: empError } = await supabase
+            .from('empleados')
+            .select('id, nombre_completo, cedula, cargo_oficial, firma_digital_base64')
+            .eq('id', empleadoId)
+            .single();
+
+        if (empError || !empleado?.firma_digital_base64) {
+            this.logger.warn(`No se pudo auto-firmar: El empleado ${empleadoId} no tiene firma guardada.`);
+            return null;
+        }
+
+        // 2. Crear el registro de firma
+        return this.create({
+            documento_id: documentoId,
+            empleado_id: empleado.id,
+            nombre_firmante: empleado.nombre_completo,
+            documento_identidad_firmante: empleado.cedula,
+            cargo_firmante: empleado.cargo_oficial || 'Administrador',
+            tipo_firma: 'digital',
+            firma_base64: empleado.firma_digital_base64,
+            orden: 1, // Por defecto al principio
+            es_ultima_firma: false // Dependerá del flujo
+        }, ipAddress);
+    }
+
+    /**
+     * 💾 GUARDAR FIRMA MAESTRA: Guarda la firma en el perfil del empleado
+     */
+    async saveMasterSignature(empleadoId: number, firmaBase64: string, cargo?: string) {
+        const supabase = this.supabaseService.getClient();
+        const updateData: any = { firma_digital_base64: firmaBase64 };
+        if (cargo) updateData.cargo_oficial = cargo;
+
+        const { data, error } = await supabase
+            .from('empleados')
+            .update(updateData)
+            .eq('id', empleadoId)
+            .select()
+            .single();
+
+        if (error) throw new BadRequestException("Error al guardar firma maestra del empleado");
+        return data;
     }
 }

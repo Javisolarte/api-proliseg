@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException, Logger, BadRequestException, ForbiddenException } from "@nestjs/common";
+import { Injectable, NotFoundException, Logger, BadRequestException, ForbiddenException, Inject, forwardRef } from "@nestjs/common";
 import { SupabaseService } from "../supabase/supabase.service";
 import { PlantillasService } from "../plantillas/plantillas.service";
 import type { CreateDocumentoDto } from "./dto/documento-generado.dto";
+import { FirmasService } from "../firmas/firmas.service";
 
 @Injectable()
 export class DocumentosGeneradosService {
@@ -9,10 +10,12 @@ export class DocumentosGeneradosService {
 
     constructor(
         private readonly supabaseService: SupabaseService,
-        private readonly plantillasService: PlantillasService
+        private readonly plantillasService: PlantillasService,
+        @Inject(forwardRef(() => FirmasService))
+        private readonly firmasService: FirmasService
     ) { }
 
-    async create(createDto: CreateDocumentoDto) {
+    async create(createDto: CreateDocumentoDto, usuarioActual?: any) {
         try {
             // 1. Validar variables de plantilla
             await this.plantillasService.validateVariables(createDto.plantilla_id, createDto.datos_json);
@@ -20,7 +23,8 @@ export class DocumentosGeneradosService {
             const supabase = this.supabaseService.getClient();
 
             // 2. Crear documento en estado borrador
-            const { data, error } = await supabase
+            // NOTA: Si queremos que se firme auto, quizás deba estar en otro estado o pasar por un flujo
+            const { data: doc, error } = await supabase
                 .from("documentos_generados")
                 .insert({
                     plantilla_id: createDto.plantilla_id,
@@ -33,7 +37,14 @@ export class DocumentosGeneradosService {
                 .single();
 
             if (error) throw new BadRequestException("Error al generar documento");
-            return data;
+
+            // 3. AUTO-FIRMA (Si el usuario actual está vinculado a un empleado con firma)
+            if (usuarioActual?.empleado_id) {
+                await this.firmasService.autoSign(doc.id, usuarioActual.empleado_id);
+                this.logger.log(`Documento ${doc.id} auto-firmado por empleado ${usuarioActual.empleado_id}`);
+            }
+
+            return doc;
 
         } catch (error) {
             this.logger.error("Error en create:", error);

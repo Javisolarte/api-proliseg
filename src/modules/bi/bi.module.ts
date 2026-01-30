@@ -5,8 +5,10 @@ import { AnalyticsService } from './analytics.service';
 import { AnalyticsController } from './analytics.controller';
 import { SupabaseModule } from '../supabase/supabase.module';
 
+import { AuthModule } from '../auth/auth.module';
+
 @Module({
-    imports: [SupabaseModule],
+    imports: [AuthModule],
     controllers: [BiController, AnalyticsController],
     providers: [BiService, AnalyticsService],
     exports: [BiService, AnalyticsService]

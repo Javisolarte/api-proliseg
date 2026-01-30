@@ -23,6 +23,8 @@ import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { PermissionsGuard } from "../auth/guards/permissions.guard";
 import { RequirePermissions } from "../auth/decorators/permissions.decorator";
 
+import { CurrentUser } from "../auth/decorators/current-user.decorator";
+
 @ApiTags("Documentos Generados")
 @Controller("documentos-generados")
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -88,8 +90,8 @@ export class DocumentosGeneradosController {
     @RequirePermissions("documentos", "crear")
     @ApiOperation({ summary: "Crear documento generado" })
     @ApiResponse({ status: 201, description: "Documento creado exitosamente" })
-    async create(@Body() createDto: CreateDocumentoDto) {
-        return this.documentosService.create(createDto);
+    async create(@Body() createDto: CreateDocumentoDto, @CurrentUser() user: any) {
+        return this.documentosService.create(createDto, user);
     }
 
     @Put(":id")

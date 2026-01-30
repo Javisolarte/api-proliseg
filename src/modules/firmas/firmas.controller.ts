@@ -82,4 +82,15 @@ export class FirmasController {
     async getEstado(@Param("id", ParseIntPipe) id: number) {
         return this.firmasService.getEstadoFirmas(id);
     }
+
+    @Post("empleado/:id")
+    @RequirePermissions("configuracion", "actualizar")
+    @ApiOperation({ summary: "Guardar firma maestra para un empleado" })
+    @ApiResponse({ status: 200, description: "Firma maestra guardada" })
+    async saveMaster(
+        @Param("id", ParseIntPipe) id: number,
+        @Body() body: { firma_base64: string, cargo?: string }
+    ) {
+        return this.firmasService.saveMasterSignature(id, body.firma_base64, body.cargo);
+    }
 }

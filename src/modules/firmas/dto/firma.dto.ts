@@ -13,6 +13,11 @@ export class CreateFirmaDto {
 
     @ApiProperty({ required: false })
     @IsOptional()
+    @IsNumber()
+    empleado_id?: number;
+
+    @ApiProperty({ required: false })
+    @IsOptional()
     @IsString()
     nombre_firmante?: string;
 

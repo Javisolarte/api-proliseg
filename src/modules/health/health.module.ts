@@ -6,7 +6,7 @@ import { SupabaseHealthIndicator } from './indicators/supabase.indicator';
 import { SupabaseModule } from '../supabase/supabase.module';
 
 @Module({
-    imports: [TerminusModule, SupabaseModule],
+    imports: [TerminusModule],
     controllers: [HealthController],
     providers: [RedisHealthIndicator, SupabaseHealthIndicator],
 })

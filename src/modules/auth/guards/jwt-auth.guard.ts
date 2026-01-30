@@ -4,6 +4,8 @@ import {
   ExecutionContext,
   UnauthorizedException,
   InternalServerErrorException,
+  Inject,
+  forwardRef,
 } from "@nestjs/common";
 import { SupabaseService } from "../../supabase/supabase.service";
 import { AuthService } from "../../auth/auth.service";
@@ -12,6 +14,7 @@ import { AuthService } from "../../auth/auth.service";
 export class JwtAuthGuard implements CanActivate {
   constructor(
     private readonly supabaseService: SupabaseService,
+    @Inject(forwardRef(() => AuthService))
     private readonly authService: AuthService
   ) { }
 
