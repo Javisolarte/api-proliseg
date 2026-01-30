@@ -9,7 +9,10 @@ import {
   Delete,
   UseGuards,
   ParseIntPipe,
+  UseInterceptors,
+  UploadedFile,
 } from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
 import {
   ApiTags,
   ApiOperation,
@@ -374,5 +377,25 @@ export class AsistenciasController {
   })
   async registrarSalidaManual(@Body() dto: RegistrarSalidaManualDto) {
     return this.asistenciasService.registrarSalidaManual(dto);
+  }
+
+  @Post("upload-foto")
+  @RequirePermissions("asistencia.write")
+  @ApiOperation({ summary: "Subir foto de evidencia (Entrada/Salida)" })
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiResponse({
+    status: 201,
+    description: "Foto subida correctamente",
+    schema: {
+      example: {
+        url: "https://supabase.../asistencias-fotos/123.jpg"
+      }
+    }
+  })
+  async uploadFoto(
+    @UploadedFile() file: Express.Multer.File,
+    @Body("empleado_id") empleado_id: string
+  ) {
+    return this.asistenciasService.uploadFoto(file, parseInt(empleado_id));
   }
 }

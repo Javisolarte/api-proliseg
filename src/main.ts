@@ -7,7 +7,17 @@ import {
 } from "@nestjs/swagger";
 import { AppModule } from "./app.module";
 import { NestExpressApplication } from "@nestjs/platform-express";
+import * as Sentry from "@sentry/nestjs";
 import "dotenv/config";
+
+Sentry.init({
+  dsn: process.env.SENTRY_DSN,
+  integrations: [
+    Sentry.nestIntegration(),
+  ],
+  tracesSampleRate: 1.0,
+  profilesSampleRate: 1.0,
+});
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -59,6 +69,7 @@ async function bootstrap() {
     .addTag("Configuración", "Gestión de roles, usuarios y permisos")
     .addTag("Salarios", "Gestión de salarios")
     .addTag("Vigilancia", "Gestión de cursos y tipos de vigilantes")
+    .addTag("Webhooks", "Suscripciones y notificaciones externas")
     .build();
 
   const document = SwaggerModule.createDocument(app, config);

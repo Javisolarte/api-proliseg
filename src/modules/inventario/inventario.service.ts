@@ -154,4 +154,29 @@ export class InventarioService {
             explicacion: "El cálculo se basa en el historial de movimientos. Entradas con motivo 'Devolución' suman al stock de segunda. Salidas con motivo '(segunda)' restan al stock de segunda."
         };
     }
+
+    async getAlertas() {
+        // Alertas de stock bajo
+        const supabase = this.supabaseService.getClient();
+        const { data } = await supabase.from('articulos_dotacion_variantes')
+            .select('*, articulo:articulos_dotacion(nombre)')
+            .lt('stock_actual', 5) // Umbral fijo (hardcoded) o campo 'stock_minimo' si existe
+            .order('stock_actual', { ascending: true });
+        return data || [];
+    }
+
+    async getReporteGeneral() {
+        const supabase = this.supabaseService.getClient();
+        // Agregaciones
+        const { count: items } = await supabase.from('articulos_dotacion').select('*', { count: 'exact', head: true });
+        const { count: variantes } = await supabase.from('articulos_dotacion_variantes').select('*', { count: 'exact', head: true });
+
+        // Calcular valor total inventario (costo promedio estimado, si hubiera campo costo)
+        // Por ahora conteo básico
+        return {
+            total_articulos: items || 0,
+            total_variantes: variantes || 0,
+            fecha_reporte: new Date()
+        };
+    }
 }

@@ -1,95 +1,53 @@
+import { Controller, Post, Body, Get, Put, Query, UseGuards, Request } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { NotificacionesService } from './notificaciones.service';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import {
-  Controller,
-  Get,
-  Post,
-  Put,
-  Delete,
-  Body,
-  Param,
-  UseGuards,
-} from "@nestjs/common";
-import {
-  ApiTags,
-  ApiOperation,
-  ApiResponse,
-  ApiBearerAuth,
-  ApiBody,
-} from "@nestjs/swagger";
-import { NotificacionesService } from "./notificaciones.service";
-import { CreateNotificacionDto, UpdateNotificacionDto } from "./dto/notificacion.dto";
-import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
-import { PermissionsGuard } from "../auth/guards/permissions.guard";
-import { RequirePermissions } from "../auth/decorators/permissions.decorator";
+  RegistrarDispositivoDto,
+  ConfigurarPreferenciasDto,
+  EnviarNotificacionDto
+} from './dto/notificaciones.dto';
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
-@ApiTags("Notificaciones")
-@Controller("notificaciones")
-@UseGuards(JwtAuthGuard, PermissionsGuard)
-@ApiBearerAuth("JWT-auth")
+@ApiTags('Notificaciones')
+@Controller('api/notificaciones')
+@UseGuards(JwtAuthGuard)
+@ApiBearerAuth('JWT-auth')
 export class NotificacionesController {
   constructor(private readonly notificacionesService: NotificacionesService) { }
 
-  @Get()
-  @RequirePermissions("notificaciones")
-  @ApiOperation({ summary: "Listar todas las notificaciones" })
-  @ApiResponse({ status: 200, description: "Lista de notificaciones" })
-  async findAll() {
-    return this.notificacionesService.findAll();
+  @Post('dispositivos')
+  @ApiOperation({ summary: 'Registrar token de dispositivo (FCM) para Push' })
+  async registrarDispositivo(@Request() req, @Body() dto: RegistrarDispositivoDto) {
+    const tipo = req.user.tipo === 'empleado' ? 'empleado' : 'usuario';
+    return this.notificacionesService.registrarDispositivo(req.user.id, dto, tipo);
   }
 
-  @Get(":id")
-  @RequirePermissions("notificaciones")
-  @ApiOperation({ summary: "Obtener notificación por ID" })
-  @ApiResponse({ status: 200, description: "Notificación encontrada" })
-  @ApiResponse({ status: 404, description: "Notificación no encontrada" })
-  async findOne(@Param("id") id: string) {
-    return this.notificacionesService.findOne(Number(id));
+  @Put('preferencias')
+  @ApiOperation({ summary: 'Configurar preferencias de notificación' })
+  async configurarPreferencias(@Request() req, @Body() dto: ConfigurarPreferenciasDto) {
+    return this.notificacionesService.configurarPreferencias(req.user.id, dto);
   }
 
-  @Post()
-  @RequirePermissions("notificaciones")
-  @ApiOperation({ summary: "Crear nueva notificación" })
-  @ApiResponse({ status: 201, description: "Notificación creada exitosamente" })
-  @ApiBody({ type: CreateNotificacionDto })
-  async create(@Body() createNotificacionDto: CreateNotificacionDto) {
-    return this.notificacionesService.create(createNotificacionDto);
-  }
-
-  @Put(":id")
-  @RequirePermissions("notificaciones")
-  @ApiOperation({ summary: "Actualizar notificación" })
-  @ApiResponse({ status: 200, description: "Notificación actualizada correctamente" })
-  async update(
-    @Param("id") id: string,
-    @Body() updateNotificacionDto: UpdateNotificacionDto,
-  ) {
-    return this.notificacionesService.update(Number(id), updateNotificacionDto);
-  }
-
-  @Delete(":id")
-  @RequirePermissions("notificaciones")
-  @ApiOperation({ summary: "Eliminar notificación" })
-  @ApiResponse({ status: 200, description: "Notificación eliminada exitosamente" })
-  async remove(@Param("id") id: string) {
-    return this.notificacionesService.remove(Number(id));
-  }
-
-  @Post("verificar-asignaciones")
-  @RequirePermissions("notificaciones")
-  @ApiOperation({
-    summary: "Verificar asignaciones incompletas manualmente",
-    description: "Verifica todos los subpuestos activos y crea notificaciones para aquellos que tengan empleados faltantes por asignar"
-  })
-  @ApiResponse({
-    status: 201,
-    description: "Verificación completada",
-    schema: {
-      example: {
-        verificados: 15,
-        notificaciones_creadas: 3
-      }
+  @Post('enviar')
+  @RequirePermissions('sistema', 'enviar_notificacion')
+  @ApiOperation({ summary: 'Enviar una notificación manual (Admin)' })
+  async enviarNotificacionManual(@Body() dto: EnviarNotificacionDto) {
+    if (dto.evento_codigo) {
+      return this.notificacionesService.dispararEvento(dto.evento_codigo, {
+        destinatarios: dto.destinatarios,
+        variables: dto.variables,
+        extra: dto.datos_extra
+      });
     }
-  })
-  async verificarAsignaciones() {
-    return this.notificacionesService.verificarAsignacionesIncompletas();
+    return { message: 'Se requiere codigo de evento para disparo manual' };
+  }
+
+  @Post('procesar-cola')
+  @RequirePermissions('sistema', 'admin')
+  @ApiOperation({ summary: 'Forzar procesamiento de cola de notificaciones' })
+  async forzarProcesamiento() {
+    await this.notificacionesService.procesarColaEnvios();
+    return { message: 'Cola procesada' };
   }
 }

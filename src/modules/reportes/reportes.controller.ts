@@ -1,5 +1,5 @@
-import { Controller, Get, Post, Body, Param, Put, Delete, UseGuards } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from "@nestjs/swagger";
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Query, ParseIntPipe, Put } from "@nestjs/common";
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from "@nestjs/swagger";
 import { ReportesService } from "./reportes.service";
 import { CreateReporteDto, UpdateReporteDto } from "./dto/reporte.dto";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
@@ -25,6 +25,20 @@ export class ReportesController {
     @ApiOperation({ summary: "Listar reportes" })
     async findAll() {
         return this.reportesService.findAll();
+    }
+
+    @Get("operativo")
+    @RequirePermissions("reportes")
+    @ApiOperation({ summary: "Generar reporte operativo unificado" })
+    @ApiQuery({ name: "puesto_id", type: Number, required: true })
+    @ApiQuery({ name: "fecha_inicio", type: String, required: true })
+    @ApiQuery({ name: "fecha_fin", type: String, required: true })
+    async generarReporteOperativo(
+        @Query("puesto_id", ParseIntPipe) puesto_id: number,
+        @Query("fecha_inicio") fecha_inicio: string,
+        @Query("fecha_fin") fecha_fin: string
+    ) {
+        return this.reportesService.generarReporteOperativo(puesto_id, fecha_inicio, fecha_fin);
     }
 
     @Get(":id")

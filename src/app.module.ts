@@ -2,7 +2,15 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_FILTER } from '@nestjs/core';
+import { PrometheusModule } from '@willsoto/nestjs-prometheus';
+import { SentryFilter } from './common/filters/sentry.filter';
+import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
+import { PermissionsGuard } from './modules/auth/guards/permissions.guard';
+import { CacheModule } from '@nestjs/cache-manager';
+import { redisStore } from 'cache-manager-redis-store';
+import { EventEmitterModule } from '@nestjs/event-emitter';
+import * as Sentry from '@sentry/nestjs';
 
 // Configuration
 import { validationSchema } from './config/validation.config';
@@ -74,6 +82,40 @@ import { FestivosModule } from './modules/festivos/festivos.module';
 import { CorreosCorporativosModule } from './modules/correos-corporativos/correos-corporativos.module';
 import { CalendarioModule } from './modules/calendario/calendario.module';
 
+// 🆕 New modules - Document management
+import { PlantillasModule } from './modules/plantillas/plantillas.module';
+import { DocumentosGeneradosModule } from './modules/documentos-generados/documentos-generados.module';
+import { FirmasModule } from './modules/firmas/firmas.module';
+import { CotizacionesModule } from './modules/cotizaciones/cotizaciones.module';
+
+// 🆕 New modules - Access control & residential
+import { ResidentesModule } from './modules/residentes/residentes.module';
+import { VisitantesModule } from './modules/visitantes/visitantes.module';
+import { VisitasRegistroModule } from './modules/visitas-registro/visitas-registro.module';
+import { ListasAccesoModule } from './modules/listas-acceso/listas-acceso.module';
+
+// 🆕 New modules - Rondas & RRHH
+import { RondasDefinicionModule } from './modules/rondas-definicion/rondas-definicion.module';
+import { RondasEjecucionModule } from './modules/rondas-ejecucion/rondas-ejecucion.module';
+import { ConsentimientosModule } from './modules/consentimientos/consentimientos.module';
+import { VerificacionReferenciasModule } from './modules/verificacion-referencias/verificacion-referencias.module';
+
+// 🆕 New modules - Operations & Maintenance
+import { VisitasTecnicasModule } from './modules/visitas-tecnicas/visitas-tecnicas.module';
+import { InventarioPuestoModule } from './modules/inventario-puesto/inventario-puesto.module';
+
+// 🆕 Production modules
+import { HealthModule } from './modules/health/health.module';
+import { FeatureFlagsModule } from './modules/feature-flags/feature-flags.module';
+import { ExportModule } from './modules/export/export.module';
+import { SecurityModule } from './modules/security/security.module';
+import { JobsModule } from './modules/jobs/jobs.module';
+import { ClientesConfigModule } from './modules/clientes-config/clientes-config.module';
+import { PoliticasModule } from './modules/politicas/politicas.module';
+import { BiModule } from './modules/bi/bi.module';
+import { WebhooksModule } from './modules/webhooks/webhooks.module';
+import { ComplianceModule } from './modules/compliance/compliance.module';
+
 @Module({
   imports: [
     // Global configuration
@@ -86,6 +128,22 @@ import { CalendarioModule } from './modules/calendario/calendario.module';
 
     // Cron jobs
     ScheduleModule.forRoot(),
+    EventEmitterModule.forRoot(),
+
+    // Monitoring
+    PrometheusModule.register({
+      path: '/metrics',
+      defaultMetrics: {
+        enabled: true,
+      },
+    }),
+    CacheModule.register({
+      isGlobal: true,
+      store: redisStore,
+      host: process.env.REDIS_HOST || 'localhost',
+      port: parseInt(process.env.REDIS_PORT || '6379'),
+      ttl: 600, // 10 minutes default
+    }),
 
     // Rate limiting
     ThrottlerModule.forRoot([
@@ -157,7 +215,50 @@ import { CalendarioModule } from './modules/calendario/calendario.module';
     HelpersModule,
     CorreosCorporativosModule,
     CalendarioModule,
+
+    // 🆕 Document management modules
+    PlantillasModule,
+    DocumentosGeneradosModule,
+    FirmasModule,
+    CotizacionesModule,
+
+    // 🆕 Access control & residential modules
+    ResidentesModule,
+    VisitantesModule,
+    VisitasRegistroModule,
+    ListasAccesoModule,
+
+    // 🆕 Rondas & RRHH modules
+    RondasDefinicionModule,
+    RondasEjecucionModule,
+    ConsentimientosModule,
+    VerificacionReferenciasModule,
+
+    // 🆕 Operations & Maintenance modules
+    VisitasTecnicasModule,
+    InventarioPuestoModule,
+
+    // 🆕 Production-ready modules
+    HealthModule,
+    FeatureFlagsModule,
+    ExportModule,
+    SecurityModule,
+    JobsModule,
+    ClientesConfigModule,
+    PoliticasModule,
+    BiModule,
+    WebhooksModule,
+    ComplianceModule,
   ],
-  providers: [],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: PermissionsGuard,
+    },
+    {
+      provide: APP_FILTER,
+      useClass: GlobalExceptionFilter,
+    },
+  ],
 })
 export class AppModule { }

@@ -26,4 +26,9 @@ export class RegistrarSalidaDto {
   @IsOptional()
   @IsString()
   observaciones?: string;
+
+  @ApiProperty({ example: 'https://bucket.supabase.co/foto.jpg', description: 'URL de la foto de evidencia', required: false })
+  @IsOptional()
+  @IsString()
+  foto_url?: string;
 }

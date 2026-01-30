@@ -2,15 +2,30 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ComunicacionesGateway } from './comunicaciones.gateway';
 import { SupabaseService } from '../supabase/supabase.service';
 import { SubirGrabacionDto } from './dto/subir-grabacion.dto';
+import { ConfigService } from '@nestjs/config';
+import * as nodemailer from 'nodemailer';
 
 @Injectable()
 export class ComunicacionesService {
     private readonly logger = new Logger(ComunicacionesService.name);
+    private transporter: nodemailer.Transporter;
 
     constructor(
         private readonly gateway: ComunicacionesGateway,
         private readonly supabase: SupabaseService,
-    ) { }
+        private readonly configService: ConfigService,
+    ) {
+        // Configure email transporter
+        this.transporter = nodemailer.createTransport({
+            host: this.configService.get('SMTP_HOST', 'smtp.gmail.com'),
+            port: this.configService.get('SMTP_PORT', 587),
+            secure: false,
+            auth: {
+                user: this.configService.get('SMTP_USER'),
+                pass: this.configService.get('SMTP_PASS'),
+            },
+        });
+    }
 
     /**
      * 📊 Obtener estadísticas de comunicaciones en tiempo real
@@ -217,6 +232,99 @@ export class ComunicacionesService {
         if (error) throw new Error(`Error al eliminar: ${error.message}`);
 
         return { success: true };
+    }
+
+    // 🟢 BLOQUE 4 - Email & WhatsApp Communications
+    /**
+     * 📧 Enviar email
+     */
+    async enviarEmail(destinatarios: string[], asunto: string, cuerpo: string, adjuntos?: any[]) {
+        try {
+            const mailOptions = {
+                from: this.configService.get('SMTP_FROM', 'noreply@proliseg.com'),
+                to: destinatarios.join(', '),
+                subject: asunto,
+                html: cuerpo,
+                attachments: adjuntos || [],
+            };
+
+            const info = await this.transporter.sendMail(mailOptions);
+
+            this.logger.log(`Email enviado: ${info.messageId}`);
+            return {
+                success: true,
+                messageId: info.messageId,
+                destinatarios,
+            };
+        } catch (error) {
+            this.logger.error('Error enviando email:', error);
+            throw new Error('Error al enviar email');
+        }
+    }
+
+    /**
+     * 📱 Enviar WhatsApp
+     */
+    async enviarWhatsApp(numero: string, mensaje: string) {
+        // TODO: Integrate with WhatsApp API (Twilio, WhatsApp Business API, etc.)
+        this.logger.log(`WhatsApp enviado a ${numero}: ${mensaje.substring(0, 50)}...`);
+
+        // Simulación de envío
+        return {
+            success: true,
+            numero,
+            mensaje_id: `wa_${Date.now()}`,
+            nota: 'Integración de WhatsApp pendiente - requiere configuración de API',
+        };
+    }
+
+    /**
+     * 📄 Enviar cotización por email/WhatsApp
+     */
+    async enviarCotizacionCliente(cotizacionId: number, email: string, telefono?: string, enviarWhatsApp = false) {
+        const publicUrl = `${this.configService.get('APP_URL', 'https://app.proliseg.com')}/public/cotizaciones/${cotizacionId}`;
+
+        // Enviar email
+        const emailBody = `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <h2 style="color: #1976D2;">Nueva Cotización - PROLISEG</h2>
+                <p>Estimado cliente,</p>
+                <p>Le hemos enviado una nueva cotización para su revisión.</p>
+                <p style="margin: 30px 0;">
+                    <a href="${publicUrl}" 
+                       style="background-color: #1976D2; color: white; padding: 12px 24px; 
+                              text-decoration: none; border-radius: 4px; display: inline-block;">
+                        Ver Cotización
+                    </a>
+                </p>
+                <p style="color: #666; font-size: 12px;">
+                    Este enlace estará disponible por 30 días.
+                </p>
+                <hr style="border: 1px solid #eee; margin: 20px 0;">
+                <p style="color: #999; font-size: 11px;">
+                    PROLISEG - Seguridad Profesional<br>
+                    Este es un correo automático, por favor no responder.
+                </p>
+            </div>
+        `;
+
+        const emailResult = await this.enviarEmail(
+            [email],
+            'Nueva Cotización - PROLISEG',
+            emailBody
+        );
+
+        let whatsappResult: any = null;
+        if (enviarWhatsApp && telefono) {
+            const whatsappMessage = `Hola! Te hemos enviado una nueva cotización. Puedes verla aquí: ${publicUrl}`;
+            whatsappResult = await this.enviarWhatsApp(telefono, whatsappMessage);
+        }
+
+        return {
+            email: emailResult,
+            whatsapp: whatsappResult,
+            publicUrl,
+        };
     }
 
     /**

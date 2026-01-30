@@ -1,5 +1,5 @@
-import { Module } from "@nestjs/common";
-import { ConfigModule, ConfigService } from "@nestjs/config"; 
+import { Global, Module } from "@nestjs/common";
+import { ConfigModule, ConfigService } from "@nestjs/config";
 import { PassportModule } from '@nestjs/passport';
 import { JwtModule } from '@nestjs/jwt';
 import { AuthController } from "./auth.controller";
@@ -10,6 +10,7 @@ import { RolesGuard } from "./guards/roles.guard";
 import { PermissionsGuard } from "./guards/permissions.guard";
 import { SupabaseModule } from "../supabase/supabase.module";
 
+@Global()
 @Module({
   imports: [
     ConfigModule,
@@ -34,4 +35,4 @@ import { SupabaseModule } from "../supabase/supabase.module";
   ],
   exports: [AuthService, JwtAuthGuard, RolesGuard, PermissionsGuard],
 })
-export class AuthModule {}
+export class AuthModule { }

@@ -59,4 +59,16 @@ export class InventarioController {
     async getResumenStock(@Param('varianteId') varianteId: string) {
         return this.inventarioService.getResumenStock(Number(varianteId));
     }
+
+    @Get('alertas')
+    @ApiOperation({ summary: 'Alertas de stock bajo' })
+    async getAlertas() {
+        return this.inventarioService.getAlertas();
+    }
+
+    @Get('reportes/general')
+    @ApiOperation({ summary: 'Reporte general de inventario' })
+    async getReporteGeneral() {
+        return this.inventarioService.getReporteGeneral();
+    }
 }

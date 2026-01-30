@@ -162,7 +162,8 @@ export class AsistenciasService {
         hora_entrada: now.toISOString(),
         observaciones: observaciones_calculadas,
         estado_asistencia: 'pendiente', // En curso
-        metodo_registro: 'app'
+        metodo_registro: 'app',
+        foto_entrada: dto.foto_url // Guardar foto entrada
       }).eq('id', asistenciaId);
     } else {
       const { data: newAsis, error: errAsis } = await db.from('turnos_asistencia').insert({
@@ -172,7 +173,8 @@ export class AsistenciasService {
         observaciones: observaciones_calculadas,
         registrado_por: dto.empleado_id,
         metodo_registro: 'app',
-        estado_asistencia: 'pendiente'
+        estado_asistencia: 'pendiente',
+        foto_entrada: dto.foto_url // Guardar foto entrada
       }).select().single();
       if (errAsis) throw new BadRequestException(errAsis.message);
       asistenciaId = newAsis.id;
@@ -186,7 +188,8 @@ export class AsistenciasService {
       timestamp: now.toISOString(),
       latitud_entrada: dto.latitud,
       longitud_entrada: dto.longitud,
-      registrada_por: dto.empleado_id
+      registrada_por: dto.empleado_id,
+      evidencia_foto_url: dto.foto_url // Guardar foto en histórico
     }).select().single();
 
     // 8. Actualizar ESTADO DEL TURNO a 'parcial' (Significa En Curso según lógica usuario)
@@ -289,7 +292,8 @@ export class AsistenciasService {
     await db.from('turnos_asistencia').update({
       hora_salida: now.toISOString(),
       observaciones: nuevasObservaciones,
-      estado_asistencia: 'cumplido'
+      estado_asistencia: 'cumplido',
+      foto_salida: dto.foto_url // Guardar foto salida
     }).eq('id', asistencia.id);
 
     // 5. Insertar en log 'asistencias' legacy
@@ -300,7 +304,8 @@ export class AsistenciasService {
       timestamp: now.toISOString(),
       latitud_salida: dto.latitud,
       longitud_salida: dto.longitud,
-      registrada_por: (dto as any).empleado_id
+      registrada_por: (dto as any).empleado_id,
+      evidencia_foto_url: dto.foto_url // Guardar foto en histórico
     });
 
     // 6. Actualizar ESTADO DEL TURNO a 'cumplido'
@@ -960,5 +965,38 @@ export class AsistenciasService {
       message: '✅ Salida manual registrada exitosamente.',
       asistencia: updated
     };
+  }
+
+  // ============================================================
+  // 📸 SUBIR FOTO EVIDENCIA
+  // ============================================================
+  async uploadFoto(file: any, empleado_id: number) {
+    if (!file) throw new BadRequestException("No se ha subido ningún archivo");
+
+    const db = this.supabase.getClient();
+    const timestamp = Date.now();
+    // Clean filename
+    const name = file.originalname.split('.')[0].replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    const ext = file.originalname.split('.').pop();
+    const path = `${empleado_id}/${timestamp}_${name}.${ext}`;
+
+    const { data, error } = await db.storage
+      .from('asistencias-fotos')
+      .upload(path, file.buffer, {
+        contentType: file.mimetype,
+        upsert: false
+      });
+
+    if (error) {
+      this.logger.error(`Error subiendo foto asistencia: ${error.message}`);
+      throw new BadRequestException("Error al subir la evidencia fotográfica");
+    }
+
+    // Get Public URL
+    const { data: { publicUrl } } = db.storage
+      .from('asistencias-fotos')
+      .getPublicUrl(path);
+
+    return { url: publicUrl };
   }
 }

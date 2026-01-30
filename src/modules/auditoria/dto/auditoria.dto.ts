@@ -1,6 +1,6 @@
 import { ApiProperty, PartialType } from "@nestjs/swagger";
-import { IsInt, IsString, IsOptional, IsJSON, IsIP } from "class-validator";
-import { Transform } from "class-transformer";
+import { IsInt, IsString, IsOptional, IsJSON, IsIP, IsDate, IsEnum } from "class-validator";
+import { Transform, Type } from "class-transformer";
 
 export class CreateAuditoriaDto {
     @ApiProperty({ example: "empleados" })
@@ -44,3 +44,45 @@ export class CreateAuditoriaDto {
 }
 
 export class UpdateAuditoriaDto extends PartialType(CreateAuditoriaDto) { }
+
+export class AuditoriaQueryDto {
+    @ApiProperty({ required: false, example: "2024-01-01" })
+    @IsOptional()
+    @Type(() => Date)
+    @IsDate()
+    desde?: Date;
+
+    @ApiProperty({ required: false, example: "2024-12-31" })
+    @IsOptional()
+    @Type(() => Date)
+    @IsDate()
+    hasta?: Date;
+
+    @ApiProperty({ required: false, example: 1 })
+    @IsOptional()
+    @Transform(({ value }) => parseInt(value))
+    @IsInt()
+    usuario_id?: number;
+
+    @ApiProperty({ required: false, example: "INSERT" })
+    @IsOptional()
+    @IsString()
+    accion?: string;
+
+    @ApiProperty({ required: false, example: "empleados" })
+    @IsOptional()
+    @IsString()
+    tabla?: string;
+
+    @ApiProperty({ required: false, example: 100, default: 100 })
+    @IsOptional()
+    @Transform(({ value }) => parseInt(value))
+    @IsInt()
+    limit?: number = 100;
+
+    @ApiProperty({ required: false, example: 0, default: 0 })
+    @IsOptional()
+    @Transform(({ value }) => parseInt(value))
+    @IsInt()
+    offset?: number = 0;
+}
