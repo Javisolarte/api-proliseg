@@ -22,6 +22,7 @@ import { AuthService } from './auth.service';
 import { LoginDto, RegisterDto, UpdateUserDto, UpdateStatusDto, ForgotPasswordDto } from './dto/auth.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
+import { Public } from './decorators/public.decorator';
 import type { Request } from 'express';
 
 
@@ -35,6 +36,7 @@ export class AuthController {
   /**
    * 🔐 LOGIN - Autentica un usuario y devuelve tokens + permisos
    */
+  @Public()
   @Post('login')
   @ApiOperation({ summary: 'Iniciar sesión y obtener token JWT' })
   @ApiResponse({ status: 200, description: 'Login exitoso' })
@@ -63,6 +65,7 @@ export class AuthController {
   /**
    * 🧾 REGISTER - Crea un nuevo usuario con rol y registro en Supabase
    */
+  @Public()
   @Post('register')
   @ApiOperation({ summary: 'Registrar un nuevo usuario en Supabase y base de datos' })
   @ApiResponse({ status: 201, description: 'Usuario creado exitosamente' })
@@ -90,7 +93,6 @@ export class AuthController {
    * 👤 PROFILE - Retorna información completa del usuario autenticado
    */
   @Get('profile')
-  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Obtener el perfil completo del usuario autenticado' })
   @ApiResponse({ status: 200, description: 'Perfil obtenido exitosamente' })
@@ -112,7 +114,6 @@ export class AuthController {
    * 🚪 LOGOUT - Cierra la sesión del usuario
    */
   @Post('logout')
-  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Cerrar sesión del usuario autenticado' })
   @ApiResponse({ status: 200, description: 'Sesión cerrada exitosamente' })
@@ -134,7 +135,6 @@ export class AuthController {
    * 🔄 UPDATE USER - Actualiza los datos de un usuario por su ID (serial)
    */
   @Patch('update/:id')
-  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Actualizar datos de un usuario' })
   @ApiResponse({ status: 200, description: 'Usuario actualizado correctamente' })
@@ -151,7 +151,6 @@ export class AuthController {
    * 🏷️ STATUS - Cambia el estado activo/inactivo de un usuario
    */
   @Patch('status/:id')
-  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Cambiar estado (activo/inactivo) de un usuario' })
   @ApiResponse({ status: 200, description: 'Estado actualizado correctamente' })
@@ -166,6 +165,7 @@ export class AuthController {
   /**
    * 📧 FORGOT PASSWORD - Inicia el proceso de recuperación de contraseña
    */
+  @Public()
   @Post('forgot-password')
   @ApiOperation({ summary: 'Solicitar recuperación de contraseña por email' })
   @ApiResponse({ status: 200, description: 'Correo de recuperación enviado' })

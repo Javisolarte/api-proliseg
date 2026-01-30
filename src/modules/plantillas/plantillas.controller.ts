@@ -26,7 +26,6 @@ import { CurrentUser } from "../auth/decorators/current-user.decorator";
 
 @ApiTags("Plantillas de Documentos")
 @Controller("plantillas")
-@UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth("JWT-auth")
 export class PlantillasController {
     constructor(private readonly plantillasService: PlantillasService) { }

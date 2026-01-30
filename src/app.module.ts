@@ -7,6 +7,7 @@ import { PrometheusModule } from '@willsoto/nestjs-prometheus';
 import { SentryFilter } from './common/filters/sentry.filter';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { PermissionsGuard } from './modules/auth/guards/permissions.guard';
+import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { CacheModule } from '@nestjs/cache-manager';
 import { redisStore } from 'cache-manager-redis-store';
 import { EventEmitterModule } from '@nestjs/event-emitter';
@@ -251,6 +252,10 @@ import { ComplianceModule } from './modules/compliance/compliance.module';
     ComplianceModule,
   ],
   providers: [
+    {
+      provide: APP_GUARD,
+      useClass: JwtAuthGuard,
+    },
     {
       provide: APP_GUARD,
       useClass: PermissionsGuard,
