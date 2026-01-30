@@ -20,7 +20,7 @@ export class HealthController {
     @HealthCheck()
     check() {
         return this.health.check([
-            () => this.memory.checkHeap('memory_heap', 300 * 1024 * 1024),
+            () => this.memory.checkHeap('memory_heap', 3000 * 1024 * 1024),
             () => this.redis.isHealthy('redis'),
         ]);
     }

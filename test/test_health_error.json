@@ -1,5 +1,35 @@
 {
-  "message": "Cannot GET /api/health",
-  "error": "Not Found",
-  "statusCode": 404
+  "statusCode": 503,
+  "timestamp": "2026-01-30T17:05:25.897Z",
+  "path": "/api/health",
+  "method": "GET",
+  "message": {
+    "status": "error",
+    "info": {
+      "redis": {
+        "status": "up"
+      }
+    },
+    "error": {
+      "memory_heap": {
+        "status": "down",
+        "message": "Used heap exceeded the set threshold"
+      }
+    },
+    "details": {
+      "redis": {
+        "status": "up"
+      },
+      "memory_heap": {
+        "status": "down",
+        "message": "Used heap exceeded the set threshold"
+      }
+    }
+  },
+  "error": {
+    "memory_heap": {
+      "status": "down",
+      "message": "Used heap exceeded the set threshold"
+    }
+  }
 }
