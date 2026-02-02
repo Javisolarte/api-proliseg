@@ -105,7 +105,12 @@ export class PlantillasService {
         const required = plantilla.variables_requeridas as string[];
         const provided = Object.keys(datosJson);
 
-        const missing = required.filter(v => !provided.includes(v));
+        // Filter out placeholders that are injected by the system (firma_1, huella_1, etc.)
+        const missing = required.filter(v =>
+            !provided.includes(v) &&
+            !v.startsWith('firma_') &&
+            !v.startsWith('huella_')
+        );
 
         if (missing.length > 0) {
             throw new BadRequestException(`Faltan variables requeridas: ${missing.join(", ")}`);
