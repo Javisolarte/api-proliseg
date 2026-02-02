@@ -20,7 +20,7 @@ export class FirmasService {
 
             // 1. Validar estado del documento
             const doc = await this.documentosService.findOne(docId);
-            if (doc.estado !== 'pendiente_firmas') {
+            if (doc.estado !== 'pendiente_firmas' && doc.estado !== 'borrador') {
                 throw new BadRequestException(`El documento no está pendiente de firmas (Estado: ${doc.estado})`);
             }
 
