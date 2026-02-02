@@ -175,8 +175,7 @@ export class VerificacionReferenciasService {
                         entidad_tipo,
                         entidad_id,
                         datos_json,
-                        estado: 'borrador',
-                        requiere_firma: true
+                        estado: 'borrador'
                     })
                     .select()
                     .single();
