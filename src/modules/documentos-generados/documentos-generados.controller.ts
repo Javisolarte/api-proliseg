@@ -87,7 +87,7 @@ export class DocumentosGeneradosController {
     }
 
     @Post()
-    @RequirePermissions("documentos", "crear")
+    @RequirePermissions("documentos")
     @ApiOperation({ summary: "Crear documento generado" })
     @ApiResponse({ status: 201, description: "Documento creado exitosamente" })
     async create(@Body() createDto: CreateDocumentoDto, @CurrentUser() user: any) {
@@ -95,7 +95,7 @@ export class DocumentosGeneradosController {
     }
 
     @Put(":id")
-    @RequirePermissions("documentos", "actualizar")
+    @RequirePermissions("documentos")
     @ApiOperation({ summary: "Actualizar documento" })
     @ApiResponse({ status: 200, description: "Documento actualizado exitosamente" })
     async update(
@@ -106,7 +106,7 @@ export class DocumentosGeneradosController {
     }
 
     @Delete(":id/anular")
-    @RequirePermissions("documentos", "eliminar")
+    @RequirePermissions("documentos")
     @ApiOperation({ summary: "Anular documento" })
     @ApiResponse({ status: 200, description: "Documento anulado exitosamente" })
     async anular(@Param("id", ParseIntPipe) id: number, @Body("motivo") motivo: string) {
@@ -115,7 +115,7 @@ export class DocumentosGeneradosController {
 
     // 🟢 BLOQUE 3 - State Transitions for Documents
     @Post(":id/generar-pdf")
-    @RequirePermissions("documentos", "generar")
+    @RequirePermissions("documentos")
     @ApiOperation({ summary: "Generar PDF del documento" })
     @ApiResponse({ status: 200, description: "PDF generado exitosamente" })
     async generarPdf(@Param("id", ParseIntPipe) id: number) {
@@ -123,7 +123,7 @@ export class DocumentosGeneradosController {
     }
 
     @Post(":id/enviar-firmas")
-    @RequirePermissions("documentos", "enviar")
+    @RequirePermissions("documentos")
     @ApiOperation({ summary: "Enviar documento para firmas" })
     @ApiResponse({ status: 200, description: "Documento enviado para firmas" })
     async enviarFirmas(@Param("id", ParseIntPipe) id: number) {
@@ -131,7 +131,7 @@ export class DocumentosGeneradosController {
     }
 
     @Post(":id/cerrar")
-    @RequirePermissions("documentos", "cerrar")
+    @RequirePermissions("documentos")
     @ApiOperation({ summary: "Cerrar documento" })
     @ApiResponse({ status: 200, description: "Documento cerrado exitosamente" })
     async cerrar(@Param("id", ParseIntPipe) id: number) {
@@ -147,7 +147,7 @@ export class DocumentosGeneradosController {
     }
 
     @Post(":id/finalizar")
-    @RequirePermissions("documentos", "cerrar")
+    @RequirePermissions("documentos")
     @ApiOperation({ summary: "Finalizar documento (bloqueo definitivo)" })
     async finalizar(@Param("id", ParseIntPipe) id: number) {
         return this.documentosService.finalizar(id);
@@ -161,7 +161,7 @@ export class DocumentosGeneradosController {
     }
 
     @Post(":id/reenviar")
-    @RequirePermissions("documentos", "enviar")
+    @RequirePermissions("documentos")
     @ApiOperation({ summary: "Reenviar notificaciones a firmantes" })
     async reenviar(@Param("id", ParseIntPipe) id: number) {
         return this.documentosService.reenviar(id);
