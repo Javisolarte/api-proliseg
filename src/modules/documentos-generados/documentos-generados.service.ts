@@ -112,7 +112,7 @@ export class DocumentosGeneradosService {
                 .select()
                 .single();
 
-            if (error) throw new BadRequestException("Error al cambiar estado");
+            if (error) throw new BadRequestException(`Error al cambiar estado: ${error.message}`);
             return data;
 
         } catch (error) {
@@ -295,7 +295,7 @@ export class DocumentosGeneradosService {
                 .select()
                 .single();
 
-            if (updateError) throw new BadRequestException("Error actualizando URL del PDF");
+            if (updateError) throw new BadRequestException(`Error actualizando URL del PDF: ${updateError.message}`);
 
             this.logger.log(`✅ PDF generado y subido para documento ${id}: ${publicUrl}`);
             return updatedDoc;
@@ -342,7 +342,7 @@ export class DocumentosGeneradosService {
             .select()
             .single();
 
-        if (error) throw new BadRequestException("Error enviando a firmas");
+        if (error) throw new BadRequestException(`Error enviando a firmas: ${error.message}`);
 
         // TODO: Aquí se enviarían notificaciones a los firmantes
         this.logger.log(`Documento ${id} enviado para firmas`);
@@ -382,7 +382,7 @@ export class DocumentosGeneradosService {
             .select()
             .single();
 
-        if (error) throw new BadRequestException("Error cerrando documento");
+        if (error) throw new BadRequestException(`Error cerrando documento: ${error.message}`);
 
         this.logger.log(`Documento ${id} cerrado exitosamente`);
         return data;
