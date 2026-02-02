@@ -131,6 +131,100 @@ export class VerificacionReferenciasService {
         }
     }
 
+    async finalizarConDocumento(
+        id: number,
+        conclusiones: string,
+        datosReferencias: any,
+        plantillaId?: number
+    ) {
+        try {
+            const supabase = this.supabaseService.getClient();
+
+            // 1. Obtener verificación y datos de la persona
+            const verificacion = await this.findOne(id);
+            if (!verificacion) {
+                throw new NotFoundException(`Verificación ${id} no encontrada`);
+            }
+
+            let documentoGeneradoId: number | null = null;
+            let urlPdf: string | null = null;
+
+            // 2. Si se proporciona plantilla, generar documento
+            if (plantillaId) {
+                // Preparar datos para la plantilla
+                const datos_json = {
+                    fecha: new Date().toLocaleDateString('es-ES'),
+                    cargo_ocupar: datosReferencias.cargo_ocupar || 'N/A',
+                    nombre_candidato: verificacion.aspirante_nombre || verificacion.empleado_nombre || 'N/A',
+                    referencias_laborales: datosReferencias.referencias_laborales || [],
+                    referencias_personales: datosReferencias.referencias_personales || [],
+                    hallazgos: datosReferencias.hallazgos || '',
+                    conclusiones: conclusiones,
+                    responsable_nombre: verificacion.responsable_nombre || 'N/A'
+                };
+
+                // Determinar entidad
+                const entidad_tipo = verificacion.aspirante_id ? 'aspirante' : 'empleado';
+                const entidad_id = verificacion.aspirante_id || verificacion.empleado_id;
+
+                // Crear documento generado
+                const { data: docGenerado, error: docError } = await supabase
+                    .from('documentos_generados')
+                    .insert({
+                        plantilla_id: plantillaId,
+                        entidad_tipo,
+                        entidad_id,
+                        datos_json,
+                        estado: 'borrador',
+                        requiere_firma: true
+                    })
+                    .select()
+                    .single();
+
+                if (docError) {
+                    this.logger.error('Error creando documento:', docError);
+                    throw new BadRequestException('Error al crear documento');
+                }
+
+                documentoGeneradoId = docGenerado.id;
+
+                // Intentar generar PDF inicial (sin firma)
+                try {
+                    // Aquí se puede llamar al servicio de generación de PDF
+                    // const pdfResult = await this.documentosGeneradosService.generarPdf(documentoGeneradoId);
+                    // urlPdf = pdfResult.url_pdf;
+                    this.logger.log(`Documento ${documentoGeneradoId} creado, pendiente de generación PDF`);
+                } catch (e) {
+                    this.logger.warn(`No se pudo generar PDF inicial: ${e.message}`);
+                }
+            }
+
+            // 3. Actualizar verificación con conclusiones y documento
+            const { data, error } = await supabase
+                .from("verificacion_referencias")
+                .update({
+                    estado: 'finalizado',
+                    conclusiones,
+                    documento_final_id: documentoGeneradoId,
+                })
+                .eq("id", id)
+                .select()
+                .single();
+
+            if (error) throw new BadRequestException("Error al finalizar verificación");
+
+            this.logger.log(`✅ Verificación ${id} finalizada con documento ${documentoGeneradoId}`);
+            return {
+                ...data,
+                documento_generado_id: documentoGeneradoId,
+                url_pdf: urlPdf
+            };
+        } catch (error) {
+            this.logger.error(`Error en finalizarConDocumento(${id}):`, error);
+            throw error;
+        }
+    }
+
     async getDetalles(verificacionId: number) {
         try {
             const supabase = this.supabaseService.getClient();

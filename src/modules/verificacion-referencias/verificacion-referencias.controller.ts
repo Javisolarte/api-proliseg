@@ -57,6 +57,21 @@ export class VerificacionReferenciasController {
         return this.verificacionService.finalizar(id, dto.conclusiones, dto.documento_final_id);
     }
 
+    @Post(":id/finalizar-con-documento")
+    @RequirePermissions("empleados")
+    @ApiOperation({ summary: "Finalizar verificación con generación de documento" })
+    async finalizarConDocumento(
+        @Param("id", ParseIntPipe) id: number,
+        @Body() dto: any
+    ) {
+        return this.verificacionService.finalizarConDocumento(
+            id,
+            dto.conclusiones,
+            dto.datos_referencias,
+            dto.plantilla_id
+        );
+    }
+
     @Get(":id/detalles")
     @RequirePermissions("empleados")
     @ApiOperation({ summary: "Obtener detalles de llamadas de verificación" })
