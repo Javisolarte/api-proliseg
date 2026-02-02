@@ -15,11 +15,13 @@ export class VerificacionReferenciasService {
         SELECT vr.*, 
                a.nombres || ' ' || a.apellidos as aspirante_nombre,
                e.nombre_completo as empleado_nombre,
-               u.nombre as responsable_nombre
+               u.nombre as responsable_nombre,
+               dg.url_pdf as documento_pdf_url
         FROM verificacion_referencias vr
         LEFT JOIN aspirantes a ON vr.aspirante_id = a.id
         LEFT JOIN empleados e ON vr.empleado_id = e.id
         LEFT JOIN usuarios_externos u ON vr.responsable_verificacion = u.id
+        LEFT JOIN documentos_generados dg ON vr.documento_final_id = dg.id
         WHERE 1=1
       `;
 

@@ -122,7 +122,7 @@ export class ConsentimientosService {
                 SELECT c.*, 
                        e.nombre_completo as empleado_nombre,
                        e.cedula as empleado_cedula,
-                       dg.url_pdf as documento_url
+                       COALESCE(dg.url_pdf, c.documento_pdf_url) as documento_pdf_url
                 FROM consentimientos_empleado c
                 LEFT JOIN empleados e ON c.empleado_id = e.id
                 LEFT JOIN documentos_generados dg ON c.documento_generado_id = dg.id

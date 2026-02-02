@@ -13,7 +13,7 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 BEGIN
-    RETURN QUERY EXECUTE query;
+    RETURN QUERY EXECUTE 'SELECT to_jsonb(t) FROM (' || query || ') t';
 END;
 $$;
 
