@@ -31,11 +31,11 @@ export class ConsentimientosService {
                 await supabase.from("consentimientos_empleado").update({ vigente: false }).eq("id", current.id);
             }
 
-            let documentoGeneradoId: number | null = null;
+            let documentoGeneradoId: number | null = createDto.documento_generado_id || null;
             let urlPdf: string | null = createDto.documento_pdf_url || null;
 
-            // 2. Si se proporciona plantilla, generar documento
-            if (createDto.plantilla_id) {
+            // 2. Si se proporciona plantilla y NO hay documento generado previo, generar documento
+            if (createDto.plantilla_id && !documentoGeneradoId) {
                 // Obtener datos del empleado si no se pasan todos
                 const { data: empleado } = await supabase.from('empleados').select('*').eq('id', createDto.empleado_id).single();
 
