@@ -94,6 +94,21 @@ export class ConsentimientosService {
         } catch (error) { throw error; }
     }
 
+    async update(id: number, updateDto: any) {
+        try {
+            const supabase = this.supabaseService.getClient();
+            const { data, error } = await supabase
+                .from("consentimientos_empleado")
+                .update(updateDto)
+                .eq("id", id)
+                .select()
+                .single();
+
+            if (error) throw new BadRequestException(`Error actualizando consentimiento: ${error.message}`);
+            return data;
+        } catch (error) { throw error; }
+    }
+
     async revocar(id: number) {
         const supabase = this.supabaseService.getClient();
         await supabase.from("consentimientos_empleado").update({ vigente: false, acepta: false }).eq("id", id);

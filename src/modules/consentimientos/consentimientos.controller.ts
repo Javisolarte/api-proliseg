@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, UseGuards, ParseIntPipe, Query, Delete } from "@nestjs/common";
+import { Controller, Get, Post, Patch, Body, Param, UseGuards, ParseIntPipe, Query, Delete } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from "@nestjs/swagger";
 import { ConsentimientosService } from "./consentimientos.service";
 import { CreateConsentimientoDto } from "./dto/consentimiento.dto";
@@ -41,6 +41,16 @@ export class ConsentimientosController {
     @ApiOperation({ summary: "Obtener consentimientos de un empleado" })
     async getByEmpleado(@Param("empleadoId", ParseIntPipe) empleadoId: number) {
         return this.consentimientosService.getByEmpleado(empleadoId);
+    }
+
+    @Patch(":id")
+    @RequirePermissions("empleados")
+    @ApiOperation({ summary: "Actualizar consentimiento" })
+    async update(
+        @Param("id", ParseIntPipe) id: number,
+        @Body() updateDto: any
+    ) {
+        return this.consentimientosService.update(id, updateDto);
     }
 
     @Delete(":id")
