@@ -3,8 +3,10 @@ import { ConsentimientosController } from "./consentimientos.controller";
 import { ConsentimientosService } from "./consentimientos.service";
 import { AuthModule } from "../auth/auth.module";
 
+import { DocumentosGeneradosModule } from "../documentos-generados/documentos-generados.module";
+
 @Module({
-    imports: [AuthModule],
+    imports: [AuthModule, DocumentosGeneradosModule],
     controllers: [ConsentimientosController],
     providers: [ConsentimientosService],
     exports: [ConsentimientosService],
