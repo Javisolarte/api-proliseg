@@ -46,7 +46,7 @@ export class FirmasController {
     }
 
     @Post()
-    @RequirePermissions("documentos", "firmar")
+    @RequirePermissions("documentos")
     @ApiOperation({ summary: "Agregar firma a documento" })
     @ApiResponse({ status: 201, description: "Firma agregada exitosamente" })
     async create(@Body() createFirmaDto: CreateFirmaDto, @Req() request: Request) {
@@ -62,7 +62,7 @@ export class FirmasController {
     }
 
     @Delete(":id")
-    @RequirePermissions("documentos", "eliminar")
+    @RequirePermissions("documentos")
     @ApiOperation({ summary: "Eliminar firma (solo si documento no está finalizado)" })
     @ApiResponse({ status: 200, description: "Firma eliminada exitosamente" })
     async remove(@Param("id", ParseIntPipe) id: number) {
@@ -70,7 +70,7 @@ export class FirmasController {
     }
 
     @Post("ordenar")
-    @RequirePermissions("documentos", "actualizar")
+    @RequirePermissions("documentos")
     @ApiOperation({ summary: "Reordenar firmas" })
     async ordenar(@Body() ordenes: { id: number, orden: number }[]) {
         return this.firmasService.reordenar(ordenes);
@@ -84,7 +84,7 @@ export class FirmasController {
     }
 
     @Post("empleado/:id")
-    @RequirePermissions("configuracion", "actualizar")
+    @RequirePermissions("configuracion")
     @ApiOperation({ summary: "Guardar firma maestra para un empleado" })
     @ApiResponse({ status: 200, description: "Firma maestra guardada" })
     async saveMaster(

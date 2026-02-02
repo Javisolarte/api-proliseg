@@ -1,4 +1,4 @@
--- Semilla para plantillas de consentimientos
+-- Semilla para plantillas de consentimientos (FIXED JSONB)
 -- Ejecutar en la base de datos para tener opciones en el dropdown
 
 INSERT INTO public.plantillas_documentos (nombre, tipo, contenido_html, variables_requeridas, version, activa)
@@ -16,7 +16,7 @@ VALUES
             <p>Firma del Empleado</p>
         </div>
     </div>',
-    ARRAY['nombre_empleado', 'cedula_empleado', 'fecha'],
+    '["nombre_empleado", "cedula_empleado", "fecha"]'::jsonb,
     1,
     true
 ),
@@ -36,7 +36,7 @@ VALUES
             {{huella_1}}
         </div>
     </div>',
-    ARRAY['nombre_empleado', 'cedula_empleado', 'fecha'],
+    '["nombre_empleado", "cedula_empleado", "fecha"]'::jsonb,
     1,
     true
 ),
@@ -54,7 +54,7 @@ VALUES
             <p>Firma</p>
         </div>
     </div>',
-    ARRAY['nombre_empleado', 'cedula_empleado'],
+    '["nombre_empleado", "cedula_empleado"]'::jsonb,
     1,
     true
 );
