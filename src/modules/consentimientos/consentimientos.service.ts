@@ -119,9 +119,19 @@ export class ConsentimientosService {
         try {
             const supabase = this.supabaseService.getClient();
             let query = `
-                SELECT c.*, 
+                SELECT c.id, 
+                       c.empleado_id, 
+                       c.tipo_consentimiento, 
+                       c.acepta, 
+                       c.fecha_consentimiento, 
+                       c.datos_json, 
+                       c.vigente, 
+                       c.created_at, 
+                       c.updated_at, 
+                       c.documento_generado_id,
                        e.nombre_completo as empleado_nombre,
                        e.cedula as empleado_cedula,
+                       dg.plantilla_id as plantilla_id,
                        COALESCE(dg.url_pdf, c.documento_pdf_url) as documento_pdf_url
                 FROM consentimientos_empleado c
                 LEFT JOIN empleados e ON c.empleado_id = e.id

@@ -12,17 +12,24 @@ export class VerificacionReferenciasService {
         try {
             const supabase = this.supabaseService.getClient();
             let query = `
-        SELECT vr.*, 
-               a.nombres || ' ' || a.apellidos as aspirante_nombre,
-               e.nombre_completo as empleado_nombre,
-               u.nombre as responsable_nombre,
-               dg.url_pdf as documento_pdf_url
-        FROM verificacion_referencias vr
-        LEFT JOIN aspirantes a ON vr.aspirante_id = a.id
-        LEFT JOIN empleados e ON vr.empleado_id = e.id
-        LEFT JOIN usuarios_externos u ON vr.responsable_verificacion = u.id
-        LEFT JOIN documentos_generados dg ON vr.documento_final_id = dg.id
-        WHERE 1=1
+                SELECT vr.id, 
+                       vr.aspirante_id, 
+                       vr.empleado_id, 
+                       vr.responsable_verificacion, 
+                       vr.estado, 
+                       vr.documento_final_id, 
+                       vr.conclusiones, 
+                       vr.created_at,
+                       a.nombre_completo as aspirante_nombre,
+                       e.nombre_completo as empleado_nombre,
+                       u.nombre_completo as responsable_nombre,
+                       dg.url_pdf as documento_pdf_url
+                FROM verificacion_referencias vr
+                LEFT JOIN aspirantes a ON vr.aspirante_id = a.id
+                LEFT JOIN empleados e ON vr.empleado_id = e.id
+                LEFT JOIN usuarios_externos u ON vr.responsable_verificacion = u.id
+                LEFT JOIN documentos_generados dg ON vr.documento_final_id = dg.id
+                WHERE 1=1
       `;
 
             if (filters?.aspirante_id) query += ` AND vr.aspirante_id = ${filters.aspirante_id}`;
@@ -45,13 +52,20 @@ export class VerificacionReferenciasService {
         try {
             const supabase = this.supabaseService.getClient();
             const query = `
-        SELECT vr.*, 
-               a.nombres || ' ' || a.apellidos as aspirante_nombre,
-               e.nombre_completo as empleado_nombre
-        FROM verificacion_referencias vr
-        LEFT JOIN aspirantes a ON vr.aspirante_id = a.id
-        LEFT JOIN empleados e ON vr.empleado_id = e.id
-        WHERE vr.id = ${id}
+                SELECT vr.id,
+                       vr.aspirante_id,
+                       vr.empleado_id,
+                       vr.responsable_verificacion,
+                       vr.estado,
+                       vr.documento_final_id,
+                       vr.conclusiones,
+                       vr.created_at,
+                       a.nombre_completo as aspirante_nombre,
+                       e.nombre_completo as empleado_nombre
+                FROM verificacion_referencias vr
+                LEFT JOIN aspirantes a ON vr.aspirante_id = a.id
+                LEFT JOIN empleados e ON vr.empleado_id = e.id
+                WHERE vr.id = ${id}
       `;
 
             const { data, error } = await supabase.rpc("exec_sql", { query });
