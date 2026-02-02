@@ -40,7 +40,7 @@ export class ContratosPersonalController {
         @CurrentUser() user: any,
         @UploadedFile() file?: any,
     ) {
-        return this.contratosService.create(createDto, user.id, file);
+        return this.contratosService.create(createDto, user, file);
     }
 
     @Post('terminate')

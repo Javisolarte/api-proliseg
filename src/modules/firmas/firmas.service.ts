@@ -82,13 +82,19 @@ export class FirmasService {
 
             if (error) throw new BadRequestException("Error al registrar firma");
 
-            // 5. Cierre automático (Opcional: Si era la última firma necesaria)
-            // Como no sabemos cuántas firmas se requieren exactamente sin tabla config,
-            // dejamos esto manual o activado por flag "es_ultima_firma" en DTO.
-            // Si el frontend envía "es_ultima: true", cerramos.
+            // 5. Cierre automático y RE-GENERACIÓN de PDF
             if (createDto.es_ultima_firma) {
+                // Primero cambiamos a firmado
                 await this.documentosService.cambiarEstado(docId, 'firmado');
-                this.logger.log(`Documento ${docId} cerrado automáticamente tras última firma.`);
+
+                // Re-generamos el PDF para que incluya todas las firmas (incluyendo esta última)
+                // Usamos un pequeño truco: pasamos temporalmente a generando_pdf para permitir el bypass de validación
+                const supabase = this.supabaseService.getClient();
+                await supabase.from("documentos_generados").update({ estado: 'borrador' }).eq("id", docId);
+                await this.documentosService.generarPdf(docId);
+                await supabase.from("documentos_generados").update({ estado: 'firmado' }).eq("id", docId);
+
+                this.logger.log(`Documento ${docId} cerrado y PDF final re-generado tras última firma.`);
             }
 
             this.logger.log(`✅ Firma registrada para documento ${docId}`);

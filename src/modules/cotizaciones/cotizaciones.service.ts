@@ -1,12 +1,17 @@
 import { Injectable, Logger, BadRequestException, NotFoundException, ForbiddenException } from "@nestjs/common";
 import { SupabaseService } from "../supabase/supabase.service";
 import type { CreateCotizacionDto, UpdateCotizacionDto, CreateCotizacionItemDto as CreateItemDto } from "./dto/cotizacion.dto";
+import { DocumentosGeneradosService } from "../documentos-generados/documentos-generados.service";
+import { EntidadTipo } from "../documentos-generados/dto/documento-generado.dto";
 
 @Injectable()
 export class CotizacionesService {
     private readonly logger = new Logger(CotizacionesService.name);
 
-    constructor(private readonly supabaseService: SupabaseService) { }
+    constructor(
+        private readonly supabaseService: SupabaseService,
+        private readonly documentosService: DocumentosGeneradosService
+    ) { }
 
     // Helper para recalcular totales
     private async recalcularTotales(cotizacionId: number) {
@@ -33,19 +38,40 @@ export class CotizacionesService {
         this.logger.log(`Totales recalculados cotizacion ${cotizacionId}: ${total}`);
     }
 
-    async create(createDto: CreateCotizacionDto, userId: number) {
-        /* ... create logic ... */
-        // Basic create, status borrador default is fine
+    async create(createDto: CreateCotizacionDto, user: any) {
+        const userId = typeof user === 'number' ? user : user.id;
         try {
             const supabase = this.supabaseService.getClient();
             const { data, error } = await supabase.from("cotizaciones").insert({
-                ...createDto,
+                cliente_id: createDto.cliente_id,
+                prospecto_datos: createDto.prospecto_datos,
+                fecha_emision: createDto.fecha_emision || new Date().toISOString(),
+                fecha_vencimiento: createDto.fecha_vencimiento,
+                subtotal: createDto.subtotal,
+                impuestos: createDto.impuestos,
+                total: createDto.total,
+                observaciones: createDto.observaciones,
                 creado_por: userId,
-                estado: 'borrador', // Always starts as borrador
-                fecha_emision: new Date().toISOString()
+                estado: 'borrador',
             }).select().single();
 
             if (error) throw new BadRequestException(error.message);
+
+            // Si se pasa plantilla, crear el documento vinculado
+            if (createDto.plantilla_id) {
+                const docGenerado = await this.documentosService.create({
+                    plantilla_id: createDto.plantilla_id,
+                    entidad_tipo: EntidadTipo.CLIENTE, // O crear un nuevo EntidadTipo.COTIZACION si es necesario
+                    entidad_id: data.id,
+                    datos_json: {
+                        ...createDto,
+                        total_texto: "CIEN MIL PESOS", // Podríamos añadir una utilidad luego
+                    }
+                }, typeof user === 'object' ? user : undefined);
+
+                await supabase.from("cotizaciones").update({ documento_generado_id: docGenerado.id }).eq("id", data.id);
+            }
+
             return data;
         } catch (e) { throw e; }
     }
@@ -334,15 +360,15 @@ export class CotizacionesService {
 
     async generarPdf(id: number) {
         const cotizacion = await this.findOne(id);
-        if (!cotizacion) throw new NotFoundException();
+        if (!cotizacion) throw new NotFoundException("Cotización no encontrada");
 
-        // TODO: Integración real con motor de generación PDF
-        const fakeUrl = `https://api.proliseg.com/downloads/cotizaciones/${id}_${Date.now()}.pdf`;
+        // Si tiene un documento generado vinculado, usamos ese motor
+        if (cotizacion.documento_generado_id) {
+            return this.documentosService.generarPdf(cotizacion.documento_generado_id);
+        }
 
-        // Simular delay y retorno
-        return {
-            url: fakeUrl,
-            generated_at: new Date()
-        };
+        // Si no tiene, por ahora lanzamos error indicando que requiere plantilla
+        // O podríamos implementar un generador genérico de emergencia aquí
+        throw new BadRequestException("Esta cotización no tiene una plantilla vinculada. Vincule una plantilla al crearla para habilitar la generación de PDF.");
     }
 }

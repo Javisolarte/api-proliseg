@@ -11,6 +11,8 @@ import { TerminateContratoPersonalDto } from './dto/terminate-contrato-personal.
 import { RenovarContratoDto } from './dto/renovar-contrato.dto';
 import { UpdateContratoPersonalDto } from './dto/update-contrato-personal.dto';
 import { AuditoriaService } from '../auditoria/auditoria.service';
+import { DocumentosGeneradosService } from '../documentos-generados/documentos-generados.service';
+import { EntidadTipo } from '../documentos-generados/dto/documento-generado.dto';
 
 @Injectable()
 export class ContratosPersonalService {
@@ -19,11 +21,13 @@ export class ContratosPersonalService {
     constructor(
         private readonly supabaseService: SupabaseService,
         private readonly auditoriaService: AuditoriaService,
+        private readonly documentosService: DocumentosGeneradosService,
     ) { }
 
     // 🔹 Crear contrato
-    async create(createDto: CreateContratoPersonalDto, userId: number, file?: any) {
+    async create(createDto: CreateContratoPersonalDto, user: any, file?: any) {
         const supabase = this.supabaseService.getClient();
+        const userId = user.id;
 
         // 1. Validar si el empleado ya tiene contrato activo
         const { data: activeContract } = await supabase
@@ -38,18 +42,46 @@ export class ContratosPersonalService {
         }
 
         let contratoPdfUrl: string | null = null;
+        let documentoGeneradoId: number | null = null;
 
-        // 2. Subir PDF si existe
+        // 2. Obtener datos del empleado para ruta de archivo o variables de plantilla
+        const { data: empleado } = await supabase
+            .from('empleados')
+            .select('*, salarios(*)')
+            .eq('id', createDto.empleado_id)
+            .single();
+
+        if (!empleado) throw new NotFoundException('Empleado no encontrado');
+
+        // 3. FLUJO A: Subida manual de PDF
         if (file) {
-            // Necesitamos la cédula para la ruta, la obtenemos del empleado
-            const { data: empleado } = await supabase.from('empleados').select('cedula').eq('id', createDto.empleado_id).single();
-            if (!empleado) throw new NotFoundException('Empleado no encontrado');
-
             const path = `contratos_empleados/${empleado.cedula}.pdf`;
             contratoPdfUrl = await this.uploadFile(file, 'empleados', path);
         }
 
-        // 3. Insertar contrato
+        // 4. FLUJO B: Generación automática por plantilla
+        if (createDto.plantilla_id) {
+            const docGenerado = await this.documentosService.create({
+                plantilla_id: createDto.plantilla_id,
+                entidad_tipo: EntidadTipo.CONTRATO_PERSONAL,
+                entidad_id: createDto.empleado_id,
+                datos_json: {
+                    nombre_completo: empleado.nombre_completo,
+                    cedula: empleado.cedula,
+                    fecha_inicio: createDto.fecha_inicio,
+                    salario: empleado.salarios?.valor || 0,
+                    cargo: empleado.cargo_oficial || 'Empleado',
+                }
+            }, user);
+
+            documentoGeneradoId = docGenerado.id;
+
+            // Generar PDF inicial con la firma de HR
+            const docConPdf = await this.documentosService.generarPdf(docGenerado.id);
+            contratoPdfUrl = docConPdf.url_pdf;
+        }
+
+        // 5. Insertar registro en contratos_personal
         const { data: newContract, error } = await supabase
             .from('contratos_personal')
             .insert({
@@ -60,6 +92,7 @@ export class ContratosPersonalService {
                 fecha_fin_prueba: createDto.fecha_fin_prueba || null,
                 salario_id: createDto.salario_id,
                 contrato_pdf_url: contratoPdfUrl,
+                documento_generado_id: documentoGeneradoId,
                 creado_por: userId,
                 estado: 'activo',
                 modalidad_trabajo: createDto.modalidad_trabajo || 'tiempo_completo',
@@ -72,16 +105,15 @@ export class ContratosPersonalService {
             throw new InternalServerErrorException('Error al crear el contrato');
         }
 
-        // 4. Actualizar empleado (vinculación)
+        // 6. Actualizar empleado (vinculación)
         await supabase
             .from('empleados')
             .update({
                 contrato_personal_id: newContract.id,
-                // activo: true, // Opcional: activar empleado si estaba inactivo
             })
             .eq('id', createDto.empleado_id);
 
-        // 5. Auditar
+        // 7. Auditar
         await this.auditoriaService.create({
             tabla_afectada: 'contratos_personal',
             registro_id: newContract.id,

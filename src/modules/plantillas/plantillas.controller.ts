@@ -48,7 +48,7 @@ export class PlantillasController {
     }
 
     @Post()
-    @RequirePermissions("plantillas", "crear")
+    @RequirePermissions("plantillas")
     @ApiOperation({ summary: "Crear nueva plantilla" })
     @ApiResponse({ status: 201, description: "Plantilla creada exitosamente" })
     async create(
@@ -59,7 +59,7 @@ export class PlantillasController {
     }
 
     @Put(":id")
-    @RequirePermissions("plantillas", "actualizar")
+    @RequirePermissions("plantillas")
     @ApiOperation({ summary: "Actualizar plantilla" })
     @ApiResponse({ status: 200, description: "Plantilla actualizada exitosamente" })
     async update(
@@ -71,7 +71,7 @@ export class PlantillasController {
     }
 
     @Delete(":id")
-    @RequirePermissions("plantillas", "eliminar")
+    @RequirePermissions("plantillas")
     @ApiOperation({ summary: "Desactivar plantilla (soft delete)" })
     @ApiResponse({ status: 200, description: "Plantilla desactivada exitosamente" })
     async remove(
@@ -103,14 +103,14 @@ export class PlantillasController {
     }
 
     @Post(':id/versionar')
-    @RequirePermissions("plantillas", "crear")
+    @RequirePermissions("plantillas")
     @ApiOperation({ summary: 'Crear nueva versión manualmente (clonar)' })
     async versionar(@Param("id", ParseIntPipe) id: number, @CurrentUser() user: any) {
         return this.plantillasService.crearNuevaVersionManual(id, user.id);
     }
 
     @Put(':id/activar')
-    @RequirePermissions("plantillas", "actualizar")
+    @RequirePermissions("plantillas")
     @ApiOperation({ summary: 'Activar una versión específica' })
     async activar(@Param("id", ParseIntPipe) id: number) {
         return this.plantillasService.activarVersion(id);

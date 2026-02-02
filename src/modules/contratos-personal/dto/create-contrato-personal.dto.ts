@@ -62,4 +62,10 @@ export class CreateContratoPersonalDto {
     @IsOptional()
     @IsEnum(ModalidadTrabajo)
     modalidad_trabajo?: ModalidadTrabajo;
+
+    @ApiProperty({ description: 'ID de la plantilla de documento (opcional)', required: false })
+    @IsOptional()
+    @IsInt()
+    @Transform(({ value }) => value ? parseInt(value) : undefined)
+    plantilla_id?: number;
 }

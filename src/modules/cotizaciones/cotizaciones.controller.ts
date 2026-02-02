@@ -64,7 +64,7 @@ export class CotizacionesController {
         @Body() createDto: CreateCotizacionDto,
         @CurrentUser() user: any
     ) {
-        return this.cotizacionesService.create(createDto, user.id);
+        return this.cotizacionesService.create(createDto, user);
     }
 
     @Put(":id")

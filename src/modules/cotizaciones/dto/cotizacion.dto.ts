@@ -62,6 +62,12 @@ export class CreateCotizacionDto {
     @IsOptional()
     @IsString()
     observaciones?: string;
+
+    @ApiProperty({ description: 'ID de la plantilla de documento (opcional)', required: false })
+    @IsOptional()
+    @IsInt()
+    @Transform(({ value }) => value ? parseInt(value) : undefined)
+    plantilla_id?: number;
 }
 
 export class UpdateCotizacionDto extends PartialType(CreateCotizacionDto) {

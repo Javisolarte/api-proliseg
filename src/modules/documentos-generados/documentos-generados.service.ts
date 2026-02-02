@@ -1,8 +1,9 @@
-import { Injectable, NotFoundException, Logger, BadRequestException, ForbiddenException, Inject, forwardRef } from "@nestjs/common";
+import { Injectable, NotFoundException, Logger, BadRequestException, ForbiddenException, Inject, forwardRef, InternalServerErrorException } from "@nestjs/common";
 import { SupabaseService } from "../supabase/supabase.service";
 import { PlantillasService } from "../plantillas/plantillas.service";
 import type { CreateDocumentoDto } from "./dto/documento-generado.dto";
 import { FirmasService } from "../firmas/firmas.service";
+import * as puppeteer from 'puppeteer';
 
 @Injectable()
 export class DocumentosGeneradosService {
@@ -181,35 +182,101 @@ export class DocumentosGeneradosService {
     // 🟢 BLOQUE 3 - State Transition Methods for Documents
     async generarPdf(id: number) {
         const supabase = this.supabaseService.getClient();
-        const { data: doc } = await supabase.from("documentos_generados").select("*").eq("id", id).single();
 
-        if (!doc) throw new NotFoundException("Documento no encontrado");
+        // 1. Obtener documento con su plantilla
+        const { data: doc, error: docError } = await supabase
+            .from("documentos_generados")
+            .select(`
+                *,
+                plantilla:plantillas_documentos(*)
+            `)
+            .eq("id", id)
+            .single();
 
-        // Solo se puede generar PDF si está en borrador
-        if (doc.estado !== 'borrador') {
+        if (docError || !doc) throw new NotFoundException("Documento no encontrado");
+
+        // Solo se puede generar PDF si está en borrador o generando_pdf (reintento)
+        if (doc.estado !== 'borrador' && doc.estado !== 'generando_pdf') {
             throw new BadRequestException(`No se puede generar PDF de un documento en estado ${doc.estado}`);
         }
 
-        // TODO: Aquí iría la lógica real de generación de PDF
-        // Por ahora simulamos con una URL ficticia
-        const pdfUrl = `https://storage.proliseg.com/documentos/${id}.pdf`;
+        try {
+            // 2. Preparar el HTML con variables
+            let htmlContenido = doc.plantilla.contenido_html;
+            const datos = doc.datos_json || {};
 
-        const { data, error } = await supabase
-            .from("documentos_generados")
-            .update({
-                estado: 'generando_pdf',
-                url_pdf: pdfUrl,
-                fecha_generacion: new Date().toISOString(),
-                updated_at: new Date().toISOString()
-            })
-            .eq("id", id)
-            .select()
-            .single();
+            // Reemplazo de variables {{variable}}
+            for (const [key, value] of Object.entries(datos)) {
+                const regex = new RegExp(`{{${key}}}`, 'g');
+                htmlContenido = htmlContenido.replace(regex, value as string);
+            }
 
-        if (error) throw new BadRequestException("Error generando PDF");
+            // 3. Obtener firmas registradas para inyectar si existen
+            const { data: firmas } = await supabase
+                .from("firmas_documentos")
+                .select("*")
+                .eq("documento_id", id)
+                .order("orden", { ascending: true });
 
-        this.logger.log(`PDF generado para documento ${id}`);
-        return data;
+            // Inyectar firmas en placeholders específicos ej: {{firma_1}}, {{firma_2}}
+            if (firmas && firmas.length > 0) {
+                firmas.forEach((f, index) => {
+                    if (f.firma_base64) {
+                        const firmaHtml = `<img src="${f.firma_base64}" style="max-width: 200px; max-height: 100px;" alt="Firma ${f.nombre_firmante}">`;
+                        // Soporte para placeholders {{firma_1}}, {{firma_2}}...
+                        htmlContenido = htmlContenido.replace(new RegExp(`{{firma_${index + 1}}}`, 'g'), firmaHtml);
+                        // Soporte para placeholder genérico por orden
+                        htmlContenido = htmlContenido.replace(new RegExp(`{{firma_orden_${f.orden}}}`, 'g'), firmaHtml);
+                    }
+                });
+            }
+
+            // 4. Generar PDF con Puppeteer
+            const browser = await puppeteer.launch({
+                headless: true,
+                args: ['--no-sandbox', '--disable-setuid-sandbox']
+            });
+            const page = await browser.newPage();
+
+            await page.setContent(htmlContenido, { waitUntil: 'networkidle0' });
+
+            const pdfBuffer = await page.pdf({
+                format: 'Letter' as puppeteer.PaperFormat,
+                printBackground: true,
+                margin: { top: '20mm', right: '20mm', bottom: '20mm', left: '20mm' }
+            });
+
+            await browser.close();
+
+            // 5. Subir a Supabase Storage
+            const fileName = `${doc.entidad_tipo}/${id}_${Date.now()}.pdf`;
+            const path = await this.supabaseService.uploadFile('documentos', fileName, Buffer.from(pdfBuffer), 'application/pdf');
+
+            // Obtener URL pública
+            const { data: { publicUrl } } = supabase.storage.from('documentos').getPublicUrl(path);
+
+            // 6. Actualizar registro
+            const { data: updatedDoc, error: updateError } = await supabase
+                .from("documentos_generados")
+                .update({
+                    estado: 'generando_pdf',
+                    url_pdf: publicUrl,
+                    fecha_generacion: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                })
+                .eq("id", id)
+                .select()
+                .single();
+
+            if (updateError) throw new BadRequestException("Error actualizando URL del PDF");
+
+            this.logger.log(`✅ PDF generado y subido para documento ${id}: ${publicUrl}`);
+            return updatedDoc;
+
+        } catch (error) {
+            this.logger.error(`Error generando PDF para documento ${id}:`, error);
+            throw new InternalServerErrorException("Falló la generación del PDF con Puppeteer");
+        }
     }
 
     async enviarFirmas(id: number) {

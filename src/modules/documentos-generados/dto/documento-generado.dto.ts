@@ -20,7 +20,8 @@ export enum EntidadTipo {
     EMPLEADO = 'empleado',
     CLIENTE = 'cliente',
     PROVEEDOR = 'proveedor',
-    RESIDENTE = 'residente'
+    RESIDENTE = 'residente',
+    CONTRATO_PERSONAL = 'contrato_personal'
 }
 
 export class CreateDocumentoDto {
