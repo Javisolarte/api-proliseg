@@ -459,6 +459,7 @@ CREATE TABLE public.cotizaciones_items (
 CREATE TABLE public.documentos_generados (
   id integer NOT NULL DEFAULT nextval('documentos_generados_id_seq'::regclass),
   plantilla_id integer,
+  created_by_id integer,
   codigo_referencia uuid DEFAULT gen_random_uuid() UNIQUE,
   entidad_tipo character varying NOT NULL,
   entidad_id integer NOT NULL,

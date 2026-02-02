@@ -14,6 +14,8 @@ export enum TipoPlantilla {
     CONTRATO_CLIENTE = 'contrato_cliente',
     CONTRATO_EMPLEADO = 'contrato_empleado',
     CONSENTIMIENTO = 'consentimiento',
+    AUTORIZACION_BUSQUEDA = 'autorizacion_busqueda',
+    AUTORIZACION_DATOS = 'autorizacion_datos',
     CERTIFICADO = 'certificado',
     REFERENCIA = 'referencia',
     COTIZACION = 'cotizacion',

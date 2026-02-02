@@ -51,6 +51,11 @@ export class CreateDocumentoDto {
     @IsOptional()
     @IsString()
     url_pdf?: string;
+
+    @ApiProperty({ required: false })
+    @IsOptional()
+    @IsInt()
+    created_by_id?: number;
 }
 
 export class UpdateDocumentoGeneradoDto extends PartialType(CreateDocumentoDto) {

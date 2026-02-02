@@ -32,7 +32,8 @@ export class DocumentosGeneradosService {
                     entidad_tipo: createDto.entidad_tipo,
                     entidad_id: createDto.entidad_id,
                     datos_json: createDto.datos_json,
-                    estado: 'borrador'
+                    estado: 'borrador',
+                    created_by_id: createDto.created_by_id || usuarioActual?.id || null
                 })
                 .select()
                 .single();
@@ -234,6 +235,27 @@ export class DocumentosGeneradosService {
                         htmlContenido = htmlContenido.replace(new RegExp(`{{huella_${index + 1}}}`, 'g'), huellaHtml);
                     }
                 });
+            }
+
+            // 3.5. Insertar Footer con "Generado por"
+            let footerHtml = '';
+            if (doc.created_by_id) {
+                // Intentar buscar en usuarios_externos (gestores)
+                const { data: usuario } = await supabase.from('usuarios_externos').select('nombre_completo').eq('id', doc.created_by_id).single();
+                if (usuario) {
+                    footerHtml = `
+                    <div style="position: fixed; bottom: 0; width: 100%; font-size: 8px; color: #888; text-align: center; padding: 5px; background: white;">
+                        Generado por: ${usuario.nombre_completo.toUpperCase()} | Fecha: ${new Date().toLocaleString('es-CO')} | Ref: ${doc.codigo_referencia || id}
+                    </div>`;
+                }
+            }
+
+            // Si el contenido no tiene cierre de body/html, lo añadimos al final. 
+            // Si es un documento completo, lo ideal es usar headerTemplate/footerTemplate de puppeteer,
+            // pero eso requiere margins.
+            // Para simplicidad, lo agregamos al final del contenido HTML, asumiendo flujo normal.
+            if (footerHtml) {
+                htmlContenido += footerHtml;
             }
 
             // 4. Generar PDF con Puppeteer
