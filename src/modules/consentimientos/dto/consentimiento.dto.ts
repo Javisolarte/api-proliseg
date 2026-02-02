@@ -25,4 +25,13 @@ export class CreateConsentimientoDto {
     @IsOptional()
     @IsString()
     documento_pdf_url?: string;
+
+    @ApiProperty({ required: false, description: "ID de la plantilla para generar el documento" })
+    @IsOptional()
+    @IsNumber()
+    plantilla_id?: number;
+
+    @ApiProperty({ required: false, description: "Datos para rellenar la plantilla" })
+    @IsOptional()
+    datos_json?: Record<string, any>;
 }

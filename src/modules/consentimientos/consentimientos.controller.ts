@@ -30,7 +30,7 @@ export class ConsentimientosController {
     }
 
     @Post()
-    @RequirePermissions("empleados", "crear")
+    @RequirePermissions("empleados")
     @ApiOperation({ summary: "Registrar consentimiento" })
     async create(@Body() createDto: CreateConsentimientoDto) {
         return this.consentimientosService.create(createDto);

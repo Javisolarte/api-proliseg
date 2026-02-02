@@ -41,14 +41,14 @@ export class VerificacionReferenciasController {
     }
 
     @Post()
-    @RequirePermissions("empleados", "crear")
+    @RequirePermissions("empleados")
     @ApiOperation({ summary: "Iniciar verificación de referencias" })
     async create(@Body() createDto: CreateVerificacionDto, @CurrentUser() user: any) {
         return this.verificacionService.create(createDto, user.id);
     }
 
     @Patch(":id/finalizar")
-    @RequirePermissions("empleados", "actualizar")
+    @RequirePermissions("empleados")
     @ApiOperation({ summary: "Finalizar verificación" })
     async finalizar(
         @Param("id", ParseIntPipe) id: number,
@@ -65,7 +65,7 @@ export class VerificacionReferenciasController {
     }
 
     @Post("detalles")
-    @RequirePermissions("empleados", "crear")
+    @RequirePermissions("empleados")
     @ApiOperation({ summary: "Registrar detalle de llamada de referencia" })
     async createDetalle(@Body() createDto: CreateReferenciaDetalleDto) {
         return this.verificacionService.createDetalle(createDto);

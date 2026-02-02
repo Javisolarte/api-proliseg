@@ -74,6 +74,7 @@ export class FirmasService {
                     cargo_firmante: createDto.cargo_firmante || null,
                     tipo_firma: createDto.tipo_firma,
                     firma_base64: createDto.firma_base64,
+                    huella_base64: createDto.huella_base64 || null,
                     ip_address: ipAddress, // Obligatorio
                     orden: orden
                 })

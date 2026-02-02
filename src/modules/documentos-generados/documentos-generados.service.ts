@@ -228,6 +228,11 @@ export class DocumentosGeneradosService {
                         // Soporte para placeholder genérico por orden
                         htmlContenido = htmlContenido.replace(new RegExp(`{{firma_orden_${f.orden}}}`, 'g'), firmaHtml);
                     }
+                    // Inyectar Huella si existe
+                    if (f.huella_base64) {
+                        const huellaHtml = `<img src="${f.huella_base64}" style="max-width: 100px; max-height: 120px;" alt="Huella">`;
+                        htmlContenido = htmlContenido.replace(new RegExp(`{{huella_${index + 1}}}`, 'g'), huellaHtml);
+                    }
                 });
             }
 

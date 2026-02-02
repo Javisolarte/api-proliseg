@@ -633,6 +633,7 @@ CREATE TABLE public.firmas_documentos (
   cargo_firmante character varying,
   tipo_firma character varying DEFAULT 'digital'::character varying CHECK (tipo_firma::text = ANY (ARRAY['digital'::character varying, 'manuscrita_capturada'::character varying, 'biometrica'::character varying]::text[])),
   firma_base64 text,
+  huella_base64 text,
   ip_address inet,
   fecha_firma timestamp without time zone DEFAULT now(),
   token_validacion uuid DEFAULT gen_random_uuid(),

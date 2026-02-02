@@ -41,6 +41,11 @@ export class CreateFirmaDto {
     @IsNotEmpty()
     firma_base64: string;
 
+    @ApiProperty({ required: false, description: "Huella digital en base64" })
+    @IsOptional()
+    @IsString()
+    huella_base64?: string;
+
     @ApiProperty({ required: false, default: 1 })
     @IsOptional()
     @IsNumber()
