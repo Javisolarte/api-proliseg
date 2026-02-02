@@ -74,7 +74,7 @@ export class ConsentimientosService {
                     acepta: createDto.acepta ?? true,
                     fecha_consentimiento: new Date().toISOString(),
                     documento_pdf_url: urlPdf,
-                    // documento_generado_id: documentoGeneradoId, // Descomentar si la tabla tiene esta columna en prod
+                    documento_generado_id: documentoGeneradoId,
                     vigente: true
                 })
                 .select()
@@ -115,6 +115,36 @@ export class ConsentimientosService {
         return { success: true };
     }
 
-    async findAll(filters: any) { const supabase = this.supabaseService.getClient(); /*...*/ return []; }
-    async getByEmpleado(id: number) { const supabase = this.supabaseService.getClient(); /*...*/ return []; }
+    async findAll(filters: { empleado_id?: number; tipo?: string }) {
+        try {
+            const supabase = this.supabaseService.getClient();
+            let query = `
+                SELECT c.*, 
+                       e.nombre_completo as empleado_nombre,
+                       e.cedula as empleado_cedula,
+                       dg.url_pdf as documento_url
+                FROM consentimientos_empleado c
+                LEFT JOIN empleados e ON c.empleado_id = e.id
+                LEFT JOIN documentos_generados dg ON c.documento_generado_id = dg.id
+                WHERE 1=1
+            `;
+
+            if (filters?.empleado_id) query += ` AND c.empleado_id = ${filters.empleado_id}`;
+            if (filters?.tipo) query += ` AND c.tipo_consentimiento = '${filters.tipo}'`;
+
+            query += ` ORDER BY c.created_at DESC`;
+
+            const { data, error } = await supabase.rpc("exec_sql", { query });
+
+            if (error) {
+                this.logger.error("Error en findAll consentimientos:", error);
+                throw new BadRequestException("Error al obtener consentimientos");
+            }
+            return Array.isArray(data) ? data : [];
+        } catch (error) { throw error; }
+    }
+
+    async getByEmpleado(id: number) {
+        return this.findAll({ empleado_id: id });
+    }
 }
