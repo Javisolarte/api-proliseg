@@ -57,7 +57,7 @@ export class CotizacionesController {
     }
 
     @Post()
-    @RequirePermissions("cotizaciones", "crear")
+    @RequirePermissions("cotizaciones")
     @ApiOperation({ summary: "Crear cotización" })
     @ApiResponse({ status: 201, description: "Cotización creada" })
     async create(
@@ -68,7 +68,7 @@ export class CotizacionesController {
     }
 
     @Put(":id")
-    @RequirePermissions("cotizaciones", "actualizar")
+    @RequirePermissions("cotizaciones")
     @ApiOperation({ summary: "Actualizar cotización" })
     @ApiResponse({ status: 200, description: "Cotización actualizada" })
     async update(
@@ -80,7 +80,7 @@ export class CotizacionesController {
     }
 
     @Post(":id/aprobar")
-    @RequirePermissions("cotizaciones", "aprobar")
+    @RequirePermissions("cotizaciones")
     @ApiOperation({ summary: "Aprobar cotización" })
     @ApiResponse({ status: 200, description: "Cotización aprobada" })
     async aprobar(
@@ -92,7 +92,7 @@ export class CotizacionesController {
 
     // 🟢 BLOQUE 3 - State Transitions
     @Post(":id/enviar")
-    @RequirePermissions("cotizaciones", "enviar")
+    @RequirePermissions("cotizaciones")
     @ApiOperation({ summary: "Enviar cotización al cliente" })
     @ApiResponse({ status: 200, description: "Cotización enviada exitosamente" })
     async enviar(
@@ -103,7 +103,7 @@ export class CotizacionesController {
     }
 
     @Post(":id/aceptar")
-    @RequirePermissions("cotizaciones", "aceptar")
+    @RequirePermissions("cotizaciones")
     @ApiOperation({ summary: "Aceptar cotización" })
     @ApiResponse({ status: 200, description: "Cotización aceptada" })
     async aceptar(
@@ -114,7 +114,7 @@ export class CotizacionesController {
     }
 
     @Post(":id/rechazar")
-    @RequirePermissions("cotizaciones", "rechazar")
+    @RequirePermissions("cotizaciones")
     @ApiOperation({ summary: "Rechazar cotización" })
     @ApiResponse({ status: 200, description: "Cotización rechazada" })
     async rechazar(
@@ -126,7 +126,7 @@ export class CotizacionesController {
     }
 
     @Post(":id/expirar")
-    @RequirePermissions("cotizaciones", "expirar")
+    @RequirePermissions("cotizaciones")
     @ApiOperation({ summary: "Expirar cotización" })
     @ApiResponse({ status: 200, description: "Cotización expirada" })
     async expirar(
@@ -145,7 +145,7 @@ export class CotizacionesController {
     }
 
     @Post("items")
-    @RequirePermissions("cotizaciones", "crear")
+    @RequirePermissions("cotizaciones")
     @ApiOperation({ summary: "Agregar item a cotización" })
     @ApiResponse({ status: 201, description: "Item creado" })
     async createItem(@Body() createItemDto: CreateCotizacionItemDto) {
@@ -153,7 +153,7 @@ export class CotizacionesController {
     }
 
     @Delete("items/:id")
-    @RequirePermissions("cotizaciones", "eliminar")
+    @RequirePermissions("cotizaciones")
     @ApiOperation({ summary: "Eliminar item de cotización" })
     @ApiResponse({ status: 200, description: "Item eliminado" })
     async deleteItem(@Param("id", ParseIntPipe) id: number) {
@@ -161,7 +161,7 @@ export class CotizacionesController {
     }
 
     @Post(":id/convertir-contrato")
-    @RequirePermissions("cotizaciones", "aprobar") // Requiere permisos altos
+    @RequirePermissions("cotizaciones") // Requiere permisos altos
     @ApiOperation({ summary: "Convertir cotización en contrato" })
     async convertirContrato(@Param("id", ParseIntPipe) id: number, @CurrentUser() user: any) {
         return this.cotizacionesService.convertirAContrato(id, user.id);
