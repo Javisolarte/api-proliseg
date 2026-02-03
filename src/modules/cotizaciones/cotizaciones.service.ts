@@ -59,14 +59,32 @@ export class CotizacionesService {
 
             // Si se pasa plantilla, crear el documento vinculado
             if (createDto.plantilla_id) {
+                // Preparar variables requeridas por la plantilla para pasar validación inicial
+                const formatter = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 });
+                const dateOptions: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'long', day: 'numeric' };
+
+                const variablesIniciales = {
+                    ...createDto,
+                    ciudad: 'Bogotá D.C.',
+                    fecha_formato: new Date(data.fecha_emision).toLocaleDateString('es-ES', dateOptions),
+                    cliente_empresa: createDto.prospecto_datos?.empresa || 'Prospecto',
+                    cliente_nit: createDto.prospecto_datos?.nit || '',
+                    cliente_contacto: createDto.prospecto_datos?.contacto || '',
+                    numero_propuesta: `COT-${data.id.toString().padStart(4, '0')}`,
+                    items: '<tr><td colspan="5" style="padding:10px; text-align:center; color:#888;">Detalle de items pendiente de carga...</td></tr>',
+                    mostrar_total: 'true',
+                    subtotal_formateado: formatter.format(createDto.subtotal || 0),
+                    impuestos_formateado: formatter.format(createDto.impuestos || 0),
+                    total_formateado: formatter.format(createDto.total || 0),
+                    asesor_nombre: 'Asesor Comercial Proliseg', // Podríamos obtenerlo de `user` si tuviéramos tabla usuarios completa a mano
+                    asesor_telefono: '(601) 745 5555'
+                };
+
                 const docGenerado = await this.documentosService.create({
                     plantilla_id: createDto.plantilla_id,
-                    entidad_tipo: EntidadTipo.CLIENTE, // O crear un nuevo EntidadTipo.COTIZACION si es necesario
+                    entidad_tipo: EntidadTipo.CLIENTE, // TODO: Debería ser COTIZACION idealmente, pero usamos CLIENTE por compatibilidad actual? Revisar EntidadTipo.
                     entidad_id: data.id,
-                    datos_json: {
-                        ...createDto,
-                        total_texto: "CIEN MIL PESOS", // Podríamos añadir una utilidad luego
-                    }
+                    datos_json: variablesIniciales
                 }, typeof user === 'object' ? user : undefined);
 
                 await supabase.from("cotizaciones").update({ documento_generado_id: docGenerado.id }).eq("id", data.id);
