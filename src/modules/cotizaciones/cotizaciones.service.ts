@@ -359,16 +359,75 @@ export class CotizacionesService {
     }
 
     async generarPdf(id: number) {
-        const cotizacion = await this.findOne(id);
-        if (!cotizacion) throw new NotFoundException("Cotización no encontrada");
+        const supabase = this.supabaseService.getClient();
 
-        // Si tiene un documento generado vinculado, usamos ese motor
-        if (cotizacion.documento_generado_id) {
-            return this.documentosService.generarPdf(cotizacion.documento_generado_id);
+        // 1. Obtener cotización completa con items
+        const { data: cotizacion, error } = await supabase
+            .from("cotizaciones")
+            .select(`
+                *,
+                items:cotizaciones_items (
+                    *,
+                    tipo_servicio:tipos_servicios (nombre)
+                )
+            `)
+            .eq("id", id)
+            .single();
+
+        if (error || !cotizacion) throw new NotFoundException("Cotización no encontrada");
+
+        if (!cotizacion.documento_generado_id) {
+            throw new BadRequestException("Esta cotización no tiene una plantilla vinculada.");
         }
 
-        // Si no tiene, por ahora lanzamos error indicando que requiere plantilla
-        // O podríamos implementar un generador genérico de emergencia aquí
-        throw new BadRequestException("Esta cotización no tiene una plantilla vinculada. Vincule una plantilla al crearla para habilitar la generación de PDF.");
+        // 2. Preparar variables enriquecidas
+        const formatter = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 });
+        const dateOptions: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'long', day: 'numeric' };
+
+        // Construir tabla items HTML
+        const itemsHtml = (cotizacion.items || []).map((item: any, index: number) => `
+            <tr>
+                <td style="padding: 8px; border-bottom: 1px solid #eee;">${index + 1}</td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee;">
+                    <strong>${item.tipo_servicio?.nombre || 'Servicio'}</strong><br>
+                    <span style="color: #666; font-size: 0.9em;">${item.descripcion || ''}</span>
+                </td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${item.cantidad}</td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${formatter.format(item.valor_unitario)}</td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${formatter.format(item.total_linea)}</td>
+            </tr>
+        `).join('');
+
+        const variables = {
+            ciudad: 'Bogotá D.C.',
+            fecha_formato: new Date(cotizacion.fecha_emision).toLocaleDateString('es-ES', dateOptions),
+            cliente_empresa: cotizacion.prospecto_datos?.empresa || 'CLIENTE',
+            cliente_nit: cotizacion.prospecto_datos?.nit || '',
+            cliente_contacto: cotizacion.prospecto_datos?.contacto || '',
+            numero_propuesta: `COT-${cotizacion.id.toString().padStart(4, '0')}`,
+            items: itemsHtml,
+            mostrar_total: 'true',
+            subtotal_formateado: formatter.format(cotizacion.subtotal || 0),
+            impuestos_formateado: formatter.format(cotizacion.impuestos || 0),
+            total_formateado: formatter.format(cotizacion.total || 0),
+            // TODO: Obtener del usuario real si es posible. Por ahora hardcode de ejemplo.
+            asesor_nombre: 'Asesor Comercial Proliseg',
+            asesor_telefono: '(601) 745 5555'
+        };
+
+        // 3. Actualizar datos en documentos_generados
+        const { error: updateDocError } = await supabase
+            .from("documentos_generados")
+            .update({
+                datos_json: variables // Sobrescribimos el JSON con la data fresca
+            })
+            .eq("id", cotizacion.documento_generado_id);
+
+        if (updateDocError) {
+            this.logger.error("Error actualizando datos documento:", updateDocError);
+        }
+
+        // 4. Delegar generación al servicio de documentos
+        return this.documentosService.generarPdf(cotizacion.documento_generado_id);
     }
 }
