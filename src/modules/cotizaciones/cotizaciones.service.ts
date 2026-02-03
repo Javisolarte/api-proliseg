@@ -379,20 +379,21 @@ export class CotizacionesService {
     async generarPdf(id: number) {
         const supabase = this.supabaseService.getClient();
 
-        // 1. Obtener cotización completa con items
+        // 1. Obtener cotización completa con items (Query simplificada)
         const { data: cotizacion, error } = await supabase
             .from("cotizaciones")
             .select(`
                 *,
-                items:cotizaciones_items (
-                    *,
-                    tipo_servicio:tipos_servicios (nombre)
-                )
+                items:cotizaciones_items (*)
             `)
             .eq("id", id)
             .single();
 
-        if (error || !cotizacion) throw new NotFoundException("Cotización no encontrada");
+        if (error) {
+            this.logger.error(`Error DB getCotizacion(${id}): ${error.message}`);
+        }
+
+        if (error || !cotizacion) throw new NotFoundException(`Cotización no encontrada: ${error?.message || ''}`);
 
         if (!cotizacion.documento_generado_id) {
             throw new BadRequestException("Esta cotización no tiene una plantilla vinculada.");
@@ -407,8 +408,7 @@ export class CotizacionesService {
             <tr>
                 <td style="padding: 8px; border-bottom: 1px solid #eee;">${index + 1}</td>
                 <td style="padding: 8px; border-bottom: 1px solid #eee;">
-                    <strong>${item.tipo_servicio?.nombre || 'Servicio'}</strong><br>
-                    <span style="color: #666; font-size: 0.9em;">${item.descripcion || ''}</span>
+                     <strong>${item.descripcion || 'Servicio ' + item.tipo_servicio_id}</strong>
                 </td>
                 <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${item.cantidad}</td>
                 <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${formatter.format(item.valor_unitario)}</td>
