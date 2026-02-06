@@ -20,15 +20,18 @@ export class VisitasTecnicasController {
     @ApiQuery({ name: "puesto_id", required: false, type: Number })
     @ApiQuery({ name: "tipo_visitante", required: false })
     @ApiQuery({ name: "fecha_desde", required: false })
+    @ApiQuery({ name: "estado", required: false })
     async findAll(
         @Query("puesto_id") puesto_id?: string,
         @Query("tipo_visitante") tipo_visitante?: string,
-        @Query("fecha_desde") fecha_desde?: string
+        @Query("fecha_desde") fecha_desde?: string,
+        @Query("estado") estado?: string
     ) {
         const filters: any = {};
         if (puesto_id) filters.puesto_id = parseInt(puesto_id);
         if (tipo_visitante) filters.tipo_visitante = tipo_visitante;
         if (fecha_desde) filters.fecha_desde = fecha_desde;
+        if (estado) filters.estado = estado;
 
         return this.visitasService.findAll(filters);
     }

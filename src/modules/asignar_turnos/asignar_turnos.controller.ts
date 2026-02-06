@@ -82,18 +82,24 @@ export class AsignarTurnosController {
     summary: 'Generar turnos automáticamente para todos los subpuestos',
     description: 'Genera turnos automáticamente para todos los subpuestos activos que tengan configuración de turnos y no tengan turnos generados para el mes actual'
   })
+  @ApiQuery({ name: 'mes', type: Number, required: false, description: 'Mes a generar (1-12)' })
+  @ApiQuery({ name: 'año', type: Number, required: false, description: 'Año a generar' })
   @ApiResponse({
     status: 201,
     description: 'Generación automática completada',
     schema: {
       example: {
         generados: 5,
-        omitidos: 2
+        omitidos: 2,
+        periodos_procesados: 1
       }
     }
   })
-  async generarAutomatico() {
-    return this.asignarTurnosService.generarTurnosAutomaticos();
+  async generarAutomatico(
+    @Query('mes') mes?: number,
+    @Query('año') año?: number
+  ) {
+    return this.asignarTurnosService.generarTurnosAutomaticos(mes, año);
   }
 
   @Post('rotar')

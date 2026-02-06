@@ -505,10 +505,36 @@ export class AsignarTurnosService {
   /**
    * 🧠 Generación automática mensual
    * Genera turnos para todos los subpuestos que tengan configuración
+   * @param mes Opcional: Mes específico a generar
+   * @param año Opcional: Año específico a generar
    */
-  async generarTurnosAutomaticos() {
+  async generarTurnosAutomaticos(mes?: number, año?: number) {
     const supabase = this.supabaseService.getClient();
     this.logger.log('🤖 Iniciando generación automática de turnos...');
+
+    const fechaActual = new Date();
+    const periodos: { mes: number, año: number }[] = [];
+
+    if (mes && año) {
+      // Si se especifica un periodo, usar ese
+      periodos.push({ mes, año });
+    } else {
+      // Por defecto, siempre intentar generar el mes actual (por si faltan)
+      periodos.push({
+        mes: fechaActual.getMonth() + 1,
+        año: fechaActual.getFullYear()
+      });
+
+      // Si es 25 o más, intentar generar también el mes siguiente
+      if (fechaActual.getDate() >= 25) {
+        const fechaProximoMes = new Date(fechaActual.getFullYear(), fechaActual.getMonth() + 1, 1);
+        periodos.push({
+          mes: fechaProximoMes.getMonth() + 1,
+          año: fechaProximoMes.getFullYear()
+        });
+        this.logger.log('📅 Fin de mes detectado (>= 25). Se incluirá generación para el próximo mes.');
+      }
+    }
 
     // Obtener todos los subpuestos activos con configuración
     const { data: subpuestos, error } = await supabase
@@ -532,45 +558,46 @@ export class AsignarTurnosService {
       return;
     }
 
-    const fechaActual = new Date();
-    const mesActual = fechaActual.getMonth() + 1;
-    const añoActual = fechaActual.getFullYear();
-    let generados = 0;
-    let omitidos = 0;
+    let generadosTotal = 0;
+    let omitidosTotal = 0;
 
-    for (const subpuesto of subpuestos) {
-      // Verificar si ya se generaron turnos este mes
-      const { data: yaGenerado } = await supabase
-        .from('turnos_generacion_log')
-        .select('id')
-        .eq('subpuesto_id', subpuesto.id)
-        .eq('mes', mesActual)
-        .eq('año', añoActual)
-        .maybeSingle();
+    for (const periodo of periodos) {
+      const { mes: m, año: a } = periodo;
+      this.logger.log(`📅 Procesando periodo ${m}/${a}...`);
 
-      if (yaGenerado) {
-        this.logger.debug(`⏭️ Subpuesto ${subpuesto.nombre} ya tiene turnos generados para ${mesActual}/${añoActual}`);
-        omitidos++;
-        continue;
-      }
+      for (const subpuesto of subpuestos) {
+        // Verificar si ya se generaron turnos para este subpuesto en este periodo
+        const { data: yaGenerado } = await supabase
+          .from('turnos_generacion_log')
+          .select('id')
+          .eq('subpuesto_id', subpuesto.id)
+          .eq('mes', m)
+          .eq('año', a)
+          .maybeSingle();
 
-      try {
-        const dto = {
-          subpuesto_id: subpuesto.id,
-          fecha_inicio: new Date(añoActual, mesActual - 1, 1).toISOString().split('T')[0],
-          asignado_por: 1, // Sistema automático
-        };
+        if (yaGenerado) {
+          omitidosTotal++;
+          continue;
+        }
 
-        await this.asignarTurnos(dto as any);
-        generados++;
-        this.logger.log(`✅ Turnos generados para subpuesto ${subpuesto.nombre} (${mesActual}/${añoActual})`);
-      } catch (error: any) {
-        this.logger.error(`❌ Error generando turnos para subpuesto ${subpuesto.nombre}: ${error.message}`);
+        try {
+          const dto = {
+            subpuesto_id: subpuesto.id,
+            fecha_inicio: new Date(a, m - 1, 1).toISOString().split('T')[0],
+            asignado_por: 1, // Sistema automático
+          };
+
+          await this.asignarTurnos(dto as any);
+          generadosTotal++;
+          this.logger.log(`✅ Turnos generados para subpuesto ${subpuesto.nombre} (${m}/${a})`);
+        } catch (error: any) {
+          this.logger.error(`❌ Error generando turnos para subpuesto ${subpuesto.nombre} (${m}/${a}): ${error.message}`);
+        }
       }
     }
 
-    this.logger.log(`🎯 Generación automática completada: ${generados} generados, ${omitidos} omitidos`);
-    return { generados, omitidos };
+    this.logger.log(`🎯 Generación automática completada: ${generadosTotal} generados, ${omitidosTotal} omitidos`);
+    return { generados: generadosTotal, omitidos: omitidosTotal, periodos_procesados: periodos.length };
   }
 
   /**
