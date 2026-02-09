@@ -18,45 +18,69 @@ export class BotonPanicoService {
     async activar(dto: ActivarPanicoDto, ipAddress: string) {
         const db = this.supabase.getClient();
 
-        // 1. Insertar el evento principal
-        const { data: evento, error: err } = await db
-            .from('boton_panico_eventos')
-            .insert({
-                ...dto,
-                ip_origen: ipAddress,
-                estado: 'activo',
-                created_at: new Date().toISOString(),
-            })
-            .select()
-            .single();
+        this.logger.log(`📥 [activar] Recibido DTO pánico: ${JSON.stringify(dto)} - IP: ${ipAddress}`);
 
-        if (err) throw err;
+        try {
+            // 1. Insertar el evento principal
+            this.logger.log('⏳ [activar] Insertando en boton_panico_eventos...');
+            const { data: evento, error: err } = await db
+                .from('boton_panico_eventos')
+                .insert({
+                    ...dto,
+                    ip_origen: ipAddress,
+                    estado: 'activo',
+                    created_at: new Date().toISOString(),
+                })
+                .select()
+                .single();
 
-        // 2. Crear registro en Minuta si hay un puesto relacionado
-        if (dto.puesto_id) {
-            await db.from('minutas').insert({
-                puesto_id: dto.puesto_id,
-                turno_id: dto.turno_id || null,
-                creada_por: dto.usuario_id,
-                contenido: `🚨 BOTÓN DE PÁNICO ACTIVADO. Origen: ${dto.origen.toUpperCase()}.`,
-                tipo: 'seguridad',
-                titulo: 'ALERTA DE SEGURIDAD',
-                nivel_riesgo: 'crítico',
-                ubicacion_lat: dto.latitud,
-                ubicacion_lng: dto.longitud,
-                ip_origen: ipAddress,
-                dispositivo: dto.dispositivo,
-                version_app: dto.version_app
-            });
+            if (err) {
+                this.logger.error(`❌ [activar] Error al insertar en boton_panico_eventos: ${JSON.stringify(err)}`);
+                throw err;
+            }
+
+            this.logger.log(`✅ [activar] Evento insertado correctamente. ID: ${evento.id}`);
+
+            // 2. Crear registro en Minuta si hay un puesto relacionado
+            if (dto.puesto_id) {
+                this.logger.log(`⏳ [activar] Insertando minuta para puesto ${dto.puesto_id}...`);
+                const { error: minutaErr } = await db.from('minutas').insert({
+                    puesto_id: dto.puesto_id,
+                    turno_id: dto.turno_id || null,
+                    creada_por: dto.usuario_id,
+                    contenido: `🚨 BOTÓN DE PÁNICO ACTIVADO. Origen: ${dto.origen.toUpperCase()}.`,
+                    tipo: 'seguridad',
+                    titulo: 'ALERTA DE SEGURIDAD',
+                    nivel_riesgo: 'crítico',
+                    ubicacion_lat: dto.latitud,
+                    ubicacion_lng: dto.longitud,
+                    ip_origen: ipAddress,
+                    dispositivo: dto.dispositivo,
+                    version_app: dto.version_app
+                });
+
+                if (minutaErr) {
+                    this.logger.warn(`⚠️ [activar] Error no-crítico al insertar minuta: ${JSON.stringify(minutaErr)}`);
+                    // No lanzamos error para no bloquear la alerta de pánico
+                } else {
+                    this.logger.log('✅ [activar] Minuta registrada.');
+                }
+            }
+
+            // 3. Obtener evento enriquecido (con datos de usuario, puesto, etc.) para emitir
+            this.logger.log(`⏳ [activar] Obteniendo detalle enriquecido para ID ${evento.id}...`);
+            const eventoEnriquecido = await this.getDetalle(evento.id);
+
+            // 4. Emitir alerta en tiempo real vía WebSocket
+            this.logger.log('⏳ [activar] Emitiendo via Gateway...');
+            this.gateway.emitPanicEvent(eventoEnriquecido);
+
+            this.logger.log('🚀 [activar] Proceso finalizado con éxito.');
+            return eventoEnriquecido;
+        } catch (error) {
+            this.logger.error(`💥 [activar] Error inesperado en el proceso de pánico: ${error.message}`, error.stack);
+            throw error;
         }
-
-        // 3. Obtener evento enriquecido (con datos de usuario, puesto, etc.) para emitir
-        const eventoEnriquecido = await this.getDetalle(evento.id);
-
-        // 4. Emitir alerta en tiempo real vía WebSocket
-        this.gateway.emitPanicEvent(eventoEnriquecido);
-
-        return eventoEnriquecido;
     }
 
     /**
@@ -87,24 +111,38 @@ export class BotonPanicoService {
      */
     async getDetalle(id: number) {
         const db = this.supabase.getClient();
-        const { data, error } = await db
-            .from('boton_panico_eventos')
-            .select(`
-        *,
-        empleados(nombre_completo, cedula, telefono),
-        clientes(nombre_empresa, nit, contacto),
-        puestos_trabajo(nombre, direccion, ciudad),
-        usuarios_externos!usuario_id(nombre_completo),
-        atendido_por_usuario:usuarios_externos!atendido_por(nombre_completo)
-      `)
-            .eq('id', id)
-            .single();
+        this.logger.log(`⏳ [getDetalle] Consultando evento ID: ${id}`);
 
-        if (error || !data) throw new NotFoundException('Evento no encontrado');
+        try {
+            const { data, error } = await db
+                .from('boton_panico_eventos')
+                .select(`
+            *,
+            empleados(nombre_completo, cedula, telefono),
+            clientes(nombre_empresa, nit, contacto),
+            puestos_trabajo(nombre, direccion, ciudad),
+            usuarios_externos!usuario_id(nombre_completo),
+            atendido_por_usuario:usuarios_externos!atendido_por(nombre_completo)
+          `)
+                .eq('id', id)
+                .single();
 
-        // Buscar minutas relacionadas por texto o metadatos si fuera necesario
-        // Por simplicidad, retornamos el evento principal.
-        return data;
+            if (error) {
+                this.logger.error(`❌ [getDetalle] Error en query Supabase: ${JSON.stringify(error)}`);
+                throw error;
+            }
+
+            if (!data) {
+                this.logger.warn(`⚠️ [getDetalle] No se encontró el evento pánico con ID: ${id}`);
+                throw new NotFoundException('Evento no encontrado');
+            }
+
+            this.logger.log('✅ [getDetalle] Datos recuperados con éxito.');
+            return data;
+        } catch (error) {
+            this.logger.error(`💥 [getDetalle] Error recuperando detalle: ${error.message}`);
+            throw error;
+        }
     }
 
     /**
