@@ -100,10 +100,12 @@ export class AsignarTurnosController {
   async generarAutomatico(
     @Query('mes') mes?: number,
     @Query('año') año?: number,
-    @Query('anio') anio?: number // 🔥 Alternativa por si hay problemas con la ñ
+    @Query('anio') anio?: number, // 🔥 Alternativa por si hay problemas con la ñ
+    @CurrentUser() user?: any // 🔥 Obtener usuario si está logueado
   ) {
     const a = año || anio;
-    return this.asignarTurnosService.generarTurnosAutomaticos(mes, a);
+    const asignadoPor = user?.id || 203; // 🔥 Fallback a 203 como pidió el usuario
+    return this.asignarTurnosService.generarTurnosAutomaticos(mes, a, asignadoPor);
   }
 
   @Post('rotar')

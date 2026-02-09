@@ -508,7 +508,7 @@ export class AsignarTurnosService {
    * @param mes Opcional: Mes específico a generar
    * @param año Opcional: Año específico a generar
    */
-  async generarTurnosAutomaticos(mes?: number, año?: number) {
+  async generarTurnosAutomaticos(mes?: number, año?: number, asignadoPor: number = 203) {
     const supabase = this.supabaseService.getClient();
     this.logger.log('🤖 Iniciando generación automática de turnos...');
 
@@ -604,7 +604,7 @@ export class AsignarTurnosService {
           const dto = {
             subpuesto_id: subpuesto.id,
             fecha_inicio: fechaInicio,
-            asignado_por: 1, // Sistema automático
+            asignado_por: asignadoPor, // 🔥 Usar el ID proporcionado (o 203 por defecto)
           };
 
           this.logger.log(`⏳ Iniciando asignación para ${subpuesto.nombre} con fecha inicio: ${fechaInicio}`);
