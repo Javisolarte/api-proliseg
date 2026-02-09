@@ -566,7 +566,7 @@ export class AsignarTurnosService {
       this.logger.log(`📅 Procesando periodo ${m}/${a}...`);
 
       for (const subpuesto of subpuestos) {
-        // Verificar si ya se generaron turnos para este subpuesto en este periodo
+        // 🔍 VERIFICACIÓN ROBUSTA: No solo ver el log, sino también si hay turnos reales
         const { data: yaGenerado } = await supabase
           .from('turnos_generacion_log')
           .select('id')
@@ -575,18 +575,39 @@ export class AsignarTurnosService {
           .eq('año', a)
           .maybeSingle();
 
-        if (yaGenerado) {
+        // Calcular fechas del periodo para verificar en la tabla de turnos
+        const fechaInicioPeriodo = `${a}-${String(m).padStart(2, '0')}-01`;
+        // El fin de mes no es estrictamente necesario si filtramos por subpuesto y mes/año en la query si existiera esa col, 
+        // pero como 'turnos' usa 'fecha', buscaremos si hay al menos un turno en ese mes.
+        const fechaFinPeriodo = `${a}-${String(m).padStart(2, '0')}-28`; // Suficiente para detectar presencia
+
+        const { count: turnosExistentes } = await supabase
+          .from('turnos')
+          .select('id', { count: 'exact', head: true })
+          .eq('subpuesto_id', subpuesto.id)
+          .gte('fecha', fechaInicioPeriodo)
+          .lte('fecha', `${a}-${String(m).padStart(2, '0')}-31`);
+
+        if (yaGenerado && (turnosExistentes && turnosExistentes > 10)) {
           omitidosTotal++;
           continue;
         }
 
+        if (yaGenerado && (!turnosExistentes || turnosExistentes === 0)) {
+          this.logger.warn(`⚠️ Log existe para subpuesto ${subpuesto.nombre} (${m}/${a}) pero NO se encontraron turnos. Reintentando generación...`);
+        }
+
         try {
+          // 🕒 CORRECCIÓN: Formatear fecha sin desfase de zona horaria
+          const fechaInicio = `${a}-${String(m).padStart(2, '0')}-01`;
+
           const dto = {
             subpuesto_id: subpuesto.id,
-            fecha_inicio: new Date(a, m - 1, 1).toISOString().split('T')[0],
+            fecha_inicio: fechaInicio,
             asignado_por: 1, // Sistema automático
           };
 
+          this.logger.log(`⏳ Iniciando asignación para ${subpuesto.nombre} con fecha inicio: ${fechaInicio}`);
           await this.asignarTurnos(dto as any);
           generadosTotal++;
           this.logger.log(`✅ Turnos generados para subpuesto ${subpuesto.nombre} (${m}/${a})`);
