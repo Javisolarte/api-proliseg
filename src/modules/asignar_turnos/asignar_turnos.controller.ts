@@ -4,6 +4,7 @@ import { AsignarTurnosService } from './asignar_turnos.service';
 import { AsignarTurnosDto } from './dto/asignar_turnos.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { Public } from '../auth/decorators/public.decorator';
 
 @ApiTags('Asignar Turnos')
 @ApiBearerAuth()
@@ -77,6 +78,7 @@ export class AsignarTurnosController {
     return this.asignarTurnosService.eliminarTurnos(subpuesto_id, desde, hasta);
   }
 
+  @Public()
   @Post('automatico')
   @ApiOperation({
     summary: 'Generar turnos automáticamente para todos los subpuestos',
@@ -91,15 +93,17 @@ export class AsignarTurnosController {
       example: {
         generados: 5,
         omitidos: 2,
-        periodos_procesados: 1
+        periodos_processed: 1
       }
     }
   })
   async generarAutomatico(
     @Query('mes') mes?: number,
-    @Query('año') año?: number
+    @Query('año') año?: number,
+    @Query('anio') anio?: number // 🔥 Alternativa por si hay problemas con la ñ
   ) {
-    return this.asignarTurnosService.generarTurnosAutomaticos(mes, año);
+    const a = año || anio;
+    return this.asignarTurnosService.generarTurnosAutomaticos(mes, a);
   }
 
   @Post('rotar')
