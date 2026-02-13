@@ -47,11 +47,22 @@ export class ContratosPersonalService {
         // 2. Obtener datos del empleado para ruta de archivo o variables de plantilla
         const { data: empleado } = await supabase
             .from('empleados')
-            .select('*, salarios(*)')
+            .select('*')
             .eq('id', createDto.empleado_id)
             .single();
 
         if (!empleado) throw new NotFoundException('Empleado no encontrado');
+
+        // 2.1 Obtener datos del salario por separado para la plantilla (si aplica)
+        let salarioValor = 0;
+        if (createDto.plantilla_id || createDto.salario_id) {
+            const { data: salario } = await supabase
+                .from('salarios')
+                .select('valor')
+                .eq('id', createDto.salario_id)
+                .single();
+            if (salario) salarioValor = salario.valor;
+        }
 
         // 3. FLUJO A: Subida manual de PDF
         if (file) {
@@ -69,7 +80,7 @@ export class ContratosPersonalService {
                     nombre_completo: empleado.nombre_completo,
                     cedula: empleado.cedula,
                     fecha_inicio: createDto.fecha_inicio,
-                    salario: empleado.salarios?.valor || 0,
+                    salario: salarioValor,
                     cargo: empleado.cargo_oficial || 'Empleado',
                 }
             }, user);
@@ -305,7 +316,7 @@ export class ContratosPersonalService {
         // 4. Actualizar Empleado
         await supabase
             .from('empleados')
-            .update({ contrato_personal_id: newContract.id, salario_id: dto.salario_id })
+            .update({ contrato_personal_id: newContract.id })
             .eq('id', oldContract.empleado_id);
 
         // 5. Auditar renovación
