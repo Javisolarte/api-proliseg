@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Query, ParseIntPipe, Put } from "@nestjs/common";
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Query, ParseIntPipe, Put, Res } from "@nestjs/common";
+import type { Response } from 'express';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from "@nestjs/swagger";
 import { ReportesService } from "./reportes.service";
 import { CreateReporteDto, UpdateReporteDto } from "./dto/reporte.dto";
@@ -39,6 +40,13 @@ export class ReportesController {
         @Query("fecha_fin") fecha_fin: string
     ) {
         return this.reportesService.generarReporteOperativo(puesto_id, fecha_inicio, fecha_fin);
+    }
+
+    @Get("empleados/pdf")
+    @RequirePermissions("reportes.export")
+    @ApiOperation({ summary: "Exportar todos los empleados a PDF" })
+    async exportEmpleadosPDF(@Res() res: Response) {
+        return this.reportesService.exportEmpleadosPDF(res);
     }
 
     @Get(":id")

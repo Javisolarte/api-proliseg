@@ -1,9 +1,12 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { Injectable, NotFoundException, Logger } from "@nestjs/common";
 import { SupabaseService } from "../supabase/supabase.service";
 import { CreateReporteDto, UpdateReporteDto } from "./dto/reporte.dto";
+import * as puppeteer from 'puppeteer';
+import { Response } from 'express';
 
 @Injectable()
 export class ReportesService {
+    private readonly logger = new Logger(ReportesService.name);
     constructor(private readonly supabaseService: SupabaseService) { }
 
     async create(createReporteDto: CreateReporteDto) {
@@ -139,5 +142,122 @@ export class ReportesService {
         const { data, error } = await supabase.from("reportes").delete().eq("id", id).select().single();
         if (error) throw error;
         return { message: "Reporte eliminado", data };
+    }
+
+    async exportEmpleadosPDF(res: Response) {
+        try {
+            const db = this.supabaseService.getClient();
+
+            // 1. Obtener datos de empleados con joins necesarios
+            const sql = `
+                SELECT e.nombre_completo, e.cedula, e.direccion, e.telefono,
+                       e.formacion_academica, e.experiencia, e.rol,
+                       cp.tipo_contrato,
+                       s.valor as sueldo,
+                       p.nombre as puesto_nombre
+                FROM empleados e
+                LEFT JOIN contratos_personal cp ON e.contrato_personal_id = cp.id
+                LEFT JOIN salarios s ON cp.salario_id = s.id
+                LEFT JOIN asignacion_guardas_puesto agp ON e.id = agp.empleado_id AND agp.activo = true
+                LEFT JOIN puestos_trabajo p ON agp.puesto_id = p.id
+                WHERE e.activo = true
+                ORDER BY e.nombre_completo ASC
+            `;
+
+            const { data: empleados, error } = await db.rpc("exec_sql", { query: sql });
+            if (error) throw error;
+
+            // 2. Construir HTML
+            const htmlContent = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <style>
+                    body { font-family: 'Helvetica', sans-serif; color: #333; margin: 0; padding: 20px; }
+                    .header { text-align: center; border-bottom: 2px solid #1a237e; padding-bottom: 10px; margin-bottom: 20px; }
+                    .header h1 { color: #1a237e; margin: 0; font-size: 24px; }
+                    .header p { margin: 5px 0; color: #666; }
+                    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 10px; }
+                    th { background-color: #1a237e; color: white; padding: 10px; text-align: left; }
+                    td { border-bottom: 1px solid #ddd; padding: 8px; vertical-align: top; }
+                    tr:nth-child(even) { background-color: #f5f5f5; }
+                    .footer { position: fixed; bottom: 0; width: 100%; text-align: center; font-size: 8px; color: #999; border-top: 1px solid #eee; padding-top: 5px; }
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <h1>PROLISEG LTDA</h1>
+                    <p>Reporte General de Empleados Activos</p>
+                    <p>Fecha de generación: ${new Date().toLocaleDateString('es-CO')}</p>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Nombre Completo</th>
+                            <th>Identificación</th>
+                            <th>Contacto / Dirección</th>
+                            <th>Formación / Experiencia</th>
+                            <th>Puesto / Cargo</th>
+                            <th>Contrato / Sueldo</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${(empleados as any[]).map(emp => `
+                            <tr>
+                                <td><strong>${emp.nombre_completo}</strong></td>
+                                <td>${emp.cedula}</td>
+                                <td>
+                                    ${emp.telefono || 'N/A'}<br>
+                                    <small>${emp.direccion || 'N/A'}</small>
+                                </td>
+                                <td>
+                                    <strong>Formación:</strong> ${emp.formacion_academica || 'N/A'}<br>
+                                    <strong>Exp:</strong> ${emp.experiencia || 'N/A'}
+                                </td>
+                                <td>
+                                    <strong>${emp.rol || 'N/A'}</strong><br>
+                                    Puesto: ${emp.puesto_nombre || 'Sin asignar'}
+                                </td>
+                                <td>
+                                    Tipo: ${emp.tipo_contrato || 'N/A'}<br>
+                                    Sueldo: $${emp.sueldo ? Number(emp.sueldo).toLocaleString('es-CO') : '0'}
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+                <div class="footer">
+                    PROLISEG LTDA - Sistema de Gestión de Personal
+                </div>
+            </body>
+            </html>
+            `;
+
+            // 3. Renderizar con Puppeteer
+            const browser = await puppeteer.launch({
+                headless: true,
+                args: ['--no-sandbox', '--disable-setuid-sandbox']
+            });
+            const page = await browser.newPage();
+            await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+
+            const pdfBuffer = await page.pdf({
+                format: 'Letter',
+                landscape: true,
+                printBackground: true,
+                margin: { top: '10mm', right: '10mm', bottom: '15mm', left: '10mm' }
+            });
+
+            await browser.close();
+
+            // 4. Enviar respuesta
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', 'attachment; filename=reporte_empleados.pdf');
+            res.send(Buffer.from(pdfBuffer));
+
+        } catch (error) {
+            this.logger.error('Error generando reporte de empleados:', error);
+            res.status(500).json({ message: 'Error al generar el reporte PDF', error: error.message });
+        }
     }
 }
