@@ -228,7 +228,7 @@ export class ContratosPersonalService {
             .from('contratos_personal')
             .select(`
               *,
-              salarios (nombre_salario, valor)
+              salario:salarios (nombre_salario, valor)
           `)
             .eq('empleado_id', empleadoId)
             .order('fecha_inicio', { ascending: false });
@@ -244,7 +244,7 @@ export class ContratosPersonalService {
             .from('contratos_personal')
             .select(`
                 *,
-                salarios(nombre_salario, valor),
+                salario:salarios(nombre_salario, valor),
                 empleados!fk_contrato_empleado(nombre_completo, cedula)
             `)
             .eq('id', id)
@@ -339,7 +339,7 @@ export class ContratosPersonalService {
             .select(`
                 *,
                 empleados!fk_contrato_empleado(nombre_completo, cedula),
-                salarios(nombre_salario, valor)
+                salario:salarios(nombre_salario, valor)
             `)
             .eq('estado', 'activo');
 
@@ -355,7 +355,7 @@ export class ContratosPersonalService {
             .select(`
                 *,
                 empleados!fk_contrato_empleado(nombre_completo, cedula),
-                salarios(nombre_salario, valor)
+                salario:salarios(nombre_salario, valor)
             `)
             .neq('estado', 'activo');
 

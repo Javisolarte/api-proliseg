@@ -9,12 +9,26 @@ import * as puppeteer from 'puppeteer';
 export class DocumentosGeneradosService {
     private readonly logger = new Logger(DocumentosGeneradosService.name);
 
+    private browser: puppeteer.Browser | null = null;
+    private readonly browserOptions: any = {
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+    };
+
     constructor(
         private readonly supabaseService: SupabaseService,
         private readonly plantillasService: PlantillasService,
         @Inject(forwardRef(() => FirmasService))
         private readonly firmasService: FirmasService
     ) { }
+
+    private async getBrowser() {
+        if (!this.browser || !this.browser.connected) {
+            this.browser = await puppeteer.launch(this.browserOptions);
+            this.logger.log('Nuevo navegador Puppeteer iniciado');
+        }
+        return this.browser;
+    }
 
     async create(createDto: CreateDocumentoDto, usuarioActual?: any) {
         try {
@@ -258,47 +272,48 @@ export class DocumentosGeneradosService {
                 htmlContenido += footerHtml;
             }
 
-            // 4. Generar PDF con Puppeteer
-            const browser = await puppeteer.launch({
-                headless: true,
-                args: ['--no-sandbox', '--disable-setuid-sandbox']
-            });
+            // 4. Generar PDF con Puppeteer (Navegador reutilizado)
+            const browser = await this.getBrowser();
             const page = await browser.newPage();
 
-            await page.setContent(htmlContenido, { waitUntil: 'networkidle0' });
+            try {
+                // Usamos domcontentloaded ya que es mucho más rápido que networkidle0
+                await page.setContent(htmlContenido, { waitUntil: 'domcontentloaded' });
 
-            const pdfBuffer = await page.pdf({
-                format: 'Letter' as puppeteer.PaperFormat,
-                printBackground: true,
-                margin: { top: '20mm', right: '20mm', bottom: '20mm', left: '20mm' }
-            });
+                const pdfBuffer = await page.pdf({
+                    format: 'Letter' as puppeteer.PaperFormat,
+                    printBackground: true,
+                    margin: { top: '20mm', right: '20mm', bottom: '20mm', left: '20mm' }
+                });
 
-            await browser.close();
+                // 5. Subir a Supabase Storage
+                const fileName = `${doc.entidad_tipo}/${id}_${Date.now()}.pdf`;
+                const path = await this.supabaseService.uploadFile('documentos', fileName, Buffer.from(pdfBuffer), 'application/pdf');
 
-            // 5. Subir a Supabase Storage
-            const fileName = `${doc.entidad_tipo}/${id}_${Date.now()}.pdf`;
-            const path = await this.supabaseService.uploadFile('documentos', fileName, Buffer.from(pdfBuffer), 'application/pdf');
+                // Obtener URL pública
+                const { data: { publicUrl } } = supabase.storage.from('documentos').getPublicUrl(path);
 
-            // Obtener URL pública
-            const { data: { publicUrl } } = supabase.storage.from('documentos').getPublicUrl(path);
+                // 6. Actualizar registro
+                const { data: updatedDoc, error: updateError } = await supabase
+                    .from("documentos_generados")
+                    .update({
+                        estado: 'generando_pdf',
+                        url_pdf: publicUrl,
+                        fecha_generacion: new Date().toISOString(),
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq("id", id)
+                    .select()
+                    .single();
 
-            // 6. Actualizar registro
-            const { data: updatedDoc, error: updateError } = await supabase
-                .from("documentos_generados")
-                .update({
-                    estado: 'generando_pdf',
-                    url_pdf: publicUrl,
-                    fecha_generacion: new Date().toISOString(),
-                    updated_at: new Date().toISOString()
-                })
-                .eq("id", id)
-                .select()
-                .single();
+                if (updateError) throw new BadRequestException(`Error actualizando URL del PDF: ${updateError.message}`);
 
-            if (updateError) throw new BadRequestException(`Error actualizando URL del PDF: ${updateError.message}`);
+                this.logger.log(`✅ PDF generado y subido para documento ${id}: ${publicUrl}`);
+                return updatedDoc;
 
-            this.logger.log(`✅ PDF generado y subido para documento ${id}: ${publicUrl}`);
-            return updatedDoc;
+            } finally {
+                await page.close();
+            }
 
         } catch (error) {
             this.logger.error(`Error generando PDF para documento ${id}:`, error);

@@ -144,7 +144,22 @@ export class ReportesService {
         return { message: "Reporte eliminado", data };
     }
 
+    private browser: puppeteer.Browser | null = null;
+    private readonly browserOptions: any = {
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+    };
+
+    private async getBrowser() {
+        if (!this.browser || !this.browser.connected) {
+            this.browser = await puppeteer.launch(this.browserOptions);
+            this.logger.log('Nuevo navegador Puppeteer iniciado');
+        }
+        return this.browser;
+    }
+
     async exportEmpleadosPDF(res: Response) {
+        let browser: puppeteer.Browser | null = null;
         try {
             const db = this.supabaseService.getClient();
 
@@ -233,31 +248,35 @@ export class ReportesService {
             </html>
             `;
 
-            // 3. Renderizar con Puppeteer
-            const browser = await puppeteer.launch({
-                headless: true,
-                args: ['--no-sandbox', '--disable-setuid-sandbox']
-            });
+            // 3. Renderizar con Puppeteer (Navegador reutilizado)
+            browser = await this.getBrowser();
             const page = await browser.newPage();
-            await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
 
-            const pdfBuffer = await page.pdf({
-                format: 'Letter',
-                landscape: true,
-                printBackground: true,
-                margin: { top: '10mm', right: '10mm', bottom: '15mm', left: '10mm' }
-            });
+            try {
+                // Usamos domcontentloaded ya que es HTML estático y mucho más rápido que networkidle0
+                await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
 
-            await browser.close();
+                const pdfBuffer = await page.pdf({
+                    format: 'Letter',
+                    landscape: true,
+                    printBackground: true,
+                    margin: { top: '10mm', right: '10mm', bottom: '15mm', left: '10mm' }
+                });
 
-            // 4. Enviar respuesta
-            res.setHeader('Content-Type', 'application/pdf');
-            res.setHeader('Content-Disposition', 'attachment; filename=reporte_empleados.pdf');
-            res.send(Buffer.from(pdfBuffer));
+                // 4. Enviar respuesta
+                res.setHeader('Content-Type', 'application/pdf');
+                res.setHeader('Content-Disposition', 'attachment; filename=reporte_empleados.pdf');
+                res.send(Buffer.from(pdfBuffer));
+
+            } finally {
+                await page.close();
+            }
 
         } catch (error) {
             this.logger.error('Error generando reporte de empleados:', error);
-            res.status(500).json({ message: 'Error al generar el reporte PDF', error: error.message });
+            if (!res.headersSent) {
+                res.status(500).json({ message: 'Error al generar el reporte PDF', error: error.message });
+            }
         }
     }
 }
