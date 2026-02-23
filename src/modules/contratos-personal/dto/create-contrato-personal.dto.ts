@@ -68,4 +68,28 @@ export class CreateContratoPersonalDto {
     @IsInt()
     @Transform(({ value }) => value ? parseInt(value) : undefined)
     plantilla_id?: number;
+
+    @ApiProperty({ description: 'Salario en texto (opcional)', required: false })
+    @IsOptional()
+    @IsString()
+    salario_texto?: string;
+
+    @ApiProperty({ description: 'Duración en texto (opcional)', required: false })
+    @IsOptional()
+    @IsString()
+    duracion_texto?: string;
+
+    @ApiProperty({ description: 'Periodos de pago (opcional)', required: false })
+    @IsOptional()
+    @IsString()
+    periodos_pago?: string;
+
+    @ApiProperty({ description: 'Lugar de prestación (opcional)', required: false })
+    @IsOptional()
+    @IsString()
+    lugar_prestacion?: string;
+
+    @ApiProperty({ description: 'Datos JSON adicionales (opcional)', required: false })
+    @IsOptional()
+    datos_json?: any;
 }

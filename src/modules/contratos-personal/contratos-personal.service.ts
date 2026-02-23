@@ -72,22 +72,42 @@ export class ContratosPersonalService {
 
         // 4. FLUJO B: Generación automática por plantilla
         if (createDto.plantilla_id) {
+            const today = new Date();
+            const meses = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
+
+            const datos = {
+                nombre_trabajador: empleado.nombre_completo.toUpperCase(),
+                cedula_trabajador: empleado.cedula,
+                direccion_trabajador: (empleado.direccion || 'Corregimiento la laguna PASTO-NARIÑO').toUpperCase(),
+                expedida_en: (empleado.lugar_expedicion_cedula || 'PASTO (N)').toUpperCase(),
+                lugar_nacimiento: (empleado.lugar_nacimiento || 'PASTO').toUpperCase(),
+                fecha_nacimiento: empleado.fecha_nacimiento || '29/08/1983',
+                nacionalidad: (empleado.nacionalidad || 'COLOMBIANO').toUpperCase(),
+                cargo: (empleado.cargo_oficial || 'GUARDA DE SEGURIDAD').toUpperCase(),
+                salario_texto: (createDto.salario_texto || `(01) SALARIO MÍNIMO MENSUAL LEGAL VIGENTE MAS AUXILIO DE TRANSPORTE MAS RECARGOS DE LEY`).toUpperCase(),
+                duracion_contrato: (createDto.duracion_texto || '').toUpperCase(),
+                periodos_pago: (createDto.periodos_pago || '5-10 DIAS DE CADA MES').toUpperCase(),
+                fecha_inicio: createDto.fecha_inicio,
+                fecha_fin: createDto.fecha_fin || '',
+                lugar_prestacion: (createDto.lugar_prestacion || '').toUpperCase(),
+                dia_firma: today.getDate(),
+                mes_firma: meses[today.getMonth()],
+                anio_firma: today.getFullYear(),
+                ...(typeof createDto.datos_json === 'string' ? JSON.parse(createDto.datos_json) : createDto.datos_json)
+            };
+
+            this.logger.debug(`Datos para plantilla: ${JSON.stringify(datos, null, 2)}`);
+
             const docGenerado = await this.documentosService.create({
                 plantilla_id: createDto.plantilla_id,
                 entidad_tipo: EntidadTipo.CONTRATO_PERSONAL,
                 entidad_id: createDto.empleado_id,
-                datos_json: {
-                    nombre_completo: empleado.nombre_completo,
-                    cedula: empleado.cedula,
-                    fecha_inicio: createDto.fecha_inicio,
-                    salario: salarioValor,
-                    cargo: empleado.cargo_oficial || 'Empleado',
-                }
+                datos_json: datos
             }, user);
 
             documentoGeneradoId = docGenerado.id;
 
-            // Generar PDF inicial con la firma de HR
+            // Generar PDF inicial
             const docConPdf = await this.documentosService.generarPdf(docGenerado.id);
             contratoPdfUrl = docConPdf.url_pdf;
         }

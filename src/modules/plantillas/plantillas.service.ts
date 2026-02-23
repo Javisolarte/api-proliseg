@@ -102,17 +102,22 @@ export class PlantillasService {
 
         if (!plantilla) throw new NotFoundException("Plantilla no encontrada");
 
-        const required = plantilla.variables_requeridas as string[];
-        const provided = Object.keys(datosJson);
+        const required = (plantilla.variables_requeridas as any) || [];
+        const provided = Object.keys(datosJson || {});
 
-        // Filter out placeholders that are injected by the system (firma_1, huella_1, etc.)
-        const missing = required.filter(v =>
+        this.logger.warn(`Validando plantilla ${id}. Provistos: ${provided.join(", ")}`);
+
+        // Ensure required is an array and trim strings
+        const requiredArray = (Array.isArray(required) ? required : []).map(v => typeof v === 'string' ? v.trim() : v);
+
+        const missing = requiredArray.filter(v =>
             !provided.includes(v) &&
             !v.startsWith('firma_') &&
             !v.startsWith('huella_')
         );
 
         if (missing.length > 0) {
+            this.logger.error(`Faltan variables en plantilla ${id}: ${missing.join(", ")}`);
             throw new BadRequestException(`Faltan variables requeridas: ${missing.join(", ")}`);
         }
         return true;
