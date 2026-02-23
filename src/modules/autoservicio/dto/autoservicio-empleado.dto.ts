@@ -58,6 +58,11 @@ export class RegistrarMiAsistenciaEntradaDto {
     @IsOptional()
     @IsString()
     observaciones?: string;
+
+    @ApiProperty({ example: 'https://...', description: 'URL de la foto de evidencia', required: false })
+    @IsOptional()
+    @IsString()
+    foto_url?: string;
 }
 
 export class RegistrarMiAsistenciaSalidaDto {
@@ -90,6 +95,11 @@ export class RegistrarMiAsistenciaSalidaDto {
     @IsOptional()
     @IsString()
     observaciones?: string;
+
+    @ApiProperty({ example: 'https://...', description: 'URL de la foto de evidencia', required: false })
+    @IsOptional()
+    @IsString()
+    foto_url?: string;
 }
 
 export class RegistrarMiUbicacionDto {

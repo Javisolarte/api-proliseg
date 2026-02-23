@@ -12,6 +12,7 @@ import {
     RegistrarMiAsistenciaEntradaDto,
     RegistrarMiAsistenciaSalidaDto
 } from './dto/autoservicio-empleado.dto';
+import { getColombiaTime } from '../../common/helpers/time.helper';
 import {
     IniciarSupervisionDto,
     RegistrarUbicacionDto as RegistrarUbicacionSupervisorDto,
@@ -786,7 +787,7 @@ export class AutoservicioService {
         if (turno.empleado_id !== empBasic.id) throw new ForbiddenException('Este turno no te pertenece');
 
         // 3. Verificar ventana de tiempo (20 minutos antes)
-        const now = new Date();
+        const now = getColombiaTime();
         const [h, m, s] = (turno.hora_inicio || '00:00:00').split(':');
         const turnoFechaInicio = new Date(turno.fecha);
         turnoFechaInicio.setHours(parseInt(h), parseInt(m), parseInt(s || '0'));
@@ -836,7 +837,8 @@ export class AutoservicioService {
             observaciones: observaciones_calculadas,
             registrado_por: userId,
             metodo_registro: 'app',
-            estado_asistencia: 'pendiente'
+            estado_asistencia: 'pendiente',
+            foto_entrada: dto.foto_url // Guardar foto
         }).select().single();
 
         if (errAsis) throw errAsis;
@@ -849,7 +851,8 @@ export class AutoservicioService {
             timestamp: now.toISOString(),
             latitud_entrada: dto.latitud,
             longitud_entrada: dto.longitud,
-            registrada_por: userId
+            registrada_por: userId,
+            evidencia_foto_url: dto.foto_url // Guardar foto en histórico
         });
 
         // 8. Actualizar Turno
@@ -888,7 +891,7 @@ export class AutoservicioService {
         if (!turno) throw new NotFoundException('Turno no encontrado');
 
         // 4. Validar ventana de salida (10 min antes del fin)
-        const now = new Date();
+        const now = getColombiaTime();
         const [hFin, mFin, sFin] = (turno.hora_fin || '23:59:59').split(':');
         const turnoFechaFin = new Date(turno.fecha);
         turnoFechaFin.setHours(parseInt(hFin), parseInt(mFin), parseInt(sFin || '0'));
@@ -928,7 +931,8 @@ export class AutoservicioService {
         await supabase.from('turnos_asistencia').update({
             hora_salida: now.toISOString(),
             observaciones: nuevasObservaciones,
-            estado_asistencia: 'cumplido'
+            estado_asistencia: 'cumplido',
+            foto_salida: dto.foto_url // Guardar foto
         }).eq('id', asisId);
 
         // 8. Log legacy
@@ -939,7 +943,8 @@ export class AutoservicioService {
             timestamp: now.toISOString(),
             latitud_salida: dto.latitud,
             longitud_salida: dto.longitud,
-            registrada_por: userId
+            registrada_por: userId,
+            evidencia_foto_url: dto.foto_url // Guardar foto en histórico
         });
 
         // 9. Actualizar Turno

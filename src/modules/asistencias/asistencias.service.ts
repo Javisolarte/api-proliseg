@@ -11,16 +11,7 @@ import { UpdateAsistenciaDto, CerrarTurnoManualDto, RegistrarEntradaManualDto, R
 import { calcularDistancia } from './utils/distancia.util';
 import { GeminiService } from '../ia/gemini.service';
 import { analizarAsistenciaIA } from './utils/ia.util';
-
-/**
- * ⏰ Retorna la fecha/hora actual en zona horaria de Colombia (UTC-5)
- * El resultado es un Date cuyo valor interno ya está ajustado a UTC-5.
- */
-function getColombiaTime(): Date {
-  const now = new Date();
-  const offsetMs = -5 * 60 * 60 * 1000; // UTC-5 en milisegundos
-  return new Date(now.getTime() + now.getTimezoneOffset() * 60 * 1000 + offsetMs);
-}
+import { getColombiaTime } from '../../common/helpers/time.helper';
 
 @Injectable()
 export class AsistenciasService {
@@ -70,6 +61,7 @@ export class AsistenciasService {
       .eq('empleado_id', empleado_id)
       .eq('subpuesto_id', turno.subpuesto_id)
       .eq('activo', true)
+      .limit(1)
       .maybeSingle();
 
     if (asignError) {
@@ -110,6 +102,8 @@ export class AsistenciasService {
       .from('turnos_asistencia')
       .select('id, hora_entrada')
       .eq('turno_id', dto.turno_id)
+      .order('created_at', { ascending: false })
+      .limit(1)
       .maybeSingle();
 
     if (asistenciaExistente && asistenciaExistente.hora_entrada) {
@@ -237,7 +231,9 @@ export class AsistenciasService {
       .select('*')
       .eq('turno_id', dto.turno_id)
       .eq('empleado_id', (dto as any).empleado_id)
-      .single();
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
     if (asisError || !asistencia) {
       throw new BadRequestException('No se encontró registro de entrada para este turno en turnos_asistencia.');
@@ -391,6 +387,7 @@ export class AsistenciasService {
         .eq('empleado_id', empleado_id)
         .eq('subpuesto_id', (turno as any).subpuesto_id)
         .eq('activo', true)
+        .limit(1)
         .maybeSingle();
 
       if (asignacion) {
@@ -590,6 +587,8 @@ export class AsistenciasService {
       .select('*')
       .eq('turno_id', dto.turno_id)
       .eq('empleado_id', dto.empleado_id)
+      .order('created_at', { ascending: false })
+      .limit(1)
       .maybeSingle();
 
     if (asisError) throw new BadRequestException(asisError.message);
@@ -649,6 +648,8 @@ export class AsistenciasService {
         minutos_tolerancia
       `)
       .eq('turno_id', turno_id)
+      .order('created_at', { ascending: false })
+      .limit(1)
       .maybeSingle();
 
     if (error) throw new BadRequestException(error.message);
@@ -944,6 +945,8 @@ export class AsistenciasService {
       .select('*')
       .eq('turno_id', dto.turno_id)
       .eq('empleado_id', dto.empleado_id)
+      .order('created_at', { ascending: false })
+      .limit(1)
       .maybeSingle();
 
     if (asisError) throw new BadRequestException(asisError.message);
