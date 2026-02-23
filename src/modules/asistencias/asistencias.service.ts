@@ -12,6 +12,16 @@ import { calcularDistancia } from './utils/distancia.util';
 import { GeminiService } from '../ia/gemini.service';
 import { analizarAsistenciaIA } from './utils/ia.util';
 
+/**
+ * ⏰ Retorna la fecha/hora actual en zona horaria de Colombia (UTC-5)
+ * El resultado es un Date cuyo valor interno ya está ajustado a UTC-5.
+ */
+function getColombiaTime(): Date {
+  const now = new Date();
+  const offsetMs = -5 * 60 * 60 * 1000; // UTC-5 en milisegundos
+  return new Date(now.getTime() + now.getTimezoneOffset() * 60 * 1000 + offsetMs);
+}
+
 @Injectable()
 export class AsistenciasService {
   private readonly logger = new Logger(AsistenciasService.name);
@@ -107,7 +117,7 @@ export class AsistenciasService {
     }
 
     // 3. Verificar ventana de tiempo (20 minutos antes)
-    const now = new Date();
+    const now = getColombiaTime();
     const [h, m, s] = (turno.hora_inicio || '00:00:00').split(':');
     const turnoFechaInicio = new Date(turno.fecha);
     turnoFechaInicio.setHours(parseInt(h), parseInt(m), parseInt(s || '0'));
@@ -191,6 +201,7 @@ export class AsistenciasService {
       registrada_por: dto.empleado_id,
       evidencia_foto_url: dto.foto_url // Guardar foto en histórico
     }).select().single();
+    void logAsistencia; // evitar warning de variable no usada
 
     // 8. Actualizar ESTADO DEL TURNO a 'parcial' (Significa En Curso según lógica usuario)
     await db.from('turnos').update({
@@ -248,7 +259,7 @@ export class AsistenciasService {
     }
 
     // 3. Calcular Observaciones de Salida
-    const now = new Date();
+    const now = getColombiaTime();
     const [hFin, mFin, sFin] = (turno.hora_fin || '23:59:59').split(':');
     const turnoFechaFin = new Date(turno.fecha);
     turnoFechaFin.setHours(parseInt(hFin), parseInt(mFin), parseInt(sFin || '0'));
@@ -307,6 +318,7 @@ export class AsistenciasService {
       registrada_por: (dto as any).empleado_id,
       evidencia_foto_url: dto.foto_url // Guardar foto en histórico
     });
+    // Log guardado, continúa flujo
 
     // 6. Actualizar ESTADO DEL TURNO a 'cumplido'
     // La DB se encargará de calcular horas_reportadas y duracion_horas vía trigger en turnos_asistencia
@@ -582,7 +594,7 @@ export class AsistenciasService {
 
     if (asisError) throw new BadRequestException(asisError.message);
 
-    const now = dto.hora_salida || new Date().toISOString();
+    const now = dto.hora_salida || getColombiaTime().toISOString();
 
     if (asistencia) {
       // 2. Actualizar salida
@@ -594,8 +606,7 @@ export class AsistenciasService {
         })
         .eq('id', asistencia.id);
     } else {
-      // Si no hay entrada, creamos registro "fantasma" o forzamos? 
-      // El usuario pidió "Cierre manualmente si faltó salida"
+      // Si no hay entrada, creamos registro con hora Colombia
       await db.from('turnos_asistencia').insert({
         turno_id: dto.turno_id,
         empleado_id: dto.empleado_id,
@@ -881,7 +892,7 @@ export class AsistenciasService {
   // ============================================================
   async registrarEntradaManual(dto: RegistrarEntradaManualDto) {
     const db = this.supabase.getClient();
-    const now = new Date();
+    const now = getColombiaTime();
 
     // 1. Verificar permiso
     await this.verificarPermisoAsistencia(dto.empleado_id, dto.turno_id);
@@ -924,28 +935,45 @@ export class AsistenciasService {
   // ============================================================
   async registrarSalidaManual(dto: RegistrarSalidaManualDto) {
     const db = this.supabase.getClient();
-    const now = new Date();
+    // Usar hora colombiana (UTC-5) en lugar de hora UTC del servidor
+    const now = getColombiaTime();
 
-    // 1. Buscar registro de entrada
+    // 1. Buscar registro de entrada — usar maybeSingle para no lanzar error si no existe
     const { data: asistencia, error: asisError } = await db
       .from('turnos_asistencia')
       .select('*')
       .eq('turno_id', dto.turno_id)
       .eq('empleado_id', dto.empleado_id)
-      .single();
+      .maybeSingle();
 
-    if (asisError || !asistencia) {
-      throw new BadRequestException('No se encontró registro de entrada para este turno.');
+    if (asisError) throw new BadRequestException(asisError.message);
+
+    let updated: any;
+
+    if (asistencia) {
+      // 2a. Existe registro previo — solo actualizar la salida
+      const { data, error } = await db.from('turnos_asistencia').update({
+        hora_salida: now.toISOString(),
+        observaciones: (asistencia.observaciones || '') + ` | Salida manual (Super Usuario). ${dto.observaciones || ''}`,
+        estado_asistencia: 'cumplido'
+      }).eq('id', asistencia.id).select().single();
+      if (error) throw new BadRequestException(error.message);
+      updated = data;
+    } else {
+      // 2b. No existe registro previo — crear uno con solo salida (turno forzado)
+      const { data, error } = await db.from('turnos_asistencia').insert({
+        turno_id: dto.turno_id,
+        empleado_id: dto.empleado_id,
+        hora_salida: now.toISOString(),
+        observaciones: `Salida manual sin registro de entrada (Super Usuario). ${dto.observaciones || ''}`,
+        estado_asistencia: 'cumplido',
+        metodo_registro: 'manual',
+        registrado_por: dto.empleado_id,
+      }).select().single();
+      if (error) throw new BadRequestException(error.message);
+      updated = data;
+      this.logger.warn(`⚠️ Salida manual registrada sin entrada previa para turno ${dto.turno_id}, empleado ${dto.empleado_id}`);
     }
-
-    // 2. Actualizar salida
-    const { data: updated, error } = await db.from('turnos_asistencia').update({
-      hora_salida: now.toISOString(),
-      observaciones: (asistencia.observaciones || '') + ` | Salida manual (Super Usuario). ${dto.observaciones || ''}`,
-      estado_asistencia: 'cumplido'
-    }).eq('id', asistencia.id).select().single();
-
-    if (error) throw new BadRequestException(error.message);
 
     // 3. Registrar en log legacy
     await db.from('asistencias').insert({
