@@ -165,20 +165,18 @@ export class AsistenciasService {
       await db.from('turnos_asistencia').update({
         hora_entrada: now.toISOString(),
         observaciones: observaciones_calculadas,
-        estado_asistencia: 'pendiente', // En curso
-        metodo_registro: 'app',
-        foto_entrada: dto.foto_url // Guardar foto entrada
+        foto_entrada: dto.foto_url, // Guardar foto entrada
+        latitud_entrada: dto.latitud,
+        longitud_entrada: dto.longitud
       }).eq('id', asistenciaId);
     } else {
       const { data: newAsis, error: errAsis } = await db.from('turnos_asistencia').insert({
         turno_id: dto.turno_id,
         empleado_id: dto.empleado_id,
-        hora_entrada: now.toISOString(),
-        observaciones: observaciones_calculadas,
-        registrado_por: dto.empleado_id,
-        metodo_registro: 'app',
         estado_asistencia: 'pendiente',
-        foto_entrada: dto.foto_url // Guardar foto entrada
+        foto_entrada: dto.foto_url, // Guardar foto entrada
+        latitud_entrada: dto.latitud,
+        longitud_entrada: dto.longitud
       }).select().single();
       if (errAsis) throw new BadRequestException(errAsis.message);
       asistenciaId = newAsis.id;
@@ -300,7 +298,9 @@ export class AsistenciasService {
       hora_salida: now.toISOString(),
       observaciones: nuevasObservaciones,
       estado_asistencia: 'cumplido',
-      foto_salida: dto.foto_url // Guardar foto salida
+      foto_salida: dto.foto_url, // Guardar foto salida
+      latitud_salida: dto.latitud,
+      longitud_salida: dto.longitud
     }).eq('id', asistencia.id);
 
     // 5. Insertar en log 'asistencias' legacy

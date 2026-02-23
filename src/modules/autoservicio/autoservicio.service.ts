@@ -768,6 +768,12 @@ export class AutoservicioService {
     }
 
     async marcarAsistenciaEntrada(userId: number, dto: RegistrarMiAsistenciaEntradaDto) {
+        console.log(`📥 [AutoservicioService] Intentando registrar ENTRADA para usuario ${userId}:`, {
+            turno_id: dto.turno_id,
+            lat: dto.latitud,
+            lng: dto.longitud,
+            tiene_foto: !!dto.foto_url
+        });
         const supabase = this.supabaseService.getClient();
 
         // 1. Obtener datos del empleado y verificar permiso
@@ -838,7 +844,9 @@ export class AutoservicioService {
             registrado_por: userId,
             metodo_registro: 'app',
             estado_asistencia: 'pendiente',
-            foto_entrada: dto.foto_url // Guardar foto
+            foto_entrada: dto.foto_url, // Guardar foto
+            latitud_entrada: dto.latitud,
+            longitud_entrada: dto.longitud
         }).select().single();
 
         if (errAsis) throw errAsis;
@@ -866,6 +874,13 @@ export class AutoservicioService {
     }
 
     async marcarAsistenciaSalida(userId: number, dto: RegistrarMiAsistenciaSalidaDto) {
+        console.log(`📥 [AutoservicioService] Intentando registrar SALIDA para usuario ${userId}:`, {
+            turno_id: dto.turno_id,
+            asistencia_id: dto.asistencia_id || (dto as any).id,
+            lat: dto.latitud,
+            lng: dto.longitud,
+            tiene_foto: !!dto.foto_url
+        });
         const supabase = this.supabaseService.getClient();
 
         // 1. Obtener datos del empleado
@@ -932,7 +947,9 @@ export class AutoservicioService {
             hora_salida: now.toISOString(),
             observaciones: nuevasObservaciones,
             estado_asistencia: 'cumplido',
-            foto_salida: dto.foto_url // Guardar foto
+            foto_salida: dto.foto_url, // Guardar foto
+            latitud_salida: dto.latitud,
+            longitud_salida: dto.longitud
         }).eq('id', asisId);
 
         // 8. Log legacy

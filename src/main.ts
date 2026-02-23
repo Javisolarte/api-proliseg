@@ -26,8 +26,9 @@ async function bootstrap() {
 
   app.set("trust proxy", true);
 
-  // NOTA: Se eliminan bodyParser.json() y urlencoded() manuales para evitar conflictos con Multer.
-  // NestJS maneja esto internamente. Si necesitas límites mayores, usa la config de factory.create.
+  // ✅ Configurar límites de carga para permitir fotos
+  app.use(require('body-parser').json({ limit: '10mb' }));
+  app.use(require('body-parser').urlencoded({ limit: '10mb', extended: true }));
 
   app.setGlobalPrefix("api");
 

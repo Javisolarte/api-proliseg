@@ -56,6 +56,16 @@ export class RegistrarEntradaManualDto {
     @IsOptional()
     @IsString()
     observaciones?: string;
+
+    @ApiProperty({ example: '4.6097', required: false })
+    @IsOptional()
+    @IsString()
+    latitud?: string;
+
+    @ApiProperty({ example: '-74.0817', required: false })
+    @IsOptional()
+    @IsString()
+    longitud?: string;
 }
 
 export class RegistrarSalidaManualDto {
@@ -73,4 +83,14 @@ export class RegistrarSalidaManualDto {
     @IsOptional()
     @IsString()
     observaciones?: string;
+
+    @ApiProperty({ example: '4.6097', required: false })
+    @IsOptional()
+    @IsString()
+    latitud?: string;
+
+    @ApiProperty({ example: '-74.0817', required: false })
+    @IsOptional()
+    @IsString()
+    longitud?: string;
 }

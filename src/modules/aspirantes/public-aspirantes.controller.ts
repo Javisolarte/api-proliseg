@@ -3,9 +3,11 @@ import { ApiOperation, ApiResponse, ApiTags, ApiParam, ApiQuery } from '@nestjs/
 import { AspirantesService } from './aspirantes.service';
 import { SubmitRespuestaDto } from './dto/submit-respuesta.dto';
 import { SaveDatosPreEmpleadoDto } from './dto/save-datos-pre-empleado.dto';
+import { Public } from '../auth/decorators/public.decorator';
 
 @ApiTags('Aspirantes (Public / Token)')
 @Controller('public/aspirantes')
+@Public()
 export class PublicAspirantesController {
     constructor(private readonly aspirantesService: AspirantesService) { }
 
