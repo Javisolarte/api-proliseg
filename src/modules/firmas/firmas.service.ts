@@ -85,15 +85,30 @@ export class FirmasService {
 
             // 5. Cierre automático y RE-GENERACIÓN de PDF
             if (createDto.es_ultima_firma) {
+                const supabase = this.supabaseService.getClient();
+
+                // Obtener info del documento para ver qué entidad actualizar
+                // (Ya tenemos 'doc' de la validación inicial, pero el snippet lo vuelve a buscar)
+                const doc = await this.documentosService.findOne(docId);
+
                 // Primero cambiamos a firmado
                 await this.documentosService.cambiarEstado(docId, 'firmado');
 
-                // Re-generamos el PDF para que incluya todas las firmas (incluyendo esta última)
-                // Usamos un pequeño truco: pasamos temporalmente a generando_pdf para permitir el bypass de validación
-                const supabase = this.supabaseService.getClient();
+                // Re-generamos el PDF para que incluya todas las firmas
                 await supabase.from("documentos_generados").update({ estado: 'borrador' }).eq("id", docId);
                 await this.documentosService.generarPdf(docId);
                 await supabase.from("documentos_generados").update({ estado: 'firmado' }).eq("id", docId);
+
+                // Actualizar entidad relacionada si es necesario
+                if (doc.entidad_id) {
+                    if (doc.entidad_tipo === 'contrato_personal') {
+                        await supabase.from('contratos_personal').update({ estado: 'activo' }).eq('id', doc.entidad_id);
+                        this.logger.log(`Contrato ${doc.entidad_id} activado tras firma.`);
+                    } else if (doc.entidad_tipo === 'consentimiento') {
+                        await supabase.from('consentimientos').update({ acepta: true }).eq('id', doc.entidad_id);
+                        this.logger.log(`Consentimiento ${doc.entidad_id} marcado como aceptado tras firma.`);
+                    }
+                }
 
                 this.logger.log(`Documento ${docId} cerrado y PDF final re-generado tras última firma.`);
             }

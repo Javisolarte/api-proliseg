@@ -222,8 +222,15 @@ export class DocumentosGeneradosService {
 
             // Reemplazo de variables {{variable}}
             for (const [key, value] of Object.entries(datos)) {
-                const regex = new RegExp(`{{${key}}}`, 'g');
-                htmlContenido = htmlContenido.replace(regex, value as string);
+                const regex = new RegExp(`{{${key}}}`, 'gi');
+                let valStr = String(value || '').trim();
+
+                // Si es una imagen base64, envolver automáticamente en un tag img
+                if (valStr.startsWith('data:image/') && valStr.includes('base64,')) {
+                    valStr = `<img src="${valStr}" style="max-width: 250px; max-height: 100px; display: block; margin: 0 auto;" alt="Firma ${key}">`;
+                }
+
+                htmlContenido = htmlContenido.replace(regex, valStr);
             }
 
             // 3. Obtener firmas registradas para inyectar si existen
@@ -237,11 +244,11 @@ export class DocumentosGeneradosService {
             if (firmas && firmas.length > 0) {
                 firmas.forEach((f, index) => {
                     if (f.firma_base64) {
-                        const firmaHtml = `<img src="${f.firma_base64}" style="max-width: 200px; max-height: 100px;" alt="Firma ${f.nombre_firmante}">`;
+                        const firmaHtml = `<img src="${f.firma_base64}" style="max-width: 180px; max-height: 80px; display: block; margin: 5px 0;" alt="Firma ${f.nombre_firmante || 'Registrada'}">`;
                         // Soporte para placeholders {{firma_1}}, {{firma_2}}...
-                        htmlContenido = htmlContenido.replace(new RegExp(`{{firma_${index + 1}}}`, 'g'), firmaHtml);
+                        htmlContenido = htmlContenido.replace(new RegExp(`{{firma_${index + 1}}}`, 'gi'), firmaHtml);
                         // Soporte para placeholder genérico por orden
-                        htmlContenido = htmlContenido.replace(new RegExp(`{{firma_orden_${f.orden}}}`, 'g'), firmaHtml);
+                        htmlContenido = htmlContenido.replace(new RegExp(`{{firma_orden_${f.orden}}}`, 'gi'), firmaHtml);
                     }
                     // Inyectar Huella si existe
                     if (f.huella_base64) {
@@ -251,7 +258,10 @@ export class DocumentosGeneradosService {
                 });
             }
 
-            // 3.5. Insertar Footer con "Generado por"
+            // 3.5 Limpieza final de placeholders de firma no usados (ej: {{firma_2}} si no se envió en ninguna de las fases previas)
+            htmlContenido = htmlContenido.replace(/{{firma_\d+}}/gi, '');
+
+            // 3.6. Insertar Footer con "Generado por"
             let footerHtml = '';
             if (doc.created_by_id) {
                 // Intentar buscar en usuarios_externos (gestores)

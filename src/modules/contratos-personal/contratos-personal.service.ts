@@ -112,7 +112,17 @@ export class ContratosPersonalService {
             contratoPdfUrl = docConPdf.url_pdf;
         }
 
-        // 5. Insertar registro en contratos_personal
+        // 5. Determinar estado inicial
+        // Si es por plantilla y NO tiene firma del trabajador, queda como pendiente_firma
+        let estadoInicial = 'activo';
+        if (createDto.plantilla_id) {
+            const datosFinales = typeof createDto.datos_json === 'string' ? JSON.parse(createDto.datos_json) : createDto.datos_json;
+            if (!datosFinales?.firma_1) {
+                estadoInicial = 'pendiente_firma';
+            }
+        }
+
+        // 6. Insertar registro en contratos_personal
         const { data: newContract, error } = await supabase
             .from('contratos_personal')
             .insert({
@@ -125,7 +135,7 @@ export class ContratosPersonalService {
                 contrato_pdf_url: contratoPdfUrl,
                 documento_generado_id: documentoGeneradoId,
                 creado_por: userId,
-                estado: 'activo',
+                estado: estadoInicial,
                 modalidad_trabajo: createDto.modalidad_trabajo || 'tiempo_completo',
             })
             .select()
