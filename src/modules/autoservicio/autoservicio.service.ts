@@ -988,13 +988,51 @@ export class AutoservicioService {
     async registrarMiUbicacion(userId: number, dto: RegistrarMiUbicacionDto) {
         const empleado = await this.getEmpleadoByUserId(userId);
 
+        // Mapeamos explícitamente para evitar enviar campos que la DB no tenga (como timestamp)
+        // y asegurar que los nombres coincidan con la tabla empleado_ubicaciones
         return this.ubicacionesService.registrar({
-            ...dto,
             empleado_id: empleado.id,
             usuario_id: userId,
+            latitud: dto.latitud,
+            longitud: dto.longitud,
+            precision_metros: dto.precision_metros,
+            velocidad: dto.velocidad,
+            bateria: dto.bateria,
             timestamp: Date.now(),
             evento: 'tracking'
         });
+    }
+
+    // ============================================================
+    // 📸 SUBIR FOTO EVIDENCIA (AUTOSERVICIO)
+    // ============================================================
+    async uploadFoto(file: any, userId: number) {
+        const empleado = await this.getEmpleadoByUserId(userId);
+        const supabase = this.supabaseService.getClient();
+        const timestamp = Date.now();
+
+        // Limpiar nombre de archivo
+        const name = file.originalname.split('.')[0].replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        const ext = file.originalname.split('.').pop();
+        const path = `${empleado.id}/${timestamp}_${name}.${ext}`;
+
+        const { data, error } = await supabase.storage
+            .from('asistencias-fotos')
+            .upload(path, file.buffer, {
+                contentType: file.mimetype,
+                upsert: false
+            });
+
+        if (error) {
+            throw new BadRequestException("Error al subir la evidencia fotográfica");
+        }
+
+        // Obtener URL Pública
+        const { data: { publicUrl } } = supabase.storage
+            .from('asistencias-fotos')
+            .getPublicUrl(path);
+
+        return { url: publicUrl };
     }
 
     // ------------------------------------------------------------------

@@ -1,4 +1,5 @@
-import { Controller, Get, Param, ParseIntPipe, Post, Body, Put, UseGuards, Ip } from '@nestjs/common';
+import { Controller, Get, Param, ParseIntPipe, Post, Body, Put, UseGuards, Ip, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -117,6 +118,16 @@ export class AutoservicioEmpleadoController {
         @Body() dto: RegistrarMiAsistenciaSalidaDto
     ) {
         return this.autoservicioService.marcarAsistenciaSalida(user.id, dto);
+    }
+
+    @Post('mi-asistencia/upload-foto')
+    @ApiOperation({ summary: 'Subir foto de evidencia (Autoservicio)' })
+    @UseInterceptors(FileInterceptor('file'))
+    async uploadFoto(
+        @UploadedFile() file: any,
+        @CurrentUser() user: any
+    ) {
+        return this.autoservicioService.uploadFoto(file, user.id);
     }
 
     // --- SEGURIDAD & SEGUIMIENTO ---
