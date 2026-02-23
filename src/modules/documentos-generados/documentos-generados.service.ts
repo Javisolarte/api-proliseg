@@ -277,14 +277,20 @@ export class DocumentosGeneradosService {
             const page = await browser.newPage();
 
             try {
-                // Usamos domcontentloaded ya que es mucho más rápido que networkidle0
-                await page.setContent(htmlContenido, { waitUntil: 'domcontentloaded' });
+                this.logger.debug(`Iniciando renderización Puppeteer para doc ${id}...`);
+                // Aumentamos el timeout a 60s para entornos lentos como Render
+                await page.setContent(htmlContenido, {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 60000
+                });
 
                 const pdfBuffer = await page.pdf({
                     format: 'Letter' as puppeteer.PaperFormat,
                     printBackground: true,
-                    margin: { top: '20mm', right: '20mm', bottom: '20mm', left: '20mm' }
+                    margin: { top: '20mm', right: '20mm', bottom: '20mm', left: '20mm' },
+                    timeout: 60000
                 });
+                this.logger.debug(`PDF generado localmente para doc ${id}`);
 
                 // 5. Subir a Supabase Storage
                 const fileName = `${doc.entidad_tipo}/${id}_${Date.now()}.pdf`;
