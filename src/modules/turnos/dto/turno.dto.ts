@@ -90,6 +90,15 @@ export class CreateTurnoDto {
   @IsNumber()
   @IsPositive()
   duracion_horas?: number;
+
+  @ApiProperty({
+    example: "Llegada tarde por tráfico",
+    description: "Observaciones sobre el turno",
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  observaciones?: string;
 }
 
 export class UpdateTurnoDto extends PartialType(CreateTurnoDto) { }
