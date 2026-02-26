@@ -6,7 +6,7 @@ import { CreateTurnoDto, UpdateTurnoDto } from "./dto/turno.dto";
 export class TurnosService {
   private readonly logger = new Logger(TurnosService.name);
 
-  constructor(private readonly supabaseService: SupabaseService) {}
+  constructor(private readonly supabaseService: SupabaseService) { }
 
   // ✅ Obtener todos los turnos (con filtros opcionales)
   async findAll(filters?: { fecha?: string; empleadoId?: number; puestoId?: number }) {
@@ -122,7 +122,6 @@ export class TurnosService {
       .from("turnos")
       .insert({
         ...dto,
-        creado_por: userId,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       })
@@ -158,7 +157,6 @@ export class TurnosService {
       .from("turnos")
       .update({
         ...dto,
-        actualizado_por: userId,
         updated_at: new Date().toISOString(),
       })
       .eq("id", id)
@@ -194,7 +192,6 @@ export class TurnosService {
       .from("turnos")
       .update({
         activo: false,
-        actualizado_por: userId,
         updated_at: new Date().toISOString(),
       })
       .eq("id", id)
@@ -229,7 +226,6 @@ export class TurnosService {
       .from("turnos")
       .update({
         ...dto,
-        actualizado_por: userId,
         updated_at: new Date().toISOString(),
       })
       .eq("empleado_id", empleadoId)
@@ -263,7 +259,6 @@ export class TurnosService {
       .from("turnos")
       .update({
         activo: false,
-        actualizado_por: userId,
         updated_at: new Date().toISOString(),
       })
       .eq("empleado_id", empleadoId)
