@@ -215,12 +215,18 @@ export class TurnosReemplazosService {
       throw new BadRequestException(`Error al crear reemplazo: ${errorReemplazo.message}`);
     }
 
-    // 6️⃣ Actualizar el turno original - REASIGNAR al nuevo empleado
+    const empleadoOriginal = Array.isArray(turnoOriginal.empleado)
+      ? turnoOriginal.empleado[0]
+      : turnoOriginal.empleado;
+
+    // 6️⃣ Actualizar el turno original - MARCAR como reemplazo, conservar empleado original
+    const observationOriginalAuto = `reemplazo realizado turno ${turnoOriginal.tipo_turno} al señor ${empleadoOriginal?.nombre_completo || 'Desconocido'} por motivo de ${dto.motivo} remplazante ${empleadoReemplazo.nombre_completo}`;
+
     const { data: turnoActualizado, error: errorUpdate } = await supabase
       .from("turnos")
       .update({
-        empleado_id: dto.empleado_reemplazo_id,
-        tipo_turno: "reemplazo",
+        es_reemplazo: true,
+        observaciones: turnoOriginal.observaciones ? `${turnoOriginal.observaciones} | ${observationOriginalAuto}` : observationOriginalAuto,
         updated_at: new Date().toISOString(),
       })
       .eq("id", dto.turno_original_id)
@@ -233,9 +239,29 @@ export class TurnosReemplazosService {
       throw new BadRequestException(`Error al actualizar turno: ${errorUpdate.message}`);
     }
 
-    const empleadoOriginal = Array.isArray(turnoOriginal.empleado)
-      ? turnoOriginal.empleado[0]
-      : turnoOriginal.empleado;
+    // 7️⃣ CREAR NUEVO TURNO para el empleado de REEMPLAZO
+    const { data: turnoNuevo, error: errorInsert } = await supabase
+      .from("turnos")
+      .insert({
+        puesto_id: turnoOriginal.puesto_id,
+        subpuesto_id: turnoOriginal.subpuesto_id,
+        empleado_id: dto.empleado_reemplazo_id,
+        fecha: turnoOriginal.fecha,
+        hora_inicio: turnoOriginal.hora_inicio,
+        hora_fin: turnoOriginal.hora_fin,
+        tipo_turno: turnoOriginal.tipo_turno,
+        estado_turno: turnoOriginal.estado_turno,
+        observaciones: `Cubre reemplazo de ${empleadoOriginal?.nombre_completo || 'Desconocido'} por ${dto.motivo}`,
+        // no es_reemplazo flag here, so it renders normally with its Shift Code
+      })
+      .select()
+      .single();
+
+    if (errorInsert) {
+      this.logger.error(`Error creando turno para reemplazante: ${errorInsert.message}`);
+      // Consider reverting updateUpdate and reemplazo here, but for now we throw
+      throw new BadRequestException(`Error al asignar turno al reemplazante: ${errorInsert.message}`);
+    }
 
     this.logger.log(
       `✅ Reemplazo exitoso: ${empleadoOriginal?.nombre_completo} → ${empleadoReemplazo.nombre_completo}`
@@ -245,6 +271,7 @@ export class TurnosReemplazosService {
       mensaje: "✅ Reemplazo creado exitosamente",
       reemplazo,
       turno_actualizado: turnoActualizado,
+      turno_nuevo: turnoNuevo,
       detalles: {
         empleado_original: empleadoOriginal?.nombre_completo,
         empleado_reemplazo: empleadoReemplazo.nombre_completo,
