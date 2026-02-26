@@ -62,6 +62,17 @@ export class TurnosReemplazosController {
   }
 
   /**
+   * 👥 Obtener empleados disponibles para reemplazar un turno
+   */
+  @Get("disponibles/:turnoId")
+  @RequirePermissions("turnos_reemplazos")
+  @ApiOperation({ summary: "Obtener empleados disponibles para reemplazar un turno específico" })
+  @ApiResponse({ status: 200, description: "Lista de empleados disponibles" })
+  async getDisponibles(@Param("turnoId") turnoId: string) {
+    return this.service.getEmpleadosDisponibles(Number(turnoId));
+  }
+
+  /**
    * 🤖 Crear reemplazo o mostrar sugerencias (IA + distancia)
    */
   @Post()

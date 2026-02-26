@@ -178,23 +178,9 @@ export class TurnosReemplazosService {
       throw new BadRequestException("El empleado de reemplazo no puede ser el mismo que el original");
     }
 
-    // 3️⃣ Verificar que el empleado de reemplazo está asignado al subpuesto
-    const { data: asignacion } = await supabase
-      .from("asignacion_guardas_puesto")
-      .select("id")
-      .eq("empleado_id", dto.empleado_reemplazo_id)
-      .eq("subpuesto_id", turnoOriginal.subpuesto_id)
-      .eq("activo", true)
-      .maybeSingle();
+    // (ELIMINADO) Validación de que el empleado de reemplazo esté asignado al subpuesto.
+    // Esto se quitó para permitir que "turneros" o empleados de descanso hagan reemplazos.
 
-    if (!asignacion) {
-      const subpuesto = Array.isArray(turnoOriginal.subpuesto)
-        ? turnoOriginal.subpuesto[0]
-        : turnoOriginal.subpuesto;
-      throw new BadRequestException(
-        `El empleado ${empleadoReemplazo.nombre_completo} no está asignado al subpuesto ${subpuesto?.nombre}`
-      );
-    }
 
     // 4️⃣ Verificar disponibilidad del empleado de reemplazo
     const { data: turnosConflicto } = await supabase
@@ -410,5 +396,53 @@ export class TurnosReemplazosService {
 
     this.logger.log(`🗑️ Reemplazo ${id} cancelado`);
     return { mensaje: `🗑️ Reemplazo ${id} cancelado correctamente` };
+  }
+
+  /**
+   * 🔎 Obtener empleados disponibles para reemplazar un turno
+   * Un empleado está disponible si está activo y no tiene un turno asignado
+   * en el mismo horario y fecha.
+   */
+  async getEmpleadosDisponibles(turnoId: number) {
+    const supabase = this.supabaseService.getClient();
+
+    // 1️⃣ Obtener el turno original para ver horario
+    const { data: turno, error } = await supabase
+      .from("turnos")
+      .select("fecha, hora_inicio, hora_fin, empleado_id")
+      .eq("id", turnoId)
+      .single();
+
+    if (error || !turno) {
+      throw new NotFoundException("Turno original no encontrado");
+    }
+
+    // 2️⃣ Buscar qué empleados TIENEN turno en ese rango para esta fecha
+    const { data: turnosConflicto } = await supabase
+      .from("turnos")
+      .select("empleado_id")
+      .eq("fecha", turno.fecha)
+      .or(`and(hora_inicio.lte.${turno.hora_fin},hora_fin.gte.${turno.hora_inicio})`);
+
+    const empleadosOcupadosIds = new Set(
+      turnosConflicto?.map((t) => t.empleado_id) || []
+    );
+    // Agregamos también al empleado original, no se va a reemplazar a sí mismo
+    empleadosOcupadosIds.add(turno.empleado_id);
+
+    // 3️⃣ Traer todos los empleados activos
+    const { data: empleadosActivos } = await supabase
+      .from("empleados")
+      .select("id, nombre_completo, identificacion, cargo")
+      .eq("activo", true);
+
+    if (!empleadosActivos) return [];
+
+    // 4️⃣ Filtrar los disponibles
+    const candidatos = empleadosActivos.filter(
+      (emp) => !empleadosOcupadosIds.has(emp.id)
+    );
+
+    return candidatos;
   }
 }
