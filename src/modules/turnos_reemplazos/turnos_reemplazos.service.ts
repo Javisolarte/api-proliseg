@@ -251,7 +251,7 @@ export class TurnosReemplazosService {
         hora_fin: turnoOriginal.hora_fin,
         tipo_turno: turnoOriginal.tipo_turno,
         estado_turno: turnoOriginal.estado_turno,
-        observaciones: `Cubre reemplazo de ${empleadoOriginal?.nombre_completo || 'Desconocido'} por ${dto.motivo}`,
+        observaciones: `Cubre reemplazo turno ${turnoOriginal.tipo_turno} de ${empleadoOriginal?.nombre_completo || 'Desconocido'} por motivo: ${dto.motivo}`,
         // no es_reemplazo flag here, so it renders normally with its Shift Code
       })
       .select()
