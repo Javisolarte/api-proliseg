@@ -196,6 +196,20 @@ CREATE TABLE public.aspirantes_respuestas (
   CONSTRAINT aspirantes_respuestas_pregunta_id_fkey FOREIGN KEY (pregunta_id) REFERENCES public.aspirantes_preguntas(id),
   CONSTRAINT aspirantes_respuestas_opcion_id_fkey FOREIGN KEY (opcion_id) REFERENCES public.aspirantes_preguntas_opciones(id)
 );
+CREATE TABLE public.audit_legal_log (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  usuario_id integer,
+  entidad character varying NOT NULL,
+  entidad_id character varying NOT NULL,
+  accion character varying NOT NULL,
+  detalles jsonb,
+  ip character varying,
+  user_agent text,
+  timestamp timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  hash_integridad text NOT NULL,
+  CONSTRAINT audit_legal_log_pkey PRIMARY KEY (id),
+  CONSTRAINT audit_legal_log_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.usuarios_externos(id)
+);
 CREATE TABLE public.auditoria (
   id integer NOT NULL DEFAULT nextval('auditoria_id_seq'::regclass),
   tabla_afectada character varying NOT NULL,
@@ -207,6 +221,8 @@ CREATE TABLE public.auditoria (
   ip_address inet,
   user_agent text,
   created_at timestamp without time zone DEFAULT now(),
+  estado_anterior jsonb,
+  estado_nuevo jsonb,
   CONSTRAINT auditoria_pkey PRIMARY KEY (id),
   CONSTRAINT auditoria_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.usuarios_externos(id)
 );
@@ -299,6 +315,18 @@ CREATE TABLE public.clientes (
   CONSTRAINT clientes_pkey PRIMARY KEY (id),
   CONSTRAINT clientes_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.usuarios_externos(id)
 );
+CREATE TABLE public.clientes_configuracion (
+  id integer NOT NULL DEFAULT nextval('clientes_configuracion_id_seq'::regclass),
+  cliente_id integer UNIQUE,
+  horarios jsonb,
+  reglas_visitas jsonb,
+  limites jsonb,
+  branding jsonb,
+  created_at timestamp without time zone DEFAULT now(),
+  updated_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT clientes_configuracion_pkey PRIMARY KEY (id),
+  CONSTRAINT clientes_configuracion_cliente_id_fkey FOREIGN KEY (cliente_id) REFERENCES public.clientes(id)
+);
 CREATE TABLE public.comunicaciones_historial (
   id integer NOT NULL DEFAULT nextval('comunicaciones_historial_id_seq'::regclass),
   sesion_id text NOT NULL,
@@ -330,6 +358,40 @@ CREATE TABLE public.configuraciones (
   created_at timestamp without time zone DEFAULT now(),
   updated_at timestamp without time zone DEFAULT now(),
   CONSTRAINT configuraciones_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.consentimientos (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  usuario_id integer,
+  empleado_id integer,
+  politica_id integer NOT NULL,
+  aceptado boolean NOT NULL DEFAULT true,
+  ip_address character varying,
+  user_agent text,
+  firmado_hash character varying,
+  metadatos jsonb,
+  revocado boolean DEFAULT false,
+  fecha_revocacion timestamp without time zone,
+  created_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT consentimientos_pkey PRIMARY KEY (id),
+  CONSTRAINT consentimientos_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.usuarios_externos(id),
+  CONSTRAINT consentimientos_empleado_id_fkey FOREIGN KEY (empleado_id) REFERENCES public.empleados(id),
+  CONSTRAINT consentimientos_politica_id_fkey FOREIGN KEY (politica_id) REFERENCES public.politicas(id)
+);
+CREATE TABLE public.consentimientos_empleado (
+  id integer NOT NULL DEFAULT nextval('consentimientos_empleado_id_seq'::regclass),
+  empleado_id integer NOT NULL,
+  documento_generado_id integer,
+  tipo_consentimiento character varying NOT NULL,
+  acepta boolean DEFAULT false,
+  fecha_consentimiento timestamp with time zone DEFAULT now(),
+  documento_pdf_url text,
+  datos_json jsonb,
+  vigente boolean DEFAULT true,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT consentimientos_empleado_pkey PRIMARY KEY (id),
+  CONSTRAINT consentimientos_empleado_documento_generado_id_fkey FOREIGN KEY (documento_generado_id) REFERENCES public.documentos_generados(id),
+  CONSTRAINT consentimientos_empleado_empleado_id_fkey FOREIGN KEY (empleado_id) REFERENCES public.empleados(id)
 );
 CREATE TABLE public.consentimientos_informados (
   id integer NOT NULL DEFAULT nextval('consentimientos_informados_id_seq'::regclass),
@@ -437,6 +499,13 @@ CREATE TABLE public.cotizaciones (
   documento_generado_id integer,
   created_at timestamp without time zone DEFAULT now(),
   updated_at timestamp without time zone DEFAULT now(),
+  public_token character varying UNIQUE,
+  public_token_expires_at timestamp without time zone,
+  fecha_envio timestamp without time zone,
+  fecha_aceptacion timestamp without time zone,
+  fecha_rechazo timestamp without time zone,
+  fecha_expiracion timestamp without time zone,
+  motivo_rechazo text,
   CONSTRAINT cotizaciones_pkey PRIMARY KEY (id),
   CONSTRAINT cotizaciones_cliente_id_fkey FOREIGN KEY (cliente_id) REFERENCES public.clientes(id),
   CONSTRAINT cotizaciones_creado_por_fkey FOREIGN KEY (creado_por) REFERENCES public.usuarios_externos(id),
@@ -459,15 +528,18 @@ CREATE TABLE public.cotizaciones_items (
 CREATE TABLE public.documentos_generados (
   id integer NOT NULL DEFAULT nextval('documentos_generados_id_seq'::regclass),
   plantilla_id integer,
-  created_by_id integer,
   codigo_referencia uuid DEFAULT gen_random_uuid() UNIQUE,
   entidad_tipo character varying NOT NULL,
   entidad_id integer NOT NULL,
   datos_json jsonb NOT NULL,
   url_pdf text,
-  estado character varying DEFAULT 'borrador'::character varying CHECK (estado::text = ANY (ARRAY['borrador'::character varying, 'pendiente_firmas'::character varying, 'firmado'::character varying, 'anulado'::character varying]::text[])),
+  estado character varying DEFAULT 'borrador'::character varying CHECK (estado::text = ANY (ARRAY['borrador'::character varying, 'generando_pdf'::character varying, 'pendiente_firmas'::character varying, 'firmado'::character varying, 'anulado'::character varying, 'cerrado'::character varying, 'enviado'::character varying]::text[])),
   created_at timestamp without time zone DEFAULT now(),
   updated_at timestamp without time zone DEFAULT now(),
+  fecha_generacion timestamp without time zone,
+  fecha_envio_firmas timestamp without time zone,
+  fecha_cierre timestamp without time zone,
+  created_by_id integer,
   CONSTRAINT documentos_generados_pkey PRIMARY KEY (id),
   CONSTRAINT documentos_generados_plantilla_id_fkey FOREIGN KEY (plantilla_id) REFERENCES public.plantillas_documentos(id)
 );
@@ -600,6 +672,15 @@ CREATE TABLE public.empleados (
   tiene_curso_vigilancia boolean DEFAULT false,
   tipo_curso_vigilancia_id integer,
   fecha_vencimiento_curso date,
+  deleted_at timestamp with time zone,
+  deleted_by integer,
+  deletion_reason text,
+  firma_digital_base64 text,
+  cargo_oficial character varying,
+  numero_cuenta character varying,
+  entidad_bancaria character varying,
+  tipo_cuenta character varying,
+  certificado_bancario_url text,
   CONSTRAINT empleados_pkey PRIMARY KEY (id),
   CONSTRAINT empleados_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.usuarios_externos(id),
   CONSTRAINT empleados_eps_id_fkey FOREIGN KEY (eps_id) REFERENCES public.eps(id),
@@ -610,7 +691,8 @@ CREATE TABLE public.empleados (
   CONSTRAINT empleados_actualizado_por_fkey FOREIGN KEY (actualizado_por) REFERENCES public.usuarios_externos(id),
   CONSTRAINT fk_empleado_contrato_activo FOREIGN KEY (contrato_personal_id) REFERENCES public.contratos_personal(id),
   CONSTRAINT fk_empleados_tipo_vigilante FOREIGN KEY (tipo_vigilante_id) REFERENCES public.tipos_vigilante(id),
-  CONSTRAINT fk_empleados_tipo_curso_vigilancia FOREIGN KEY (tipo_curso_vigilancia_id) REFERENCES public.tipos_curso_vigilancia(id)
+  CONSTRAINT fk_empleados_tipo_curso_vigilancia FOREIGN KEY (tipo_curso_vigilancia_id) REFERENCES public.tipos_curso_vigilancia(id),
+  CONSTRAINT empleados_deleted_by_fkey FOREIGN KEY (deleted_by) REFERENCES public.usuarios_externos(id)
 );
 CREATE TABLE public.eps (
   id integer NOT NULL DEFAULT nextval('eps_id_seq'::regclass),
@@ -619,6 +701,15 @@ CREATE TABLE public.eps (
   created_at timestamp without time zone DEFAULT now(),
   updated_at timestamp without time zone DEFAULT now(),
   CONSTRAINT eps_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.feature_flags (
+  flag_key character varying NOT NULL,
+  enabled boolean DEFAULT false,
+  description text,
+  metadata jsonb,
+  created_at timestamp without time zone DEFAULT now(),
+  updated_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT feature_flags_pkey PRIMARY KEY (flag_key)
 );
 CREATE TABLE public.festivos_colombia (
   fecha date NOT NULL,
@@ -634,14 +725,16 @@ CREATE TABLE public.firmas_documentos (
   cargo_firmante character varying,
   tipo_firma character varying DEFAULT 'digital'::character varying CHECK (tipo_firma::text = ANY (ARRAY['digital'::character varying, 'manuscrita_capturada'::character varying, 'biometrica'::character varying]::text[])),
   firma_base64 text,
-  huella_base64 text,
   ip_address inet,
   fecha_firma timestamp without time zone DEFAULT now(),
   token_validacion uuid DEFAULT gen_random_uuid(),
   orden integer DEFAULT 1,
+  empleado_id integer,
+  huella_base64 text,
   CONSTRAINT firmas_documentos_pkey PRIMARY KEY (id),
   CONSTRAINT firmas_documentos_documento_id_fkey FOREIGN KEY (documento_id) REFERENCES public.documentos_generados(id),
-  CONSTRAINT firmas_documentos_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.usuarios_externos(id)
+  CONSTRAINT firmas_documentos_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.usuarios_externos(id),
+  CONSTRAINT firmas_documentos_empleado_id_fkey FOREIGN KEY (empleado_id) REFERENCES public.empleados(id)
 );
 CREATE TABLE public.fm_archivos (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -884,6 +977,19 @@ CREATE TABLE public.inventario_puesto_movimientos (
   CONSTRAINT inventario_puesto_movimientos_puesto_id_fkey FOREIGN KEY (puesto_id) REFERENCES public.puestos_trabajo(id),
   CONSTRAINT inventario_puesto_movimientos_variante_articulo_id_fkey FOREIGN KEY (variante_articulo_id) REFERENCES public.articulos_dotacion_variantes(id),
   CONSTRAINT inventario_puesto_movimientos_responsable_id_fkey FOREIGN KEY (responsable_id) REFERENCES public.usuarios_externos(id)
+);
+CREATE TABLE public.jobs (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  tipo character varying,
+  estado character varying DEFAULT 'pending'::character varying,
+  payload jsonb,
+  error text,
+  intentos integer DEFAULT 0,
+  max_intentos integer DEFAULT 3,
+  created_at timestamp without time zone DEFAULT now(),
+  updated_at timestamp without time zone DEFAULT now(),
+  completed_at timestamp without time zone,
+  CONSTRAINT jobs_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.listas_acceso (
   id integer NOT NULL DEFAULT nextval('listas_acceso_id_seq'::regclass),
@@ -1153,6 +1259,86 @@ CREATE TABLE public.notificaciones (
   CONSTRAINT notificaciones_pkey PRIMARY KEY (id),
   CONSTRAINT notificaciones_para_usuario_id_fkey FOREIGN KEY (para_usuario_id) REFERENCES public.usuarios_externos(id)
 );
+CREATE TABLE public.notificaciones_dispositivos (
+  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  usuario_id integer,
+  empleado_id integer,
+  token_dispositivo text NOT NULL UNIQUE,
+  plataforma character varying CHECK (plataforma::text = ANY (ARRAY['android'::character varying, 'ios'::character varying, 'web'::character varying]::text[])),
+  modelo_dispositivo character varying,
+  app_version character varying,
+  activo boolean DEFAULT true,
+  ultimo_uso timestamp without time zone DEFAULT now(),
+  created_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT notificaciones_dispositivos_pkey PRIMARY KEY (id),
+  CONSTRAINT notificaciones_dispositivos_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.usuarios_externos(id),
+  CONSTRAINT notificaciones_dispositivos_empleado_id_fkey FOREIGN KEY (empleado_id) REFERENCES public.empleados(id)
+);
+CREATE TABLE public.notificaciones_envios (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  destinatario_tipo character varying NOT NULL CHECK (destinatario_tipo::text = ANY (ARRAY['usuario'::character varying, 'empleado'::character varying, 'cliente'::character varying, 'sistema'::character varying]::text[])),
+  destinatario_id integer NOT NULL,
+  evento_id integer,
+  canal USER-DEFINED NOT NULL,
+  titulo character varying,
+  mensaje text NOT NULL,
+  datos_extra jsonb,
+  accion_url text,
+  estado USER-DEFINED DEFAULT 'pendiente'::notificacion_estado,
+  prioridad USER-DEFINED DEFAULT 'media'::notificacion_prioridad,
+  intentos_realizados integer DEFAULT 0,
+  max_intentos integer DEFAULT 3,
+  fecha_programada timestamp without time zone DEFAULT now(),
+  fecha_envio timestamp without time zone,
+  fecha_lectura timestamp without time zone,
+  error_log text,
+  proveedor_id_externo text,
+  created_at timestamp without time zone DEFAULT now(),
+  updated_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT notificaciones_envios_pkey PRIMARY KEY (id),
+  CONSTRAINT notificaciones_envios_evento_id_fkey FOREIGN KEY (evento_id) REFERENCES public.notificaciones_eventos(id)
+);
+CREATE TABLE public.notificaciones_eventos (
+  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  codigo character varying NOT NULL UNIQUE,
+  nombre character varying NOT NULL,
+  descripcion text,
+  prioridad_por_defecto USER-DEFINED DEFAULT 'media'::notificacion_prioridad,
+  canales_obligatorios ARRAY DEFAULT '{}'::notificacion_canal[],
+  agrupar_notificaciones boolean DEFAULT false,
+  activo boolean DEFAULT true,
+  created_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT notificaciones_eventos_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.notificaciones_plantillas (
+  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  evento_id integer NOT NULL,
+  canal USER-DEFINED NOT NULL,
+  asunto_template text,
+  cuerpo_template text NOT NULL,
+  metadata_template jsonb,
+  idioma character varying DEFAULT 'es'::character varying,
+  version integer DEFAULT 1,
+  activo boolean DEFAULT true,
+  CONSTRAINT notificaciones_plantillas_pkey PRIMARY KEY (id),
+  CONSTRAINT notificaciones_plantillas_evento_id_fkey FOREIGN KEY (evento_id) REFERENCES public.notificaciones_eventos(id)
+);
+CREATE TABLE public.notificaciones_preferencias (
+  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  usuario_id integer,
+  empleado_id integer,
+  evento_id integer NOT NULL,
+  canal USER-DEFINED NOT NULL,
+  habilitado boolean DEFAULT true,
+  horario_silencio_inicio time without time zone,
+  horario_silencio_fin time without time zone,
+  created_at timestamp without time zone DEFAULT now(),
+  updated_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT notificaciones_preferencias_pkey PRIMARY KEY (id),
+  CONSTRAINT notificaciones_preferencias_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.usuarios_externos(id),
+  CONSTRAINT notificaciones_preferencias_empleado_id_fkey FOREIGN KEY (empleado_id) REFERENCES public.empleados(id),
+  CONSTRAINT notificaciones_preferencias_evento_id_fkey FOREIGN KEY (evento_id) REFERENCES public.notificaciones_eventos(id)
+);
 CREATE TABLE public.novedades (
   id integer NOT NULL DEFAULT nextval('novedades_id_seq'::regclass),
   creada_por integer,
@@ -1169,7 +1355,7 @@ CREATE TABLE public.novedades (
 CREATE TABLE public.plantillas_documentos (
   id integer NOT NULL DEFAULT nextval('plantillas_documentos_id_seq'::regclass),
   nombre character varying NOT NULL,
-  tipo character varying NOT NULL CHECK (tipo::text = ANY (ARRAY['contrato_cliente'::character varying, 'contrato_empleado'::character varying, 'consentimiento'::character varying, 'certificado'::character varying, 'referencia'::character varying, 'cotizacion'::character varying, 'otro'::character varying]::text[])),
+  tipo character varying NOT NULL,
   contenido_html text NOT NULL,
   variables_requeridas jsonb DEFAULT '[]'::jsonb,
   version integer DEFAULT 1,
@@ -1179,6 +1365,17 @@ CREATE TABLE public.plantillas_documentos (
   updated_at timestamp without time zone DEFAULT now(),
   CONSTRAINT plantillas_documentos_pkey PRIMARY KEY (id),
   CONSTRAINT plantillas_documentos_creado_por_fkey FOREIGN KEY (creado_por) REFERENCES public.usuarios_externos(id)
+);
+CREATE TABLE public.politicas (
+  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  codigo character varying NOT NULL,
+  nombre character varying NOT NULL,
+  version character varying NOT NULL,
+  contenido text NOT NULL,
+  vigente boolean DEFAULT true,
+  fecha_vigencia timestamp without time zone DEFAULT now(),
+  created_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT politicas_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.pqrsf (
   id integer NOT NULL DEFAULT nextval('pqrsf_id_seq'::regclass),
@@ -1278,11 +1475,15 @@ CREATE TABLE public.puestos_trabajo (
   cantidad_armas integer NOT NULL DEFAULT 0,
   tiene_cctv boolean NOT NULL DEFAULT false,
   cantidad_camaras integer NOT NULL DEFAULT 0,
+  deleted_at timestamp with time zone,
+  deleted_by integer,
+  deletion_reason text,
   CONSTRAINT puestos_trabajo_pkey PRIMARY KEY (id),
   CONSTRAINT puestos_trabajo_creado_por_fkey FOREIGN KEY (creado_por) REFERENCES public.usuarios_externos(id),
   CONSTRAINT puestos_trabajo_actualizado_por_fkey FOREIGN KEY (actualizado_por) REFERENCES public.usuarios_externos(id),
   CONSTRAINT puestos_trabajo_contrato_id_fkey FOREIGN KEY (contrato_id) REFERENCES public.contratos(id),
-  CONSTRAINT puestos_trabajo_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.puestos_trabajo(id)
+  CONSTRAINT puestos_trabajo_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.puestos_trabajo(id),
+  CONSTRAINT puestos_trabajo_deleted_by_fkey FOREIGN KEY (deleted_by) REFERENCES public.usuarios_externos(id)
 );
 CREATE TABLE public.recorridos_supervisor (
   id integer NOT NULL DEFAULT nextval('recorridos_supervisor_id_seq'::regclass),
@@ -1554,6 +1755,17 @@ CREATE TABLE public.salarios (
   created_at timestamp without time zone DEFAULT now(),
   CONSTRAINT salarios_pkey PRIMARY KEY (id)
 );
+CREATE TABLE public.sesiones (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  usuario_id integer,
+  token_hash character varying,
+  ip_address character varying,
+  user_agent text,
+  expires_at timestamp without time zone,
+  created_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT sesiones_pkey PRIMARY KEY (id),
+  CONSTRAINT sesiones_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.usuarios_externos(id)
+);
 CREATE TABLE public.sesiones_usuario (
   id integer NOT NULL DEFAULT nextval('sesiones_usuario_id_seq'::regclass),
   usuario_id integer,
@@ -1674,6 +1886,7 @@ CREATE TABLE public.turnos (
   fecha_fin timestamp without time zone,
   subpuesto_id integer,
   observaciones text,
+  es_reemplazo boolean DEFAULT false,
   CONSTRAINT turnos_pkey PRIMARY KEY (id),
   CONSTRAINT turnos_empleado_id_fkey FOREIGN KEY (empleado_id) REFERENCES public.empleados(id),
   CONSTRAINT turnos_asignado_por_fkey FOREIGN KEY (asignado_por) REFERENCES public.usuarios_externos(id),
@@ -1717,6 +1930,10 @@ CREATE TABLE public.turnos_asistencia (
   minutos_tolerancia integer DEFAULT 0,
   foto_entrada text,
   foto_salida text,
+  latitud_entrada text,
+  longitud_entrada text,
+  latitud_salida text,
+  longitud_salida text,
   CONSTRAINT turnos_asistencia_pkey PRIMARY KEY (id),
   CONSTRAINT turnos_asistencia_turno_id_fkey FOREIGN KEY (turno_id) REFERENCES public.turnos(id),
   CONSTRAINT turnos_asistencia_empleado_id_fkey FOREIGN KEY (empleado_id) REFERENCES public.empleados(id),
@@ -1796,6 +2013,11 @@ CREATE TABLE public.usuarios_externos (
   estado boolean DEFAULT true,
   created_at timestamp without time zone DEFAULT now(),
   updated_at timestamp without time zone DEFAULT now(),
+  bloqueado boolean DEFAULT false,
+  bloqueado_motivo text,
+  bloqueado_hasta timestamp without time zone,
+  intentos_fallidos integer DEFAULT 0,
+  ultimo_intento_fallido timestamp without time zone,
   CONSTRAINT usuarios_externos_pkey PRIMARY KEY (id),
   CONSTRAINT usuarios_externos_rol_fkey FOREIGN KEY (rol) REFERENCES public.roles(nombre)
 );
@@ -1888,7 +2110,34 @@ CREATE TABLE public.visitas_tecnicas_puesto (
   foto_evidencia_url text,
   registrado_por integer,
   created_at timestamp without time zone DEFAULT now(),
+  solicitado_por_tipo text DEFAULT 'usuario'::text,
+  solicitado_por_id integer,
+  documento_generado_id integer,
+  estado character varying DEFAULT 'programada'::character varying CHECK (estado::text = ANY (ARRAY['programada'::character varying, 'en_proceso'::character varying, 'completada'::character varying, 'incumplida'::character varying, 'cancelada'::character varying]::text[])),
+  asignado_a integer,
+  fecha_programada timestamp without time zone,
+  cumplida boolean DEFAULT false,
+  notas_programacion text,
   CONSTRAINT visitas_tecnicas_puesto_pkey PRIMARY KEY (id),
   CONSTRAINT visitas_tecnicas_puesto_puesto_id_fkey FOREIGN KEY (puesto_id) REFERENCES public.puestos_trabajo(id),
-  CONSTRAINT visitas_tecnicas_puesto_registrado_por_fkey FOREIGN KEY (registrado_por) REFERENCES public.usuarios_externos(id)
+  CONSTRAINT visitas_tecnicas_puesto_registrado_por_fkey FOREIGN KEY (registrado_por) REFERENCES public.usuarios_externos(id),
+  CONSTRAINT visitas_tecnicas_puesto_documento_generado_id_fkey FOREIGN KEY (documento_generado_id) REFERENCES public.documentos_generados(id),
+  CONSTRAINT visitas_tecnicas_puesto_asignado_a_fkey FOREIGN KEY (asignado_a) REFERENCES public.usuarios_externos(id)
 );
+CREATE TABLE public.sedes (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  nombre VARCHAR(150) NOT NULL,
+  direccion VARCHAR(255) NOT NULL,
+  ciudad VARCHAR(100) NOT NULL,
+  departamento VARCHAR(100),
+  codigo_postal VARCHAR(20),
+  telefono VARCHAR(20),
+  email VARCHAR(150),
+  latitud DECIMAL(10,8),
+  longitud DECIMAL(11,8),
+  activa BOOLEAN DEFAULT true,
+  created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
+  updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now()
+);
+ALTER TABLE public.empleados ADD COLUMN sede_id bigint;
+ALTER TABLE public.empleados ADD CONSTRAINT empleados_sede_id_fkey FOREIGN KEY (sede_id) REFERENCES public.sedes(id);

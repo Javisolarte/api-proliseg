@@ -47,7 +47,8 @@ export class EmpleadosService {
              fp.nombre AS fondo_pension_nombre,
              cp.tipo_contrato AS contrato_personal_nombre, 
              u.nombre_completo AS creado_por_nombre,
-             tcv.nombre AS tipo_curso_vigilancia_nombre
+             tcv.nombre AS tipo_curso_vigilancia_nombre,
+             s.nombre AS sede_nombre
       FROM empleados e
       LEFT JOIN eps ON e.eps_id = eps.id
       LEFT JOIN arl ON e.arl_id = arl.id
@@ -55,6 +56,7 @@ export class EmpleadosService {
       LEFT JOIN contratos_personal cp ON e.contrato_personal_id = cp.id
       LEFT JOIN usuarios_externos u ON e.creado_por = u.id
       LEFT JOIN tipos_curso_vigilancia tcv ON e.tipo_curso_vigilancia_id = tcv.id
+      LEFT JOIN sedes s ON e.sede_id = s.id
       WHERE 1=1
     `;
 
@@ -95,7 +97,8 @@ export class EmpleadosService {
              cp.tipo_contrato AS contrato_personal_nombre,
              u.nombre_completo AS creado_por_nombre,
              uv.nombre_completo AS actualizado_por_nombre,
-             tcv.nombre AS tipo_curso_vigilancia_nombre
+             tcv.nombre AS tipo_curso_vigilancia_nombre,
+             s.nombre AS sede_nombre
       FROM empleados e
       LEFT JOIN eps ON e.eps_id = eps.id
       LEFT JOIN arl ON e.arl_id = arl.id
@@ -104,6 +107,7 @@ export class EmpleadosService {
       LEFT JOIN usuarios_externos u ON e.creado_por = u.id
       LEFT JOIN usuarios_externos uv ON e.actualizado_por = uv.id
       LEFT JOIN tipos_curso_vigilancia tcv ON e.tipo_curso_vigilancia_id = tcv.id
+      LEFT JOIN sedes s ON e.sede_id = s.id
       WHERE e.id = ${id}
       LIMIT 1
     `;
@@ -174,6 +178,12 @@ export class EmpleadosService {
         const file = files.hoja_de_vida[0];
         const path = `${createEmpleadoDto.cedula}_hv.pdf`;
         fileUrls.hoja_de_vida_url = await this.uploadFile(file, 'empleados/hojas_vida', path);
+      }
+      if (files.certificado_bancario?.[0]) {
+        const file = files.certificado_bancario[0];
+        const ext = file.originalname.split('.').pop();
+        const path = `${createEmpleadoDto.cedula}_cert_bancario.${ext}`;
+        fileUrls.certificado_bancario_url = await this.uploadFile(file, 'certificados_bancarios', path);
       }
       if (files.certificados) {
         const certificadosUrls: string[] = [];
@@ -255,6 +265,12 @@ export class EmpleadosService {
         const file = files.hoja_de_vida[0];
         const path = `${existing.cedula}_hv.pdf`;
         fileUrls.hoja_de_vida_url = await this.uploadFile(file, 'empleados/hojas_vida', path);
+      }
+      if (files.certificado_bancario?.[0]) {
+        const file = files.certificado_bancario[0];
+        const ext = file.originalname.split('.').pop();
+        const path = `${existing.cedula}_cert_bancario.${ext}`;
+        fileUrls.certificado_bancario_url = await this.uploadFile(file, 'certificados_bancarios', path);
       }
       if (files.certificados) {
         const certificadosUrls: string[] = existing.certificados_urls || [];

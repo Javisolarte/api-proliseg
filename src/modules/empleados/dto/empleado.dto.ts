@@ -279,6 +279,45 @@ export class CreateEmpleadoDto {
   @IsOptional()
   @IsDateString()
   fecha_vencimiento_curso?: string;
+
+  @ApiProperty({ example: "123456789", required: false, description: "Número de cuenta bancaria" })
+  @IsOptional()
+  @IsString()
+  numero_cuenta?: string;
+
+  @ApiProperty({ example: "Bancolombia", required: false, description: "Entidad bancaria" })
+  @IsOptional()
+  @IsString()
+  entidad_bancaria?: string;
+
+  @ApiProperty({ example: "Ahorros", required: false, description: "Tipo de cuenta" })
+  @IsOptional()
+  @IsString()
+  tipo_cuenta?: string;
+
+  @ApiProperty({ example: "url/certificado.pdf", required: false })
+  @IsOptional()
+  @IsString()
+  certificado_bancario_url?: string;
+
+  @ApiProperty({ example: "data:image/png;base64,iVBORw0K...", required: false, description: "Firma digital en formato base64" })
+  @IsOptional()
+  @IsString()
+  firma_digital_base64?: string;
+
+  @ApiProperty({ example: 1, required: false, description: "ID de la sede" })
+  @IsOptional()
+  @IsInt()
+  @Transform(({ value }) => {
+    if (value === null || value === 'null' || value === '') return null;
+    return parseInt(value);
+  })
+  sede_id?: number | null;
+
+  @ApiProperty({ example: "Guarda de Seguridad", required: false, description: "Cargo Oficial del Empleado" })
+  @IsOptional()
+  @IsString()
+  cargo_oficial?: string;
 }
 
 export class UpdateEmpleadoDto extends PartialType(CreateEmpleadoDto) { }

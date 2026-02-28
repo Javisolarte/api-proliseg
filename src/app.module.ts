@@ -43,6 +43,7 @@ import { NotificacionesModule } from './modules/notificaciones/notificaciones.mo
 import { ArlModule } from './modules/arl/arl.module';
 import { FondosPensionModule } from './modules/fondos_pension/fondos_pension.module';
 import { EpsModule } from './modules/eps/eps.module';
+import { SedesModule } from './modules/sedes/sedes.module';
 import { AsignarTurnosModule } from './modules/asignar_turnos/asignar_turnos.module';
 import { TurnosReemplazosModule } from './modules/turnos_reemplazos/turnos_reemplazos.module';
 import { MinutasModule } from './modules/minutas/minutas.module';
@@ -177,6 +178,7 @@ import { ComplianceModule } from './modules/compliance/compliance.module';
     ArlModule,
     FondosPensionModule,
     EpsModule,
+    SedesModule,
     AsignarTurnosModule,
     TurnosReemplazosModule,
     MinutasModule,
