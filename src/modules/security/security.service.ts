@@ -113,10 +113,10 @@ export class SecurityService {
         const supabase = this.supabaseService.getClient();
 
         let query = supabase
-            .from('sesiones')
-            .select('*, usuarios_externos(nombre_completo, email)')
-            .gte('expires_at', new Date().toISOString())
-            .order('created_at', { ascending: false });
+            .from('sesiones_usuario')
+            .select('*, usuarios_externos(nombre_completo, email, roles(nombre))')
+            .eq('activa', true)
+            .order('fecha_ultimo_acceso', { ascending: false });
 
         if (usuarioId) {
             query = query.eq('usuario_id', usuarioId);
@@ -126,15 +126,20 @@ export class SecurityService {
 
         if (error) throw new BadRequestException('Error al listar sesiones');
 
-        return data;
+        return data.map(s => ({
+            ...s,
+            dispositivo: s.user_agent,
+            last_active: s.fecha_ultimo_acceso,
+            created_at: s.fecha_inicio
+        }));
     }
 
     async cerrarSesion(sesionId: string) {
         const supabase = this.supabaseService.getClient();
 
         const { error } = await supabase
-            .from('sesiones')
-            .delete()
+            .from('sesiones_usuario')
+            .update({ activa: false })
             .eq('id', sesionId);
 
         if (error) throw new BadRequestException('Error al cerrar sesión');
@@ -147,8 +152,8 @@ export class SecurityService {
         const supabase = this.supabaseService.getClient();
 
         const { error } = await supabase
-            .from('sesiones')
-            .delete()
+            .from('sesiones_usuario')
+            .update({ activa: false })
             .eq('usuario_id', usuarioId);
 
         if (error) throw new BadRequestException('Error al cerrar sesiones');
@@ -161,10 +166,10 @@ export class SecurityService {
         const supabase = this.supabaseService.getClient();
 
         const { data } = await supabase
-            .from('sesiones')
+            .from('sesiones_usuario')
             .select('*')
-            .eq('token_hash', tokenHash)
-            .gte('expires_at', new Date().toISOString())
+            .eq('token_sesion', tokenHash)
+            .eq('activa', true)
             .single();
 
         return !!data;
