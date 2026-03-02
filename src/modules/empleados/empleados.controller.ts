@@ -136,6 +136,7 @@ Todos los archivos se guardan directamente en sus respectivos buckets de Supabas
         foto_perfil: { type: 'string', format: 'binary', description: '📸 Foto de perfil (JPG, PNG)' },
         cedula_pdf: { type: 'string', format: 'binary', description: '📄 Cédula escaneada (PDF)' },
         hoja_de_vida: { type: 'string', format: 'binary', description: '📋 Hoja de vida (PDF)' },
+        certificado_bancario: { type: 'string', format: 'binary', description: '🏦 Certificado bancario (PDF)' },
         certificados: { type: 'array', items: { type: 'string', format: 'binary' }, description: '🎓 Certificados (hasta 5 PDFs)' },
         documentos_adicionales: { type: 'array', items: { type: 'string', format: 'binary' }, description: '📎 Documentos adicionales (hasta 5 PDFs)' },
       },
@@ -147,6 +148,7 @@ Todos los archivos se guardan directamente en sus respectivos buckets de Supabas
       { name: "foto_perfil", maxCount: 1 },
       { name: "cedula_pdf", maxCount: 1 },
       { name: "hoja_de_vida", maxCount: 1 },
+      { name: "certificado_bancario", maxCount: 1 },
       { name: "certificados", maxCount: 5 },
       { name: "documentos_adicionales", maxCount: 5 },
     ])
@@ -160,6 +162,7 @@ Todos los archivos se guardan directamente en sus respectivos buckets de Supabas
       foto_perfil?: any[];
       cedula_pdf?: any[];
       hoja_de_vida?: any[];
+      certificado_bancario?: any[];
       certificados?: any[];
       documentos_adicionales?: any[];
     },
@@ -218,6 +221,7 @@ Todos los archivos se guardan directamente en sus respectivos buckets de Supabas
         foto_perfil: { type: 'string', format: 'binary', description: '📸 Nueva foto de perfil' },
         cedula_pdf: { type: 'string', format: 'binary', description: '📄 Nueva cédula' },
         hoja_de_vida: { type: 'string', format: 'binary', description: '📋 Nueva hoja de vida' },
+        certificado_bancario: { type: 'string', format: 'binary', description: '🏦 Nuevo certificado bancario' },
         certificados: { type: 'array', items: { type: 'string', format: 'binary' }, description: '🎓 Nuevos certificados (se agregan)' },
         documentos_adicionales: { type: 'array', items: { type: 'string', format: 'binary' }, description: '📎 Nuevos documentos (se agregan)' },
       }
@@ -228,6 +232,7 @@ Todos los archivos se guardan directamente en sus respectivos buckets de Supabas
       { name: "foto_perfil", maxCount: 1 },
       { name: "cedula_pdf", maxCount: 1 },
       { name: "hoja_de_vida", maxCount: 1 },
+      { name: "certificado_bancario", maxCount: 1 },
       { name: "certificados", maxCount: 5 },
       { name: "documentos_adicionales", maxCount: 5 },
     ])
@@ -241,6 +246,7 @@ Todos los archivos se guardan directamente en sus respectivos buckets de Supabas
       foto_perfil?: any[];
       cedula_pdf?: any[];
       hoja_de_vida?: any[];
+      certificado_bancario?: any[];
       certificados?: any[];
       documentos_adicionales?: any[];
     },
