@@ -699,6 +699,28 @@ export class AsignarTurnosService {
   async eliminarTurnos(subpuesto_id: number, desde: string, hasta: string) {
     const supabase = this.supabaseService.getClient();
 
+    // 0. LIMPIEZA DE DEPENDENCIAS: Desvincular de rutas de supervisión para evitar error FK
+    try {
+      const { data: turnosAEliminar } = await supabase
+        .from('turnos')
+        .select('id')
+        .eq('subpuesto_id', subpuesto_id)
+        .gte('fecha', desde)
+        .lte('fecha', hasta);
+
+      if (turnosAEliminar && turnosAEliminar.length > 0) {
+        const ids = turnosAEliminar.map(t => t.id);
+        await supabase
+          .from('rutas_supervision_asignacion')
+          .update({ turno_id: null })
+          .in('turno_id', ids);
+
+        this.logger.log(`🔗 Desvinculados ${ids.length} turnos de rutas de supervisión`);
+      }
+    } catch (err) {
+      this.logger.warn(`⚠️ Error al desvincular rutas de supervisión: ${err.message}`);
+    }
+
     const { data, error } = await supabase
       .from('turnos')
       .delete()
@@ -854,6 +876,24 @@ export class AsignarTurnosService {
   async eliminarTodosTurnos(subpuesto_id: number) {
     const supabase = this.supabaseService.getClient();
     this.logger.warn(`🚨 ELIMINANDO TODOS LOS TURNOS DEL SUBPUESTO ${subpuesto_id}`);
+
+    // 0. LIMPIEZA DE DEPENDENCIAS
+    try {
+      const { data: turnosAEliminar } = await supabase
+        .from('turnos')
+        .select('id')
+        .eq('subpuesto_id', subpuesto_id);
+
+      if (turnosAEliminar && turnosAEliminar.length > 0) {
+        const ids = turnosAEliminar.map(t => t.id);
+        await supabase
+          .from('rutas_supervision_asignacion')
+          .update({ turno_id: null })
+          .in('turno_id', ids);
+      }
+    } catch (err) {
+      this.logger.warn(`⚠️ Error al desvincular rutas de supervisión: ${err.message}`);
+    }
 
     const { data, error } = await supabase
       .from('turnos')
