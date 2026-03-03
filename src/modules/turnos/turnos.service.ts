@@ -23,8 +23,9 @@ export class TurnosService {
         subpuesto:subpuesto_id(id, nombre)
       `
       )
+      .eq("activo", true)
       .order("fecha", { ascending: true })
-      .limit(20000); // Aumentar límite para vista global
+      .limit(50000); // Aumentar límite para vista global
 
     if (filters?.fecha) {
       query = query.eq("fecha", filters.fecha);
