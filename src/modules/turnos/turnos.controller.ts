@@ -31,10 +31,12 @@ export class TurnosController {
   @ApiOperation({ summary: "Listar todos los turnos (con filtros opcionales)" })
   findAll(
     @Query("fecha") fecha?: string,
+    @Query("fecha_inicio") fecha_inicio?: string,
+    @Query("fecha_fin") fecha_fin?: string,
     @Query("empleado_id") empleadoId?: number,
     @Query("puesto_id") puestoId?: number
   ) {
-    return this.turnosService.findAll({ fecha, empleadoId, puestoId });
+    return this.turnosService.findAll({ fecha, fecha_inicio, fecha_fin, empleadoId, puestoId });
   }
 
   // ✅ Obtener todos los turnos de un empleado específico

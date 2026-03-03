@@ -20,6 +20,7 @@ import { TurnosReemplazosService } from "./turnos_reemplazos.service";
 import {
   CreateTurnoReemplazoDto,
   UpdateTurnoReemplazoDto,
+  CreateTurnoReemplazoRangoDto
 } from "./dto/turnos_reemplazos.dto";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { PermissionsGuard } from "../auth/guards/permissions.guard";
@@ -88,6 +89,18 @@ export class TurnosReemplazosController {
   })
   async create(@Body() dto: CreateTurnoReemplazoDto): Promise<any> {
     return this.service.create(dto);
+  }
+
+  /**
+   * 📅 Crear reemplazos por rango (Bulk)
+   */
+  @Post("bulk-range")
+  @RequirePermissions("turnos_reemplazos")
+  @ApiOperation({ summary: "Crear múltiples reemplazos por rango de fechas (ej. Vacaciones)" })
+  @ApiBody({ type: CreateTurnoReemplazoRangoDto })
+  @ApiResponse({ status: 201, description: "Reemplazos creados correctamente" })
+  async createRange(@Body() dto: CreateTurnoReemplazoRangoDto) {
+    return this.service.createRange(dto);
   }
 
   /**

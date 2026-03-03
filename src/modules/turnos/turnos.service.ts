@@ -9,7 +9,7 @@ export class TurnosService {
   constructor(private readonly supabaseService: SupabaseService) { }
 
   // ✅ Obtener todos los turnos (con filtros opcionales)
-  async findAll(filters?: { fecha?: string; empleadoId?: number; puestoId?: number }) {
+  async findAll(filters?: { fecha?: string; fecha_inicio?: string; fecha_fin?: string; empleadoId?: number; puestoId?: number }) {
     const supabase = this.supabaseService.getClient();
     this.logger.debug(`🟢 Ejecutando findAll con filtros: ${JSON.stringify(filters)}`);
 
@@ -28,6 +28,14 @@ export class TurnosService {
     if (filters?.fecha) {
       query = query.eq("fecha", filters.fecha);
       this.logger.debug(`📅 Filtro por fecha: ${filters.fecha}`);
+    }
+    if (filters?.fecha_inicio) {
+      query = query.gte("fecha", filters.fecha_inicio);
+      this.logger.debug(`📅 Filtro por fecha_inicio: ${filters.fecha_inicio}`);
+    }
+    if (filters?.fecha_fin) {
+      query = query.lte("fecha", filters.fecha_fin);
+      this.logger.debug(`📅 Filtro por fecha_fin: ${filters.fecha_fin}`);
     }
     if (filters?.empleadoId) {
       query = query.eq("empleado_id", filters.empleadoId);

@@ -5,7 +5,7 @@ import {
   Logger,
 } from "@nestjs/common";
 import { SupabaseService } from "../supabase/supabase.service";
-import type { CreateTurnoReemplazoDto, UpdateTurnoReemplazoDto } from "./dto/turnos_reemplazos.dto";
+import { CreateTurnoReemplazoDto, UpdateTurnoReemplazoDto, CreateTurnoReemplazoRangoDto } from "./dto/turnos_reemplazos.dto";
 import { IaService } from "../ia/ia.service";
 
 @Injectable()
@@ -278,6 +278,118 @@ export class TurnosReemplazosService {
         fecha: turnoOriginal.fecha,
         horario: `${turnoOriginal.hora_inicio} - ${turnoOriginal.hora_fin}`,
       }
+    };
+  }
+
+  /**
+   * 📅 Crear reemplazos por rango de fechas (Bulk)
+   * Útil para Vacaciones, Incapacidades largas, etc.
+   */
+  async createRange(dto: CreateTurnoReemplazoRangoDto) {
+    const supabase = this.supabaseService.getClient();
+    this.logger.log(`📅 Iniciando reemplazo masivo por rango: ${dto.fecha_inicio} a ${dto.fecha_fin}`);
+
+    // 1️⃣ Obtener todos los turnos del empleado original en el rango
+    const { data: turnosOriginales, error: errorTurnos } = await supabase
+      .from("turnos")
+      .select("*")
+      .eq("empleado_id", dto.empleado_original_id)
+      .gte("fecha", dto.fecha_inicio)
+      .lte("fecha", dto.fecha_fin)
+      .neq("estado_turno", "cumplido"); // Solo turnos no cumplidos
+
+    if (errorTurnos) {
+      throw new BadRequestException(`Error al buscar turnos: ${errorTurnos.message}`);
+    }
+
+    if (!turnosOriginales || turnosOriginales.length === 0) {
+      this.logger.warn(`No se encontraron turnos pendientes para el empleado ${dto.empleado_original_id} en el rango.`);
+      return { mensaje: "No se encontraron turnos para reemplazar en este rango", procesados: 0 };
+    }
+
+    // 2️⃣ Validar empleado de reemplazo
+    const { data: empleadoReemplazo } = await supabase
+      .from("empleados")
+      .select("id, nombre_completo, activo")
+      .eq("id", dto.empleado_reemplazo_id)
+      .single();
+
+    if (!empleadoReemplazo || !empleadoReemplazo.activo) {
+      throw new BadRequestException("El empleado de reemplazo no existe o no está activo");
+    }
+
+    const { data: empleadoOriginal } = await supabase
+      .from("empleados")
+      .select("nombre_completo")
+      .eq("id", dto.empleado_original_id)
+      .single();
+
+    let exitosos = 0;
+    let errores = 0;
+
+    // 3️⃣ Procesar cada turno
+    for (const turno of turnosOriginales) {
+      try {
+        // Verificar conflicto para el reemplazante en este turno específico
+        const { data: conflicto } = await supabase
+          .from("turnos")
+          .select("id")
+          .eq("empleado_id", dto.empleado_reemplazo_id)
+          .eq("fecha", turno.fecha)
+          .or(`and(hora_inicio.lte.${turno.hora_fin},hora_fin.gte.${turno.hora_inicio})`);
+
+        if (conflicto && conflicto.length > 0) {
+          this.logger.warn(`Salteando turno ${turno.id} por conflicto de horario para el reemplazante`);
+          errores++;
+          continue;
+        }
+
+        // Crear registro en turnos_reemplazos
+        await supabase.from("turnos_reemplazos").insert({
+          turno_original_id: turno.id,
+          empleado_reemplazo_id: dto.empleado_reemplazo_id,
+          motivo: dto.motivo,
+          autorizado_por: dto.autorizado_por,
+          estado: "aprobado",
+          fecha_autorizacion: new Date().toISOString(),
+        });
+
+        const observationOriginalAuto = `reemplazo masivo (${dto.motivo}) al señor ${empleadoOriginal?.nombre_completo} por ${empleadoReemplazo.nombre_completo}`;
+
+        // Actualizar turno original
+        await supabase.from("turnos")
+          .update({
+            es_reemplazo: true,
+            observaciones: turno.observaciones ? `${turno.observaciones} | ${observationOriginalAuto}` : observationOriginalAuto,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", turno.id);
+
+        // Crear nuevo turno para el reemplazante
+        await supabase.from("turnos").insert({
+          puesto_id: turno.puesto_id,
+          subpuesto_id: turno.subpuesto_id,
+          empleado_id: dto.empleado_reemplazo_id,
+          fecha: turno.fecha,
+          hora_inicio: turno.hora_inicio,
+          hora_fin: turno.hora_fin,
+          tipo_turno: turno.tipo_turno,
+          estado_turno: turno.estado_turno,
+          observaciones: `Cubre reemplazo masivo (${dto.motivo}) de ${empleadoOriginal?.nombre_completo}`,
+        });
+
+        exitosos++;
+      } catch (e) {
+        this.logger.error(`Error procesando reemplazo para turno ${turno.id}: ${e.message}`);
+        errores++;
+      }
+    }
+
+    return {
+      mensaje: `✅ Reemplazo masivo completado`,
+      exitosos,
+      errores,
+      total_encontrados: turnosOriginales.length
     };
   }
 
