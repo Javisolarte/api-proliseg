@@ -270,35 +270,42 @@ export class AsignarTurnosService {
 
     if (tipoProyeccion === 'ciclico') {
       const offsetPorEmpleado = Math.floor(cicloLength / empleados.length);
-      this.logger.debug(`📊 Ciclo de ${cicloLength} días. Offset base por empleado: ${offsetPorEmpleado}`);
+      this.logger.debug(`📊 Ciclo de ${cicloLength} días. Guardas: ${empleados.length}. Offset por guarda: ${offsetPorEmpleado}`);
 
-      // Usar empleadosRaw directamente para asegurar acceso a fase_inicial
-      empleadosRaw.forEach((emp, index) => {
-        const empleado = emp.empleado;
+      // Log de depuración para ver qué está llegando de la base de datos
+      if (empleadosRaw.length > 0) {
+        this.logger.debug(`🔍 Datos de asignación (Raw): ${JSON.stringify(empleadosRaw.map(r => ({ id: r.empleado_id, fase: r.fase_inicial, fecha: r.fecha_inicio_patron })))}`);
+      }
+
+      empleados.forEach((empleado: Empleado, index) => {
+        // Buscar la asignación correspondiente en empleadosRaw
+        const empRaw = empleadosRaw.find(e => e.empleado_id === empleado.id);
         let offsetPersonalizado: number | null = null;
 
-        // Limpieza y validación de fase_inicial (convertir a número por si acaso)
-        const faseIni = emp.fase_inicial !== null ? Number(emp.fase_inicial) : null;
+        // Limpieza y validación de fase_inicial
+        const faseIni = (empRaw && empRaw.fase_inicial !== null && empRaw.fase_inicial !== undefined)
+          ? parseInt(empRaw.fase_inicial.toString(), 10)
+          : null;
 
-        // PRIORIDAD 1: fase_inicial → El admin eligió explícitamente la fase del ciclo
+        // PRIORIDAD 1: fase_inicial → Configurada por el admin
         if (faseIni !== null && !isNaN(faseIni)) {
           offsetPersonalizado = faseIni % cicloLength;
-          this.logger.log(`👤 EMPLEADO: ${empleado.nombre_completo} (ID: ${emp.empleado_id}) -> USANDO fase_inicial: ${faseIni}. Offset final: ${offsetPersonalizado}`);
+          this.logger.log(`👤 EMPLEADO: ${empleado.nombre_completo} (ID: ${empleado.id}) -> FASE MANUAL: ${faseIni} -> OFFSET: ${offsetPersonalizado}`);
         }
-        // PRIORIDAD 2: fecha_inicio_patron → Calcula el offset basado en la fecha
-        else if (emp.fecha_inicio_patron) {
-          const fechaInicioPatronEmpleado = new Date(emp.fecha_inicio_patron);
+        // PRIORIDAD 2: fecha_inicio_patron → Cálculo por fecha
+        else if (empRaw && empRaw.fecha_inicio_patron) {
+          const fechaInicioPatronEmpleado = new Date(empRaw.fecha_inicio_patron);
           fechaInicioPatronEmpleado.setHours(0, 0, 0, 0);
           const diffTime = fechaBase.getTime() - fechaInicioPatronEmpleado.getTime();
           const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
           offsetPersonalizado = ((diffDays % cicloLength) + cicloLength) % cicloLength;
-          this.logger.log(`👤 EMPLEADO: ${empleado.nombre_completo} -> Offset calculado desde fecha (${emp.fecha_inicio_patron}): ${offsetPersonalizado}`);
+          this.logger.log(`👤 EMPLEADO: ${empleado.nombre_completo} -> OFFSET FECHA: ${offsetPersonalizado}`);
         }
 
         const offsetInicial = offsetPersonalizado !== null ? offsetPersonalizado : ((index * offsetPorEmpleado) % cicloLength);
 
         if (offsetPersonalizado === null) {
-          this.logger.log(`👤 EMPLEADO: ${empleado.nombre_completo} -> USANDO OFFSET AUTOMÁTICO: ${offsetInicial} (Índice: ${index})`);
+          this.logger.log(`👤 EMPLEADO: ${empleado.nombre_completo} -> OFFSET AUTOMÁTICO: ${offsetInicial}`);
         }
 
         for (let dia = 0; dia < numeroDeDiasAGenerar; dia++) {

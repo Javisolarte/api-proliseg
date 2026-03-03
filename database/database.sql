@@ -56,6 +56,7 @@ CREATE TABLE public.asignacion_guardas_puesto (
   rol_puesto character varying DEFAULT 'titular'::character varying CHECK (rol_puesto::text = ANY (ARRAY['titular'::character varying, 'relevante'::character varying]::text[])),
   patron_descanso character varying,
   fecha_inicio_patron date DEFAULT CURRENT_DATE,
+  fase_inicial integer,
   CONSTRAINT asignacion_guardas_puesto_pkey PRIMARY KEY (id),
   CONSTRAINT asignacion_guardas_puesto_empleado_id_fkey FOREIGN KEY (empleado_id) REFERENCES public.empleados(id),
   CONSTRAINT asignacion_guardas_puesto_puesto_id_fkey FOREIGN KEY (puesto_id) REFERENCES public.puestos_trabajo(id),
@@ -681,6 +682,7 @@ CREATE TABLE public.empleados (
   entidad_bancaria character varying,
   tipo_cuenta character varying,
   certificado_bancario_url text,
+  sede_id integer,
   CONSTRAINT empleados_pkey PRIMARY KEY (id),
   CONSTRAINT empleados_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.usuarios_externos(id),
   CONSTRAINT empleados_eps_id_fkey FOREIGN KEY (eps_id) REFERENCES public.eps(id),
@@ -692,7 +694,8 @@ CREATE TABLE public.empleados (
   CONSTRAINT fk_empleado_contrato_activo FOREIGN KEY (contrato_personal_id) REFERENCES public.contratos_personal(id),
   CONSTRAINT fk_empleados_tipo_vigilante FOREIGN KEY (tipo_vigilante_id) REFERENCES public.tipos_vigilante(id),
   CONSTRAINT fk_empleados_tipo_curso_vigilancia FOREIGN KEY (tipo_curso_vigilancia_id) REFERENCES public.tipos_curso_vigilancia(id),
-  CONSTRAINT empleados_deleted_by_fkey FOREIGN KEY (deleted_by) REFERENCES public.usuarios_externos(id)
+  CONSTRAINT empleados_deleted_by_fkey FOREIGN KEY (deleted_by) REFERENCES public.usuarios_externos(id),
+  CONSTRAINT empleados_sede_id_fkey FOREIGN KEY (sede_id) REFERENCES public.sedes(id)
 );
 CREATE TABLE public.eps (
   id integer NOT NULL DEFAULT nextval('eps_id_seq'::regclass),
@@ -1755,6 +1758,22 @@ CREATE TABLE public.salarios (
   created_at timestamp without time zone DEFAULT now(),
   CONSTRAINT salarios_pkey PRIMARY KEY (id)
 );
+CREATE TABLE public.sedes (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  nombre character varying NOT NULL,
+  direccion character varying NOT NULL,
+  ciudad character varying NOT NULL,
+  departamento character varying,
+  codigo_postal character varying,
+  telefono character varying,
+  email character varying,
+  latitud numeric,
+  longitud numeric,
+  activa boolean DEFAULT true,
+  created_at timestamp without time zone DEFAULT now(),
+  updated_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT sedes_pkey PRIMARY KEY (id)
+);
 CREATE TABLE public.sesiones (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   usuario_id integer,
@@ -2124,20 +2143,3 @@ CREATE TABLE public.visitas_tecnicas_puesto (
   CONSTRAINT visitas_tecnicas_puesto_documento_generado_id_fkey FOREIGN KEY (documento_generado_id) REFERENCES public.documentos_generados(id),
   CONSTRAINT visitas_tecnicas_puesto_asignado_a_fkey FOREIGN KEY (asignado_a) REFERENCES public.usuarios_externos(id)
 );
-CREATE TABLE public.sedes (
-  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  nombre VARCHAR(150) NOT NULL,
-  direccion VARCHAR(255) NOT NULL,
-  ciudad VARCHAR(100) NOT NULL,
-  departamento VARCHAR(100),
-  codigo_postal VARCHAR(20),
-  telefono VARCHAR(20),
-  email VARCHAR(150),
-  latitud DECIMAL(10,8),
-  longitud DECIMAL(11,8),
-  activa BOOLEAN DEFAULT true,
-  created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
-  updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now()
-);
-ALTER TABLE public.empleados ADD COLUMN sede_id bigint;
-ALTER TABLE public.empleados ADD CONSTRAINT empleados_sede_id_fkey FOREIGN KEY (sede_id) REFERENCES public.sedes(id);
