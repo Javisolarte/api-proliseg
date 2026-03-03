@@ -270,7 +270,26 @@ export class AsignarTurnosService {
       const offsetPorEmpleado = Math.floor(cicloLength / empleados.length);
 
       empleados.forEach((empleado: Empleado, empleadoIndex) => {
-        const offsetInicial = (empleadoIndex * offsetPorEmpleado) % cicloLength;
+        const empRaw = empleadosRaw.find(e => e.empleado_id === empleado.id);
+
+        let offsetPersonalizado: number | null = null;
+        if (empRaw && empRaw.fecha_inicio_patron) {
+          const fechaInicioPatronEmpleado = new Date(empRaw.fecha_inicio_patron);
+          fechaInicioPatronEmpleado.setHours(0, 0, 0, 0);
+          const diffTime = fechaBase.getTime() - fechaInicioPatronEmpleado.getTime();
+          const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+          // diffDays representa cuántos días han pasado desde la fecha_inicio_patron hasta el día 1 del mes (fechaBase).
+          // Para encontrar en qué día del ciclo (0 a cicloLength-1) estamos en fechaBase:
+          // Si el ciclo es de 4 días (0=D, 1=N, 2=Z, 3=Z) y diffDays=2, entonces (2 % 4) = 2 (estado Z)
+          // Nota: % de número negativo en TS puede ser problemático, así que ajustamos:
+          offsetPersonalizado = ((diffDays % cicloLength) + cicloLength) % cicloLength;
+        }
+
+        const offsetInicial = offsetPersonalizado !== null ? offsetPersonalizado : ((empleadoIndex * offsetPorEmpleado) % cicloLength);
+
+        if (offsetPersonalizado !== null) {
+          this.logger.log(`👤 Empleado ${empleado.nombre_completo} usa offset personalizado ${offsetPersonalizado} basado en su fecha de inicio.`);
+        }
 
         for (let dia = 0; dia < numeroDeDiasAGenerar; dia++) {
           // Calcular fecha del turno (Siempre desde el día 1 para mantener el ciclo consistente)
