@@ -269,148 +269,173 @@ export class AsignarTurnosService {
     this.logger.log(`⚙️ Estrategia: ${tipoProyeccion}`);
 
     if (tipoProyeccion === 'ciclico') {
-      const offsetPorEmpleado = Math.floor(cicloLength / empleados.length);
-      this.logger.debug(`📊 Ciclo de ${cicloLength} días. Guardas: ${empleados.length}. Offset por guarda: ${offsetPorEmpleado}`);
+      this.logger.log('🔄 Usando Estrategia Cíclica (Rotativa)');
 
-      // Log de depuración para ver qué está llegando de la base de datos
-      if (empleadosRaw.length > 0) {
-        this.logger.debug(`🔍 Datos de asignación (Raw): ${JSON.stringify(empleadosRaw.map(r => ({ id: r.empleado_id, fase: r.fase_inicial, fecha: r.fecha_inicio_patron })))}`);
-      }
+      // 1. Separar equipo por roles
+      const equipo = (empleadosRaw || []).sort((a, b) => a.id - b.id);
+      const titulares = equipo.filter(e => !e.rol_puesto || e.rol_puesto === 'titular');
+      const relevantes = equipo.filter(e => e.rol_puesto === 'relevante');
 
-      empleados.forEach((empleado: Empleado, index) => {
-        // Buscar la asignación correspondiente en empleadosRaw
-        const empRaw = empleadosRaw.find(e => e.empleado_id === empleado.id);
+      // Calcular offset automático base si no hay manual (solo sobre titulares)
+      const offsetPorEmpleado = titulares.length > 0 ? Math.floor(cicloLength / titulares.length) : 0;
+
+      // Mapa para rastrear huecos por día: { "[fecha]_[plaza]": { horaInc, horaFin, tipo, orden } }
+      const huecosPorDia = new Map<string, any>();
+
+      // 2. Generar turnos para TITULARES
+      titulares.forEach((empRaw, index) => {
+        const empleado = empRaw.empleado;
         let offsetPersonalizado: number | null = null;
 
         // Limpieza y validación de fase_inicial
-        const faseIni = (empRaw && empRaw.fase_inicial !== null && empRaw.fase_inicial !== undefined)
+        const faseIni = (empRaw.fase_inicial !== null && empRaw.fase_inicial !== undefined)
           ? parseInt(empRaw.fase_inicial.toString(), 10)
           : null;
 
-        // PRIORIDAD 1: fase_inicial → Configurada por el admin
         if (faseIni !== null && !isNaN(faseIni)) {
           offsetPersonalizado = faseIni % cicloLength;
-          this.logger.log(`👤 EMPLEADO: ${empleado.nombre_completo} (ID: ${empleado.id}) -> FASE MANUAL: ${faseIni} -> OFFSET: ${offsetPersonalizado}`);
-        }
-        // PRIORIDAD 2: fecha_inicio_patron → Cálculo por fecha
-        else if (empRaw && empRaw.fecha_inicio_patron) {
+          this.logger.log(`👤 TITULAR: ${empleado.nombre_completo} -> FASE MANUAL: ${faseIni} -> OFFSET: ${offsetPersonalizado}`);
+        } else if (empRaw.fecha_inicio_patron) {
           const fechaInicioPatronEmpleado = new Date(empRaw.fecha_inicio_patron);
           fechaInicioPatronEmpleado.setHours(0, 0, 0, 0);
           const diffTime = fechaBase.getTime() - fechaInicioPatronEmpleado.getTime();
           const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
           offsetPersonalizado = ((diffDays % cicloLength) + cicloLength) % cicloLength;
-          this.logger.log(`👤 EMPLEADO: ${empleado.nombre_completo} -> OFFSET FECHA: ${offsetPersonalizado}`);
+          this.logger.log(`👤 TITULAR: ${empleado.nombre_completo} -> OFFSET FECHA: ${offsetPersonalizado}`);
         }
 
         const offsetInicial = offsetPersonalizado !== null ? offsetPersonalizado : ((index * offsetPorEmpleado) % cicloLength);
 
         if (offsetPersonalizado === null) {
-          this.logger.log(`👤 EMPLEADO: ${empleado.nombre_completo} -> OFFSET AUTOMÁTICO: ${offsetInicial}`);
+          this.logger.log(`👤 TITULAR: ${empleado.nombre_completo} -> OFFSET AUTOMÁTICO: ${offsetInicial}`);
         }
 
         for (let dia = 0; dia < numeroDeDiasAGenerar; dia++) {
-          // Calcular fecha del turno (Siempre desde el día 1 para mantener el ciclo consistente)
           const fechaTurno = new Date(fechaBase);
           fechaTurno.setDate(fechaTurno.getDate() + dia);
+          const fechaStr = fechaTurno.toISOString().split('T')[0];
 
-          // Si no estamos rellenando desde el inicio, saltar días anteriores a la fecha solicitada
+          // Detección de salto de día para inserción parcial
+          let skipInsert = false;
           if (!fillFromMonthStart) {
-            const fechaTurnoCheck = new Date(fechaTurno);
-            fechaTurnoCheck.setHours(0, 0, 0, 0);
-            if (fechaTurnoCheck < fechaInicioInsert) {
-              continue;
-            }
+            const check = new Date(fechaTurno); check.setHours(0, 0, 0, 0);
+            if (check < fechaInicioInsert) skipInsert = true;
           }
 
-          const diaSemana = fechaTurno.getDay(); // 0 = Domingo, 1 = Lunes...
+          const diaSemana = fechaTurno.getDay();
+          const diaDelCiclo = (dia + offsetInicial) % cicloLength;
+          const detalle = detalles[diaDelCiclo];
+          const tipoTurno = detalle.tipo?.toUpperCase() || 'NORMAL';
+          const esDescanso = tipoTurno === 'DESCANSO' || tipoTurno === 'Z';
+          const plazaNo = (index % guardasActivos) + 1;
 
           if (isOficina) {
-            // --- LÓGICA HORARIO DE OFICINA ---
-            // Domingo (0) -> Descanso (no se genera turno)
+            // LÓGICA OFICINA (No usa Relevantes Cíclicos usualmente, pero se mantiene coherencia)
             if (diaSemana === 0) continue;
 
-            // Sabado (6) -> 8:00 - 12:00
+            const turnosOficina: { hora_inicio: string; hora_fin: string; }[] = [];
             if (diaSemana === 6) {
+              turnosOficina.push({ hora_inicio: '08:00:00', hora_fin: '12:00:00' });
+            } else {
+              turnosOficina.push({ hora_inicio: '08:00:00', hora_fin: '12:00:00' });
+              turnosOficina.push({ hora_inicio: '14:00:00', hora_fin: '18:00:00' });
+            }
+
+            if (!skipInsert) {
+              turnosOficina.forEach(t => {
+                turnosParaInsertar.push({
+                  empleado_id: empleado.id,
+                  puesto_id: subpuesto.puesto_id,
+                  subpuesto_id: subpuesto_id,
+                  fecha: fechaStr,
+                  hora_inicio: t.hora_inicio,
+                  hora_fin: t.hora_fin,
+                  tipo_turno: 'NORMAL',
+                  configuracion_id: subpuesto.configuracion_id,
+                  orden_en_ciclo: diaSemana,
+                  plaza_no: 1,
+                  grupo: 'OFICINA',
+                  asignado_por,
+                  estado_turno: 'programado',
+                });
+              });
+            }
+          } else {
+            // LÓGICA CÍCLICA REGULAR
+            if (esDescanso) {
+              const key = `${fechaStr}_${plazaNo}`;
+              if (!huecosPorDia.has(key)) {
+                // Buscamos un horario válido para este hueco. 
+                // Si el detalle tiene 00:00:00, intentamos buscar el horario de la misma plaza 
+                // en otros días del ciclo si fuera posible, o simplemente tomamos el del detalle 
+                // si el admin configuró el horario deseado en el día de "Z".
+                huecosPorDia.set(key, {
+                  fecha: fechaStr,
+                  plaza: plazaNo,
+                  hora_inicio: detalle.hora_inicio,
+                  hora_fin: detalle.hora_fin,
+                  orden: detalle.orden
+                });
+              }
+            }
+
+            if (!skipInsert) {
               turnosParaInsertar.push({
                 empleado_id: empleado.id,
                 puesto_id: subpuesto.puesto_id,
                 subpuesto_id: subpuesto_id,
-                fecha: fechaTurno.toISOString().split('T')[0],
-                hora_inicio: '08:00:00',
-                hora_fin: '12:00:00',
-                tipo_turno: 'NORMAL',
+                fecha: fechaStr,
+                hora_inicio: esDescanso ? null : detalle.hora_inicio,
+                hora_fin: esDescanso ? null : detalle.hora_fin,
+                tipo_turno: tipoTurno,
                 configuracion_id: subpuesto.configuracion_id,
-                orden_en_ciclo: diaSemana,
-                plaza_no: 1,
-                grupo: 'OFICINA',
+                orden_en_ciclo: detalle.orden,
+                plaza_no: plazaNo,
+                grupo: `GRUPO_${Math.floor(index / guardasActivos) + 1}`,
                 asignado_por,
                 estado_turno: 'programado',
               });
-              continue;
             }
-
-            // Lunes (1) a Viernes (5) -> 8-12 y 14-18
-            // Turno AM
-            turnosParaInsertar.push({
-              empleado_id: empleado.id,
-              puesto_id: subpuesto.puesto_id,
-              subpuesto_id: subpuesto_id,
-              fecha: fechaTurno.toISOString().split('T')[0],
-              hora_inicio: '08:00:00',
-              hora_fin: '12:00:00',
-              tipo_turno: 'NORMAL',
-              configuracion_id: subpuesto.configuracion_id,
-              orden_en_ciclo: diaSemana,
-              plaza_no: 1,
-              grupo: 'OFICINA',
-              asignado_por,
-              estado_turno: 'programado',
-            });
-
-            // Turno PM
-            turnosParaInsertar.push({
-              empleado_id: empleado.id,
-              puesto_id: subpuesto.puesto_id,
-              subpuesto_id: subpuesto_id,
-              fecha: fechaTurno.toISOString().split('T')[0],
-              hora_inicio: '14:00:00',
-              hora_fin: '18:00:00',
-              tipo_turno: 'NORMAL',
-              configuracion_id: subpuesto.configuracion_id,
-              orden_en_ciclo: diaSemana,
-              plaza_no: 1,
-              grupo: 'OFICINA',
-              asignado_por,
-              estado_turno: 'programado',
-            });
-          } else {
-            // --- LÓGICA CICLO REGULAR ---
-            const diaDelCiclo = (dia + offsetInicial) % cicloLength;
-            const detalle = detalles[diaDelCiclo];
-
-            const tipoTurno = detalle.tipo?.toUpperCase() || 'NORMAL';
-            const esDescanso = tipoTurno === 'DESCANSO' || tipoTurno === 'Z';
-
-            const turno = {
-              empleado_id: empleado.id,
-              puesto_id: subpuesto.puesto_id,
-              subpuesto_id: subpuesto_id,
-              fecha: fechaTurno.toISOString().split('T')[0],
-              hora_inicio: esDescanso ? null : detalle.hora_inicio,
-              hora_fin: esDescanso ? null : detalle.hora_fin,
-              tipo_turno: tipoTurno,
-              configuracion_id: subpuesto.configuracion_id,
-              orden_en_ciclo: detalle.orden,
-              plaza_no: index + 1,
-              grupo: `GRUPO_${Math.floor(index / guardasActivos) + 1}`,
-              asignado_por,
-              estado_turno: 'programado',
-            };
-
-            turnosParaInsertar.push(turno);
           }
         }
       });
+
+      // 3. Generar turnos para RELEVANTES (Llenar huecos)
+      if (relevantes.length > 0 && huecosPorDia.size > 0 && !isOficina) {
+        this.logger.log(`🔍 Llenando ${huecosPorDia.size} huecos con ${relevantes.length} relevantes`);
+
+        const huecosOrdenados = Array.from(huecosPorDia.values()).sort((a, b) => {
+          if (a.fecha !== b.fecha) return a.fecha.localeCompare(b.fecha);
+          return a.plaza - b.plaza;
+        });
+
+        huecosOrdenados.forEach((hueco, hIndex) => {
+          const relevante = relevantes[hIndex % relevantes.length];
+          const fechaHueco = new Date(hueco.fecha + 'T00:00:00');
+          if (!fillFromMonthStart && fechaHueco < fechaInicioInsert) return;
+
+          // DETERMINAR HORARIO: Si la config tiene 00:00:00 en el descanso Z de la DB, 
+          // usaremos una heurística o simplemente lo que diga el detalle.
+          // Para el 3-3-2 de 7-7, el relevo debería trabajar 07-19 o 19-07 según la plaza.
+
+          turnosParaInsertar.push({
+            empleado_id: relevante.empleado_id,
+            puesto_id: subpuesto.puesto_id,
+            subpuesto_id: subpuesto_id,
+            fecha: hueco.fecha,
+            hora_inicio: hueco.hora_inicio,
+            hora_fin: hueco.hora_fin,
+            tipo_turno: 'RELEVO',
+            configuracion_id: subpuesto.configuracion_id,
+            orden_en_ciclo: hueco.orden,
+            plaza_no: hueco.plaza,
+            grupo: 'RELEVO',
+            asignado_por,
+            estado_turno: 'programado',
+            observaciones: `Cubre descanso de Titular en Plaza ${hueco.plaza}`
+          });
+        });
+      }
     } else {
       // ===========================================================================
       // 🟢 ESTRATEGIA NUEVA (REGLAS SEMANALES + INTELIGENCIA BIOLÓGICA)
