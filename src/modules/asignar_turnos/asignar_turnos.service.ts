@@ -270,32 +270,35 @@ export class AsignarTurnosService {
 
     if (tipoProyeccion === 'ciclico') {
       const offsetPorEmpleado = Math.floor(cicloLength / empleados.length);
+      this.logger.debug(`📊 Ciclo de ${cicloLength} días. Offset base por empleado: ${offsetPorEmpleado}`);
 
-      empleados.forEach((empleado: Empleado, empleadoIndex) => {
-        const empRaw = empleadosRaw.find(e => e.empleado_id === empleado.id);
-
+      // Usar empleadosRaw directamente para asegurar acceso a fase_inicial
+      empleadosRaw.forEach((emp, index) => {
+        const empleado = emp.empleado;
         let offsetPersonalizado: number | null = null;
 
+        // Limpieza y validación de fase_inicial (convertir a número por si acaso)
+        const faseIni = emp.fase_inicial !== null ? Number(emp.fase_inicial) : null;
+
         // PRIORIDAD 1: fase_inicial → El admin eligió explícitamente la fase del ciclo
-        // fase_inicial es el índice directo en el arreglo de detalles (0=primera fase, 1=segunda, etc.)
-        if (empRaw && empRaw.fase_inicial != null) {
-          offsetPersonalizado = empRaw.fase_inicial % cicloLength;
-          this.logger.log(`👤 Empleado ${empleado.nombre_completo} usa fase_inicial DIRECTA: ${offsetPersonalizado} (de ${cicloLength} fases)`);
+        if (faseIni !== null && !isNaN(faseIni)) {
+          offsetPersonalizado = faseIni % cicloLength;
+          this.logger.log(`👤 EMPLEADO: ${empleado.nombre_completo} (ID: ${emp.empleado_id}) -> USANDO fase_inicial: ${faseIni}. Offset final: ${offsetPersonalizado}`);
         }
         // PRIORIDAD 2: fecha_inicio_patron → Calcula el offset basado en la fecha
-        else if (empRaw && empRaw.fecha_inicio_patron) {
-          const fechaInicioPatronEmpleado = new Date(empRaw.fecha_inicio_patron);
+        else if (emp.fecha_inicio_patron) {
+          const fechaInicioPatronEmpleado = new Date(emp.fecha_inicio_patron);
           fechaInicioPatronEmpleado.setHours(0, 0, 0, 0);
           const diffTime = fechaBase.getTime() - fechaInicioPatronEmpleado.getTime();
           const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
           offsetPersonalizado = ((diffDays % cicloLength) + cicloLength) % cicloLength;
-          this.logger.log(`👤 Empleado ${empleado.nombre_completo} usa offset calculado desde fecha: ${offsetPersonalizado}`);
+          this.logger.log(`👤 EMPLEADO: ${empleado.nombre_completo} -> Offset calculado desde fecha (${emp.fecha_inicio_patron}): ${offsetPersonalizado}`);
         }
 
-        const offsetInicial = offsetPersonalizado !== null ? offsetPersonalizado : ((empleadoIndex * offsetPorEmpleado) % cicloLength);
+        const offsetInicial = offsetPersonalizado !== null ? offsetPersonalizado : ((index * offsetPorEmpleado) % cicloLength);
 
         if (offsetPersonalizado === null) {
-          this.logger.log(`👤 Empleado ${empleado.nombre_completo} usa offset automático: ${offsetInicial} (índice ${empleadoIndex})`);
+          this.logger.log(`👤 EMPLEADO: ${empleado.nombre_completo} -> USANDO OFFSET AUTOMÁTICO: ${offsetInicial} (Índice: ${index})`);
         }
 
         for (let dia = 0; dia < numeroDeDiasAGenerar; dia++) {
@@ -373,7 +376,6 @@ export class AsignarTurnosService {
               asignado_por,
               estado_turno: 'programado',
             });
-
           } else {
             // --- LÓGICA CICLO REGULAR ---
             const diaDelCiclo = (dia + offsetInicial) % cicloLength;
@@ -392,8 +394,8 @@ export class AsignarTurnosService {
               tipo_turno: tipoTurno,
               configuracion_id: subpuesto.configuracion_id,
               orden_en_ciclo: detalle.orden,
-              plaza_no: empleadoIndex + 1,
-              grupo: `GRUPO_${Math.floor(empleadoIndex / guardasActivos) + 1}`,
+              plaza_no: index + 1,
+              grupo: `GRUPO_${Math.floor(index / guardasActivos) + 1}`,
               asignado_por,
               estado_turno: 'programado',
             };
