@@ -23,7 +23,6 @@ export class TurnosService {
         subpuesto:subpuesto_id(id, nombre)
       `
       )
-      .eq("activo", true)
       .order("fecha", { ascending: true })
       .limit(50000); // Aumentar límite para vista global
 
@@ -189,7 +188,7 @@ export class TurnosService {
 
     const { data: existing, error: findError } = await supabase
       .from("turnos")
-      .select("id, activo")
+      .select("id")
       .eq("id", id)
       .single();
 
@@ -201,7 +200,6 @@ export class TurnosService {
     const { data, error } = await supabase
       .from("turnos")
       .update({
-        activo: false,
         updated_at: new Date().toISOString(),
       })
       .eq("id", id)
@@ -257,7 +255,7 @@ export class TurnosService {
 
     const { data: existing, error: findError } = await supabase
       .from("turnos")
-      .select("id, activo")
+      .select("id")
       .eq("empleado_id", empleadoId);
 
     if (findError || !existing || existing.length === 0) {
@@ -268,7 +266,6 @@ export class TurnosService {
     const { data, error } = await supabase
       .from("turnos")
       .update({
-        activo: false,
         updated_at: new Date().toISOString(),
       })
       .eq("empleado_id", empleadoId)
