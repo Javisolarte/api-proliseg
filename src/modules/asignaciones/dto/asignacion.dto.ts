@@ -68,6 +68,15 @@ export class CreateAsignacionDto {
   @IsOptional()
   @IsDateString()
   fecha_inicio_patron?: string;
+
+  @ApiProperty({
+    example: 0,
+    description: "Índice de la fase inicial del ciclo (0 = primera fase, 2 = tercera fase, etc.). Se usa para controlar en qué punto del ciclo empieza el empleado.",
+    required: false
+  })
+  @IsOptional()
+  @IsInt()
+  fase_inicial?: number;
 }
 
 

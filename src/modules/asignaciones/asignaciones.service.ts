@@ -209,6 +209,7 @@ export class AsignacionesService {
       rol_puesto: dto.rol_puesto ?? 'titular',
       patron_descanso: dto.patron_descanso ?? null,
       fecha_inicio_patron: dto.fecha_inicio_patron ?? null,
+      fase_inicial: dto.fase_inicial ?? null,
       // ---
       activo: true,
       fecha_asignacion: new Date().toISOString().split('T')[0],

@@ -15,6 +15,7 @@ interface EmpleadoInfo {
   rol_puesto: 'titular' | 'relevante';
   patron_descanso: string | null; // "4-2", "5-2"
   fecha_inicio_patron: string;
+  fase_inicial: number | null; // Índice de la fase del ciclo donde empieza (0=primera fase)
   empleado: {
     id: number;
     nombre_completo: string;
@@ -164,6 +165,7 @@ export class AsignarTurnosService {
         rol_puesto,
         patron_descanso,
         fecha_inicio_patron,
+        fase_inicial,
         empleado:empleado_id (
           id,
           nombre_completo,
@@ -278,17 +280,23 @@ export class AsignarTurnosService {
           fechaInicioPatronEmpleado.setHours(0, 0, 0, 0);
           const diffTime = fechaBase.getTime() - fechaInicioPatronEmpleado.getTime();
           const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-          // diffDays representa cuántos días han pasado desde la fecha_inicio_patron hasta el día 1 del mes (fechaBase).
-          // Para encontrar en qué día del ciclo (0 a cicloLength-1) estamos en fechaBase:
-          // Si el ciclo es de 4 días (0=D, 1=N, 2=Z, 3=Z) y diffDays=2, entonces (2 % 4) = 2 (estado Z)
-          // Nota: % de número negativo en TS puede ser problemático, así que ajustamos:
+          // Calcula en qué posición del ciclo estamos en fechaBase
           offsetPersonalizado = ((diffDays % cicloLength) + cicloLength) % cicloLength;
+
+          // Si tiene fase_inicial, ajustar el offset para que el empleado
+          // empiece en la fase indicada (ej: fase_inicial=4 para empezar en Z en un ciclo 2D-2N-2Z)
+          if (empRaw.fase_inicial != null && empRaw.fase_inicial > 0) {
+            offsetPersonalizado = ((offsetPersonalizado + empRaw.fase_inicial) % cicloLength);
+          }
+        } else if (empRaw && empRaw.fase_inicial != null && empRaw.fase_inicial > 0) {
+          // Solo fase_inicial sin fecha personalizada: usar fase_inicial como offset directo
+          offsetPersonalizado = empRaw.fase_inicial;
         }
 
         const offsetInicial = offsetPersonalizado !== null ? offsetPersonalizado : ((empleadoIndex * offsetPorEmpleado) % cicloLength);
 
         if (offsetPersonalizado !== null) {
-          this.logger.log(`👤 Empleado ${empleado.nombre_completo} usa offset personalizado ${offsetPersonalizado} basado en su fecha de inicio.`);
+          this.logger.log(`👤 Empleado ${empleado.nombre_completo} usa offset personalizado ${offsetPersonalizado} (fase_inicial: ${empRaw?.fase_inicial ?? 'auto'}).`);
         }
 
         for (let dia = 0; dia < numeroDeDiasAGenerar; dia++) {
