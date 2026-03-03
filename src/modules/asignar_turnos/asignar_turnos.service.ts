@@ -275,28 +275,27 @@ export class AsignarTurnosService {
         const empRaw = empleadosRaw.find(e => e.empleado_id === empleado.id);
 
         let offsetPersonalizado: number | null = null;
-        if (empRaw && empRaw.fecha_inicio_patron) {
+
+        // PRIORIDAD 1: fase_inicial → El admin eligió explícitamente la fase del ciclo
+        // fase_inicial es el índice directo en el arreglo de detalles (0=primera fase, 1=segunda, etc.)
+        if (empRaw && empRaw.fase_inicial != null) {
+          offsetPersonalizado = empRaw.fase_inicial % cicloLength;
+          this.logger.log(`👤 Empleado ${empleado.nombre_completo} usa fase_inicial DIRECTA: ${offsetPersonalizado} (de ${cicloLength} fases)`);
+        }
+        // PRIORIDAD 2: fecha_inicio_patron → Calcula el offset basado en la fecha
+        else if (empRaw && empRaw.fecha_inicio_patron) {
           const fechaInicioPatronEmpleado = new Date(empRaw.fecha_inicio_patron);
           fechaInicioPatronEmpleado.setHours(0, 0, 0, 0);
           const diffTime = fechaBase.getTime() - fechaInicioPatronEmpleado.getTime();
           const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-          // Calcula en qué posición del ciclo estamos en fechaBase
           offsetPersonalizado = ((diffDays % cicloLength) + cicloLength) % cicloLength;
-
-          // Si tiene fase_inicial, ajustar el offset para que el empleado
-          // empiece en la fase indicada (ej: fase_inicial=4 para empezar en Z en un ciclo 2D-2N-2Z)
-          if (empRaw.fase_inicial != null && empRaw.fase_inicial > 0) {
-            offsetPersonalizado = ((offsetPersonalizado + empRaw.fase_inicial) % cicloLength);
-          }
-        } else if (empRaw && empRaw.fase_inicial != null && empRaw.fase_inicial > 0) {
-          // Solo fase_inicial sin fecha personalizada: usar fase_inicial como offset directo
-          offsetPersonalizado = empRaw.fase_inicial;
+          this.logger.log(`👤 Empleado ${empleado.nombre_completo} usa offset calculado desde fecha: ${offsetPersonalizado}`);
         }
 
         const offsetInicial = offsetPersonalizado !== null ? offsetPersonalizado : ((empleadoIndex * offsetPorEmpleado) % cicloLength);
 
-        if (offsetPersonalizado !== null) {
-          this.logger.log(`👤 Empleado ${empleado.nombre_completo} usa offset personalizado ${offsetPersonalizado} (fase_inicial: ${empRaw?.fase_inicial ?? 'auto'}).`);
+        if (offsetPersonalizado === null) {
+          this.logger.log(`👤 Empleado ${empleado.nombre_completo} usa offset automático: ${offsetInicial} (índice ${empleadoIndex})`);
         }
 
         for (let dia = 0; dia < numeroDeDiasAGenerar; dia++) {
