@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, Logger } from "@nestjs/common";
+import { Injectable, NotFoundException, BadRequestException, Logger } from "@nestjs/common";
 import { SupabaseService } from "../supabase/supabase.service";
 import { CreateTurnoDto, UpdateTurnoDto } from "./dto/turno.dto";
 
@@ -278,5 +278,82 @@ export class TurnosService {
 
     this.logger.debug(`✅ ${data.length} turnos desactivados del empleado ${empleadoId}`);
     return { message: "Turnos desactivados correctamente", data };
+  }
+
+  // ✅ Intercambiar dos turnos (Drag & Drop)
+  async intercambiarTurnos(turnoId1: number, turnoId2: number, motivo: string, userId: number) {
+    const supabase = this.supabaseService.getClient();
+    this.logger.debug(`🟢 Intercambiando turnos ${turnoId1} y ${turnoId2} por usuario ${userId}`);
+
+    // 1. Obtener ambos turnos
+    const { data: turnos, error: findError } = await supabase
+      .from("turnos")
+      .select(`
+        id, 
+        empleado_id, 
+        fecha, 
+        observaciones,
+        empleado:empleado_id(nombre_completo)
+      `)
+      .in("id", [turnoId1, turnoId2]);
+
+    if (findError || !turnos || turnos.length !== 2) {
+      this.logger.warn(`⚠️ No se encontraron ambos turnos o hubo un error: ${findError?.message}`);
+      throw new BadRequestException("No se encontraron los turnos especificados o uno de ellos no existe");
+    }
+
+    const t1 = turnos.find(t => t.id === turnoId1);
+    const t2 = turnos.find(t => t.id === turnoId2);
+
+    if (!t1 || !t2) {
+      throw new BadRequestException("No se encontraron ambos turnos especificados en la base de datos");
+    }
+
+    // 2. Validar que sean de la misma fecha
+    if (t1.fecha !== t2.fecha) {
+      throw new BadRequestException("Solo se pueden intercambiar turnos que ocurran en la misma fecha");
+    }
+
+    const fechaHoy = new Date().toISOString().split('T')[0];
+    const empleado1Nombre = Array.isArray(t1.empleado) ? t1.empleado[0]?.nombre_completo : (t1.empleado as any)?.nombre_completo;
+    const empleado2Nombre = Array.isArray(t2.empleado) ? t2.empleado[0]?.nombre_completo : (t2.empleado as any)?.nombre_completo;
+
+    // 3. Crear nuevas observaciones
+    const obs1 = `${t1.observaciones || ''}\n[${fechaHoy}] Intercambiado con ${empleado2Nombre}. Motivo: ${motivo}`.trim();
+    const obs2 = `${t2.observaciones || ''}\n[${fechaHoy}] Intercambiado con ${empleado1Nombre}. Motivo: ${motivo}`.trim();
+
+    // 4. Actualizar ambos turnos intercambiando 'empleado_id'
+    const { error: updateT1Error } = await supabase
+      .from("turnos")
+      .update({
+        empleado_id: t2.empleado_id,
+        observaciones: obs1,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", t1.id);
+
+    if (updateT1Error) throw updateT1Error;
+
+    const { error: updateT2Error } = await supabase
+      .from("turnos")
+      .update({
+        empleado_id: t1.empleado_id,
+        observaciones: obs2,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", t2.id);
+
+    if (updateT2Error) {
+      // Rollback intento si falla el segundo
+      this.logger.error(`❌ Falló la actualización del segundo turno. Intentando rollback manual...`);
+      throw new BadRequestException("Ocurrió un error al intercambiar los turnos.");
+    }
+
+    this.logger.log(`✅ Turnos ${t1.id} y ${t2.id} intercambiados exitosamente`);
+
+    return {
+      message: "Turnos intercambiados exitosamente",
+      turnos_afectados: [t1.id, t2.id]
+    };
   }
 }

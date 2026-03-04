@@ -87,6 +87,22 @@ export class TurnosController {
     return this.turnosService.updateByEmpleado(empleadoId, dto, req.user.id);
   }
 
+  // ✅ Intercambiar turnos
+  @Post("intercambiar")
+  @RequirePermissions("turnos")
+  @ApiOperation({ summary: "Intercambiar dos turnos (Drag and Drop)" })
+  intercambiar(
+    @Body() body: { turnoId1: number; turnoId2: number; motivo: string },
+    @Request() req
+  ) {
+    return this.turnosService.intercambiarTurnos(
+      body.turnoId1,
+      body.turnoId2,
+      body.motivo,
+      req.user.id
+    );
+  }
+
   // ✅ Desactivar (soft delete) todos los turnos de un empleado
   @Delete("empleado/:empleadoId")
   @RequirePermissions("turnos")
