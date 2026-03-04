@@ -181,10 +181,10 @@ export class TurnosService {
     return data;
   }
 
-  // ✅ Desactivar (soft delete) un turno por ID
+  // ✅ Eliminar un turno por ID (hard delete)
   async softDelete(id: number, userId: number) {
     const supabase = this.supabaseService.getClient();
-    this.logger.debug(`🟢 Desactivando turno ID ${id} por usuario ${userId}`);
+    this.logger.debug(`🟢 Eliminando turno ID ${id} por usuario ${userId}`);
 
     const { data: existing, error: findError } = await supabase
       .from("turnos")
@@ -197,22 +197,18 @@ export class TurnosService {
       throw new NotFoundException(`Turno con ID ${id} no encontrado`);
     }
 
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from("turnos")
-      .update({
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", id)
-      .select()
-      .single();
+      .delete()
+      .eq("id", id);
 
     if (error) {
-      this.logger.error(`❌ Error Supabase (softDelete): ${JSON.stringify(error)}`);
+      this.logger.error(`❌ Error Supabase (delete): ${JSON.stringify(error)}`);
       throw error;
     }
 
-    this.logger.debug(`✅ Turno desactivado correctamente`);
-    return { message: "Turno desactivado correctamente", data };
+    this.logger.debug(`✅ Turno eliminado correctamente`);
+    return { message: "Turno eliminado correctamente" };
   }
 
   // ✅ Actualizar turnos de un empleado
