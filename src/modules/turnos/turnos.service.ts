@@ -309,18 +309,17 @@ export class TurnosService {
       throw new BadRequestException("No se encontraron ambos turnos especificados en la base de datos");
     }
 
-    // 2. Validar que sean de la misma fecha
-    if (t1.fecha !== t2.fecha) {
-      throw new BadRequestException("Solo se pueden intercambiar turnos que ocurran en la misma fecha");
-    }
+    // 2. Permitir intercambio entre fechas diferentes (ya no se bloquea)
+    const esFechaDiferente = t1.fecha !== t2.fecha;
 
     const fechaHoy = new Date().toISOString().split('T')[0];
     const empleado1Nombre = Array.isArray(t1.empleado) ? t1.empleado[0]?.nombre_completo : (t1.empleado as any)?.nombre_completo;
     const empleado2Nombre = Array.isArray(t2.empleado) ? t2.empleado[0]?.nombre_completo : (t2.empleado as any)?.nombre_completo;
 
-    // 3. Crear nuevas observaciones
-    const obs1 = `${t1.observaciones || ''}\n[${fechaHoy}] Intercambiado con ${empleado2Nombre}. Motivo: ${motivo}`.trim();
-    const obs2 = `${t2.observaciones || ''}\n[${fechaHoy}] Intercambiado con ${empleado1Nombre}. Motivo: ${motivo}`.trim();
+    // 3. Crear nuevas observaciones (incluir fechas si son diferentes)
+    const fechaInfo = esFechaDiferente ? ` (Fecha origen: ${t1.fecha?.split('T')[0]}, Fecha destino: ${t2.fecha?.split('T')[0]})` : '';
+    const obs1 = `${t1.observaciones || ''}\n[${fechaHoy}] Intercambiado con ${empleado2Nombre}${fechaInfo}. Motivo: ${motivo}`.trim();
+    const obs2 = `${t2.observaciones || ''}\n[${fechaHoy}] Intercambiado con ${empleado1Nombre}${fechaInfo}. Motivo: ${motivo}`.trim();
 
     // 4. Actualizar ambos turnos intercambiando 'empleado_id'
     const { error: updateT1Error } = await supabase
