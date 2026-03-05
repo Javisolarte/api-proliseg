@@ -8,54 +8,66 @@ export class TurnosService {
 
   constructor(private readonly supabaseService: SupabaseService) { }
 
-  // ✅ Obtener todos los turnos (con filtros opcionales)
+  // ✅ Obtener todos los turnos (con filtros opcionales) con paginación automática
   async findAll(filters?: { fecha?: string; fecha_inicio?: string; fecha_fin?: string; empleadoId?: number; puestoId?: number }) {
     const supabase = this.supabaseService.getClient();
     this.logger.debug(`🟢 Ejecutando findAll con filtros: ${JSON.stringify(filters)}`);
 
-    let query = supabase
-      .from("turnos")
-      .select(
-        `
-        *,
-        empleado:empleado_id(id, nombre_completo),
-        puesto:puesto_id(id, nombre),
-        subpuesto:subpuesto_id(id, nombre)
-      `
-      )
-      .order("fecha", { ascending: true })
-      .limit(50000); // Aumentar límite para vista global
+    let allData: any[] = [];
+    let from = 0;
+    const step = 1000;
+    let finished = false;
 
-    if (filters?.fecha) {
-      query = query.eq("fecha", filters.fecha);
-      this.logger.debug(`📅 Filtro por fecha: ${filters.fecha}`);
-    }
-    if (filters?.fecha_inicio) {
-      query = query.gte("fecha", filters.fecha_inicio);
-      this.logger.debug(`📅 Filtro por fecha_inicio: ${filters.fecha_inicio}`);
-    }
-    if (filters?.fecha_fin) {
-      query = query.lte("fecha", filters.fecha_fin);
-      this.logger.debug(`📅 Filtro por fecha_fin: ${filters.fecha_fin}`);
-    }
-    if (filters?.empleadoId) {
-      query = query.eq("empleado_id", filters.empleadoId);
-      this.logger.debug(`👤 Filtro por empleadoId: ${filters.empleadoId}`);
-    }
-    if (filters?.puestoId) {
-      query = query.eq("puesto_id", filters.puestoId);
-      this.logger.debug(`🏢 Filtro por puestoId: ${filters.puestoId}`);
+    while (!finished) {
+      let query = supabase
+        .from("turnos")
+        .select(`*, empleado:empleado_id(id, nombre_completo), puesto:puesto_id(id, nombre), subpuesto:subpuesto_id(id, nombre)`)
+        .order("fecha", { ascending: true })
+        .range(from, from + step - 1);
+
+      if (filters?.fecha) {
+        query = query.eq("fecha", filters.fecha);
+      }
+      if (filters?.fecha_inicio) {
+        query = query.gte("fecha", filters.fecha_inicio);
+      }
+      if (filters?.fecha_fin) {
+        query = query.lte("fecha", filters.fecha_fin);
+      }
+      if (filters?.empleadoId) {
+        query = query.eq("empleado_id", filters.empleadoId);
+      }
+      if (filters?.puestoId) {
+        query = query.eq("puesto_id", filters.puestoId);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        this.logger.error(`❌ Error Supabase (findAll - range ${from}-${from + step - 1}): ${JSON.stringify(error)}`);
+        throw error;
+      }
+
+      if (!data || data.length === 0) {
+        finished = true;
+      } else {
+        allData = [...allData, ...data];
+        if (data.length < step) {
+          finished = true;
+        } else {
+          from += step;
+        }
+      }
+
+      // Safety break to avoid infinite loops in case of unexpected API behavior
+      if (from > 100000) {
+        this.logger.warn("⚠️ findAll alcanzó el límite de seguridad de 100.000 filas");
+        finished = true;
+      }
     }
 
-    const { data, error } = await query;
-
-    if (error) {
-      this.logger.error(`❌ Error Supabase (findAll): ${JSON.stringify(error)}`);
-      throw error;
-    }
-
-    this.logger.debug(`✅ Turnos obtenidos: ${data?.length ?? 0}`);
-    return data;
+    this.logger.debug(`✅ Total turnos obtenidos: ${allData.length}`);
+    return allData;
   }
 
   // ✅ Obtener un turno por ID
