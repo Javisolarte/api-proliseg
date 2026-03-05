@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { FileManagerService } from './file-manager.service';
 import { FileManagerController } from './file-manager.controller';
+import { FileManagerPublicController } from './file-public.controller';
 import { FmCarpeta } from './entities/fm-carpeta.entity';
 import { FmArchivo } from './entities/fm-archivo.entity';
 import { FmVersion } from './entities/fm-version.entity';
@@ -13,7 +14,7 @@ import { AuthModule } from '../auth/auth.module';
         SupabaseModule,
         AuthModule,
     ],
-    controllers: [FileManagerController],
+    controllers: [FileManagerController, FileManagerPublicController],
     providers: [FileManagerService],
     exports: [FileManagerService],
 })

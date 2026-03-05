@@ -399,4 +399,31 @@ export class FileManagerService {
             typeBreakdown: byType || []
         };
     }
+
+    // --- Public Methods ---
+
+    async getPublicFileDetails(id: string) {
+        const { data: file, error: fError } = await this.getDb().from('fm_archivos').select('*, fm_versiones(*)').eq('id', id).single();
+        if (fError || !file) throw new NotFoundException('Archivo no encontrado');
+
+        if (file.visibilidad !== 'publico') {
+            throw new ForbiddenException('Este archivo no es público');
+        }
+
+        return file;
+    }
+
+    async getPublicDownloadUrl(id: string) {
+        const { data: file, error: fError } = await this.getDb().from('fm_archivos').select('visibilidad').eq('id', id).single();
+        if (fError || !file) throw new NotFoundException('Archivo no encontrado');
+
+        if (file.visibilidad !== 'publico') {
+            throw new ForbiddenException('Este archivo no es público');
+        }
+
+        const { data: version, error } = await this.getDb().from('fm_versiones').select('url_storage').eq('archivo_id', id).order('numero_version', { ascending: false }).limit(1).single();
+        if (error || !version) throw new NotFoundException('Archivo no tiene versiones');
+
+        return this.supabaseService.getSignedUrl(this.BUCKET_NAME, version.url_storage);
+    }
 }
