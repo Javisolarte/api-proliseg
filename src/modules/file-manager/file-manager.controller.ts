@@ -213,6 +213,19 @@ export class FileManagerController {
         return this.fileManagerService.revokeShare(user.id, permisoId);
     }
 
+    @Get('items/:type/:id/shared-users')
+    @ApiOperation({ summary: 'Listar usuarios con acceso a un elemento', description: 'Permite al propietario ver quién tiene acceso al archivo o carpeta.' })
+    @ApiParam({ name: 'type', enum: ['file', 'folder'], description: 'Tipo de elemento' })
+    @ApiParam({ name: 'id', description: 'ID del elemento' })
+    async getSharedUsers(
+        @CurrentUser() user: any,
+        @Param('type') type: 'file' | 'folder',
+        @Param('id') id: string
+    ) {
+        if (!['file', 'folder'].includes(type)) throw new BadRequestException('Tipo de elemento inválido');
+        return this.fileManagerService.getItemSharedUsers(user.id, id, type);
+    }
+
     @Get('shared-with-me')
     @ApiOperation({ summary: 'Listar elementos compartidos conmigo' })
     async getSharedWithMe(@CurrentUser() user: any) {

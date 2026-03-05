@@ -321,6 +321,36 @@ export class FileManagerService {
         return { success: true };
     }
 
+    async getItemSharedUsers(userId: number, itemId: string, itemType: 'file' | 'folder') {
+        const table = itemType === 'file' ? 'fm_archivos' : 'fm_carpetas';
+        const { data: item, error: itemError } = await this.getDb()
+            .from(table)
+            .select('propietario_id')
+            .eq('id', itemId)
+            .single();
+
+        if (itemError || !item) throw new NotFoundException('Elemento no encontrado');
+        if (item.propietario_id !== userId) throw new ForbiddenException('No tienes permiso para ver los usuarios compartidos de este elemento');
+
+        const column = itemType === 'file' ? 'archivo_id' : 'carpeta_id';
+        const { data, error } = await this.getDb()
+            .from('fm_permisos')
+            .select(`
+                id,
+                permiso,
+                created_at,
+                usuario:usuarios_externos!usuario_destino_id(
+                    id,
+                    nombre_completo,
+                    correo
+                )
+            `)
+            .eq(column, itemId);
+
+        if (error) throw error;
+        return data;
+    }
+
     async getSharedWithMe(userId: number) {
         const { data: perms } = await this.getDb().from('fm_permisos').select(`
             *,
