@@ -318,6 +318,12 @@ export class CreateEmpleadoDto {
   @IsOptional()
   @IsString()
   cargo_oficial?: string;
+
+  @ApiProperty({ example: 0, required: false, description: "Orden de visualización" })
+  @IsOptional()
+  @IsInt()
+  @Transform(({ value }) => parseInt(value))
+  orden?: number;
 }
 
 export class UpdateEmpleadoDto extends PartialType(CreateEmpleadoDto) { }

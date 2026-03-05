@@ -345,4 +345,31 @@ Todos los archivos se guardan directamente en sus respectivos buckets de Supabas
   async getTipoVigilante(@Param("id", ParseIntPipe) id: number) {
     return this.empleadosService.getTipoVigilante(id);
   }
+
+  /**
+   * 🔹 Actualizar el orden de los empleados (Bulk)
+   */
+  @Post("update-order")
+  @RequirePermissions("empleados")
+  @ApiOperation({ summary: "Actualizar el orden de los empleados en bloque" })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        orders: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'number' },
+              orden: { type: 'number' }
+            }
+          }
+        }
+      }
+    }
+  })
+  async updateOrder(@Body("orders") orders: { id: number; orden: number }[]) {
+    return this.empleadosService.updateOrder(orders);
+  }
 }

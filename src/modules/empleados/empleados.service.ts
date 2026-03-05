@@ -42,6 +42,7 @@ export class EmpleadosService {
 
     let sql = `
       SELECT e.*,
+             e.orden,
              eps.nombre AS eps_nombre,
              arl.nombre AS arl_nombre,
              fp.nombre AS fondo_pension_nombre,
@@ -63,7 +64,7 @@ export class EmpleadosService {
     if (filters?.activo !== undefined) sql += ` AND e.activo = ${filters.activo}`;
     if (filters?.tipoEmpleadoId) sql += ` AND e.tipo_empleado_id = ${filters.tipoEmpleadoId}`;
 
-    sql += ` ORDER BY e.created_at DESC`;
+    sql += ` ORDER BY e.orden ASC, e.created_at DESC`;
 
     this.logger.debug(`📜 SQL Ejecutado:\n${sql}`);
 
@@ -91,6 +92,7 @@ export class EmpleadosService {
 
     const sql = `
       SELECT e.*,
+             e.orden,
              eps.nombre AS eps_nombre,
              arl.nombre AS arl_nombre,
              fp.nombre AS fondo_pension_nombre,
@@ -477,5 +479,31 @@ export class EmpleadosService {
     }
 
     return Array.isArray(data) ? data : [];
+  }
+
+  // 🔹 Actualizar el orden de varios empleados en bloque
+  async updateOrder(orders: { id: number; orden: number }[]) {
+    const supabase = this.supabaseService.getClient();
+    this.logger.debug(`🔢 Actualizando orden de ${orders.length} empleados`);
+
+    // Usamos un loop para actualizar cada empleado. 
+    // Supabase no soporta bulk updates con valores diferentes por fila de forma nativa fácilmente sin RPC complejo.
+    const promises = orders.map(item =>
+      supabase
+        .from("empleados")
+        .update({ orden: item.orden, updated_at: new Date().toISOString() })
+        .eq("id", item.id)
+    );
+
+    const results = await Promise.all(promises);
+    const errors = results.filter(r => r.error).map(r => r.error);
+
+    if (errors.length > 0) {
+      this.logger.error(`❌ Errores al actualizar ordenes: ${JSON.stringify(errors)}`);
+      throw new Error("Error al actualizar el orden de algunos empleados");
+    }
+
+    this.logger.debug(`✅ Orden actualizado exitosamente para ${orders.length} empleados`);
+    return { message: "Orden actualizado correctamente" };
   }
 }
