@@ -1462,6 +1462,7 @@ CREATE TABLE public.puestos_estudios_seguridad (
 );
 CREATE TABLE public.puestos_trabajo (
   id integer NOT NULL DEFAULT nextval('puestos_trabajo_id_seq'::regclass),
+  codigo_puesto character varying UNIQUE,
   contrato_id integer NOT NULL,
   nombre character varying NOT NULL,
   direccion text,

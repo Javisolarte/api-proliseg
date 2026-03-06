@@ -11,6 +11,15 @@ import {
 
 export class CreatePuestoDto {
   @ApiProperty({
+    example: "1002",
+    required: false,
+    description: "Código del puesto de seguridad",
+  })
+  @IsOptional()
+  @IsString({ message: "El campo codigo_puesto debe ser texto" })
+  codigo_puesto?: string;
+
+  @ApiProperty({
     example: 1,
     description: "ID del contrato asociado al puesto",
   })

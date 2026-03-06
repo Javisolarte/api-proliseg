@@ -32,10 +32,13 @@ export class PuestosService {
       .from("puestos_trabajo")
       .select(`
         *,
+        codigo_puesto,
         contratos:contratos!puestos_trabajo_contrato_id_fkey(
           id,
           cliente_id,
+          cliente:clientes(id, nombre_empresa),
           tipo_servicio_id,
+          tipo_servicio:tipos_servicio(id, nombre),
           valor,
           fecha_inicio,
           fecha_fin,
@@ -45,6 +48,20 @@ export class PuestosService {
           id,
           nombre,
           ciudad
+        ),
+        subpuestos:subpuestos_trabajo(
+          *,
+          configuracion:turnos_configuracion!subpuestos_trabajo_configuracion_id_fkey (
+            id,
+            nombre,
+            dias_ciclo,
+            activo,
+            detalles:turnos_detalle_configuracion!turnos_detalle_configuracion_configuracion_id_fkey(tipo)
+          ),
+          asignaciones:asignacion_guardas_puesto!asignacion_guardas_puesto_subpuesto_id_fkey(
+            id,
+            activo
+          )
         )
       `)
       .order("created_at", { ascending: false });
@@ -67,10 +84,13 @@ export class PuestosService {
       .from("puestos_trabajo")
       .select(`
         *,
+        codigo_puesto,
         contratos:contratos!puestos_trabajo_contrato_id_fkey(
           id,
           cliente_id,
+          cliente:clientes(id, nombre_empresa),
           tipo_servicio_id,
+          tipo_servicio:tipos_servicio(id, nombre),
           valor,
           fecha_inicio,
           fecha_fin,
@@ -80,6 +100,20 @@ export class PuestosService {
           id,
           nombre,
           ciudad
+        ),
+        subpuestos:subpuestos_trabajo(
+          *,
+          configuracion:turnos_configuracion!subpuestos_trabajo_configuracion_id_fkey (
+            id,
+            nombre,
+            dias_ciclo,
+            activo,
+            detalles:turnos_detalle_configuracion!turnos_detalle_configuracion_configuracion_id_fkey(tipo)
+          ),
+          asignaciones:asignacion_guardas_puesto!asignacion_guardas_puesto_subpuesto_id_fkey(
+            id,
+            activo
+          )
         )
       `)
       .eq("id", id)
