@@ -38,7 +38,7 @@ export class PuestosService {
           cliente_id,
           cliente:clientes(id, nombre_empresa),
           tipo_servicio_id,
-          tipo_servicio:tipos_servicio(id, nombre),
+          tipo_servicio:tipo_servicio!contratos_tipo_servicio_id_fkey(id, nombre),
           valor,
           fecha_inicio,
           fecha_fin,
@@ -49,7 +49,7 @@ export class PuestosService {
           nombre,
           ciudad
         ),
-        subpuestos:subpuestos_trabajo(
+        subpuestos:subpuestos_trabajo!subpuestos_trabajo_puesto_id_fkey(
           *,
           configuracion:turnos_configuracion!subpuestos_trabajo_configuracion_id_fkey (
             id,
@@ -90,7 +90,7 @@ export class PuestosService {
           cliente_id,
           cliente:clientes(id, nombre_empresa),
           tipo_servicio_id,
-          tipo_servicio:tipos_servicio(id, nombre),
+          tipo_servicio:tipo_servicio!contratos_tipo_servicio_id_fkey(id, nombre),
           valor,
           fecha_inicio,
           fecha_fin,
@@ -101,7 +101,7 @@ export class PuestosService {
           nombre,
           ciudad
         ),
-        subpuestos:subpuestos_trabajo(
+        subpuestos:subpuestos_trabajo!subpuestos_trabajo_puesto_id_fkey(
           *,
           configuracion:turnos_configuracion!subpuestos_trabajo_configuracion_id_fkey (
             id,
