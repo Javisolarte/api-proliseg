@@ -651,11 +651,11 @@ export class AsignacionesService {
     }
 
     // 3. ACTUALIZAR turnos futuros a RET (Retirado)
+    // NOTE: estado_turno has a DB CHECK constraint, so we only change tipo_turno to 'RET'
     const { data: turnosActualizados, error: turnosError } = await supabase
       .from("turnos")
       .update({
         tipo_turno: 'RET',
-        estado_turno: 'RETIRADO',
         observaciones: motivo_detalle ? `Retiro: ${motivo_detalle}` : `Retirado por ${motivo}`,
         updated_at: new Date().toISOString()
       })
