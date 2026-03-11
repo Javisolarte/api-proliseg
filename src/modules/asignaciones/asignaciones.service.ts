@@ -573,6 +573,169 @@ export class AsignacionesService {
   }
 
   /**
+   * 🛑 Retirar empleado de un subpuesto
+   * - Marca la asignación como inactiva desde una fecha específica
+   * - Marca los turnos desde la fecha de retiro como "RETIRADO" (tipo 'RET')
+   * - Opcionalmente termina el contrato del empleado
+   */
+  async retirar(
+    id: number,
+    fecha_retiro: string,
+    motivo: string,
+    motivo_detalle?: string,
+    terminar_contrato?: boolean,
+    userId?: number
+  ) {
+    const supabase = this.supabaseService.getClient();
+
+    // 1. Obtener asignación con detalles
+    const { data: asignacion, error: asignError } = await supabase
+      .from("asignacion_guardas_puesto")
+      .select(`
+        id,
+        activo,
+        empleado_id,
+        subpuesto_id,
+        observaciones,
+        contrato_id,
+        empleado:empleado_id (
+          id,
+          nombre_completo,
+          contrato_personal_id
+        ),
+        subpuesto:subpuesto_id (
+          id,
+          nombre
+        )
+      `)
+      .eq("id", id)
+      .single();
+
+    if (asignError || !asignacion) {
+      throw new NotFoundException(`Asignación con ID ${id} no encontrada`);
+    }
+
+    if (!asignacion.activo) {
+      throw new BadRequestException("La asignación ya está inactiva");
+    }
+
+    const empleado = Array.isArray(asignacion.empleado)
+      ? asignacion.empleado[0]
+      : asignacion.empleado;
+    const subpuesto = Array.isArray(asignacion.subpuesto)
+      ? asignacion.subpuesto[0]
+      : asignacion.subpuesto;
+
+    const fechaActual = new Date().toISOString().split('T')[0];
+    const horaActual = new Date().toISOString().split('T')[1].split('.')[0];
+
+    // 2. Desactivar asignación con fecha de retiro
+    const { data: asignacionActualizada, error: updateError } = await supabase
+      .from("asignacion_guardas_puesto")
+      .update({
+        activo: false,
+        fecha_fin: fecha_retiro, // Fecha efectiva de retiro
+        hora_fin: horaActual,
+        motivo_finalizacion: motivo,
+        observaciones: motivo_detalle
+          ? `${asignacion.observaciones || ''}\n[${fechaActual}] Retiro (${motivo}): ${motivo_detalle}`.trim()
+          : asignacion.observaciones,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (updateError) {
+      throw new BadRequestException(`Error al retirar: ${updateError.message}`);
+    }
+
+    // 3. ACTUALIZAR turnos futuros a RET (Retirado)
+    const { data: turnosActualizados, error: turnosError } = await supabase
+      .from("turnos")
+      .update({
+        tipo_turno: 'RET',
+        estado_turno: 'RETIRADO',
+        observaciones: motivo_detalle ? `Retiro: ${motivo_detalle}` : `Retirado por ${motivo}`,
+        updated_at: new Date().toISOString()
+      })
+      .eq("empleado_id", asignacion.empleado_id)
+      .eq("subpuesto_id", asignacion.subpuesto_id)
+      .gte("fecha", fecha_retiro)
+      .in("estado_turno", ["programado", "pendiente"])
+      .select("id");
+
+    const cantidadTurnos = turnosActualizados?.length || 0;
+
+    if (turnosError) {
+      this.logger.warn(`⚠️ Error actualizando turnos a RET: ${turnosError.message}`);
+    } else {
+      this.logger.log(`✅ ${cantidadTurnos} turnos futuros marcados como RET para el empleado`);
+    }
+
+    // 4. Terminar contrato si se solicita
+    let contratoMessage = "";
+    if (terminar_contrato) {
+      // Buscar el contrato activo del empleado
+      const contratoId = empleado.contrato_personal_id || asignacion.contrato_id;
+
+      if (contratoId) {
+        // Actualizar contrato
+        await supabase
+          .from('contratos_personal')
+          .update({
+            estado: 'terminado',
+            fecha_fin: fecha_retiro,
+          })
+          .eq('id', contratoId);
+
+        // Desvincular e inactivar empleado
+        await supabase
+          .from('empleados')
+          .update({
+            contrato_personal_id: null,
+            asignado: false,
+            activo: false, // Inactivar empleado general
+            fecha_salida: fecha_retiro
+          })
+          .eq('id', asignacion.empleado_id);
+
+        contratoMessage = " y contrato terminado exitosamente";
+      }
+    } else {
+      // Si no se termina el contrato, verificar si el empleado tiene otras asignaciones activas
+      const { count: otrasAsignaciones } = await supabase
+        .from('asignacion_guardas_puesto')
+        .select('*', { count: 'exact', head: true })
+        .eq('empleado_id', asignacion.empleado_id)
+        .eq('activo', true);
+
+      if (!otrasAsignaciones || otrasAsignaciones === 0) {
+        // Solo marcar como no asignado
+        await supabase.from('empleados').update({ asignado: false }).eq('id', asignacion.empleado_id);
+      }
+    }
+
+    this.logger.log(
+      `✅ Empleado ${empleado?.nombre_completo} retirado de ${subpuesto?.nombre} (Motivo: ${motivo})`
+    );
+
+    return {
+      message: `Empleado retirado exitosamente${contratoMessage}`,
+      asignacion: asignacionActualizada,
+      turnos_marcados: cantidadTurnos,
+      detalles: {
+        empleado: empleado?.nombre_completo,
+        subpuesto: subpuesto?.nombre,
+        motivo,
+        fecha_retiro,
+        turnos_actualizados: cantidadTurnos,
+        contrato_terminado: terminar_contrato
+      }
+    };
+  }
+
+  /**
    * 🔄 Reasignar turnos pendientes a un nuevo empleado
    * Se ejecuta automáticamente al crear una nueva asignación
    */

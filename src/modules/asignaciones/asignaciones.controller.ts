@@ -119,6 +119,51 @@ export class AsignacionesController {
     return this.asignacionesService.desasignar(id, motivo, motivo_detalle);
   }
 
+  @Post(":id/retirar")
+  @RequirePermissions("asignaciones")
+  @ApiOperation({
+    summary: "Retirar empleado de un subpuesto",
+    description: "Retira un empleado de un subpuesto desde una fecha específica. Conserva los turnos en el historial pero los marca como 'RET'. Opcionalmente permite terminar el contrato del empleado."
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['fecha_retiro', 'motivo'],
+      properties: {
+        fecha_retiro: {
+          type: 'string',
+          format: 'date',
+          description: 'Fecha desde la cual el empleado se retira'
+        },
+        motivo: {
+          type: 'string',
+          description: 'Motivo del retiro (ej. renuncia, cambio de puesto)'
+        },
+        motivo_detalle: {
+          type: 'string',
+          description: 'Observaciones detalladas sobre el retiro'
+        },
+        terminar_contrato: {
+          type: 'boolean',
+          description: 'Establecer en true para terminar el contrato laboral e inactivar al empleado'
+        }
+      }
+    }
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Empleado retirado exitosamente',
+  })
+  async retirar(
+    @Param("id") id: number,
+    @Body("fecha_retiro") fecha_retiro: string,
+    @Body("motivo") motivo: string,
+    @Body("motivo_detalle") motivo_detalle?: string,
+    @Body("terminar_contrato") terminar_contrato?: boolean
+  ) {
+    return this.asignacionesService.retirar(id, fecha_retiro, motivo, motivo_detalle, terminar_contrato);
+  }
+
   @Post(":id/reemplazar")
   @RequirePermissions("asignaciones")
   @ApiOperation({
