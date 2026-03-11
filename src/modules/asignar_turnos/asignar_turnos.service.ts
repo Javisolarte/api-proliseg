@@ -752,6 +752,7 @@ export class AsignarTurnosService {
       .eq('subpuesto_id', subpuesto_id)
       .gte('fecha', desde)
       .lte('fecha', hasta)
+      .neq('tipo_turno', 'RET') // ✅ NUNCA eliminar turnos de empleados retirados
       // .eq('estado_turno', 'programado') // Comentado para asegurar limpieza completa en rangos dados
       .select();
 
