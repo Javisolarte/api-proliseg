@@ -656,7 +656,9 @@ export class AsignacionesService {
       .from("turnos")
       .update({
         tipo_turno: 'RET',
-        observaciones: motivo_detalle ? `Retiro: ${motivo_detalle}` : `Retirado por ${motivo}`,
+        observaciones: motivo_detalle
+          ? `Retirado del puesto - ${motivo_detalle}`
+          : `Retirado del puesto`,
         updated_at: new Date().toISOString()
       })
       .eq("empleado_id", asignacion.empleado_id)
