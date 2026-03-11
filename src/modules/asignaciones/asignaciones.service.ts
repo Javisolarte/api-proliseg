@@ -662,7 +662,7 @@ export class AsignacionesService {
       .eq("empleado_id", asignacion.empleado_id)
       .eq("subpuesto_id", asignacion.subpuesto_id)
       .gte("fecha", fecha_retiro)
-      .in("estado_turno", ["programado", "pendiente"])
+      .neq("tipo_turno", "RET") // Avoid re-processing already-retired shifts
       .select("id");
 
     const cantidadTurnos = turnosActualizados?.length || 0;
