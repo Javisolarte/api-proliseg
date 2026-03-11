@@ -133,6 +133,18 @@ export class NominaService {
             throw new BadRequestException('No hay contratos activos para generar nómina.');
         }
 
+        // 4.5 Obtener TODOS los turnos para todos los contratos en el periodo
+        const { data: turnosRaw, error: errTurnos } = await supabase
+            .from('turnos')
+            .select('*')
+            .gte('fecha', periodo.fecha_inicio)
+            .lte('fecha', periodo.fecha_fin);
+
+        if (errTurnos) {
+            this.logger.error(`Error buscando turnos: ${errTurnos.message}`);
+            throw new InternalServerErrorException(errTurnos.message);
+        }
+
         const resultados: any[] = [];
 
         // 5. Calcular por Empleado (Iterando contratos)
@@ -146,15 +158,53 @@ export class NominaService {
             const valorHora = salarioBase / 240; // Base 30 dias * 8 horas = 240
 
 
-            // A. Calcular Horas (Simulado o desde reportes de turnos)
-            // TODO: Conectar con modulo de turnos para obtener horas reales.
-            // Por ahora 0 extras.
+            // A. Calcular Horas (Desde reportes de turnos)
             const horasExtras = {
                 diurna: 0,
                 nocturna: 0,
                 festiva: 0,
                 dominical: 0,
             };
+            let recargo_nocturno_horas = 0;
+
+            const turnosEmpleado = turnosRaw?.filter(t => t.empleado_id === emp.id).sort((a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime()) || [];
+
+            const weeks: Record<string, typeof turnosEmpleado> = {};
+            turnosEmpleado.forEach(t => {
+                const d = new Date(t.fecha);
+                d.setHours(0, 0, 0, 0);
+                d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7);
+                const week1 = new Date(d.getFullYear(), 0, 4);
+                const weekNum = 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
+                const key = `${d.getFullYear()}-W${weekNum.toString().padStart(2, '0')}`;
+                if (!weeks[key]) weeks[key] = [];
+                weeks[key].push(t);
+            });
+
+            Object.values(weeks).forEach(weekTurnos => {
+                let weeklyHours = 0;
+                weekTurnos.forEach(t => {
+                    const tipo = t.tipo_turno?.toLowerCase() || '';
+                    const isNight = tipo === 'n' || tipo === 'noche';
+                    const isDay = tipo === 'd' || tipo === 'dia' || tipo === 't' || tipo === 'tarde';
+
+                    if (isDay || isNight) {
+                        const shiftHours = 11;
+                        if (isNight) recargo_nocturno_horas += 11;
+
+                        if (weeklyHours >= 44) {
+                            if (isNight) horasExtras.nocturna += shiftHours;
+                            else horasExtras.diurna += shiftHours;
+                        } else if (weeklyHours + shiftHours > 44) {
+                            const ordinarias = 44 - weeklyHours;
+                            const extra = shiftHours - ordinarias;
+                            if (isNight) horasExtras.nocturna += extra;
+                            else horasExtras.diurna += extra;
+                        }
+                        weeklyHours += shiftHours;
+                    }
+                });
+            });
 
             const totalHorasExtraValor =
                 horasExtras.diurna * valorHora * getMultiplicador('hora_extra_diurna') +
@@ -162,8 +212,9 @@ export class NominaService {
                 horasExtras.festiva * valorHora * getMultiplicador('hora_extra_festiva') +
                 horasExtras.dominical * valorHora * getMultiplicador('hora_dominical');
 
-            const auxilioTransporte = 0; // Debería venir de parámetros (valor fijo)
-            // TODO: Agregar auxilio transporte a parametros
+            const totalRecargosCalculado = recargo_nocturno_horas * valorHora * getMultiplicador('recargo_nocturno');
+
+            const auxilioTransporte = getMultiplicador('auxilio_transporte');
 
             const totalDevengado = salarioBase + totalHorasExtraValor + auxilioTransporte;
 
@@ -188,61 +239,14 @@ export class NominaService {
 
             const netoPagar = totalDevengado - totalDeducciones;
 
-            // C. Guardar Nomina Empleado (Upsert manual logic to preserve hours)
+            // C. Guardar Nomina Empleado
 
-            // 1. Buscar registro existente para preservar horas/recargos manuales (si no es recalculo forzoso destructivo)
             const { data: existingNomina } = await supabase
                 .from('nomina_empleado')
                 .select('*')
                 .eq('empleado_id', emp.id)
                 .eq('periodo_id', periodo.id)
                 .single();
-
-            // Si existe, usamos sus horas si son mayores a 0 (asumiendo que las registradas manualmente prevalecen o se suman)
-            // Aquí asumimos que si ya existen en DB, son las válidas. 
-            // Si queremos forzar recalculo de horas desde turnos, sería otra lógica.
-            // PERO el requerimiento es "Registrar variables del mes" (Novedades/Horas) y luego generar.
-            // Entonces, si ya están en DB, debemos respetarlas.
-
-            const currentHorasExtras = {
-                diurna: existingNomina?.horas_extra_diurnas ?? horasExtras.diurna,
-                nocturna: existingNomina?.horas_extra_nocturnas ?? horasExtras.nocturna,
-                festiva: existingNomina?.horas_extra_festivas ?? horasExtras.festiva,
-                dominical: existingNomina?.horas_dominicales ?? horasExtras.dominical,
-            };
-
-            // Recalcular devengado con horas preservadas
-            const totalHorasExtraValorPreservado =
-                (currentHorasExtras.diurna || 0) * valorHora * getMultiplicador('hora_extra_diurna') +
-                (currentHorasExtras.nocturna || 0) * valorHora * getMultiplicador('hora_extra_nocturna') +
-                (currentHorasExtras.festiva || 0) * valorHora * getMultiplicador('hora_extra_festiva') +
-                (currentHorasExtras.dominical || 0) * valorHora * getMultiplicador('hora_dominical');
-
-            // Recargos (si hubiera lógica de valor)
-            // Asumimos total_recargos viene de DB si existe, o 0.
-            const totalRecargos = existingNomina?.total_recargos || 0;
-
-            const totalDevengadoFinal = salarioBase + totalHorasExtraValorPreservado + auxilioTransporte + totalRecargos;
-
-            // Recalcular deducciones sobre nuevo devengado si aplica
-            let totalDeduccionesFinal = 0;
-            const deduccionesCalculadasFinal: any[] = [];
-            for (const ded of deducciones || []) {
-                let valor = 0;
-                if (ded.tipo === 'porcentaje') {
-                    const base = ded.aplica_a === 'salario' ? salarioBase : totalDevengadoFinal;
-                    valor = base * (Number(ded.valor) / 100);
-                } else {
-                    valor = Number(ded.valor);
-                }
-                totalDeduccionesFinal += valor;
-                deduccionesCalculadasFinal.push({
-                    deduccion_id: ded.id,
-                    valor_calculado: valor,
-                });
-            }
-
-            const netoPagarFinal = totalDevengadoFinal - totalDeduccionesFinal;
 
             // Upsert Logica: Si existe update, si no insert.
             let nominaId: number;
@@ -252,15 +256,18 @@ export class NominaService {
                     .from('nomina_empleado')
                     .update({
                         salario_id: contrato.salario_id,
-                        contrato_id: contrato.id, // Corrected: use contract.id source of truth
+                        contrato_id: contrato.id,
                         horas_normales: 240,
-                        total_horas_extra: totalHorasExtraValorPreservado,
-                        total_recargos: totalRecargos,
-                        total_deducciones: totalDeduccionesFinal,
-                        total_devengado: totalDevengadoFinal,
-                        total_pagar: netoPagarFinal,
+                        horas_extra_diurnas: horasExtras.diurna,
+                        horas_extra_nocturnas: horasExtras.nocturna,
+                        horas_extra_festivas: horasExtras.festiva,
+                        horas_dominicales: horasExtras.dominical,
+                        total_horas_extra: totalHorasExtraValor,
+                        total_recargos: totalRecargosCalculado,
+                        total_deducciones: totalDeducciones,
+                        total_devengado: totalDevengado,
+                        total_pagar: netoPagar,
                         generado: true,
-                        // No tocamos las columnas de horas individuales, se preservan.
                     })
                     .eq('id', existingNomina.id)
                     .select()
@@ -280,15 +287,15 @@ export class NominaService {
                         salario_id: contrato.salario_id, // Corrected: use contract.salario_id source of truth
                         periodo_id: periodo.id,
                         horas_normales: 240,
-                        horas_extra_diurnas: currentHorasExtras.diurna,
-                        horas_extra_nocturnas: currentHorasExtras.nocturna,
-                        horas_extra_festivas: currentHorasExtras.festiva,
-                        horas_dominicales: currentHorasExtras.dominical,
-                        total_horas_extra: totalHorasExtraValorPreservado,
-                        total_recargos: totalRecargos,
-                        total_deducciones: totalDeduccionesFinal,
-                        total_devengado: totalDevengadoFinal,
-                        total_pagar: netoPagarFinal,
+                        horas_extra_diurnas: horasExtras.diurna,
+                        horas_extra_nocturnas: horasExtras.nocturna,
+                        horas_extra_festivas: horasExtras.festiva,
+                        horas_dominicales: horasExtras.dominical,
+                        total_horas_extra: totalHorasExtraValor,
+                        total_recargos: totalRecargosCalculado,
+                        total_deducciones: totalDeducciones,
+                        total_devengado: totalDevengado,
+                        total_pagar: netoPagar,
                         generado: true,
                     })
                     .select()
@@ -304,7 +311,7 @@ export class NominaService {
             // D. Guardar Detalle Deducciones (Reemplazar)
             await supabase.from('nomina_empleado_deducciones').delete().eq('nomina_empleado_id', nominaId);
 
-            for (const dedCalc of deduccionesCalculadasFinal) {
+            for (const dedCalc of deduccionesCalculadas) {
                 await supabase.from('nomina_empleado_deducciones').insert({
                     nomina_empleado_id: nominaId,
                     deduccion_id: dedCalc.deduccion_id,
@@ -388,6 +395,22 @@ export class NominaService {
         if (errEmp || !emp) throw new NotFoundException('Empleado no encontrado o sin contrato activo.');
         if (!emp.contrato_personal_id) throw new BadRequestException('Empleado sin contrato personal activo.');
 
+        const { data: periodo } = await supabase
+            .from('nomina_periodos')
+            .select('*')
+            .eq('anio', anio)
+            .eq('mes', mes)
+            .single();
+
+        if (!periodo) throw new BadRequestException(`No se encontró periodo válido para ${anio}-${mes}`);
+
+        const { data: turnosRaw } = await supabase
+            .from('turnos')
+            .select('*')
+            .eq('empleado_id', empleadoId)
+            .gte('fecha', periodo.fecha_inicio)
+            .lte('fecha', periodo.fecha_fin);
+
         // 2. Obtener Parámetros Anuales
         const { data: parametros } = await supabase
             .from('nomina_valores_hora')
@@ -407,13 +430,53 @@ export class NominaService {
         const salarioBase = Array.isArray(salarioData) ? (salarioData[0]?.valor || 0) : (salarioData?.valor || 0);
         const valorHora = salarioBase / 240;
 
-        // Simulación de horas (idealmente vendría de inputs o turnos)
+        // A. Calcular Horas (Desde reportes de turnos)
         const horasExtras = {
             diurna: 0,
             nocturna: 0,
             festiva: 0,
             dominical: 0,
         };
+        let recargo_nocturno_horas = 0;
+
+        const turnosEmpleado = turnosRaw?.sort((a,b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime()) || [];
+        
+        const weeks: Record<string, typeof turnosEmpleado> = {};
+        turnosEmpleado.forEach(t => {
+            const d = new Date(t.fecha);
+            d.setHours(0, 0, 0, 0);
+            d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7);
+            const week1 = new Date(d.getFullYear(), 0, 4);
+            const weekNum = 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
+            const key = `${d.getFullYear()}-W${weekNum.toString().padStart(2, '0')}`;
+            if (!weeks[key]) weeks[key] = [];
+            weeks[key].push(t);
+        });
+
+        Object.values(weeks).forEach(weekTurnos => {
+            let weeklyHours = 0;
+            weekTurnos.forEach(t => {
+                const tipo = t.tipo_turno?.toLowerCase() || '';
+                const isNight = tipo === 'n' || tipo === 'noche';
+                const isDay = tipo === 'd' || tipo === 'dia' || tipo === 't' || tipo === 'tarde';
+                
+                if (isDay || isNight) {
+                    const shiftHours = 11;
+                    if (isNight) recargo_nocturno_horas += 11;
+
+                    if (weeklyHours >= 44) {
+                        if (isNight) horasExtras.nocturna += shiftHours;
+                        else horasExtras.diurna += shiftHours;
+                    } else if (weeklyHours + shiftHours > 44) {
+                        const ordinarias = 44 - weeklyHours;
+                        const extra = shiftHours - ordinarias;
+                        if (isNight) horasExtras.nocturna += extra;
+                        else horasExtras.diurna += extra;
+                    }
+                    weeklyHours += shiftHours;
+                }
+            });
+        });
 
         const totalHorasExtraValor =
             horasExtras.diurna * valorHora * getMultiplicador('hora_extra_diurna') +
@@ -421,8 +484,10 @@ export class NominaService {
             horasExtras.festiva * valorHora * getMultiplicador('hora_extra_festiva') +
             horasExtras.dominical * valorHora * getMultiplicador('hora_dominical');
 
-        const auxilioTransporte = 0; // TODO: Parameterize
-        const totalDevengado = salarioBase + totalHorasExtraValor + auxilioTransporte;
+        const totalRecargosCalculado = recargo_nocturno_horas * valorHora * getMultiplicador('recargo_nocturno');
+
+        const auxilioTransporte = getMultiplicador('auxilio_transporte');
+        const totalDevengado = salarioBase + totalHorasExtraValor + auxilioTransporte + totalRecargosCalculado;
 
         // 4. Deducciones
         const { data: deducciones } = await supabase
@@ -452,6 +517,7 @@ export class NominaService {
             devengado: {
                 basico: salarioBase,
                 horas_extras: totalHorasExtraValor,
+                recargos: totalRecargosCalculado,
                 auxilio_transporte: auxilioTransporte,
                 total: totalDevengado
             },
