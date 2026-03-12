@@ -113,8 +113,22 @@ export class ContratosPersonalService {
             const docConPdf = await this.documentosService.generarPdf(docGenerado.id);
             contratoPdfUrl = docConPdf.url_pdf;
 
-            // SI hay empleador_id, aplicar auto-firma del empleador (Orden 2)
-            if (createDto.empleador_id) {
+            // SI hay firma manual del empleador (Orden 2)
+            if (createDto.firma_empleador_base64) {
+                const employerObj = await this.supabaseService.getClient().from('empleados').select('*').eq('id', createDto.empleador_id).single();
+                await this.firmasService.create({
+                    documento_id: docGenerado.id,
+                    empleado_id: createDto.empleador_id,
+                    nombre_firmante: employerObj.data?.nombre_completo || 'Representante Legal',
+                    documento_identidad_firmante: employerObj.data?.cedula || '',
+                    cargo_firmante: employerObj.data?.cargo_oficial || 'Empleador',
+                    tipo_firma: 'digital',
+                    firma_base64: createDto.firma_empleador_base64,
+                    orden: 2,
+                    es_ultima_firma: false
+                }, '127.0.0.1');
+            } else if (createDto.empleador_id) {
+                // SII no hay manual, aplicar auto-firma del empleador (Orden 2)
                 await this.firmasService.autoSign(docGenerado.id, createDto.empleador_id, 2);
             }
         }

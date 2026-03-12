@@ -98,4 +98,9 @@ export class CreateContratoPersonalDto {
     @IsInt()
     @Transform(({ value }) => value ? parseInt(value) : undefined)
     empleador_id?: number;
+
+    @ApiProperty({ description: 'Firma manual del empleador en base64 (opcional)', required: false })
+    @IsOptional()
+    @IsString()
+    firma_empleador_base64?: string;
 }
