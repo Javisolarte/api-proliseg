@@ -279,10 +279,28 @@ export class DocumentosGeneradosService {
                 }
             }
 
+            // 3.7 Inyectar Estilos para evitar truncado de texto y mejorar visualización PDF
+            const pdfStyles = `
+            <style>
+                body { font-family: 'Helvetica', 'Arial', sans-serif; line-height: 1.5; color: #1a202c; }
+                p, div, li { page-break-inside: avoid; margin-bottom: 0.5em; text-align: justify; }
+                h1, h2, h3, h4, h5, h6 { page-break-after: avoid; }
+                table { page-break-inside: auto; width: 100%; border-collapse: collapse; }
+                tr { page-break-inside: avoid; page-break-after: auto; }
+                img { max-width: 100%; height: auto; display: block; }
+                .no-break { page-break-inside: avoid; }
+                @media print {
+                    @page { margin: 20mm; }
+                    body { -webkit-print-color-adjust: exact; }
+                }
+            </style>
+            `;
+
             // Si el contenido no tiene cierre de body/html, lo añadimos al final. 
             // Si es un documento completo, lo ideal es usar headerTemplate/footerTemplate de puppeteer,
             // pero eso requiere margins.
             // Para simplicidad, lo agregamos al final del contenido HTML, asumiendo flujo normal.
+            htmlContenido = pdfStyles + htmlContenido;
             if (footerHtml) {
                 htmlContenido += footerHtml;
             }

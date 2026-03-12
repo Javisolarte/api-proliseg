@@ -200,7 +200,7 @@ export class FirmasService {
     /**
      * ✍️ AUTO-SIGN: Firma un documento usando la firma guardada del empleado
      */
-    async autoSign(documentoId: number, empleadoId: number, ipAddress: string = '127.0.0.1') {
+    async autoSign(documentoId: number, empleadoId: number, orden: number = 1, ipAddress: string = '127.0.0.1') {
         const supabase = this.supabaseService.getClient();
 
         // 1. Obtener datos del empleado y su firma maestra
@@ -224,7 +224,7 @@ export class FirmasService {
             cargo_firmante: empleado.cargo_oficial || 'Administrador',
             tipo_firma: 'digital',
             firma_base64: empleado.firma_digital_base64,
-            orden: 1, // Por defecto al principio
+            orden: orden,
             es_ultima_firma: false // Dependerá del flujo
         }, ipAddress);
     }

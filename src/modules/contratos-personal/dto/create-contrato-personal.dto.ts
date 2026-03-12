@@ -92,4 +92,10 @@ export class CreateContratoPersonalDto {
     @ApiProperty({ description: 'Datos JSON adicionales (opcional)', required: false })
     @IsOptional()
     datos_json?: any;
+
+    @ApiProperty({ description: 'ID del empleado/representante que firma como empleador (opcional)', required: false })
+    @IsOptional()
+    @IsInt()
+    @Transform(({ value }) => value ? parseInt(value) : undefined)
+    empleador_id?: number;
 }

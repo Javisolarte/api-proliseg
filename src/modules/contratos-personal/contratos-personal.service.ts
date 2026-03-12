@@ -13,6 +13,7 @@ import { UpdateContratoPersonalDto } from './dto/update-contrato-personal.dto';
 import { AuditoriaService } from '../auditoria/auditoria.service';
 import { DocumentosGeneradosService } from '../documentos-generados/documentos-generados.service';
 import { EntidadTipo } from '../documentos-generados/dto/documento-generado.dto';
+import { FirmasService } from '../firmas/firmas.service';
 
 @Injectable()
 export class ContratosPersonalService {
@@ -22,6 +23,7 @@ export class ContratosPersonalService {
         private readonly supabaseService: SupabaseService,
         private readonly auditoriaService: AuditoriaService,
         private readonly documentosService: DocumentosGeneradosService,
+        private readonly firmasService: FirmasService,
     ) { }
 
     // 🔹 Crear contrato
@@ -110,6 +112,11 @@ export class ContratosPersonalService {
             // Generar PDF inicial
             const docConPdf = await this.documentosService.generarPdf(docGenerado.id);
             contratoPdfUrl = docConPdf.url_pdf;
+
+            // SI hay empleador_id, aplicar auto-firma del empleador (Orden 2)
+            if (createDto.empleador_id) {
+                await this.firmasService.autoSign(docGenerado.id, createDto.empleador_id, 2);
+            }
         }
 
         // 5. Determinar estado inicial

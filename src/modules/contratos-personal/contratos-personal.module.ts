@@ -5,9 +5,10 @@ import { SupabaseModule } from '../supabase/supabase.module';
 import { AuditoriaModule } from '../auditoria/auditoria.module';
 import { AuthModule } from '../auth/auth.module';
 import { DocumentosGeneradosModule } from '../documentos-generados/documentos-generados.module';
+import { FirmasModule } from '../firmas/firmas.module';
 
 @Module({
-    imports: [SupabaseModule, AuditoriaModule, AuthModule, DocumentosGeneradosModule],
+    imports: [SupabaseModule, AuditoriaModule, AuthModule, DocumentosGeneradosModule, FirmasModule],
     controllers: [ContratosPersonalController],
     providers: [ContratosPersonalService],
     exports: [ContratosPersonalService],
