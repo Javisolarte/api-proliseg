@@ -109,8 +109,25 @@ export class ContratosPersonalService {
 
             documentoGeneradoId = docGenerado.id;
 
-            // 3. Registrar FIRMA DEL EMPLEADOR ANTES de generar el PDF
-            // Esto asegura que el PDF incluya la firma desde la primera versión
+            const datosFinales = typeof createDto.datos_json === 'string' ? JSON.parse(createDto.datos_json) : createDto.datos_json;
+
+            // 3. Registrar FIRMA DEL TRABAJADOR (Orden 1) si viene en el JSON
+            if (datosFinales?.firma_1) {
+                await this.firmasService.create({
+                    documento_id: docGenerado.id,
+                    empleado_id: createDto.empleado_id,
+                    nombre_firmante: empleado.nombre_completo,
+                    documento_identidad_firmante: empleado.cedula,
+                    cargo_firmante: empleado.cargo_oficial || 'Trabajador',
+                    tipo_firma: 'digital',
+                    firma_base64: datosFinales.firma_1,
+                    huella_base64: datosFinales.huella_1 || null,
+                    orden: 1,
+                    es_ultima_firma: false
+                }, '127.0.0.1');
+            }
+
+            // 4. Registrar FIRMA DEL EMPLEADOR (Orden 2)
             if (createDto.firma_empleador_base64) {
                 const employerObj = await this.supabaseService.getClient().from('empleados').select('*').eq('id', createDto.empleador_id).single();
                 await this.firmasService.create({
@@ -125,11 +142,10 @@ export class ContratosPersonalService {
                     es_ultima_firma: false
                 }, '127.0.0.1');
             } else if (createDto.empleador_id) {
-                // SII no hay manual, aplicar auto-firma del empleador (Orden 2)
                 await this.firmasService.autoSign(docGenerado.id, createDto.empleador_id, 2);
             }
 
-            // 4. Generar PDF inicial (Ya con la firma del empleador incluida)
+            // 5. Generar PDF (Ya con ambas firmas incluidas)
             const docConPdf = await this.documentosService.generarPdf(docGenerado.id);
             contratoPdfUrl = docConPdf.url_pdf;
         }

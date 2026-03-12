@@ -282,31 +282,48 @@ export class DocumentosGeneradosService {
             // 3.7 Inyectar Estilos para evitar truncado de texto y mejorar visualización PDF
             const pdfStyles = `
             <style>
-                body { font-family: 'Helvetica', 'Arial', sans-serif; line-height: 1.4; color: #1a202c; -webkit-print-color-adjust: exact; }
+                body { 
+                    font-family: 'Helvetica', 'Arial', sans-serif; 
+                    line-height: 1.3; 
+                    color: #1a202c; 
+                    -webkit-print-color-adjust: exact; 
+                }
                 
                 /* Reset margins and allow natural flow */
-                p, div, li { 
-                    margin-bottom: 0.6em; 
+                p, div { 
+                    margin-bottom: 0.5em; 
                     text-align: justify; 
-                    orphans: 3; 
-                    widows: 3;
+                    orphans: 2; 
+                    widows: 2;
+                    display: block;
                 }
 
-                /* Only avoid breaks in small elements or specifically marked ones */
-                li { page-break-inside: auto; }
-                .no-break, h1, h2, h3, h4, h5, h6 { page-break-inside: avoid; page-break-after: avoid; }
+                li { 
+                    margin-bottom: 0.3em; 
+                    line-height: 1.2;
+                    page-break-inside: auto; 
+                }
+
+                /* Only avoid breaks in specifically marked small blocks */
+                .no-break, h1, h2, h3, h4, h5, h6 { 
+                    page-break-inside: avoid; 
+                    page-break-after: avoid; 
+                }
                 
-                /* Tables should allow breaks between rows but not inside them if simple */
-                table { width: 100%; border-collapse: collapse; page-break-inside: auto; margin-bottom: 1em; }
+                table { 
+                    width: 100%; 
+                    border-collapse: collapse; 
+                    page-break-inside: auto; 
+                    margin-bottom: 0.8em; 
+                }
                 tr { page-break-inside: avoid; }
-                td, th { padding: 4px; vertical-align: top; }
+                td, th { padding: 3px; vertical-align: top; }
 
                 /* Signatures must ALWAYS stay together */
                 .signature-container, .firmas-grid { 
                     page-break-inside: avoid !important; 
                     display: block;
                     width: 100%;
-                    margin-top: 20px;
                 }
 
                 img { max-width: 100%; height: auto; display: block; }

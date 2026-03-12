@@ -53,12 +53,9 @@ export class FirmasService {
                     .eq("documento_id", docId)
                     .lt("orden", orden);
 
-                // Si el orden es 2, debe haber al menos 1 firma anterior.
-                // Nota: Esta lógica depende de definir firmantes esperados.
-                // Si no se definen, es difícil validar "todas las anteriores".
-                // Asumiremos validación simple: debe existir alguna firma previa si orden > 1
+                // Solo loguear advertencia si falta firma previa. No bloqueamos para permitir flujos flexibles.
                 if (count === 0) {
-                    throw new BadRequestException(`No se puede firmar en orden ${orden} sin firmas previas.`);
+                    this.logger.warn(`Registrando firma en orden ${orden} para documento ${docId} sin firmas previas registradas en sistema.`);
                 }
             }
 
