@@ -18,9 +18,10 @@ export class FirmasService {
             const supabase = this.supabaseService.getClient();
             const docId = createDto.documento_id;
 
-            // 1. Validar estado del documento
+            // 1. Validar estado del documento (Permitir borrador, pendiente o generando)
             const doc = await this.documentosService.findOne(docId);
-            if (doc.estado !== 'pendiente_firmas' && doc.estado !== 'borrador') {
+            const estadosPermitidos = ['pendiente_firmas', 'borrador', 'generando_pdf'];
+            if (!estadosPermitidos.includes(doc.estado)) {
                 throw new BadRequestException(`El documento no está pendiente de firmas (Estado: ${doc.estado})`);
             }
 

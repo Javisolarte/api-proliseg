@@ -109,11 +109,8 @@ export class ContratosPersonalService {
 
             documentoGeneradoId = docGenerado.id;
 
-            // Generar PDF inicial
-            const docConPdf = await this.documentosService.generarPdf(docGenerado.id);
-            contratoPdfUrl = docConPdf.url_pdf;
-
-            // SI hay firma manual del empleador (Orden 2)
+            // 3. Registrar FIRMA DEL EMPLEADOR ANTES de generar el PDF
+            // Esto asegura que el PDF incluya la firma desde la primera versión
             if (createDto.firma_empleador_base64) {
                 const employerObj = await this.supabaseService.getClient().from('empleados').select('*').eq('id', createDto.empleador_id).single();
                 await this.firmasService.create({
@@ -131,6 +128,10 @@ export class ContratosPersonalService {
                 // SII no hay manual, aplicar auto-firma del empleador (Orden 2)
                 await this.firmasService.autoSign(docGenerado.id, createDto.empleador_id, 2);
             }
+
+            // 4. Generar PDF inicial (Ya con la firma del empleador incluida)
+            const docConPdf = await this.documentosService.generarPdf(docGenerado.id);
+            contratoPdfUrl = docConPdf.url_pdf;
         }
 
         // 5. Determinar estado inicial

@@ -243,18 +243,18 @@ export class DocumentosGeneradosService {
 
             // Inyectar firmas en placeholders específicos ej: {{firma_1}}, {{firma_2}}
             if (firmas && firmas.length > 0) {
-                firmas.forEach((f, index) => {
+                firmas.forEach((f) => {
                     if (f.firma_base64) {
                         const firmaHtml = `<img src="${f.firma_base64}" style="max-width: 180px; max-height: 80px; display: block; margin: 5px 0;" alt="Firma ${f.nombre_firmante || 'Registrada'}">`;
-                        // Soporte para placeholders {{firma_1}}, {{firma_2}}... con espacios opcionales
-                        htmlContenido = htmlContenido.replace(new RegExp(`{{\\s*firma_${index + 1}\\s*}}`, 'gi'), firmaHtml);
-                        // Soporte para placeholder genérico por orden
+                        // Usar f.orden para mapear correctamente al placeholder ej: {{firma_2}} para orden 2
+                        htmlContenido = htmlContenido.replace(new RegExp(`{{\\s*firma_${f.orden}\\s*}}`, 'gi'), firmaHtml);
+                        // Soporte para placeholder explícito por orden
                         htmlContenido = htmlContenido.replace(new RegExp(`{{\\s*firma_orden_${f.orden}\\s*}}`, 'gi'), firmaHtml);
                     }
                     // Inyectar Huella si existe
                     if (f.huella_base64) {
                         const huellaHtml = `<img src="${f.huella_base64}" style="max-width: 80px; max-height: 110px;" alt="Huella">`;
-                        htmlContenido = htmlContenido.replace(new RegExp(`{{\\s*huella_${index + 1}\\s*}}`, 'gi'), huellaHtml);
+                        htmlContenido = htmlContenido.replace(new RegExp(`{{\\s*huella_${f.orden}\\s*}}`, 'gi'), huellaHtml);
                         htmlContenido = htmlContenido.replace(new RegExp(`{{\\s*huella_orden_${f.orden}\\s*}}`, 'gi'), huellaHtml);
                     }
                 });
@@ -282,16 +282,40 @@ export class DocumentosGeneradosService {
             // 3.7 Inyectar Estilos para evitar truncado de texto y mejorar visualización PDF
             const pdfStyles = `
             <style>
-                body { font-family: 'Helvetica', 'Arial', sans-serif; line-height: 1.5; color: #1a202c; }
-                p, div, li { page-break-inside: avoid; margin-bottom: 0.5em; text-align: justify; }
-                h1, h2, h3, h4, h5, h6 { page-break-after: avoid; }
-                table { page-break-inside: auto; width: 100%; border-collapse: collapse; }
-                tr { page-break-inside: avoid; page-break-after: auto; }
+                body { font-family: 'Helvetica', 'Arial', sans-serif; line-height: 1.4; color: #1a202c; -webkit-print-color-adjust: exact; }
+                
+                /* Reset margins and allow natural flow */
+                p, div, li { 
+                    margin-bottom: 0.6em; 
+                    text-align: justify; 
+                    orphans: 3; 
+                    widows: 3;
+                }
+
+                /* Only avoid breaks in small elements or specifically marked ones */
+                li { page-break-inside: auto; }
+                .no-break, h1, h2, h3, h4, h5, h6 { page-break-inside: avoid; page-break-after: avoid; }
+                
+                /* Tables should allow breaks between rows but not inside them if simple */
+                table { width: 100%; border-collapse: collapse; page-break-inside: auto; margin-bottom: 1em; }
+                tr { page-break-inside: avoid; }
+                td, th { padding: 4px; vertical-align: top; }
+
+                /* Signatures must ALWAYS stay together */
+                .signature-container, .firmas-grid { 
+                    page-break-inside: avoid !important; 
+                    display: block;
+                    width: 100%;
+                    margin-top: 20px;
+                }
+
                 img { max-width: 100%; height: auto; display: block; }
-                .no-break { page-break-inside: avoid; }
+                
                 @media print {
-                    @page { margin: 20mm; }
-                    body { -webkit-print-color-adjust: exact; }
+                    @page { 
+                        size: letter;
+                        margin: 15mm 20mm; 
+                    }
                 }
             </style>
             `;
