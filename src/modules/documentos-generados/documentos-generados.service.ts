@@ -296,12 +296,10 @@ export class DocumentosGeneradosService {
                     orphans: 3; 
                     widows: 3;
                     display: block;
-                    page-break-inside: avoid; /* Prevent slicing lines */
-                    break-inside: avoid;
                 }
 
                 div {
-                    page-break-inside: auto; /* Allow containers to break to avoid gaps */
+                    page-break-inside: auto; 
                 }
 
                 li { 
@@ -309,25 +307,9 @@ export class DocumentosGeneradosService {
                     line-height: 1.3;
                 }
 
-                /* Ensure the content doesn't collide with the fixed header on any page */
                 body {
-                    padding-top: 25mm; 
-                    padding-bottom: 10mm;
-                }
-
-                /* Fixed header repeated on every page */
-                #page-header {
-                    position: fixed;
-                    top: 0px;
-                    left: 0;
-                    right: 0;
-                    font-size: 8px;
-                    color: #888;
-                    text-align: center;
-                    padding: 8px 0;
-                    background: white;
-                    border-bottom: 0.5px solid #eee;
-                    z-index: 9999;
+                    padding: 0;
+                    margin: 0;
                 }
 
                 /* Only avoid breaks in specifically marked small blocks */
@@ -368,9 +350,6 @@ export class DocumentosGeneradosService {
             // pero eso requiere margins.
             // Para simplicidad, lo agregamos al final del contenido HTML, asumiendo flujo normal.
             htmlContenido = pdfStyles + htmlContenido;
-            if (headerHtml) {
-                htmlContenido = headerHtml + htmlContenido;
-            }
 
             // 4. Generar PDF con Puppeteer (Navegador reutilizado)
             const browser = await this.getBrowser();
@@ -387,7 +366,14 @@ export class DocumentosGeneradosService {
                 const pdfBuffer = await page.pdf({
                     format: 'Letter' as puppeteer.PaperFormat,
                     printBackground: true,
-                    margin: { top: '25mm', right: '15mm', bottom: '20mm', left: '15mm' },
+                    displayHeaderFooter: !!headerHtml,
+                    headerTemplate: headerHtml ? `
+                        <div style="font-size: 7px; color: #888; width: 100%; text-align: center; padding-top: 5px; font-family: 'Helvetica', 'Arial', sans-serif; border-bottom: 0.1px solid #eee; margin: 0 15mm;">
+                            ${headerHtml.replace(/<div id="page-header">/g, '').replace(/<\/div>/g, '').trim()}
+                        </div>
+                    ` : '<span></span>',
+                    footerTemplate: '<div style="font-size: 7px; color: #888; width: 100%; text-align: center; font-family: \'Helvetica\', \'Arial\', sans-serif;"><span class="pageNumber"></span> / <span class="totalPages"></span></div>',
+                    margin: { top: '20mm', right: '15mm', bottom: '15mm', left: '15mm' },
                     timeout: 60000
                 });
                 this.logger.debug(`PDF generado localmente para doc ${id}`);
