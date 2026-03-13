@@ -267,13 +267,13 @@ export class DocumentosGeneradosService {
             htmlContenido = htmlContenido.replace(/{{\\s*huella_orden_\d+\\s*}}/gi, '');
 
             // 3.6. Insertar Footer con "Generado por"
-            let footerHtml = '';
+            let headerHtml = '';
             if (doc.created_by_id) {
                 // Intentar buscar en usuarios_externos (gestores)
                 const { data: usuario } = await supabase.from('usuarios_externos').select('nombre_completo').eq('id', doc.created_by_id).single();
                 if (usuario) {
-                    footerHtml = `
-                    <div id="footer">
+                    headerHtml = `
+                    <div id="page-header">
                         Generado por: ${usuario.nombre_completo.toUpperCase()} | Fecha: ${new Date().toLocaleString('es-CO', { timeZone: 'America/Bogota' })} | Ref: ${doc.codigo_referencia || id}
                     </div>`;
                 }
@@ -290,14 +290,18 @@ export class DocumentosGeneradosService {
                 }
                 
                 /* Reset margins and allow natural flow */
-                p, div, li { 
+                p, li { 
                     margin-bottom: 0.6em; 
                     text-align: justify; 
-                    orphans: 2; 
-                    widows: 2;
+                    orphans: 3; 
+                    widows: 3;
                     display: block;
-                    page-break-inside: auto; /* Allow natural breaks to avoid large gaps */
-                    break-inside: auto;
+                    page-break-inside: avoid; /* Prevent slicing lines */
+                    break-inside: avoid;
+                }
+
+                div {
+                    page-break-inside: auto; /* Allow containers to break to avoid gaps */
                 }
 
                 li { 
@@ -305,15 +309,16 @@ export class DocumentosGeneradosService {
                     line-height: 1.3;
                 }
 
-                /* Ensure the content doesn't collide with the fixed footer on any page */
+                /* Ensure the content doesn't collide with the fixed header on any page */
                 body {
-                    padding-bottom: 30mm; /* Large padding to clear footer area on last page */
+                    padding-top: 25mm; 
+                    padding-bottom: 10mm;
                 }
 
-                /* Fixed footer repeated on every page */
-                #footer {
+                /* Fixed header repeated on every page */
+                #page-header {
                     position: fixed;
-                    bottom: 0px;
+                    top: 0px;
                     left: 0;
                     right: 0;
                     font-size: 8px;
@@ -321,7 +326,7 @@ export class DocumentosGeneradosService {
                     text-align: center;
                     padding: 8px 0;
                     background: white;
-                    border-top: 0.5px solid #eee;
+                    border-bottom: 0.5px solid #eee;
                     z-index: 9999;
                 }
 
@@ -363,8 +368,8 @@ export class DocumentosGeneradosService {
             // pero eso requiere margins.
             // Para simplicidad, lo agregamos al final del contenido HTML, asumiendo flujo normal.
             htmlContenido = pdfStyles + htmlContenido;
-            if (footerHtml) {
-                htmlContenido += footerHtml;
+            if (headerHtml) {
+                htmlContenido = headerHtml + htmlContenido;
             }
 
             // 4. Generar PDF con Puppeteer (Navegador reutilizado)
@@ -382,7 +387,7 @@ export class DocumentosGeneradosService {
                 const pdfBuffer = await page.pdf({
                     format: 'Letter' as puppeteer.PaperFormat,
                     printBackground: true,
-                    margin: { top: '15mm', right: '15mm', bottom: '35mm', left: '15mm' },
+                    margin: { top: '25mm', right: '15mm', bottom: '20mm', left: '15mm' },
                     timeout: 60000
                 });
                 this.logger.debug(`PDF generado localmente para doc ${id}`);
