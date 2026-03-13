@@ -247,7 +247,8 @@ export class AsignacionesService {
     this.logger.log(`🔍 Buscando turnos pendientes para reasignar a empleado ${dto.empleado_id}...`);
     const turnosReasignados = await this.reasignarTurnosPendientes(
       dto.subpuesto_id,
-      dto.empleado_id
+      dto.empleado_id,
+      dto.fecha_inicio_patron || payload.fecha_asignacion
     );
 
     if (turnosReasignados > 0) {
@@ -743,10 +744,12 @@ export class AsignacionesService {
    */
   private async reasignarTurnosPendientes(
     subpuesto_id: number,
-    nuevo_empleado_id: number
+    nuevo_empleado_id: number,
+    fecha_inicio?: string
   ): Promise<number> {
     const supabase = this.supabaseService.getClient();
     const fechaActual = new Date().toISOString().split('T')[0];
+    const fechaFiltro = fecha_inicio || fechaActual;
 
     // Buscar turnos pendientes de asignación en este subpuesto
     const { data: turnosPendientes, error } = await supabase
@@ -758,7 +761,7 @@ export class AsignacionesService {
         updated_at: new Date().toISOString()
       })
       .eq("subpuesto_id", subpuesto_id)
-      .gte("fecha", fechaActual)
+      .gte("fecha", fechaFiltro)
       .eq("estado_turno", "pendiente_asignar")
       .is("empleado_id", null)
       .select("id");
