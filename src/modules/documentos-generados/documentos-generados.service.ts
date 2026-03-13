@@ -273,7 +273,7 @@ export class DocumentosGeneradosService {
                 const { data: usuario } = await supabase.from('usuarios_externos').select('nombre_completo').eq('id', doc.created_by_id).single();
                 if (usuario) {
                     footerHtml = `
-                    <div style="position: fixed; bottom: 0; width: 100%; font-size: 8px; color: #888; text-align: center; padding: 5px; background: white;">
+                    <div id="footer">
                         Generado por: ${usuario.nombre_completo.toUpperCase()} | Fecha: ${new Date().toLocaleString('es-CO', { timeZone: 'America/Bogota' })} | Ref: ${doc.codigo_referencia || id}
                     </div>`;
                 }
@@ -293,11 +293,11 @@ export class DocumentosGeneradosService {
                 p, div, li { 
                     margin-bottom: 0.6em; 
                     text-align: justify; 
-                    orphans: 3; 
-                    widows: 3;
+                    orphans: 2; 
+                    widows: 2;
                     display: block;
-                    page-break-inside: avoid; /* Prevent cutting lines in half */
-                    break-inside: avoid;
+                    page-break-inside: auto; /* Allow natural breaks to avoid large gaps */
+                    break-inside: auto;
                 }
 
                 li { 
@@ -305,9 +305,24 @@ export class DocumentosGeneradosService {
                     line-height: 1.3;
                 }
 
-                /* Ensure the content doesn't collide with the fixed footer */
+                /* Ensure the content doesn't collide with the fixed footer on any page */
                 body {
-                    padding-bottom: 50px;
+                    padding-bottom: 30mm; /* Large padding to clear footer area on last page */
+                }
+
+                /* Fixed footer repeated on every page */
+                #footer {
+                    position: fixed;
+                    bottom: 0px;
+                    left: 0;
+                    right: 0;
+                    font-size: 8px;
+                    color: #888;
+                    text-align: center;
+                    padding: 8px 0;
+                    background: white;
+                    border-top: 0.5px solid #eee;
+                    z-index: 9999;
                 }
 
                 /* Only avoid breaks in specifically marked small blocks */
@@ -367,7 +382,7 @@ export class DocumentosGeneradosService {
                 const pdfBuffer = await page.pdf({
                     format: 'Letter' as puppeteer.PaperFormat,
                     printBackground: true,
-                    margin: { top: '20mm', right: '20mm', bottom: '25mm', left: '20mm' },
+                    margin: { top: '15mm', right: '15mm', bottom: '35mm', left: '15mm' },
                     timeout: 60000
                 });
                 this.logger.debug(`PDF generado localmente para doc ${id}`);
