@@ -232,28 +232,28 @@ export class ContratosPersonalService {
         const { data: updatedContract, error } = await supabase
             .from('contratos_personal')
             .update({
-                estado: 'terminado', // O 'finalizado'
-                fecha_fin: terminateDto.fecha_terminacion, // Actualizamos la fecha fin real
+                estado: 'terminado',
+                fecha_fin: terminateDto.fecha_terminacion,
                 terminacion_pdf_url: terminacionPdfUrl,
-                // motivo? No hay campo 'motivo' en la tabla contratos_personal según schema, 
-                // pero podemos guardar en auditoría o si se agrega el campo.
-                // Asumiendo que NO hay campo motivo en la tabla por ahora, lo dejamos solo en auditoría o log.
-                // WAIT: Schema check: "motivo text" NO EXISTE en contratos_personal. Solo "terminacion_pdf_url".
+                motivo_terminacion: terminateDto.motivo_terminacion,
+                observaciones_terminacion: terminateDto.observaciones_terminacion || null
             })
             .eq('id', terminateDto.contrato_id)
             .select()
             .single();
 
-        if (error) throw new InternalServerErrorException('Error al terminar contrato');
+        if (error) {
+            this.logger.error(`Error al terminar contrato: ${error.message}`);
+            throw new InternalServerErrorException('Error al terminar contrato');
+        }
 
-        // 4. Desvincular empleado
+        // 4. Desvincular e inhabilitar empleado
         await supabase
             .from('empleados')
             .update({
                 contrato_personal_id: null,
-                activo: false, // Opcional: desactivar empleado al terminar contrato
-                fecha_salida: terminateDto.fecha_terminacion // Si existiera en empleado, pero lo borramos.
-                // Como borramos fecha_salida del empleado, no actualizamos nada más que el contrato_id
+                activo: false,
+                fecha_salida: terminateDto.fecha_terminacion
             })
             .eq('id', contract.empleado_id);
 
@@ -263,7 +263,7 @@ export class ContratosPersonalService {
             registro_id: contract.id,
             accion: 'UPDATE',
             datos_anteriores: contract,
-            datos_nuevos: { ...updatedContract, motivo_terminacion: terminateDto.motivo_terminacion },
+            datos_nuevos: updatedContract,
             usuario_id: userId,
         });
 

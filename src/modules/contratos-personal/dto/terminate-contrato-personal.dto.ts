@@ -16,6 +16,11 @@ export class TerminateContratoPersonalDto {
     @IsString()
     motivo_terminacion: string;
 
+    @ApiProperty({ description: 'Observaciones adicionales de la terminación', example: 'Entrega todo en orden', required: false })
+    @IsOptional()
+    @IsString()
+    observaciones_terminacion?: string;
+
     @ApiProperty({ type: 'string', format: 'binary', required: false, description: 'PDF de terminación/liquidación' })
     @IsOptional()
     terminacion_pdf?: any;

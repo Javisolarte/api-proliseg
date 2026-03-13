@@ -274,7 +274,7 @@ export class DocumentosGeneradosService {
                 if (usuario) {
                     footerHtml = `
                     <div style="position: fixed; bottom: 0; width: 100%; font-size: 8px; color: #888; text-align: center; padding: 5px; background: white;">
-                        Generado por: ${usuario.nombre_completo.toUpperCase()} | Fecha: ${new Date().toLocaleString('es-CO')} | Ref: ${doc.codigo_referencia || id}
+                        Generado por: ${usuario.nombre_completo.toUpperCase()} | Fecha: ${new Date().toLocaleString('es-CO', { timeZone: 'America/Bogota' })} | Ref: ${doc.codigo_referencia || id}
                     </div>`;
                 }
             }
@@ -290,18 +290,24 @@ export class DocumentosGeneradosService {
                 }
                 
                 /* Reset margins and allow natural flow */
-                p, div { 
-                    margin-bottom: 0.5em; 
+                p, div, li { 
+                    margin-bottom: 0.6em; 
                     text-align: justify; 
-                    orphans: 2; 
-                    widows: 2;
+                    orphans: 3; 
+                    widows: 3;
                     display: block;
+                    page-break-inside: avoid; /* Prevent cutting lines in half */
+                    break-inside: avoid;
                 }
 
                 li { 
-                    margin-bottom: 0.3em; 
-                    line-height: 1.2;
-                    page-break-inside: auto; 
+                    margin-bottom: 0.4em; 
+                    line-height: 1.3;
+                }
+
+                /* Ensure the content doesn't collide with the fixed footer */
+                body {
+                    padding-bottom: 50px;
                 }
 
                 /* Only avoid breaks in specifically marked small blocks */
@@ -361,7 +367,7 @@ export class DocumentosGeneradosService {
                 const pdfBuffer = await page.pdf({
                     format: 'Letter' as puppeteer.PaperFormat,
                     printBackground: true,
-                    margin: { top: '20mm', right: '20mm', bottom: '20mm', left: '20mm' },
+                    margin: { top: '20mm', right: '20mm', bottom: '25mm', left: '20mm' },
                     timeout: 60000
                 });
                 this.logger.debug(`PDF generado localmente para doc ${id}`);
