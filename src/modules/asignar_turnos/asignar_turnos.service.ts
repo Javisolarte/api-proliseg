@@ -858,29 +858,34 @@ export class AsignarTurnosService {
    * 🔄 Regenerar turnos para un subpuesto
    * Elimina turnos futuros y los vuelve a generar con la configuración actual
    */
-  async regenerarTurnos(subpuesto_id: number, userId: number) {
+  async regenerarTurnos(subpuesto_id: number, userId: number, fechaInicio?: string) {
     this.logger.log(`♻️ Regenerando turnos para subpuesto ${subpuesto_id}`);
 
-    const fechaManana = new Date();
-    fechaManana.setDate(fechaManana.getDate() + 1);
-    const fechaInicioStr = fechaManana.toISOString().split('T')[0];
+    let fechaReferencia: string;
+    if (fechaInicio) {
+      fechaReferencia = fechaInicio;
+    } else {
+      const fechaManana = new Date();
+      fechaManana.setDate(fechaManana.getDate() + 1);
+      fechaReferencia = fechaManana.toISOString().split('T')[0];
+    }
 
-    // 1. Eliminar turnos futuros (desde mañana en adelante)
+    // 1. Eliminar turnos futuros (desde la fecha de referencia en adelante)
     const { message, eliminados } = await this.eliminarTurnos(
       subpuesto_id,
-      fechaInicioStr,
+      fechaReferencia,
       '2099-12-31' // Fecha lejana
     );
 
-    this.logger.log(`🗑️ Se eliminaron ${eliminados} turnos futuros`);
+    this.logger.log(`🗑️ Se eliminaron ${eliminados} turnos futuros (desde ${fechaReferencia})`);
 
     // 2. Generar nuevos turnos
     try {
       const resultadoGeneracion = await this.asignarTurnos({
         subpuesto_id,
-        fecha_inicio: fechaInicioStr,
+        fecha_inicio: fechaReferencia,
         asignado_por: userId
-      });
+      }, undefined, false); // ✅ fillFromMonthStart: false para respetar fecha_inicio
 
       return {
         message: 'Turnos regenerados exitosamente',

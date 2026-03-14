@@ -181,7 +181,8 @@ export class AsignarTurnosController {
   async regenerar(
     @Query('subpuesto_id', ParseIntPipe) subpuesto_id: number,
     @Query('asignado_por', ParseIntPipe) asignado_por: number,
-    @CurrentUser() user: any
+    @CurrentUser() user: any,
+    @Query('fecha_inicio') fecha_inicio?: string,
   ) {
     // Usar asignado_por del query, o fallback al usuario del token si está disponible
     // Si asignado_por viene en el query (como en el log de error), lo usamos.
@@ -192,7 +193,7 @@ export class AsignarTurnosController {
       // Should throw error if neither is present, but for now relying on pipe
     }
 
-    return this.asignarTurnosService.regenerarTurnos(subpuesto_id, uid);
+    return this.asignarTurnosService.regenerarTurnos(subpuesto_id, uid, fecha_inicio);
   }
 
   @Delete('todos')

@@ -268,7 +268,8 @@ export class AsignacionesService {
         // Usar regenerarTurnos para limpiar turnos desactualizados y generar nuevos con el equipo completo
         const turnosResult = await this.asignarTurnosService.regenerarTurnos(
           dto.subpuesto_id,
-          dto.asignado_por
+          dto.asignado_por,
+          dto.fecha_inicio_patron
         );
 
         // Mapear resultado para mantener consistencia con respuesta anterior
