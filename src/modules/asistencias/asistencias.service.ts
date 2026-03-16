@@ -833,59 +833,69 @@ export class AsistenciasService {
       novedades: [] as any[]
     };
 
-    const detalle = turnos?.map(t => {
-      const asistencia = Array.isArray(t.asistencia) ? t.asistencia[0] : t.asistencia;
-      let status = 'pendiente';
+    try {
+      const detalle = turnos?.map(t => {
+        const asistencia = Array.isArray(t.asistencia) ? t.asistencia[0] : t.asistencia;
+        let status = 'pendiente';
 
-      if (asistencia) {
-        if (asistencia.hora_salida) {
-          status = 'completado';
-          resumen.completados++;
+        if (asistencia) {
+          if (asistencia.hora_salida) {
+            status = 'completado';
+            resumen.completados++;
+          } else {
+            status = 'en_sitio';
+            resumen.en_sitio++;
+          }
         } else {
-          status = 'en_sitio';
-          resumen.en_sitio++;
+          // Verificar si ya debería haber llegado
+          if (t.hora_inicio) {
+            const [h, m] = t.hora_inicio.split(':');
+            const start = new Date();
+            start.setHours(parseInt(h), parseInt(m), 0);
+
+            if (ahora > start) {
+              status = 'ausente';
+              resumen.ausentes++;
+            } else {
+              status = 'pendiente';
+              resumen.pendientes_iniciar++;
+            }
+          } else {
+            status = 'pendiente';
+            resumen.pendientes_iniciar++;
+          }
         }
-      } else {
-        // Verificar si ya debería haber llegado
-        const [h, m] = t.hora_inicio.split(':');
-        const start = new Date();
-        start.setHours(parseInt(h), parseInt(m), 0);
 
-        if (ahora > start) {
-          status = 'ausente';
-          resumen.ausentes++;
-        } else {
-          status = 'pendiente';
-          resumen.pendientes_iniciar++;
+        const empleado = Array.isArray(t.empleado) ? t.empleado[0] : t.empleado;
+        const subpuesto = Array.isArray(t.subpuesto) ? t.subpuesto[0] : t.subpuesto;
+        const subpuestoPuesto = Array.isArray(subpuesto?.puesto) ? subpuesto.puesto[0] : subpuesto?.puesto;
+
+        if (status === 'ausente') {
+          resumen.novedades.push({
+            empleado: empleado?.nombre_completo || 'Desconocido',
+            puesto: subpuestoPuesto?.nombre || 'No especificado',
+            tipo: 'Inasistencia',
+            desde: t.hora_inicio || '--:--'
+          });
         }
-      }
 
-      const empleado = Array.isArray(t.empleado) ? t.empleado[0] : t.empleado;
-      const subpuesto = Array.isArray(t.subpuesto) ? t.subpuesto[0] : t.subpuesto;
-      const subpuestoPuesto = Array.isArray(subpuesto?.puesto) ? subpuesto.puesto[0] : subpuesto?.puesto;
+        return {
+          turno_id: t.id,
+          empleado: empleado?.nombre_completo || 'Desconocido',
+          puesto: subpuestoPuesto?.nombre || 'No especificado',
+          subpuesto: subpuesto?.nombre || 'Sin subpuesto',
+          hora_inicio: t.hora_inicio,
+          hora_fin: t.hora_fin,
+          status,
+          hora_entrada: asistencia?.hora_entrada || null
+        };
+      });
 
-      if (status === 'ausente') {
-        resumen.novedades.push({
-          empleado: empleado?.nombre_completo,
-          puesto: subpuestoPuesto?.nombre,
-          tipo: 'Inasistencia',
-          desde: t.hora_inicio
-        });
-      }
-
-      return {
-        turno_id: t.id,
-        empleado: empleado?.nombre_completo,
-        puesto: subpuestoPuesto?.nombre,
-        subpuesto: subpuesto?.nombre,
-        hora_inicio: t.hora_inicio,
-        hora_fin: t.hora_fin,
-        status,
-        hora_entrada: asistencia?.hora_entrada || null
-      };
-    });
-
-    return { resumen, detalle };
+      return { resumen, detalle };
+    } catch (e) {
+      this.logger.error(`Error procesando monitoreo: ${e.message}`, e.stack);
+      throw new BadRequestException("Error procesando el monitoreo de hoy");
+    }
   }
 
   // ============================================================

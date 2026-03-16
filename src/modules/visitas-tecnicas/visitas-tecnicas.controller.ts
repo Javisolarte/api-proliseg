@@ -86,4 +86,14 @@ export class VisitasTecnicasController {
     async getReportes() {
         return this.visitasService.getReportes({});
     }
+
+    @Post(":id/notificar")
+    @RequirePermissions("visitas")
+    @ApiOperation({ summary: "Notificar visita técnica a través de múltiples canales" })
+    async notificar(
+        @Param("id", ParseIntPipe) id: number,
+        @Body("canales") canales?: string[]
+    ) {
+        return this.visitasService.notificarVisita(id, canales);
+    }
 }

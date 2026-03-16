@@ -81,6 +81,12 @@ export class CreateVisitaTecnicaDto {
     @IsOptional()
     @IsNumber()
     costo_arreglo?: number;
+
+    @ApiProperty({ required: false, type: [String] })
+    @IsOptional()
+    @IsArray()
+    @IsString({ each: true })
+    notificar_por?: string[];
 }
 
 export class UpdateVisitaTecnicaDto {

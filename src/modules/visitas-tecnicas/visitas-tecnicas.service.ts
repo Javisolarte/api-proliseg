@@ -5,6 +5,7 @@ import type { IniciarVisitaDto, ActualizarVisitaAppDto, FinalizarVisitaAppDto } 
 
 import { DocumentosGeneradosService } from "../documentos-generados/documentos-generados.service";
 import { EntidadTipo } from "../documentos-generados/dto/documento-generado.dto";
+import { NotificacionesService } from "../notificaciones/notificaciones.service";
 
 @Injectable()
 export class VisitasTecnicasService {
@@ -12,7 +13,8 @@ export class VisitasTecnicasService {
 
     constructor(
         private readonly supabaseService: SupabaseService,
-        private readonly documentosService: DocumentosGeneradosService
+        private readonly documentosService: DocumentosGeneradosService,
+        private readonly notificacionesService: NotificacionesService
     ) { }
 
     async findAll(filters?: { puesto_id?: number; tipo_visitante?: string; fecha_desde?: string; estado?: string }) {
@@ -126,9 +128,47 @@ export class VisitasTecnicasService {
             }
 
             this.logger.log(`✅ Visita registrada: ${data.id}`);
+
+            // NOTIFICACIÓN AL TÉCNICO
+            if (data.asignado_a) {
+                const canales = createDto.notificar_por || ['email', 'whatsapp', 'sms', 'push'];
+                this.notificacionesService.dispararEvento("NUEVA_VISITA_TECNICA", {
+                    destinatarios: [{ id: data.asignado_a, tipo: 'usuario' }],
+                    variables: {
+                        puesto: data.puesto_nombre || 'Puesto asignado',
+                        fecha: data.fecha_programada || 'Pendiente',
+                        hora: data.hora_programada || 'Pendiente'
+                    },
+                    canales
+                }).catch(err => this.logger.error("Error enviando notificación de visita:", err));
+            }
+
             return data;
         } catch (error) {
             this.logger.error("Error en create:", error);
+            throw error;
+        }
+    }
+
+    async notificarVisita(id: number, canales?: string[]) {
+        try {
+            const visita = await this.findOne(id);
+            if (!visita) throw new NotFoundException('Visita no encontrada');
+            if (!visita.asignado_a) throw new BadRequestException('La visita no tiene un técnico asignado');
+
+            await this.notificacionesService.dispararEvento("NUEVA_VISITA_TECNICA", {
+                destinatarios: [{ id: visita.asignado_a, tipo: 'usuario' }],
+                variables: {
+                    puesto: visita.puestos_trabajo?.nombre || 'Puesto asignado',
+                    fecha: visita.fecha_programada || 'Pendiente',
+                    hora: visita.hora_programada || 'Pendiente'
+                },
+                canales: canales || ['email', 'whatsapp', 'sms', 'push']
+            });
+
+            return { success: true, message: 'Notificaciones disparadas' };
+        } catch (error) {
+            this.logger.error(`Error notificando visita ${id}:`, error);
             throw error;
         }
     }

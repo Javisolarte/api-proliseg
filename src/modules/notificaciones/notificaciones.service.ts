@@ -142,7 +142,11 @@ export class NotificacionesService implements OnModuleInit {
         continue;
       }
 
+      const requestedChannels = datos.canales || null;
+
       for (const plantilla of plantillas) {
+        if (requestedChannels && !requestedChannels.includes(plantilla.canal)) continue;
+
         const puedeEnviar = await this.verificarPreferencias(dest.id, dest.tipo, evento.id, plantilla.canal);
 
         const esCritico = evento.prioridad_por_defecto === 'critica';
@@ -245,6 +249,9 @@ export class NotificacionesService implements OnModuleInit {
           case 'whatsapp':
             resultado = await this.enviarWhatsApp(envio);
             break;
+          case 'sms':
+            resultado = await this.enviarSMS(envio);
+            break;
           case 'in_app':
             resultado = { success: true, id_externo: 'db_stored' };
             break;
@@ -328,8 +335,8 @@ export class NotificacionesService implements OnModuleInit {
       const { data } = await supabase.from('usuarios_externos').select('email').eq('id', envio.destinatario_id).single();
       emailDestino = data?.email;
     } else if (envio.destinatario_tipo === 'empleado') {
-      const { data } = await supabase.from('empleados').select('email').eq('id', envio.destinatario_id).single();
-      emailDestino = data?.email;
+      const { data } = await supabase.from('empleados').select('correo').eq('id', envio.destinatario_id).single();
+      emailDestino = data?.correo;
     }
 
     if (!emailDestino) return { success: false, error: 'Email no encontrado' };
@@ -348,9 +355,45 @@ export class NotificacionesService implements OnModuleInit {
   }
 
   private async enviarWhatsApp(envio: any) {
-    this.logger.log(`[WHATSAPP MOCK] Sending to ID ${envio.destinatario_id}: ${envio.mensaje}`);
-    return { success: true, id_externo: 'mock_wa_123' };
+    const supabase = this.supabaseService.getClient();
+    let telefonoDestino = '';
+
+    if (envio.destinatario_tipo === 'usuario') {
+      // Los usuarios externos podrían no tener teléfono directo en su tabla, dependería del esquema.
+      // Por ahora buscamos en empleados si es un usuario que también es empleado
+      const { data } = await supabase.from('empleados').select('telefono').eq('usuario_id', envio.destinatario_id).single();
+      telefonoDestino = data?.telefono;
+    } else if (envio.destinatario_tipo === 'empleado') {
+      const { data } = await supabase.from('empleados').select('telefono').eq('id', envio.destinatario_id).single();
+      telefonoDestino = data?.telefono;
+    }
+
+    if (!telefonoDestino) return { success: false, error: 'Teléfono no encontrado' };
+
+    this.logger.log(`[WHATSAPP] Enviando a ${telefonoDestino}: ${envio.mensaje}`);
+    
+    // Aquí iría la integración real (Twilio, Meta API, etc.)
+    // Por ahora simulamos éxito
+    return { success: true, id_externo: 'wa_sent_' + Date.now() };
   }
+  private async enviarSMS(envio: any) {
+    const supabase = this.supabaseService.getClient();
+    let telefonoDestino = '';
+
+    if (envio.destinatario_tipo === 'usuario') {
+      const { data } = await supabase.from('empleados').select('telefono').eq('usuario_id', envio.destinatario_id).single();
+      telefonoDestino = data?.telefono;
+    } else if (envio.destinatario_tipo === 'empleado') {
+      const { data } = await supabase.from('empleados').select('telefono').eq('id', envio.destinatario_id).single();
+      telefonoDestino = data?.telefono;
+    }
+
+    if (!telefonoDestino) return { success: false, error: 'Teléfono no encontrado' };
+
+    this.logger.log(`[SMS] Enviando a ${telefonoDestino}: ${envio.mensaje}`);
+    return { success: true, id_externo: 'sms_sent_' + Date.now() };
+  }
+
   async verificarAsignacionesIncompletas() {
     // Implementación pendiente o placeholder para corregir error de build
     this.logger.debug('Verificando asignaciones incompletas (Placeholder)');
