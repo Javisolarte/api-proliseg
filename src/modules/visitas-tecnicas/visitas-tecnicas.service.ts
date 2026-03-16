@@ -20,12 +20,12 @@ export class VisitasTecnicasService {
             let query = `
         SELECT vt.*, p.nombre as puesto_nombre, 
                CASE 
-                 WHEN vt.solicitado_por_tipo = 'cliente' THEN c.nombre_completo
-                 WHEN vt.solicitado_por_tipo = 'usuario' THEN u_sol.nombre
-                 ELSE u.nombre 
+                 WHEN vt.solicitado_por_tipo = 'cliente' THEN c.nombre_empresa
+                 WHEN vt.solicitado_por_tipo = 'usuario' THEN u_sol.nombre_completo
+                 ELSE u.nombre_completo
                END as solicitado_por_nombre,
-               u.nombre as registrado_por_nombre,
-               ua.nombre as asignado_a_nombre
+               u.nombre_completo as registrado_por_nombre,
+               ua.nombre_completo as asignado_a_nombre
         FROM visitas_tecnicas_puesto vt
         LEFT JOIN puestos_trabajo p ON vt.puesto_id = p.id
         LEFT JOIN usuarios_externos u ON vt.registrado_por = u.id
@@ -44,7 +44,10 @@ export class VisitasTecnicasService {
 
             const { data, error } = await supabase.rpc("exec_sql", { query });
 
-            if (error) throw new BadRequestException("Error al obtener visitas");
+            if (error) {
+                this.logger.error("Error SQL Supabase (findAll):", error);
+                throw new BadRequestException(`Error al obtener visitas: ${error.message} (${error.details})`);
+            }
             return Array.isArray(data) ? data : [];
         } catch (error) {
             this.logger.error("Error en findAll:", error);
@@ -56,8 +59,8 @@ export class VisitasTecnicasService {
         try {
             const supabase = this.supabaseService.getClient();
             const query = `
-        SELECT vt.*, p.nombre as puesto_nombre, ua.nombre as asignado_a_nombre, 
-               p.cliente_id, cl.nombre_completo as cliente_nombre
+        SELECT vt.*, p.nombre as puesto_nombre, ua.nombre_completo as asignado_a_nombre, 
+               p.cliente_id, cl.nombre_empresa as cliente_nombre
         FROM visitas_tecnicas_puesto vt
         LEFT JOIN puestos_trabajo p ON vt.puesto_id = p.id
         LEFT JOIN clientes cl ON p.cliente_id = cl.id
@@ -67,7 +70,10 @@ export class VisitasTecnicasService {
 
             const { data, error } = await supabase.rpc("exec_sql", { query });
 
-            if (error) throw new BadRequestException("Error al obtener visita");
+            if (error) {
+                this.logger.error("Error SQL Supabase (findOne):", error);
+                throw new BadRequestException(`Error al obtener visita: ${error.message} (${error.details})`);
+            }
             const result = Array.isArray(data) ? data : [];
             if (result.length === 0) throw new NotFoundException(`Visita ${id} no encontrada`);
 
