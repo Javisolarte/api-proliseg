@@ -1,6 +1,7 @@
 import { Injectable, Logger, BadRequestException, NotFoundException } from "@nestjs/common";
 import { SupabaseService } from "../supabase/supabase.service";
 import type { CreateVisitaTecnicaDto, UpdateVisitaTecnicaDto } from "./dto/visita-tecnica.dto";
+import type { IniciarVisitaDto, ActualizarVisitaAppDto, FinalizarVisitaAppDto } from "../autoservicio/dto/visitas-tecnicas-autoservicio.dto";
 
 import { DocumentosGeneradosService } from "../documentos-generados/documentos-generados.service";
 import { EntidadTipo } from "../documentos-generados/dto/documento-generado.dto";
@@ -171,7 +172,7 @@ export class VisitasTecnicasService {
         }
     }
 
-    async generarReporteAutomatico(id: number) {
+    async generarReporteAutomatico(id: number, firmasApp?: { tecnico: string, recibe: string, nombre_recibe: string }) {
         try {
             const visita = await this.findOne(id);
             const supabase = this.supabaseService.getClient();
@@ -215,8 +216,10 @@ export class VisitasTecnicasService {
                 cliente_nombre: visita.cliente_nombre || 'CLIENTE PROLISEG',
                 puesto_nombre: visita.puesto_nombre || 'PUESTO NO ESPECIFICADO',
                 tecnico_nombre: tecnicoInfo?.nombre_completo || visita.nombre_visitante || 'No asignado',
-                tecnico_firma: tecnicoInfo?.firma_digital_base64 || null,
+                tecnico_firma: firmasApp?.tecnico || tecnicoInfo?.firma_digital_base64 || null,
                 tecnico_cargo: tecnicoInfo?.cargo_oficial || 'TÉCNICO OPERATIVO',
+                recibe_nombre: firmasApp?.nombre_recibe || 'CLIENTE / RECEPTOR',
+                recibe_firma: firmasApp?.recibe || null,
                 programador_nombre: programadorInfo?.nombre_completo || 'SISTEMA PROLISEG',
                 programador_firma: programadorInfo?.firma_digital_base64 || null,
                 programador_cargo: programadorInfo?.cargo_oficial || 'COORDINADOR OPERATIVO',
@@ -296,9 +299,9 @@ export class VisitasTecnicasService {
 
         return {
             total: stats.length,
-            completadas: stats.filter(s => s.estado === 'completada').length,
+            completadas: stats.filter(s => s.estado === 'realizada').length,
             programadas: stats.filter(s => s.estado === 'programada').length,
-            en_proceso: stats.filter(s => s.estado === 'en_proceso').length,
+            en_proceso: stats.filter(s => s.estado === 'en_curso').length,
             incumplidas: stats.filter(s => s.estado === 'incumplida').length,
             cumplimiento_porcentaje: stats.length > 0
                 ? (stats.filter(s => s.cumplida).length / stats.length) * 100
@@ -327,5 +330,128 @@ export class VisitasTecnicasService {
             this.logger.error(`Error en validarVisita(${id}):`, error);
             throw error;
         }
+    }
+
+    // --- MÉTODOS PARA AUTOSERVICIO TÉCNICO (APP) ---
+
+    async findMisVisitas(usuarioId: number) {
+        const supabase = this.supabaseService.getClient();
+        const query = `
+            SELECT vt.*, p.nombre as puesto_nombre
+            FROM visitas_tecnicas_puesto vt
+            LEFT JOIN puestos_trabajo p ON vt.puesto_id = p.id
+            WHERE vt.asignado_a = ${usuarioId}
+            AND vt.estado IN ('programada', 'en_curso')
+            ORDER BY vt.fecha_programada ASC
+        `;
+        const { data, error } = await supabase.rpc("exec_sql", { query });
+        if (error) throw new BadRequestException("Error obteniendo visitas asignadas");
+        return data || [];
+    }
+
+    async iniciarVisita(id: number, usuarioId: number, dto: IniciarVisitaDto) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from("visitas_tecnicas_puesto")
+            .update({
+                estado: 'en_curso',
+                fecha_llegada: new Date().toISOString(),
+                fotos_evidencia_urls: [dto.foto_llegada_url],
+                novedades: dto.notas_llegada || null
+            })
+            .eq("id", id)
+            .eq("asignado_a", usuarioId)
+            .select()
+            .single();
+
+        if (error) throw new BadRequestException("No se pudo iniciar la visita");
+        return data;
+    }
+
+    async actualizarVisitaApp(id: number, usuarioId: number, dto: ActualizarVisitaAppDto) {
+        const supabase = this.supabaseService.getClient();
+        
+        // Obtener actuales para anexar fotos
+        const { data: actual } = await supabase
+            .from("visitas_tecnicas_puesto")
+            .select("fotos_evidencia_urls")
+            .eq("id", id)
+            .single();
+
+        const nuevasFotos = [...(actual?.fotos_evidencia_urls || [])];
+        if (dto.fotos_adicionales) nuevasFotos.push(...dto.fotos_adicionales);
+
+        const updateObj: any = {
+            fotos_evidencia_urls: nuevasFotos
+        };
+        if (dto.novedades) updateObj.novedades = dto.novedades;
+        if (dto.conclusion) updateObj.conclusion = dto.conclusion;
+        if (dto.costo_arreglo !== undefined) updateObj.costo_arreglo = dto.costo_arreglo;
+
+        const { data, error } = await supabase
+            .from("visitas_tecnicas_puesto")
+            .update(updateObj)
+            .eq("id", id)
+            .eq("asignado_a", usuarioId)
+            .select()
+            .single();
+
+        if (error) throw new BadRequestException("Error actualizando visita desde el app");
+        return data;
+    }
+
+    async finalizarVisitaApp(id: number, usuarioId: number, dto: FinalizarVisitaAppDto) {
+        const supabase = this.supabaseService.getClient();
+        
+        // 1. Actualizar datos de la visita
+        const { data, error } = await supabase
+            .from("visitas_tecnicas_puesto")
+            .update({
+                estado: 'realizada',
+                fecha_salida: new Date().toISOString(),
+                conclusion: dto.conclusion,
+                novedades: dto.novedades || null,
+                costo_arreglo: dto.costo_arreglo || 0,
+                cumplida: true
+            })
+            .eq("id", id)
+            .eq("asignado_a", usuarioId)
+            .select()
+            .single();
+
+        if (error) throw new BadRequestException("Error al finalizar visita");
+
+        // 2. Generar Reporte y registrar en Minuta (pasando firmas capturadas en el app)
+        const doc = await this.generarReporteAutomatico(id, {
+            tecnico: dto.firma_tecnico_base64,
+            recibe: dto.firma_recibe_base64,
+            nombre_recibe: dto.nombre_recibe
+        });
+
+        // 3. Registrar firmas si el reporte existe
+        if (doc) {
+            // Firma Técnico
+            await supabase.from('firmas_documentos').insert({
+                documento_id: doc.id,
+                nombre_firmante: 'Técnico Asignado',
+                cargo_firmante: 'TÉCNICO',
+                firma_base64: dto.firma_tecnico_base64,
+                tipo_firma: 'biometrica',
+                orden: 1
+            });
+
+            // Firma Quien Recibe
+            await supabase.from('firmas_documentos').insert({
+                documento_id: doc.id,
+                nombre_firmante: dto.nombre_recibe,
+                cargo_firmante: 'CLIENTE / RECEPTOR',
+                firma_base64: dto.firma_recibe_base64,
+                tipo_firma: 'biometrica',
+                orden: 2,
+                es_ultima_firma: true
+            });
+        }
+
+        return data;
     }
 }
