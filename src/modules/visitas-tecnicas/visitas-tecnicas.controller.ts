@@ -44,14 +44,14 @@ export class VisitasTecnicasController {
     }
 
     @Post()
-    @RequirePermissions("visitas", "crear")
+    @RequirePermissions("visitas")
     @ApiOperation({ summary: "Registrar llegada de visita técnica/supervisión" })
     async create(@Body() createDto: CreateVisitaTecnicaDto, @CurrentUser() user: any) {
         return this.visitasService.create(createDto, user.id);
     }
 
     @Patch(":id/salida")
-    @RequirePermissions("visitas", "actualizar")
+    @RequirePermissions("visitas")
     @ApiOperation({ summary: "Registrar salida y resultados" })
     async registrarSalida(
         @Param("id", ParseIntPipe) id: number,
@@ -61,7 +61,7 @@ export class VisitasTecnicasController {
     }
 
     @Post(":id/evidencia")
-    @RequirePermissions("visitas", "actualizar")
+    @RequirePermissions("visitas")
     @ApiOperation({ summary: "Subir URL de evidencia fotográfica" })
     async subirEvidencia(
         @Param("id", ParseIntPipe) id: number,
@@ -71,7 +71,7 @@ export class VisitasTecnicasController {
     }
 
     @Get("reportes/general")
-    @RequirePermissions("visitas", "ver_admin")
+    @RequirePermissions("visitas")
     @ApiOperation({ summary: "Reportes visitas técnicas" })
     async getReportes() {
         return this.visitasService.getReportes({});

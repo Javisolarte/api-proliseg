@@ -21,7 +21,7 @@ export class TurnosService {
     while (!finished) {
       let query = supabase
         .from("turnos")
-        .select(`*, empleado:empleado_id(id, nombre_completo), puesto:puesto_id(id, nombre), subpuesto:subpuesto_id(id, nombre)`)
+        .select(`*, empleado:empleado_id(id, nombre_completo), puesto:puesto_id(id, nombre, codigo_puesto), subpuesto:subpuesto_id(id, nombre)`)
         .order("fecha", { ascending: true })
         .range(from, from + step - 1);
 
@@ -81,7 +81,7 @@ export class TurnosService {
         `
         *,
         empleado:empleado_id(id, nombre_completo),
-        puesto:puesto_id(id, nombre),
+        puesto:puesto_id(id, nombre, codigo_puesto),
         subpuesto:subpuesto_id(id, nombre)
       `
       )
@@ -113,7 +113,7 @@ export class TurnosService {
         `
         *,
         empleado:empleado_id(id, nombre_completo),
-        puesto:puesto_id(id, nombre),
+        puesto:puesto_id(id, nombre, codigo_puesto),
         subpuesto:subpuesto_id(id, nombre)
       `
       )
