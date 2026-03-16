@@ -60,6 +60,16 @@ export class VisitasTecnicasController {
         return this.visitasService.registrarSalida(id, updateDto);
     }
 
+    @Patch(":id/validar")
+    @RequirePermissions("visitas")
+    @ApiOperation({ summary: "Validar proceso de visita terminada" })
+    async validarVisita(
+        @Param("id", ParseIntPipe) id: number,
+        @CurrentUser() user: any
+    ) {
+        return this.visitasService.validarVisita(id, user.id);
+    }
+
     @Post(":id/evidencia")
     @RequirePermissions("visitas")
     @ApiOperation({ summary: "Subir URL de evidencia fotográfica" })

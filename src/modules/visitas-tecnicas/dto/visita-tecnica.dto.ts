@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsNumber, IsOptional } from "class-validator";
+import { IsString, IsNotEmpty, IsNumber, IsOptional, IsArray } from "class-validator";
 import { ApiProperty } from "@nestjs/swagger";
 
 export class CreateVisitaTecnicaDto {
@@ -65,6 +65,21 @@ export class CreateVisitaTecnicaDto {
     @IsOptional()
     @IsNumber()
     solicitado_por_id?: number;
+
+    @ApiProperty({ required: false })
+    @IsOptional()
+    @IsString()
+    novedades?: string;
+
+    @ApiProperty({ required: false })
+    @IsOptional()
+    @IsString()
+    conclusion?: string;
+
+    @ApiProperty({ required: false })
+    @IsOptional()
+    @IsNumber()
+    costo_arreglo?: number;
 }
 
 export class UpdateVisitaTecnicaDto {
@@ -91,4 +106,28 @@ export class UpdateVisitaTecnicaDto {
     @IsOptional()
     @IsNumber()
     documento_generado_id?: number;
+
+    @ApiProperty({ required: false })
+    @IsOptional()
+    @IsString()
+    novedades?: string;
+
+    @ApiProperty({ required: false })
+    @IsOptional()
+    @IsString()
+    conclusion?: string;
+
+    @ApiProperty({ required: false })
+    @IsOptional()
+    @IsNumber()
+    costo_arreglo?: number;
+
+    @ApiProperty({ required: false })
+    @IsOptional()
+    validado?: boolean;
+
+    @ApiProperty({ required: false })
+    @IsOptional()
+    @IsNumber()
+    validado_por?: number;
 }

@@ -97,6 +97,9 @@ export class VisitasTecnicasService {
                 notas_programacion: createDto.notas_programacion || null,
                 solicitado_por_tipo: createDto.solicitado_por_tipo || 'usuario',
                 solicitado_por_id: createDto.solicitado_por_id || userId,
+                novedades: createDto.novedades || null,
+                conclusion: createDto.conclusion || null,
+                costo_arreglo: createDto.costo_arreglo || 0
             };
 
             if (createDto.foto_evidencia_url) {
@@ -128,7 +131,10 @@ export class VisitasTecnicasService {
                 fecha_salida: new Date().toISOString(),
                 resultado_observaciones: updateDto.resultado_observaciones || null,
                 estado: 'completada',
-                cumplida: true
+                cumplida: true,
+                novedades: updateDto.novedades || null,
+                conclusion: updateDto.conclusion || null,
+                costo_arreglo: updateDto.costo_arreglo || 0
             };
 
             if (updateDto.estado) updateData.estado = updateDto.estado;
@@ -165,7 +171,7 @@ export class VisitasTecnicasService {
             const { data: plantilla } = await supabase
                 .from('plantillas_documentos')
                 .select('id')
-                .eq('tipo', 'acta_visita')
+                .eq('nombre', 'ACTA DE VISITA TÉCNICA')
                 .eq('activa', true)
                 .order('version', { ascending: false })
                 .limit(1)
@@ -176,23 +182,57 @@ export class VisitasTecnicasService {
                 return;
             }
 
+            // Obtener información del técnico (asignado_a)
+            const { data: tecnicoInfo } = await supabase
+                .from('empleados')
+                .select('nombre_completo, firma_digital_base64, cargo_oficial')
+                .eq('usuario_id', visita.asignado_a)
+                .single();
+
+            // Obtener información de quien programó (registrado_por)
+            const { data: programadorInfo } = await supabase
+                .from('empleados')
+                .select('nombre_completo, firma_digital_base64, cargo_oficial')
+                .eq('usuario_id', visita.registrado_por)
+                .single();
+
             // Preparar datos para la plantilla
             const datos = {
-                ciudad: 'Pasto', // Por defecto o extraer de lugar
-                fecha: new Date().toLocaleDateString(),
-                puesto: visita.puesto_nombre,
-                supervisor: visita.nombre_visitante,
-                solicitado_por: visita.solicitado_por_nombre || 'Interno',
-                observaciones: visita.resultado_observaciones || 'Sin observaciones',
-                nombre_supervisor: visita.nombre_visitante,
-                nombre_recibe: 'Representante del Puesto' // Esto podría ser dinámico
+                fecha_actual: new Date().toLocaleDateString(),
+                hora_actual: new Date().toLocaleTimeString(),
+                fecha: new Date(visita.fecha_programada || visita.created_at).toLocaleDateString(),
+                hora: new Date(visita.fecha_programada || visita.created_at).toLocaleTimeString(),
+                codigo: visita.codigo || `VIS-${visita.id}`,
+                cliente_nombre: visita.cliente_nombre || 'CLIENTE PROLISEG',
+                puesto_nombre: visita.puesto_nombre || 'PUESTO NO ESPECIFICADO',
+                tecnico_nombre: tecnicoInfo?.nombre_completo || visita.nombre_visitante || 'No asignado',
+                tecnico_firma: tecnicoInfo?.firma_digital_base64 || null,
+                tecnico_cargo: tecnicoInfo?.cargo_oficial || 'TÉCNICO OPERATIVO',
+                programador_nombre: programadorInfo?.nombre_completo || 'SISTEMA PROLISEG',
+                programador_firma: programadorInfo?.firma_digital_base64 || null,
+                programador_cargo: programadorInfo?.cargo_oficial || 'COORDINADOR OPERATIVO',
+                motivo: visita.motivo_visita || 'Mantenimiento / Revisión',
+                novedades: visita.novedades || 'Sin novedades registradas',
+                conclusion: visita.conclusion || 'Sin conclusión registrada',
+                fotos_evidencia_urls: visita.fotos_evidencia_urls || []
             };
 
             const doc = await this.documentosService.create({
                 plantilla_id: plantilla.id,
-                entidad_tipo: EntidadTipo.CLIENTE, // O el que corresponda
+                entidad_tipo: EntidadTipo.CLIENTE,
                 entidad_id: visita.cliente_id || 0,
                 datos_json: datos
+            });
+
+            // Registrar en la Minuta Electrónica del Puesto
+            await supabase.from('minutas').insert({
+                puesto_id: visita.puesto_id,
+                contenido: `VISITA TÉCNICA COMPLETADA (${datos.codigo}): ${datos.conclusion}`,
+                tipo: 'SOPORTE_TECNICO', // Asumiendo este tipo o uno similar
+                fecha: new Date().toISOString().split('T')[0],
+                hora: new Date().toLocaleTimeString('en-GB', { hour12: false }),
+                creada_por: visita.asignado_a,
+                fotos: visita.fotos_evidencia_urls || []
             });
 
             // Vincular el documento a la visita
@@ -210,10 +250,21 @@ export class VisitasTecnicasService {
 
     async subirEvidencia(id: number, url: string) {
         const supabase = this.supabaseService.getClient();
+        
+        // Primero obtener las fotos actuales
+        const { data: visita } = await supabase
+            .from("visitas_tecnicas_puesto")
+            .select("fotos_evidencia_urls")
+            .eq("id", id)
+            .single();
+
+        const fotosActuales = visita?.fotos_evidencia_urls || [];
+        const nuevasFotos = [...fotosActuales, url];
+
         const { data, error } = await supabase
             .from("visitas_tecnicas_puesto")
             .update({
-                foto_evidencia_url: url,
+                fotos_evidencia_urls: nuevasFotos,
                 estado: 'en_proceso',
                 fecha_llegada: new Date().toISOString()
             })
@@ -244,5 +295,28 @@ export class VisitasTecnicasService {
                 ? (stats.filter(s => s.cumplida).length / stats.length) * 100
                 : 0
         };
+    }
+
+    async validarVisita(id: number, userId: number) {
+        try {
+            const supabase = this.supabaseService.getClient();
+            const { data, error } = await supabase
+                .from("visitas_tecnicas_puesto")
+                .update({
+                    validado: true,
+                    validado_por: userId
+                })
+                .eq("id", id)
+                .select()
+                .single();
+
+            if (error) throw new BadRequestException("Error al validar visita");
+
+            this.logger.log(`✅ Visita ${id} validada por usuario ${userId}`);
+            return data;
+        } catch (error) {
+            this.logger.error(`Error en validarVisita(${id}):`, error);
+            throw error;
+        }
     }
 }
