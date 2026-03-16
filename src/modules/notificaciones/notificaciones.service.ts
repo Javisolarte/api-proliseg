@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import * as admin from 'firebase-admin';
 import * as nodemailer from 'nodemailer';
+import twilio from 'twilio';
 import {
   RegistrarDispositivoDto,
   ConfigurarPreferenciasDto
@@ -14,6 +15,7 @@ export class NotificacionesService implements OnModuleInit {
   private readonly logger = new Logger(NotificacionesService.name);
   private emailTransporter: nodemailer.Transporter;
   private firebaseApp: admin.app.App;
+  private twilioClient: twilio.Twilio;
 
   constructor(
     private readonly supabaseService: SupabaseService,
@@ -24,6 +26,7 @@ export class NotificacionesService implements OnModuleInit {
 
   onModuleInit() {
     this.initializeFirebase();
+    this.initializeTwilio();
   }
 
   private initializeEmail() {
@@ -36,6 +39,17 @@ export class NotificacionesService implements OnModuleInit {
         pass: this.configService.get('SMTP_PASS'),
       },
     });
+  }
+
+  private initializeTwilio() {
+    const accountSid = this.configService.get('TWILIO_ACCOUNT_SID');
+    const authToken = this.configService.get('TWILIO_AUTH_TOKEN');
+    if (accountSid && authToken) {
+      this.twilioClient = twilio(accountSid, authToken);
+      this.logger.log('✅ Twilio inicializado correctamente');
+    } else {
+      this.logger.warn('⚠️ No se configuraron las credenciales de Twilio (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN).');
+    }
   }
 
   private initializeFirebase() {
@@ -390,8 +404,27 @@ export class NotificacionesService implements OnModuleInit {
 
     if (!telefonoDestino) return { success: false, error: 'Teléfono no encontrado' };
 
-    this.logger.log(`[SMS] Enviando a ${telefonoDestino}: ${envio.mensaje}`);
-    return { success: true, id_externo: 'sms_sent_' + Date.now() };
+    // Formatear teléfono si es necesario (Twilio prefiere E.164, ej: +57...)
+    const cleanTel = telefonoDestino.replace(/\D/g, '');
+    const finalTel = cleanTel.startsWith('57') ? `+${cleanTel}` : `+57${cleanTel}`;
+
+    if (!this.twilioClient) {
+      this.logger.warn(`[SMS] Simulación (Twilio no configurado) a ${finalTel}: ${envio.mensaje}`);
+      return { success: true, id_externo: 'sms_simulated_' + Date.now() };
+    }
+
+    try {
+      this.logger.log(`[SMS] Enviando vía Twilio a ${finalTel}...`);
+      const message = await this.twilioClient.messages.create({
+        body: envio.mensaje,
+        from: this.configService.get('TWILIO_PHONE_NUMBER'),
+        to: finalTel,
+      });
+      return { success: true, id_externo: message.sid };
+    } catch (error) {
+      this.logger.error(`❌ Error enviando SMS via Twilio: ${error.message}`);
+      return { success: false, error: error.message };
+    }
   }
 
   async verificarAsignacionesIncompletas() {
