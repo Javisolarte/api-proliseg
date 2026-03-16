@@ -89,7 +89,7 @@ export class VisitasTecnicasService {
                 empresa: createDto.empresa || null,
                 motivo_visita: createDto.motivo_visita || null,
                 registrado_por: userId,
-                foto_evidencia_url: createDto.foto_evidencia_url || null,
+                fotos_evidencia_urls: createDto.fotos_evidencia_urls || [],
                 estado: createDto.estado || 'programada',
                 asignado_a: createDto.asignado_a || null,
                 fecha_programada: createDto.fecha_programada || null,
@@ -102,8 +102,8 @@ export class VisitasTecnicasService {
                 costo_arreglo: createDto.costo_arreglo || 0
             };
 
-            if (createDto.foto_evidencia_url) {
-                payload.estado = 'en_proceso';
+            if (createDto.fotos_evidencia_urls && createDto.fotos_evidencia_urls.length > 0) {
+                payload.estado = 'en_curso';
                 payload.fecha_llegada = new Date().toISOString();
             }
 
@@ -113,7 +113,10 @@ export class VisitasTecnicasService {
                 .select()
                 .single();
 
-            if (error) throw new BadRequestException("Error al registrar visita");
+            if (error) {
+                this.logger.error("Error Supabase:", error);
+                throw new BadRequestException(`Error al registrar visita: ${error.message} (${error.details})`);
+            }
 
             this.logger.log(`✅ Visita registrada: ${data.id}`);
             return data;
@@ -130,7 +133,7 @@ export class VisitasTecnicasService {
             const updateData: any = {
                 fecha_salida: new Date().toISOString(),
                 resultado_observaciones: updateDto.resultado_observaciones || null,
-                estado: 'completada',
+                estado: 'realizada',
                 cumplida: true,
                 novedades: updateDto.novedades || null,
                 conclusion: updateDto.conclusion || null,
@@ -138,7 +141,7 @@ export class VisitasTecnicasService {
             };
 
             if (updateDto.estado) updateData.estado = updateDto.estado;
-            if (updateDto.foto_evidencia_url) updateData.foto_evidencia_url = updateDto.foto_evidencia_url;
+            if (updateDto.fotos_evidencia_urls) updateData.fotos_evidencia_urls = updateDto.fotos_evidencia_urls;
 
             const { data, error } = await supabase
                 .from("visitas_tecnicas_puesto")
@@ -150,7 +153,7 @@ export class VisitasTecnicasService {
             if (error) throw new BadRequestException("Error al registrar salida de visita");
 
             // Generar documento si se completó exitosamente
-            if (data.estado === 'completada') {
+            if (data.estado === 'realizada') {
                 await this.generarReporteAutomatico(id);
             }
 

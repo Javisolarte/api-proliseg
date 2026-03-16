@@ -26,10 +26,11 @@ export class CreateVisitaTecnicaDto {
     @IsString()
     motivo_visita?: string;
 
-    @ApiProperty({ required: false })
+    @ApiProperty({ required: false, type: [String] })
     @IsOptional()
-    @IsString()
-    foto_evidencia_url?: string;
+    @IsArray()
+    @IsString({ each: true })
+    fotos_evidencia_urls?: string[];
 
     @ApiProperty({ required: false })
     @IsOptional()
@@ -93,10 +94,11 @@ export class UpdateVisitaTecnicaDto {
     @IsString()
     estado?: string;
 
-    @ApiProperty({ required: false })
+    @ApiProperty({ required: false, type: [String] })
     @IsOptional()
-    @IsString()
-    foto_evidencia_url?: string;
+    @IsArray()
+    @IsString({ each: true })
+    fotos_evidencia_urls?: string[];
 
     @ApiProperty({ required: false })
     @IsOptional()
