@@ -17,6 +17,30 @@ export class VisitasTecnicasService {
         private readonly notificacionesService: NotificacionesService
     ) { }
 
+    // 🔹 Helper para subir archivos a Supabase Storage
+    async uploadEvidenciaToStorage(file: any, folder: string, filenameId: number): Promise<string> {
+        const bucket = 'visitas';
+        const supabase = this.supabaseService.getSupabaseAdminClient();
+        
+        const ext = file.originalname.split('.').pop() || 'jpg';
+        const path = `${folder}/${filenameId}_${Date.now()}.${ext}`;
+
+        const { error } = await supabase.storage
+            .from(bucket)
+            .upload(path, file.buffer, {
+                contentType: file.mimetype,
+                upsert: true,
+            });
+
+        if (error) {
+            this.logger.error(`❌ Error subiendo evidencia a ${bucket}/${path}: ${JSON.stringify(error)}`);
+            throw error;
+        }
+
+        const { data: publicUrlData } = supabase.storage.from(bucket).getPublicUrl(path);
+        return publicUrlData.publicUrl;
+    }
+
     async findAll(filters?: { puesto_id?: number; tipo_visitante?: string; fecha_desde?: string; estado?: string }) {
         try {
             const supabase = this.supabaseService.getClient();
@@ -328,6 +352,14 @@ export class VisitasTecnicasService {
         return data;
     }
 
+    async subirEvidenciaFile(id: number, file: any) {
+        // Subir foto a storage
+        const publicUrl = await this.uploadEvidenciaToStorage(file, 'evidencias', id);
+        
+        // Llamar directo al base (este valida internamente)
+        return this.subirEvidencia(id, publicUrl);
+    }
+
     async getReportes(filtros: any) {
         const supabase = this.supabaseService.getClient();
 
@@ -406,6 +438,15 @@ export class VisitasTecnicasService {
 
         if (error) throw new BadRequestException("No se pudo iniciar la visita");
         return data;
+    }
+
+    async iniciarVisitaWithFile(id: number, usuarioId: number, file: any, dto: IniciarVisitaDto) {
+        // Subir foto a storage
+        const publicUrl = await this.uploadEvidenciaToStorage(file, 'llegadas', id);
+        dto.foto_llegada_url = publicUrl;
+        
+        // Llamar al método base
+        return this.iniciarVisita(id, usuarioId, dto);
     }
 
     async actualizarVisitaApp(id: number, usuarioId: number, dto: ActualizarVisitaAppDto) {
