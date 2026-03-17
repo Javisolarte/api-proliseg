@@ -348,7 +348,10 @@ export class VisitasTecnicasService {
             .select()
             .single();
 
-        if (error) throw new BadRequestException("Error subiendo evidencia");
+        if (error) {
+            this.logger.error(`❌ Error en subirEvidencia(${id}):`, error);
+            throw new BadRequestException(`Error subiendo evidencia: ${error.message}`);
+        }
         return data;
     }
 
@@ -436,7 +439,10 @@ export class VisitasTecnicasService {
             .select()
             .single();
 
-        if (error) throw new BadRequestException("No se pudo iniciar la visita");
+        if (error) {
+            this.logger.error(`❌ Error en iniciarVisita(${id}):`, error);
+            throw new BadRequestException(`No se pudo iniciar la visita: ${error.message}`);
+        }
         return data;
     }
 
@@ -477,7 +483,10 @@ export class VisitasTecnicasService {
             .select()
             .single();
 
-        if (error) throw new BadRequestException("Error actualizando visita desde el app");
+        if (error) {
+            this.logger.error(`❌ Error en actualizarVisitaApp(${id}):`, error);
+            throw new BadRequestException(`Error actualizando visita desde el app: ${error.message}`);
+        }
         return data;
     }
 
@@ -500,7 +509,10 @@ export class VisitasTecnicasService {
             .select()
             .single();
 
-        if (error) throw new BadRequestException("Error al finalizar visita");
+        if (error) {
+            this.logger.error(`❌ Error en finalizarVisitaApp(${id}):`, error);
+            throw new BadRequestException(`Error al finalizar visita: ${error.message}`);
+        }
 
         // 2. Generar Reporte y registrar en Minuta (pasando firmas capturadas en el app)
         const doc = await this.generarReporteAutomatico(id, {

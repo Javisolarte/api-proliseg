@@ -442,6 +442,8 @@ CREATE TABLE public.contratos_personal (
   created_at timestamp without time zone DEFAULT now(),
   modalidad_trabajo character varying NOT NULL DEFAULT 'tiempo_completo'::character varying CHECK (modalidad_trabajo::text = ANY (ARRAY['tiempo_completo'::character varying, 'medio_tiempo'::character varying, 'virtual'::character varying, 'por_horas'::character varying, 'turnos'::character varying, 'practicas'::character varying, 'otro'::character varying]::text[])),
   documento_generado_id integer,
+  motivo_terminacion text,
+  observaciones_terminacion text,
   CONSTRAINT contratos_personal_pkey PRIMARY KEY (id),
   CONSTRAINT fk_contrato_empleado FOREIGN KEY (empleado_id) REFERENCES public.empleados(id),
   CONSTRAINT fk_contrato_salario FOREIGN KEY (salario_id) REFERENCES public.salarios(id),
@@ -683,6 +685,7 @@ CREATE TABLE public.empleados (
   tipo_cuenta character varying,
   certificado_bancario_url text,
   sede_id integer,
+  orden integer DEFAULT 0,
   CONSTRAINT empleados_pkey PRIMARY KEY (id),
   CONSTRAINT empleados_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.usuarios_externos(id),
   CONSTRAINT empleados_eps_id_fkey FOREIGN KEY (eps_id) REFERENCES public.eps(id),
@@ -1462,7 +1465,6 @@ CREATE TABLE public.puestos_estudios_seguridad (
 );
 CREATE TABLE public.puestos_trabajo (
   id integer NOT NULL DEFAULT nextval('puestos_trabajo_id_seq'::regclass),
-  codigo_puesto character varying UNIQUE,
   contrato_id integer NOT NULL,
   nombre character varying NOT NULL,
   direccion text,
@@ -1482,6 +1484,7 @@ CREATE TABLE public.puestos_trabajo (
   deleted_at timestamp with time zone,
   deleted_by integer,
   deletion_reason text,
+  codigo_puesto character varying UNIQUE,
   CONSTRAINT puestos_trabajo_pkey PRIMARY KEY (id),
   CONSTRAINT puestos_trabajo_creado_por_fkey FOREIGN KEY (creado_por) REFERENCES public.usuarios_externos(id),
   CONSTRAINT puestos_trabajo_actualizado_por_fkey FOREIGN KEY (actualizado_por) REFERENCES public.usuarios_externos(id),
@@ -2138,9 +2141,18 @@ CREATE TABLE public.visitas_tecnicas_puesto (
   fecha_programada timestamp without time zone,
   cumplida boolean DEFAULT false,
   notas_programacion text,
+  codigo character varying UNIQUE,
+  novedades text,
+  conclusion text,
+  costo_arreglo numeric DEFAULT 0,
+  validado boolean DEFAULT false,
+  validado_por integer,
+  fotos_evidencia_urls jsonb DEFAULT '[]'::jsonb,
+  hora_programada character varying,
   CONSTRAINT visitas_tecnicas_puesto_pkey PRIMARY KEY (id),
   CONSTRAINT visitas_tecnicas_puesto_puesto_id_fkey FOREIGN KEY (puesto_id) REFERENCES public.puestos_trabajo(id),
   CONSTRAINT visitas_tecnicas_puesto_registrado_por_fkey FOREIGN KEY (registrado_por) REFERENCES public.usuarios_externos(id),
   CONSTRAINT visitas_tecnicas_puesto_documento_generado_id_fkey FOREIGN KEY (documento_generado_id) REFERENCES public.documentos_generados(id),
-  CONSTRAINT visitas_tecnicas_puesto_asignado_a_fkey FOREIGN KEY (asignado_a) REFERENCES public.usuarios_externos(id)
+  CONSTRAINT visitas_tecnicas_puesto_asignado_a_fkey FOREIGN KEY (asignado_a) REFERENCES public.usuarios_externos(id),
+  CONSTRAINT visitas_tecnicas_puesto_validado_por_fkey FOREIGN KEY (validado_por) REFERENCES public.usuarios_externos(id)
 );
