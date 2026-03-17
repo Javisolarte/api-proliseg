@@ -437,8 +437,13 @@ export class VisitasTecnicasService {
             FROM visitas_tecnicas_puesto vt
             LEFT JOIN puestos_trabajo p ON vt.puesto_id = p.id
             WHERE vt.asignado_a = ${usuarioId}
-            AND vt.estado IN ('programada', 'en_curso')
-            ORDER BY vt.fecha_programada ASC
+            AND vt.estado IN ('programada', 'en_curso', 'realizada')
+            ORDER BY 
+                CASE WHEN vt.estado = 'en_curso' THEN 1
+                     WHEN vt.estado = 'programada' THEN 2
+                     ELSE 3 END,
+                vt.fecha_programada DESC,
+                vt.created_at DESC
         `;
         const { data, error } = await supabase.rpc("exec_sql", { query });
         if (error) throw new BadRequestException("Error obteniendo visitas asignadas");
