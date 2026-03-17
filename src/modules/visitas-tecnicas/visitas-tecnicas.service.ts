@@ -263,19 +263,40 @@ export class VisitasTecnicasService {
                 .eq('usuario_id', visita.asignado_a)
                 .single();
 
-            // Obtener información de quien programó (registrado_por)
-            const { data: programadorInfo } = await supabase
+            // Obtener información de quien solicita (solicitado_por_id o registrado_por)
+            const solicitanteId = visita.solicitado_por_id || visita.registrado_por;
+            const { data: solicitanteInfo } = await supabase
                 .from('empleados')
                 .select('nombre_completo, firma_digital_base64, cargo_oficial')
-                .eq('usuario_id', visita.registrado_por)
+                .eq('usuario_id', solicitanteId)
                 .single();
+
+            // Configurar hora colombiana (UTC-5)
+            const options: Intl.DateTimeFormatOptions = { 
+                timeZone: 'America/Bogota',
+                year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+                hour12: false
+            };
+            const formatter = new Intl.DateTimeFormat('es-CO', options);
+            const nowParts = formatter.formatToParts(new Date());
+            const getPart = (type: string) => nowParts.find(p => p.type === type)?.value;
+            
+            const fechaCol = `${getPart('day')}/${getPart('month')}/${getPart('year')}`;
+            const horaCol = `${getPart('hour')}:${getPart('minute')}:${getPart('second')}`;
+
+            const fechaVisita = visita.fecha_programada || visita.created_at;
+            const visitaParts = formatter.formatToParts(new Date(fechaVisita));
+            const getVPart = (type: string) => visitaParts.find(p => p.type === type)?.value;
+            const fechaVisitaCol = `${getVPart('day')}/${getVPart('month')}/${getVPart('year')}`;
+            const horaVisitaCol = visita.hora_programada || `${getVPart('hour')}:${getVPart('minute')}`;
 
             // Preparar datos para la plantilla
             const datos = {
-                fecha_actual: new Date().toLocaleDateString(),
-                hora_actual: new Date().toLocaleTimeString(),
-                fecha: new Date(visita.fecha_programada || visita.created_at).toLocaleDateString(),
-                hora: new Date(visita.fecha_programada || visita.created_at).toLocaleTimeString(),
+                fecha_actual: fechaCol,
+                hora_actual: horaCol,
+                fecha: fechaVisitaCol,
+                hora: horaVisitaCol,
                 codigo: visita.codigo || `VIS-${visita.id}`,
                 cliente_nombre: visita.cliente_nombre || 'CLIENTE PROLISEG',
                 puesto_nombre: visita.puesto_nombre || 'PUESTO NO ESPECIFICADO',
@@ -284,9 +305,9 @@ export class VisitasTecnicasService {
                 tecnico_cargo: tecnicoInfo?.cargo_oficial || 'TÉCNICO OPERATIVO',
                 recibe_nombre: firmasApp?.nombre_recibe || 'CLIENTE / RECEPTOR',
                 recibe_firma: firmasApp?.recibe || null,
-                programador_nombre: programadorInfo?.nombre_completo || 'SISTEMA PROLISEG',
-                programador_firma: programadorInfo?.firma_digital_base64 || null,
-                programador_cargo: programadorInfo?.cargo_oficial || 'COORDINADOR OPERATIVO',
+                programador_nombre: solicitanteInfo?.nombre_completo || 'SISTEMA PROLISEG',
+                programador_firma: solicitanteInfo?.firma_digital_base64 || null,
+                programador_cargo: solicitanteInfo?.cargo_oficial || 'COORDINADOR OPERATIVO',
                 motivo: visita.motivo_visita || 'Mantenimiento / Revisión',
                 novedades: visita.novedades || 'Sin novedades registradas',
                 conclusion: visita.conclusion || 'Sin conclusión registrada',
@@ -304,9 +325,9 @@ export class VisitasTecnicasService {
             await supabase.from('minutas').insert({
                 puesto_id: visita.puesto_id,
                 contenido: `VISITA TÉCNICA COMPLETADA (${datos.codigo}): ${datos.conclusion}`,
-                tipo: 'SOPORTE_TECNICO', // Asumiendo este tipo o uno similar
+                tipo: 'SOPORTE_TECNICO',
                 fecha: new Date().toISOString().split('T')[0],
-                hora: new Date().toLocaleTimeString('en-GB', { hour12: false }),
+                hora: horaCol.substring(0, 5),
                 creada_por: visita.asignado_a,
                 fotos: visita.fotos_evidencia_urls || []
             });
