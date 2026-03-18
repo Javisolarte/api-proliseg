@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, Logger, BadRequestException, ConflictException } from "@nestjs/common";
 import { SupabaseService } from "../supabase/supabase.service";
 import type { CreatePlantillaDto, UpdatePlantillaDto } from "./dto/plantilla.dto";
+import { TemplateEngine } from "../../common/utils/template-engine.util";
 
 @Injectable()
 export class PlantillasService {
@@ -148,12 +149,7 @@ export class PlantillasService {
 
     async renderPreview(id: number, data: any) {
         const plantilla = await this.findOne(id);
-        let html = plantilla.contenido_html;
-        if (data) {
-            for (const key of Object.keys(data)) {
-                html = html.replace(new RegExp(`{{${key}}}`, 'g'), data[key]);
-            }
-        }
+        const html = TemplateEngine.render(plantilla.contenido_html, data || {});
         return { html };
     }
 

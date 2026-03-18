@@ -88,8 +88,9 @@ export class VisitasTecnicasService {
             const query = `
         SELECT vt.*, p.nombre as puesto_nombre, ua.nombre_completo as asignado_a_nombre, 
                c.cliente_id, cl.nombre_empresa as cliente_nombre,
-               (SELECT firma_base64 FROM firmas_documentos WHERE documento_id = vt.documento_generado_id AND orden = 1 LIMIT 1) as firma_tecnico,
-               (SELECT firma_base64 FROM firmas_documentos WHERE documento_id = vt.documento_generado_id AND orden = 2 LIMIT 1) as firma_recibe
+               vt.firma_tecnico, vt.firma_recibe, vt.nombre_recibe,
+               (SELECT firma_base64 FROM firmas_documentos WHERE documento_id = vt.documento_generado_id AND orden = 1 LIMIT 1) as firma_tecnico_doc,
+               (SELECT firma_base64 FROM firmas_documentos WHERE documento_id = vt.documento_generado_id AND orden = 2 LIMIT 1) as firma_recibe_doc
         FROM visitas_tecnicas_puesto vt
         LEFT JOIN puestos_trabajo p ON vt.puesto_id = p.id
         LEFT JOIN contratos c ON p.contrato_id = c.id
@@ -540,7 +541,7 @@ export class VisitasTecnicasService {
     async finalizarVisitaApp(id: number, usuarioId: number, dto: FinalizarVisitaAppDto) {
         const supabase = this.supabaseService.getClient();
         
-        // 1. Actualizar datos de la visita
+        // 1. Actualizar datos de la visita (incluye firmas Base64)
         const { data, error } = await supabase
             .from("visitas_tecnicas_puesto")
             .update({
@@ -549,7 +550,10 @@ export class VisitasTecnicasService {
                 conclusion: dto.conclusion,
                 novedades: dto.novedades || null,
                 costo_arreglo: dto.costo_arreglo || 0,
-                cumplida: true
+                cumplida: true,
+                firma_tecnico: dto.firma_tecnico_base64 || null,
+                firma_recibe: dto.firma_recibe_base64 || null,
+                nombre_recibe: dto.nombre_recibe || null
             })
             .eq("id", id)
             .eq("asignado_a", usuarioId)

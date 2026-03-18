@@ -4,6 +4,7 @@ import { PlantillasService } from "../plantillas/plantillas.service";
 import type { CreateDocumentoDto } from "./dto/documento-generado.dto";
 import { FirmasService } from "../firmas/firmas.service";
 import * as puppeteer from 'puppeteer';
+import { TemplateEngine } from '../../common/utils/template-engine.util';
 
 @Injectable()
 export class DocumentosGeneradosService {
@@ -216,23 +217,9 @@ export class DocumentosGeneradosService {
         }
 
         try {
-            // 2. Preparar el HTML con variables
-            let htmlContenido = doc.plantilla.contenido_html;
+            // 2. Preparar el HTML con variables usando TemplateEngine
             const datos = doc.datos_json || {};
-
-            // Reemplazo de variables {{variable}}
-            for (const [key, value] of Object.entries(datos)) {
-                // Regex que permite espacios opcionales: {{ variable }} o {{variable}}
-                const regex = new RegExp(`{{\\s*${key}\\s*}}`, 'gi');
-                let valStr = String(value || '').trim();
-
-                // Si es una imagen base64, envolver automáticamente en un tag img
-                if (valStr.startsWith('data:image/') && valStr.includes('base64,')) {
-                    valStr = `<img src="${valStr}" style="max-width: 250px; max-height: 100px; display: block;" alt="Firma ${key}">`;
-                }
-
-                htmlContenido = htmlContenido.replace(regex, valStr);
-            }
+            let htmlContenido = TemplateEngine.render(doc.plantilla.contenido_html, datos);
 
             // 3. Obtener firmas registradas para inyectar si existen
             const { data: firmas } = await supabase

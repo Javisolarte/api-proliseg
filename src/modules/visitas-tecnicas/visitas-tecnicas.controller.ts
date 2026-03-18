@@ -96,4 +96,30 @@ export class VisitasTecnicasController {
     ) {
         return this.visitasService.notificarVisita(id, canales);
     }
+
+    @Post(":id/finalizar")
+    @RequirePermissions("visitas")
+    @ApiOperation({ summary: "Finalizar visita técnica desde la web (con firmas)" })
+    async finalizarVisita(
+        @Param("id", ParseIntPipe) id: number,
+        @Body() body: any
+    ) {
+        return this.visitasService.registrarSalida(id, {
+            ...body,
+            estado: 'realizada'
+        });
+    }
+
+    @Post(":id/foto-evidencia")
+    @RequirePermissions("visitas")
+    @ApiOperation({ summary: "Subir foto de evidencia" })
+    async subirFotoEvidencia(
+        @Param("id", ParseIntPipe) id: number,
+        @Body() body: any
+    ) {
+        if (body.url) {
+            return this.visitasService.subirEvidencia(id, body.url);
+        }
+        throw new Error("URL de la foto es requerida");
+    }
 }
