@@ -87,7 +87,9 @@ export class VisitasTecnicasService {
             const supabase = this.supabaseService.getClient();
             const query = `
         SELECT vt.*, p.nombre as puesto_nombre, ua.nombre_completo as asignado_a_nombre, 
-               p.cliente_id, cl.nombre_empresa as cliente_nombre
+               p.cliente_id, cl.nombre_empresa as cliente_nombre,
+               (SELECT firma_base64 FROM firmas_documentos WHERE documento_id = vt.documento_generado_id AND orden = 1 LIMIT 1) as firma_tecnico,
+               (SELECT firma_base64 FROM firmas_documentos WHERE documento_id = vt.documento_generado_id AND orden = 2 LIMIT 1) as firma_recibe
         FROM visitas_tecnicas_puesto vt
         LEFT JOIN puestos_trabajo p ON vt.puesto_id = p.id
         LEFT JOIN clientes cl ON p.cliente_id = cl.id
