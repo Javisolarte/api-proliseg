@@ -472,6 +472,14 @@ export class VisitasTecnicasService {
             this.logger.error(`❌ Error en iniciarVisita(${id}):`, error);
             throw new BadRequestException(`No se pudo iniciar la visita: ${error.message}`);
         }
+
+        // Notificar inicio de visita
+        try {
+            await this.notificarVisita(id, ['push', 'email']); // Notificar por canales internos
+        } catch (notifError) {
+            this.logger.warn(`No se pudo enviar notificación de inicio para visita ${id}:`, notifError);
+        }
+
         return data;
     }
 
@@ -516,6 +524,16 @@ export class VisitasTecnicasService {
             this.logger.error(`❌ Error en actualizarVisitaApp(${id}):`, error);
             throw new BadRequestException(`Error actualizando visita desde el app: ${error.message}`);
         }
+
+        // Notificar actualización (opcional)
+        if (dto.novedades || (dto.fotos_adicionales && dto.fotos_adicionales.length > 0)) {
+            try {
+                await this.notificarVisita(id, ['push']);
+            } catch (e) {
+                // Silencioso
+            }
+        }
+
         return data;
     }
 
@@ -572,6 +590,13 @@ export class VisitasTecnicasService {
                 orden: 2,
                 es_ultima_firma: true
             });
+        }
+
+        // Notificar finalización (Supervisores y Admins)
+        try {
+            await this.notificarVisita(id, ['push', 'email']);
+        } catch (notifError) {
+            this.logger.warn(`No se pudo enviar notificación de cierre para visita ${id}:`, notifError);
         }
 
         return data;
