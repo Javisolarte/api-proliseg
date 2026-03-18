@@ -185,7 +185,7 @@ export class VisitasTecnicasService {
             await this.notificacionesService.dispararEvento("NUEVA_VISITA_TECNICA", {
                 destinatarios: [{ id: visita.asignado_a, tipo: 'usuario' }],
                 variables: {
-                    puesto: visita.puestos_trabajo?.nombre || 'Puesto asignado',
+                    puesto: visita.puesto_nombre || 'Puesto asignado',
                     fecha: visita.fecha_programada || 'Pendiente',
                     hora: visita.hora_programada || 'Pendiente'
                 },
