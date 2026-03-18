@@ -50,15 +50,17 @@ export class FinalizarVisitaAppDto {
     @IsNumber()
     costo_arreglo?: number;
 
-    @ApiProperty({ description: "Firma del técnico en base64" })
+    @ApiProperty({ description: "Firma del técnico en base64 (obligatoria)" })
     @IsString()
     firma_tecnico_base64: string;
 
-    @ApiProperty({ description: "Firma de quien recibe en base64" })
+    @ApiProperty({ description: "Firma de quien recibe en base64 (opcional)", required: false })
+    @IsOptional()
     @IsString()
-    firma_recibe_base64: string;
+    firma_recibe_base64?: string;
 
-    @ApiProperty({ description: "Nombre de quien recibe la visita" })
+    @ApiProperty({ description: "Nombre de quien recibe la visita (opcional)", required: false })
+    @IsOptional()
     @IsString()
-    nombre_recibe: string;
+    nombre_recibe?: string;
 }

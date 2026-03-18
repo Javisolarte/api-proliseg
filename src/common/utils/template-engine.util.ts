@@ -8,6 +8,7 @@ export class TemplateEngine {
      * Render a template string with provided data.
      */
     static render(template: string, data: Record<string, any>): string {
+        if (!template) return '';
         let html = template;
 
         // 1. Process {{#each array}} blocks
@@ -16,67 +17,88 @@ export class TemplateEngine {
         // 2. Process {{#if variable}} blocks (supports {{else}})
         html = TemplateEngine.processIfBlocks(html, data);
 
-        // 3. Replace simple {{variable}} placeholders
-        html = TemplateEngine.replaceVariables(html, data);
-
-        // 4. Clean up any remaining unresolved placeholders
-        html = html.replace(/\{\{\s*[a-zA-Z_][a-zA-Z0-9_.]*\s*\}\}/g, '');
+        // 3. Replace all {{variable}} placeholders in one pass
+        // This handles {{ var }} with whitespace and nested properties {{ user.name }}
+        html = html.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (match, path) => {
+            const value = TemplateEngine.getValueByPath(data, path);
+            if (value === undefined || value === null) {
+                // If it looks like a helper or is already processed, leave it
+                if (path.startsWith('#') || path.startsWith('/') || path === 'else' || path === 'this') {
+                    return match;
+                }
+                return ''; // Undefined variables become empty string
+            }
+            if (Array.isArray(value)) return match; // Arrays are for #each
+            return String(value);
+        });
 
         return html;
+    }
+
+    /**
+     * Get value from object by path (desc.name)
+     */
+    private static getValueByPath(obj: any, path: string): any {
+        if (!path) return undefined;
+        try {
+            return path.split('.').reduce((prev, curr) => {
+                return (prev && prev[curr] !== undefined) ? prev[curr] : undefined;
+            }, obj);
+        } catch (e) {
+            return undefined;
+        }
     }
 
     /**
      * Process {{#each items}} ... {{this}} ... {{/each}} blocks
      */
     private static processEachBlocks(html: string, data: Record<string, any>): string {
-        const eachRegex = /\{\{#each\s+(\w+)\}\}([\s\S]*?)\{\{\/each\}\}/gi;
+        const eachRegex = /\{\{#each\s+([a-zA-Z0-9_.]+)\}\}([\s\S]*?)\{\{\/each\}\}/gi;
 
-        return html.replace(eachRegex, (_, arrayName: string, blockContent: string) => {
-            const arr = data[arrayName.trim()];
+        return html.replace(eachRegex, (_, path: string, blockContent: string) => {
+            const arr = TemplateEngine.getValueByPath(data, path);
             if (!Array.isArray(arr) || arr.length === 0) return '';
 
             return arr.map((item, index) => {
                 let itemHtml = blockContent;
-                if (typeof item === 'object' && item !== null) {
-                    // If item is an object, replace {{key}} with item.key
-                    for (const [key, value] of Object.entries(item)) {
-                        itemHtml = itemHtml.replace(
-                            new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'gi'),
-                            String(value ?? '')
-                        );
-                    }
-                }
-                // Replace {{this}} with the item itself (for string arrays)
+                
+                // Replace {{this}} with the item itself
                 itemHtml = itemHtml.replace(/\{\{\s*this\s*\}\}/gi, String(item ?? ''));
                 // Replace {{@index}} with the current index
                 itemHtml = itemHtml.replace(/\{\{\s*@index\s*\}\}/gi, String(index));
+
+                // If item is an object, replace {{key}} with item.key
+                if (typeof item === 'object' && item !== null) {
+                    itemHtml = itemHtml.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (match, key) => {
+                        const val = TemplateEngine.getValueByPath(item, key);
+                        return val !== undefined ? String(val) : match;
+                    });
+                }
+                
                 return itemHtml;
             }).join('');
         });
     }
 
     /**
-     * Process {{#if variable}} ... {{else}} ... {{/if}} blocks (supports nesting)
+     * Process {{#if variable}} ... {{else}} ... {{/if}} blocks
      */
     private static processIfBlocks(html: string, data: Record<string, any>): string {
-        // Process from innermost to outermost to handle nesting
         let result = html;
         let lastResult = '';
         let iterations = 0;
-        const maxIterations = 50; // Safety limit
+        const maxIterations = 50;
 
         while (result !== lastResult && iterations < maxIterations) {
             lastResult = result;
             iterations++;
 
-            // Match the innermost {{#if}} block (no nested {{#if}} inside)
-            const ifRegex = /\{\{#if\s+(\w+)\}\}((?:(?!\{\{#if)[\s\S])*?)\{\{\/if\}\}/gi;
+            const ifRegex = /\{\{#if\s+([a-zA-Z0-9_.]+)\}\}((?:(?!\{\{#if)[\s\S])*?)\{\{\/if\}\}/gi;
 
-            result = result.replace(ifRegex, (_, varName: string, innerContent: string) => {
-                const value = data[varName.trim()];
+            result = result.replace(ifRegex, (_, path: string, innerContent: string) => {
+                const value = TemplateEngine.getValueByPath(data, path);
                 const isTruthy = TemplateEngine.isTruthy(value);
 
-                // Check for {{else}} block
                 const elseParts = innerContent.split(/\{\{else\}\}/i);
                 const trueBlock = elseParts[0] || '';
                 const falseBlock = elseParts[1] || '';
@@ -88,25 +110,10 @@ export class TemplateEngine {
         return result;
     }
 
-    /**
-     * Replace simple {{variable}} placeholders
-     */
-    private static replaceVariables(html: string, data: Record<string, any>): string {
-        let result = html;
-        for (const [key, value] of Object.entries(data)) {
-            if (Array.isArray(value)) continue; // Skip arrays, handled by #each
-            const regex = new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'gi');
-            result = result.replace(regex, String(value ?? ''));
-        }
-        return result;
-    }
-
-    /**
-     * Check if a value is "truthy" for template conditions
-     */
     private static isTruthy(value: any): boolean {
         if (value === null || value === undefined || value === '' || value === false) return false;
         if (Array.isArray(value) && value.length === 0) return false;
+        if (typeof value === 'number' && isNaN(value)) return false;
         return true;
     }
 }

@@ -47,18 +47,20 @@ export class VisitasTecnicasService {
             let query = `
         SELECT vt.*, p.nombre as puesto_nombre, 
                CASE 
-                 WHEN vt.solicitado_por_tipo = 'cliente' THEN c.nombre_empresa
+                 WHEN vt.solicitado_por_tipo = 'cliente' THEN c_sol.nombre_empresa
                  WHEN vt.solicitado_por_tipo = 'usuario' THEN u_sol.nombre_completo
                  ELSE u.nombre_completo
                END as solicitado_por_nombre,
                u.nombre_completo as registrado_por_nombre,
-               ua.nombre_completo as asignado_a_nombre
+               ua.nombre_completo as asignado_a_nombre,
+               con.cliente_id as cliente_id
         FROM visitas_tecnicas_puesto vt
         LEFT JOIN puestos_trabajo p ON vt.puesto_id = p.id
+        LEFT JOIN contratos con ON p.contrato_id = con.id
         LEFT JOIN usuarios_externos u ON vt.registrado_por = u.id
         LEFT JOIN usuarios_externos ua ON vt.asignado_a = ua.id
         LEFT JOIN usuarios_externos u_sol ON vt.solicitado_por_id = u_sol.id AND vt.solicitado_por_tipo = 'usuario'
-        LEFT JOIN clientes c ON vt.solicitado_por_id = c.id AND vt.solicitado_por_tipo = 'cliente'
+        LEFT JOIN clientes c_sol ON vt.solicitado_por_id = c_sol.id AND vt.solicitado_por_tipo = 'cliente'
         WHERE 1=1
       `;
 
@@ -87,15 +89,24 @@ export class VisitasTecnicasService {
             const supabase = this.supabaseService.getClient();
             const query = `
         SELECT vt.*, p.nombre as puesto_nombre, ua.nombre_completo as asignado_a_nombre, 
-               c.cliente_id, cl.nombre_empresa as cliente_nombre,
+               con.cliente_id, cl.nombre_empresa as cliente_nombre,
                vt.firma_tecnico, vt.firma_recibe, vt.nombre_recibe,
+               CASE 
+                 WHEN vt.solicitado_por_tipo = 'cliente' THEN c_sol.nombre_empresa
+                 WHEN vt.solicitado_por_tipo = 'usuario' THEN u_sol.nombre_completo
+                 ELSE 'SISTEMA PROLISEG'
+               END as solicitado_por_nombre,
+               emp.cargo_oficial as tecnico_cargo,
                (SELECT firma_base64 FROM firmas_documentos WHERE documento_id = vt.documento_generado_id AND orden = 1 LIMIT 1) as firma_tecnico_doc,
                (SELECT firma_base64 FROM firmas_documentos WHERE documento_id = vt.documento_generado_id AND orden = 2 LIMIT 1) as firma_recibe_doc
         FROM visitas_tecnicas_puesto vt
         LEFT JOIN puestos_trabajo p ON vt.puesto_id = p.id
-        LEFT JOIN contratos c ON p.contrato_id = c.id
-        LEFT JOIN clientes cl ON c.cliente_id = cl.id
+        LEFT JOIN contratos con ON p.contrato_id = con.id
+        LEFT JOIN clientes cl ON con.cliente_id = cl.id
         LEFT JOIN usuarios_externos ua ON vt.asignado_a = ua.id
+        LEFT JOIN empleados emp ON ua.id = emp.usuario_id
+        LEFT JOIN usuarios_externos u_sol ON vt.solicitado_por_id = u_sol.id AND vt.solicitado_por_tipo = 'usuario'
+        LEFT JOIN clientes c_sol ON vt.solicitado_por_id = c_sol.id AND vt.solicitado_por_tipo = 'cliente'
         WHERE vt.id = ${id}
       `;
 
@@ -217,6 +228,7 @@ export class VisitasTecnicasService {
 
             if (updateDto.estado) updateData.estado = updateDto.estado;
             if (updateDto.fotos_evidencia_urls) updateData.fotos_evidencia_urls = updateDto.fotos_evidencia_urls;
+            if (updateDto.firma_tecnico) updateData.firma_tecnico = updateDto.firma_tecnico;
 
             const { data, error } = await supabase
                 .from("visitas_tecnicas_puesto")
@@ -229,7 +241,11 @@ export class VisitasTecnicasService {
 
             // Generar documento si se completó exitosamente
             if (data.estado === 'realizada') {
-                await this.generarReporteAutomatico(id);
+                await this.generarReporteAutomatico(id, 
+                    updateDto.firma_tecnico 
+                        ? { tecnico: updateDto.firma_tecnico, recibe: '', nombre_recibe: '' } 
+                        : undefined
+                );
             }
 
             this.logger.log(`✅ Salida de visita ${id} registrada`);
@@ -296,6 +312,39 @@ export class VisitasTecnicasService {
             const horaVisitaCol = visita.hora_programada || `${getVPart('hour')}:${getVPart('minute')}`;
 
             // Preparar datos para la plantilla
+            // Calcular duración de la visita
+            let duracion = 'No disponible';
+            if (visita.fecha_llegada && visita.fecha_salida) {
+                const llegada = new Date(visita.fecha_llegada);
+                const salida = new Date(visita.fecha_salida);
+                const diffMs = salida.getTime() - llegada.getTime();
+                const diffMins = Math.round(diffMs / 60000);
+                if (diffMins < 60) {
+                    duracion = `${diffMins} minutos`;
+                } else {
+                    const hrs = Math.floor(diffMins / 60);
+                    const mins = diffMins % 60;
+                    duracion = `${hrs}h ${mins}m`;
+                }
+            }
+
+            // Formatear hora de llegada y salida
+            const formatTime = (dateStr: string | null) => {
+                if (!dateStr) return 'Pendiente';
+                const parts = formatter.formatToParts(new Date(dateStr));
+                const g = (t: string) => parts.find(p => p.type === t)?.value;
+                return `${g('day')}/${g('month')}/${g('year')} ${g('hour')}:${g('minute')}`;
+            };
+
+            // Mapeo de roles legibles
+            const rolesMap: any = {
+                'tecnico': 'Técnico',
+                'supervisor': 'Supervisor', 
+                'coordinador': 'Coordinador',
+                'ingeniero': 'Ingeniero',
+                'mensajero': 'Mensajero'
+            };
+
             const datos = {
                 fecha_actual: fechaCol,
                 hora_actual: horaCol,
@@ -305,10 +354,14 @@ export class VisitasTecnicasService {
                 cliente_nombre: visita.cliente_nombre || 'CLIENTE PROLISEG',
                 puesto_nombre: visita.puesto_nombre || 'PUESTO NO ESPECIFICADO',
                 tecnico_nombre: tecnicoInfo?.nombre_completo || visita.nombre_visitante || 'No asignado',
-                tecnico_firma: firmasApp?.tecnico || tecnicoInfo?.firma_digital_base64 || null,
+                tecnico_firma: firmasApp?.tecnico || visita.firma_tecnico || tecnicoInfo?.firma_digital_base64 || null,
                 tecnico_cargo: tecnicoInfo?.cargo_oficial || 'TÉCNICO OPERATIVO',
-                recibe_nombre: firmasApp?.nombre_recibe || 'CLIENTE / RECEPTOR',
-                recibe_firma: firmasApp?.recibe || null,
+                tipo_visitante: rolesMap[visita.tipo_visitante] || visita.tipo_visitante || 'Técnico',
+                estado_visita: visita.estado === 'realizada' ? 'COMPLETADA' : (visita.estado || 'PROGRAMADA').toUpperCase(),
+                fecha_ingreso: formatTime(visita.fecha_llegada),
+                fecha_salida_visita: formatTime(visita.fecha_salida),
+                duracion: duracion,
+                solicitado_por: solicitanteInfo?.nombre_completo || 'SISTEMA PROLISEG',
                 programador_nombre: solicitanteInfo?.nombre_completo || 'SISTEMA PROLISEG',
                 programador_firma: solicitanteInfo?.firma_digital_base64 || null,
                 programador_cargo: solicitanteInfo?.cargo_oficial || 'COORDINADOR OPERATIVO',
@@ -541,7 +594,7 @@ export class VisitasTecnicasService {
     async finalizarVisitaApp(id: number, usuarioId: number, dto: FinalizarVisitaAppDto) {
         const supabase = this.supabaseService.getClient();
         
-        // 1. Actualizar datos de la visita (incluye firmas Base64)
+        // 1. Actualizar datos de la visita (incluye firma del técnico Base64)
         const { data, error } = await supabase
             .from("visitas_tecnicas_puesto")
             .update({
@@ -565,44 +618,71 @@ export class VisitasTecnicasService {
             throw new BadRequestException(`Error al finalizar visita: ${error.message}`);
         }
 
-        // 2. Generar Reporte y registrar en Minuta (pasando firmas capturadas en el app)
+        // 2. Generar Reporte Automático (crea el documento en borrador + minuta)
         const doc = await this.generarReporteAutomatico(id, {
             tecnico: dto.firma_tecnico_base64,
-            recibe: dto.firma_recibe_base64,
-            nombre_recibe: dto.nombre_recibe
+            recibe: dto.firma_recibe_base64 || '',
+            nombre_recibe: dto.nombre_recibe || ''
         });
 
-        // 3. Registrar firmas si el reporte existe
+        // 3. Registrar firma del técnico en firmas_documentos
         if (doc) {
-            // Firma Técnico
             await supabase.from('firmas_documentos').insert({
                 documento_id: doc.id,
                 nombre_firmante: 'Técnico Asignado',
                 cargo_firmante: 'TÉCNICO',
                 firma_base64: dto.firma_tecnico_base64,
                 tipo_firma: 'biometrica',
-                orden: 1
+                orden: 1,
+                firmado_en: new Date().toISOString()
             });
 
-            // Firma Quien Recibe
-            await supabase.from('firmas_documentos').insert({
-                documento_id: doc.id,
-                nombre_firmante: dto.nombre_recibe,
-                cargo_firmante: 'CLIENTE / RECEPTOR',
-                firma_base64: dto.firma_recibe_base64,
-                tipo_firma: 'biometrica',
-                orden: 2,
-                es_ultima_firma: true
-            });
+            // Firma de quien recibe (solo si se proporcionó)
+            if (dto.firma_recibe_base64) {
+                await supabase.from('firmas_documentos').insert({
+                    documento_id: doc.id,
+                    nombre_firmante: dto.nombre_recibe || 'Cliente / Receptor',
+                    cargo_firmante: 'CLIENTE / RECEPTOR',
+                    firma_base64: dto.firma_recibe_base64,
+                    tipo_firma: 'biometrica',
+                    orden: 2,
+                    es_ultima_firma: true,
+                    firmado_en: new Date().toISOString()
+                });
+            }
+
+            // 4. Generar el PDF automáticamente
+            try {
+                const pdfResult = await this.documentosService.generarPdf(doc.id);
+                this.logger.log(`✅ PDF generado para visita ${id}: ${pdfResult?.url_pdf}`);
+                
+                // Devolver los datos con la URL del PDF para descarga
+                return {
+                    ...data,
+                    documento_generado_id: doc.id,
+                    url_pdf: pdfResult?.url_pdf || null,
+                    mensaje: 'Visita finalizada exitosamente. Documento PDF generado.'
+                };
+            } catch (pdfError) {
+                this.logger.error(`⚠️ Error generando PDF para visita ${id}:`, pdfError);
+                // Continuamos aún si falla el PDF — la visita ya está finalizada
+                return {
+                    ...data,
+                    documento_generado_id: doc.id,
+                    url_pdf: null,
+                    mensaje: 'Visita finalizada. PDF pendiente de generación.'
+                };
+            }
         }
 
-        // Notificar finalización (Supervisores y Admins)
+        // Notificar finalización
         try {
             await this.notificarVisita(id, ['push', 'email']);
         } catch (notifError) {
             this.logger.warn(`No se pudo enviar notificación de cierre para visita ${id}:`, notifError);
         }
 
-        return data;
+        return { ...data, mensaje: 'Visita finalizada exitosamente.' };
     }
 }
+

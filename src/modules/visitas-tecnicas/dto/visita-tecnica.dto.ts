@@ -138,4 +138,9 @@ export class UpdateVisitaTecnicaDto {
     @IsOptional()
     @IsNumber()
     validado_por?: number;
+
+    @ApiProperty({ required: false, description: 'Firma del técnico en Base64' })
+    @IsOptional()
+    @IsString()
+    firma_tecnico?: string;
 }

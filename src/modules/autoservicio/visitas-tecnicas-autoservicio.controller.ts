@@ -110,4 +110,36 @@ export class VisitasTecnicasAutoservicioController {
     ) {
         return this.visitasService.finalizarVisitaApp(id, user.id, dto);
     }
+
+    @Get(":id/documento")
+    @ApiOperation({ summary: "Obtener el documento generado (con URL del PDF) para una visita" })
+    async getDocumento(
+        @Param("id", ParseIntPipe) id: number,
+        @CurrentUser() user: any
+    ) {
+        const visita = await this.visitasService.findOne(id);
+        if (!visita.documento_generado_id) {
+            throw new BadRequestException("Esta visita aún no tiene un documento generado.");
+        }
+
+        // Import inline to avoid circular deps
+        const supabase = (this.visitasService as any).supabaseService.getClient();
+        const { data: doc, error } = await supabase
+            .from("documentos_generados")
+            .select("*")
+            .eq("id", visita.documento_generado_id)
+            .single();
+
+        if (error || !doc) {
+            throw new BadRequestException("No se encontró el documento asociado.");
+        }
+
+        return {
+            documento_id: doc.id,
+            estado: doc.estado,
+            url_pdf: doc.url_pdf || null,
+            fecha_generacion: doc.fecha_generacion,
+            visita_id: id
+        };
+    }
 }
