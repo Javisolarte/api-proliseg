@@ -49,18 +49,27 @@ export class VisitasTecnicasService {
                CASE 
                  WHEN vt.solicitado_por_tipo = 'cliente' THEN c_sol.nombre_empresa
                  WHEN vt.solicitado_por_tipo = 'usuario' THEN u_sol.nombre_completo
-                 ELSE u.nombre_completo
+                 ELSE COALESCE(u_reg.nombre_completo, 'SISTEMA PROLISEG')
                END as solicitado_por_nombre,
-               u.nombre_completo as registrado_por_nombre,
+               u_reg.nombre_completo as registrado_por_nombre,
                ua.nombre_completo as asignado_a_nombre,
-               con.cliente_id as cliente_id
+               con.cliente_id as cliente_id,
+               emp.cargo_oficial as tecnico_cargo,
+               emp.firma_digital_base64 as tecnico_perfil_firma,
+               emp_sol.firma_digital_base64 as solicitado_por_firma,
+               emp_sol.cargo_oficial as programador_cargo
         FROM visitas_tecnicas_puesto vt
         LEFT JOIN puestos_trabajo p ON vt.puesto_id = p.id
         LEFT JOIN contratos con ON p.contrato_id = con.id
-        LEFT JOIN usuarios_externos u ON vt.registrado_por = u.id
+        LEFT JOIN usuarios_externos u_reg ON vt.registrado_por = u_reg.id
         LEFT JOIN usuarios_externos ua ON vt.asignado_a = ua.id
+        LEFT JOIN empleados emp ON ua.id = emp.usuario_id
         LEFT JOIN usuarios_externos u_sol ON vt.solicitado_por_id = u_sol.id AND vt.solicitado_por_tipo = 'usuario'
         LEFT JOIN clientes c_sol ON vt.solicitado_por_id = c_sol.id AND vt.solicitado_por_tipo = 'cliente'
+        LEFT JOIN empleados emp_sol ON (
+          (vt.solicitado_por_tipo = 'usuario' AND vt.solicitado_por_id = emp_sol.usuario_id) OR
+          (vt.solicitado_por_tipo IS NULL AND vt.registrado_por = emp_sol.usuario_id)
+        )
         WHERE 1=1
       `;
 
@@ -94,9 +103,12 @@ export class VisitasTecnicasService {
                CASE 
                  WHEN vt.solicitado_por_tipo = 'cliente' THEN c_sol.nombre_empresa
                  WHEN vt.solicitado_por_tipo = 'usuario' THEN u_sol.nombre_completo
-                 ELSE 'SISTEMA PROLISEG'
+                 ELSE COALESCE(u_reg.nombre_completo, 'SISTEMA PROLISEG')
                END as solicitado_por_nombre,
                emp.cargo_oficial as tecnico_cargo,
+               emp.firma_digital_base64 as tecnico_perfil_firma,
+               emp_sol.firma_digital_base64 as solicitado_por_firma,
+               emp_sol.cargo_oficial as programador_cargo,
                (SELECT firma_base64 FROM firmas_documentos WHERE documento_id = vt.documento_generado_id AND orden = 1 LIMIT 1) as firma_tecnico_doc,
                (SELECT firma_base64 FROM firmas_documentos WHERE documento_id = vt.documento_generado_id AND orden = 2 LIMIT 1) as firma_recibe_doc
         FROM visitas_tecnicas_puesto vt
@@ -105,8 +117,13 @@ export class VisitasTecnicasService {
         LEFT JOIN clientes cl ON con.cliente_id = cl.id
         LEFT JOIN usuarios_externos ua ON vt.asignado_a = ua.id
         LEFT JOIN empleados emp ON ua.id = emp.usuario_id
+        LEFT JOIN usuarios_externos u_reg ON vt.registrado_por = u_reg.id
         LEFT JOIN usuarios_externos u_sol ON vt.solicitado_por_id = u_sol.id AND vt.solicitado_por_tipo = 'usuario'
         LEFT JOIN clientes c_sol ON vt.solicitado_por_id = c_sol.id AND vt.solicitado_por_tipo = 'cliente'
+        LEFT JOIN empleados emp_sol ON (
+          (vt.solicitado_por_tipo = 'usuario' AND vt.solicitado_por_id = emp_sol.usuario_id) OR
+          (vt.solicitado_por_tipo IS NULL AND vt.registrado_por = emp_sol.usuario_id)
+        )
         WHERE vt.id = ${id}
       `;
 
@@ -256,9 +273,18 @@ export class VisitasTecnicasService {
         }
     }
 
+    private ensureBase64Prefix(signature: string | null): string | null {
+        if (!signature) return null;
+        if (signature.startsWith('data:image')) return signature;
+        return `data:image/png;base64,${signature}`;
+    }
+
     async generarReporteAutomatico(id: number, firmasApp?: { tecnico: string, recibe: string, nombre_recibe: string }) {
         try {
+            // we use findOne because it has the enriched joins for names, etc.
             const visita = await this.findOne(id);
+            if (!visita) return;
+
             const supabase = this.supabaseService.getClient();
 
             // Buscar la plantilla de Acta de Visita
@@ -276,21 +302,6 @@ export class VisitasTecnicasService {
                 return;
             }
 
-            // Obtener información del técnico (asignado_a)
-            const { data: tecnicoInfo } = await supabase
-                .from('empleados')
-                .select('nombre_completo, firma_digital_base64, cargo_oficial')
-                .eq('usuario_id', visita.asignado_a)
-                .single();
-
-            // Obtener información de quien solicita (solicitado_por_id o registrado_por)
-            const solicitanteId = visita.solicitado_por_id || visita.registrado_por;
-            const { data: solicitanteInfo } = await supabase
-                .from('empleados')
-                .select('nombre_completo, firma_digital_base64, cargo_oficial')
-                .eq('usuario_id', solicitanteId)
-                .single();
-
             // Configurar hora colombiana (UTC-5)
             const options: Intl.DateTimeFormatOptions = { 
                 timeZone: 'America/Bogota',
@@ -307,24 +318,24 @@ export class VisitasTecnicasService {
 
             const fechaVisita = visita.fecha_programada || visita.created_at;
             const visitaParts = formatter.formatToParts(new Date(fechaVisita));
-            const getVPart = (type: string) => visitaParts.find(p => p.type === type)?.value;
+            const getVPart = (type: string) => visitaParts.find((p: any) => p.type === type)?.value;
             const fechaVisitaCol = `${getVPart('day')}/${getVPart('month')}/${getVPart('year')}`;
             const horaVisitaCol = visita.hora_programada || `${getVPart('hour')}:${getVPart('minute')}`;
 
             // Preparar datos para la plantilla
             // Calcular duración de la visita
-            let duracion = 'No disponible';
+            let duracionStr = 'No disponible';
             if (visita.fecha_llegada && visita.fecha_salida) {
                 const llegada = new Date(visita.fecha_llegada);
                 const salida = new Date(visita.fecha_salida);
                 const diffMs = salida.getTime() - llegada.getTime();
                 const diffMins = Math.round(diffMs / 60000);
                 if (diffMins < 60) {
-                    duracion = `${diffMins} minutos`;
+                    duracionStr = `${diffMins} minutos`;
                 } else {
                     const hrs = Math.floor(diffMins / 60);
                     const mins = diffMins % 60;
-                    duracion = `${hrs}h ${mins}m`;
+                    duracionStr = `${hrs}h ${mins}m`;
                 }
             }
 
@@ -332,7 +343,7 @@ export class VisitasTecnicasService {
             const formatTime = (dateStr: string | null) => {
                 if (!dateStr) return 'Pendiente';
                 const parts = formatter.formatToParts(new Date(dateStr));
-                const g = (t: string) => parts.find(p => p.type === t)?.value;
+                const g = (t: string) => parts.find((p: any) => p.type === t)?.value;
                 return `${g('day')}/${g('month')}/${g('year')} ${g('hour')}:${g('minute')}`;
             };
 
@@ -353,18 +364,18 @@ export class VisitasTecnicasService {
                 codigo: visita.codigo || `VIS-${visita.id}`,
                 cliente_nombre: visita.cliente_nombre || 'CLIENTE PROLISEG',
                 puesto_nombre: visita.puesto_nombre || 'PUESTO NO ESPECIFICADO',
-                tecnico_nombre: tecnicoInfo?.nombre_completo || visita.nombre_visitante || 'No asignado',
-                tecnico_firma: firmasApp?.tecnico || visita.firma_tecnico || tecnicoInfo?.firma_digital_base64 || null,
-                tecnico_cargo: tecnicoInfo?.cargo_oficial || 'TÉCNICO OPERATIVO',
+                tecnico_nombre: visita.asignado_a_nombre || visita.nombre_visitante || 'No asignado',
+                tecnico_firma: this.ensureBase64Prefix(firmasApp?.tecnico || visita.firma_tecnico || visita.tecnico_perfil_firma),
+                tecnico_cargo: visita.tecnico_cargo || 'TÉCNICO OPERATIVO',
                 tipo_visitante: rolesMap[visita.tipo_visitante] || visita.tipo_visitante || 'Técnico',
                 estado_visita: visita.estado === 'realizada' ? 'COMPLETADA' : (visita.estado || 'PROGRAMADA').toUpperCase(),
                 fecha_ingreso: formatTime(visita.fecha_llegada),
                 fecha_salida_visita: formatTime(visita.fecha_salida),
-                duracion: duracion,
-                solicitado_por: solicitanteInfo?.nombre_completo || 'SISTEMA PROLISEG',
-                programador_nombre: solicitanteInfo?.nombre_completo || 'SISTEMA PROLISEG',
-                programador_firma: solicitanteInfo?.firma_digital_base64 || null,
-                programador_cargo: solicitanteInfo?.cargo_oficial || 'COORDINADOR OPERATIVO',
+                duracion: duracionStr,
+                solicitado_por: visita.solicitado_por_nombre || 'SISTEMA PROLISEG',
+                programador_nombre: visita.solicitado_por_nombre || 'SISTEMA PROLISEG',
+                programador_firma: this.ensureBase64Prefix(visita.solicitado_por_firma),
+                programador_cargo: visita.programador_cargo || 'COORDINADOR OPERATIVO',
                 motivo: visita.motivo_visita || 'Mantenimiento / Revisión',
                 novedades: visita.novedades || 'Sin novedades registradas',
                 conclusion: visita.conclusion || 'Sin conclusión registrada',
