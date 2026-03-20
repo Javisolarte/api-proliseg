@@ -1069,9 +1069,17 @@ export class NominaService {
 
     async eliminarDeduccion(id: number) {
         const supabase = this.supabaseService.getClient();
-        const { error } = await supabase.from('nomina_deducciones').update({ activo: false }).eq('id', id);
-        if (error) throw new InternalServerErrorException('No se pudo desactivar la deducción: ' + error.message);
-        return { message: 'Deducción desactivada correctamente' };
+        const { error } = await supabase.from('nomina_deducciones').delete().eq('id', id);
+        
+        if (error) {
+            // Error 23503 in PostgreSQL is a Foreign Key Violation
+            if (error.code === '23503' || error.message.includes('foreign key')) {
+                throw new InternalServerErrorException('No se puede eliminar porque ya ha sido usada en nóminas pasadas. Por favor, desactívela editándola en lugar de eliminarla.');
+            }
+            throw new InternalServerErrorException('No se pudo desactivar la deducción: ' + error.message);
+        }
+        
+        return { message: 'Deducción eliminada por completo' };
     }
 
     // ══════════════════════════════════════════════════════════
