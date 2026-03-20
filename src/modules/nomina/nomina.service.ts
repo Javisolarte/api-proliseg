@@ -1069,9 +1069,9 @@ export class NominaService {
 
     async eliminarDeduccion(id: number) {
         const supabase = this.supabaseService.getClient();
-        const { error } = await supabase.from('nomina_deducciones').delete().eq('id', id);
-        if (error) throw new InternalServerErrorException(error.message);
-        return { message: 'Deducción eliminada' };
+        const { error } = await supabase.from('nomina_deducciones').update({ activo: false }).eq('id', id);
+        if (error) throw new InternalServerErrorException('No se pudo desactivar la deducción: ' + error.message);
+        return { message: 'Deducción desactivada correctamente' };
     }
 
     // ══════════════════════════════════════════════════════════
