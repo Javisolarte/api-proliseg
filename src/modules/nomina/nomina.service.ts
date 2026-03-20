@@ -962,7 +962,14 @@ export class NominaService {
         const supabase = this.supabaseService.getClient();
         const { data: nomina } = await supabase
             .from('nomina_empleado')
-            .select('*')
+            .select(`
+                *,
+                empleados (nombre_completo, cedula),
+                nomina_empleado_deducciones (
+                    valor_calculado,
+                    nomina_deducciones (nombre, tipo, valor)
+                )
+            `)
             .eq('periodo_id', periodoId)
             .eq('empleado_id', empleadoId)
             .single();
