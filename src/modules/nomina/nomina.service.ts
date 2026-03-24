@@ -665,6 +665,20 @@ export class NominaService {
 
         this.logger.log(`>> Generando Nómina: ${anio}-${mes} | Periodo: ${periodo.fecha_inicio} al ${periodo.fecha_fin}`);
 
+        // ════ LIMPIEZA PREVIA (Sincronización) ════
+        // Borramos registros previos de este periodo para que si un empleado fue quitado de los turnos,
+        // ya no aparezca en la nómina al regenerar.
+        const { data: nominasPrevias } = await supabase
+            .from('nomina_empleado')
+            .select('id')
+            .eq('periodo_id', periodo.id);
+
+        if (nominasPrevias && nominasPrevias.length > 0) {
+            const idsPrevios = nominasPrevias.map(n => n.id);
+            await supabase.from('nomina_empleado_deducciones').delete().in('nomina_empleado_id', idsPrevios);
+            await supabase.from('nomina_empleado').delete().eq('periodo_id', periodo.id);
+        }
+
         // 2. Parámetros
         const { data: parametros } = await supabase
             .from('nomina_valores_hora')
@@ -675,6 +689,8 @@ export class NominaService {
         if (!parametros || parametros.length === 0) {
             throw new BadRequestException(`No hay parámetros de nómina configurados para el año ${anio}. Ejecuta la migración SQL.`);
         }
+
+        const smlmv = Number(parametros.find(p => p.tipo === 'salario_minimo')?.multiplicador || 1750905);
 
         // 3. Festivos
         const { data: festivosData } = await supabase
@@ -739,26 +755,64 @@ export class NominaService {
         const resultados: any[] = [];
 
         // 8. Calcular por Empleado
+        // Usamos un Map para evitar duplicados si un empleado tiene contrato y turnos
+        const empleadosAProcesar = new Map<number, any>();
+        
+        // Agregar los que tienen contrato
         for (const contrato of contratos) {
             const emp = contrato.empleados;
-            if (!emp) continue;
+            if (emp) {
+                const salarioData: any = contrato.salarios;
+                const salarioBase = Array.isArray(salarioData) ? (salarioData[0]?.valor || 0) : (salarioData?.valor || 0);
+                
+                empleadosAProcesar.set(emp.id, {
+                    id: emp.id,
+                    nombre_completo: emp.nombre_completo,
+                    cedula: emp.cedula,
+                    contrato_id: contrato.id,
+                    salario_id: contrato.salario_id,
+                    salario_base: salarioBase
+                });
+            }
+        }
 
-            const salarioData: any = contrato.salarios;
-            const salarioBase = Array.isArray(salarioData) ? (salarioData[0]?.valor || 0) : (salarioData?.valor || 0);
+        // Agregar los que tienen turnos pero NO tienen contrato activo (si los hay)
+        // Esto previene que "desaparezcan" si el contrato terminó pero trabajaron algunos días
+        const idsConTurnos = [...new Set(turnosRaw?.map(t => t.empleado_id) || [])];
+        for (const idEmp of idsConTurnos) {
+            if (!empleadosAProcesar.has(idEmp)) {
+                // Buscar info mínima del empleado
+                const { data: empData } = await supabase.from('empleados').select('id, nombre_completo, cedula').eq('id', idEmp).single();
+                if (empData) {
+                    empleadosAProcesar.set(idEmp, {
+                        id: empData.id,
+                        nombre_completo: empData.nombre_completo,
+                        cedula: empData.cedula,
+                        contrato_id: null,
+                        salario_id: null,
+                        salario_base: smlmv // Usamos el mínimo por defecto si no hay contrato
+                    });
+                }
+            }
+        }
+
+        for (const empInfo of empleadosAProcesar.values()) {
+            const empId = empInfo.id;
+            const salarioBase = empInfo.salario_base;
 
             if (salarioBase <= 0) {
-                this.logger.warn(`Empleado ${emp.id} sin salario configurado, saltando.`);
+                this.logger.warn(`Empleado ${empId} sin salario configurado, saltando.`);
                 continue;
             }
 
             // Turnos del empleado
-            const turnosEmpleado = turnosRaw?.filter(t => t.empleado_id === emp.id) || [];
+            const turnosEmpleado = turnosRaw?.filter(t => t.empleado_id === empId) || [];
 
             // Novedades del empleado
-            const novedadesEmpleado = novedadesRaw?.filter(n => n.empleado_id === emp.id) || [];
+            const novedadesEmpleado = novedadesRaw?.filter(n => n.empleado_id === empId) || [];
 
             // Buscar si tiene un salario fijo asignado por el puesto
-            const asignacion = asignacionesRaw?.find(a => a.empleado_id === emp.id);
+            const asignacion = asignacionesRaw?.find(a => a.empleado_id === empId);
             const salarioFijoPuesto = Number(asignacion?.puestos_trabajo?.['salario_fijo'] || 0);
 
             // Calcular liquidación
@@ -806,16 +860,16 @@ export class NominaService {
             const { data: existingNomina } = await supabase
                 .from('nomina_empleado')
                 .select('id')
-                .eq('empleado_id', emp.id)
+                .eq('empleado_id', empId)
                 .eq('periodo_id', periodo.id)
                 .single();
 
             let nominaId: number;
             const nominaData = {
-                empleado_id: emp.id,
+                empleado_id: empId,
                 periodo_id: periodo.id,
-                contrato_id: contrato.id,
-                salario_id: contrato.salario_id,
+                contrato_id: empInfo.contrato_id,
+                salario_id: empInfo.salario_id,
                 ...liquidacion,
             };
 
@@ -828,7 +882,7 @@ export class NominaService {
                     .single();
 
                 if (updateError) {
-                    this.logger.error(`Error actualizando nómina empleado ${emp.id}: ${updateError.message}`);
+                    this.logger.error(`Error actualizando nómina empleado ${empId}: ${updateError.message}`);
                     continue;
                 }
                 nominaId = updated.id;
@@ -840,7 +894,7 @@ export class NominaService {
                     .single();
 
                 if (insertError) {
-                    this.logger.error(`Error insertando nómina empleado ${emp.id}: ${insertError.message}`);
+                    this.logger.error(`Error insertando nómina empleado ${empId}: ${insertError.message}`);
                     continue;
                 }
                 nominaId = newNomina.id;
@@ -856,7 +910,7 @@ export class NominaService {
                 });
             }
 
-            resultados.push({ id: nominaId, nombre: emp.nombre_completo });
+            resultados.push({ id: nominaId, nombre: empInfo.nombre_completo });
         }
 
         // Actualizar totales del periodo
