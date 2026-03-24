@@ -347,24 +347,24 @@ export class NominaService {
         // ═══ CALCULAR VALORES ═══
 
         // Recargos (sobre horas ordinarias - solo el % adicional)
-        const recargoNocturno = c.ord_nocturnas * valorHora * factorRN;
+        let recargoNocturno = c.ord_nocturnas * valorHora * factorRN;
         const recargoDominicalDiurno = c.ord_dominical_diurnas * valorHora * factorDomFest;
         const recargoDominicalNocturno = c.ord_dominical_nocturnas * valorHora * factorNocDomFest;
         const recargoFestivoDiurno = c.ord_festiva_diurnas * valorHora * factorDomFest;
         const recargoFestivoNocturno = c.ord_festiva_nocturnas * valorHora * factorNocDomFest;
 
-        const totalRecargos = recargoNocturno + recargoDominicalDiurno + recargoDominicalNocturno
+        let totalRecargos = recargoNocturno + recargoDominicalDiurno + recargoDominicalNocturno
             + recargoFestivoDiurno + recargoFestivoNocturno;
 
         // Extras (valor completo de la hora extra)
-        const valorHED = c.ext_diurnas * valorHora * factorHED;
+        let valorHED = c.ext_diurnas * valorHora * factorHED;
         const valorHEN = c.ext_nocturnas * valorHora * factorHEN;
         const valorHEDD = c.ext_dominical_diurnas * valorHora * factorHEDD;
         const valorHEDN = c.ext_dominical_nocturnas * valorHora * factorHEDN;
         const valorHEFD = c.ext_festiva_diurnas * valorHora * factorHEDD;
         const valorHEFN = c.ext_festiva_nocturnas * valorHora * factorHEDN;
 
-        const totalExtras = valorHED + valorHEN + valorHEDD + valorHEDN + valorHEFD + valorHEFN;
+        let totalExtras = valorHED + valorHEN + valorHEDD + valorHEDN + valorHEFD + valorHEFN;
 
         // Descuentos por PNR y SAN (días no pagados)
         const valorDia = salarioBase / 30;
@@ -408,11 +408,28 @@ export class NominaService {
             // El objetivo es que el Total Devengado (o base + transport + extras) llegue al SalarioFijo
             // Se descuente proporcionalmente por días no pagados (PNR, Sanciones)
             const diasPagados = 30 - turnosPNR - turnosSAN;
-            const targetAjustado = Math.round((salarioFijo / 30) * diasPagados);
+            const targetNetoAjustado = Math.round((salarioFijo / 30) * diasPagados);
             
-            if (targetAjustado > totalDevengado) {
-                ajusteSalarial = targetAjustado - totalDevengado;
-                totalDevengado = targetAjustado;
+            // Queremos que Neto = 0.92 * (IBC) + AuxTransporte = targetNetoAjustado
+            // Donde IBC = DevengadoTotal - AuxTransporte
+            // Neto = 0.92 * (DevengadoTotal - AuxTransporte) + AuxTransporte = targetNetoAjustado
+            // DevengadoTotal = (targetNetoAjustado - AuxTransporte) / 0.92 + AuxTransporte
+            const devengadoRequerido = Math.round((targetNetoAjustado - auxTransporte) / 0.92 + auxTransporte);
+            
+            if (devengadoRequerido > totalDevengado) {
+                ajusteSalarial = devengadoRequerido - totalDevengado;
+                
+                // Distribución sugerida por el usuario en Extras/Recargos
+                const parteExtras = Math.round(ajusteSalarial * 0.7);
+                const parteRecargos = ajusteSalarial - parteExtras;
+                
+                valorHED += parteExtras;
+                recargoNocturno += parteRecargos;
+                
+                // Actualizar totales de salida
+                totalExtras += parteExtras;
+                totalRecargos += parteRecargos;
+                totalDevengado = devengadoRequerido;
             }
         }
 
