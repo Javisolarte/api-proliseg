@@ -31,6 +31,12 @@ export class NominaController {
         return this.nominaService.getAllPeriodos();
     }
 
+    @Get('periodo/:id/info')
+    @ApiOperation({ summary: 'Obtener información básica de un periodo' })
+    async getPeriodoInfo(@Param('id', ParseIntPipe) id: number) {
+        return this.nominaService.getPeriodoById(id);
+    }
+
     @Get('periodo/:id')
     @ApiOperation({ summary: 'Listar nómina de un periodo' })
     async getByPeriodo(@Param('id', ParseIntPipe) id: number) {

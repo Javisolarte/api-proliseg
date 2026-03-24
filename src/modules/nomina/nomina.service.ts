@@ -1114,4 +1114,15 @@ export class NominaService {
         if (error) throw new InternalServerErrorException(error.message);
         return { message: 'Novedad eliminada' };
     }
+
+    async getPeriodoById(id: number) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('nomina_periodos')
+            .select('*')
+            .eq('id', id)
+            .single();
+        if (error || !data) throw new NotFoundException('Periodo no encontrado');
+        return data;
+    }
 }
