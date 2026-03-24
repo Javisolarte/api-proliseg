@@ -390,11 +390,14 @@ export class NominaService {
         // Salario devengado base (descontando PNR y SAN)
         const salarioDevengado = salarioBase - descuentoPNR - descuentoSAN;
 
-        // Auxilio de transporte (proporcional a días trabajados, solo si ≤ 2 SMLMV)
-        const diasTrabajados = turnosDiurnos + turnosNocturnos;
+        // Auxilio de transporte (proporcional, solo si ≤ 2 SMLMV)
+        // Se paga por 30 días menos los días que no dan derecho (PNR, SAN, VAC, INC, LIC)
+        const diasNoAuxilio = turnosPNR + turnosSAN + turnosVAC + turnosINC + turnosLIC;
+        const diasAuxilio = Math.max(0, 30 - diasNoAuxilio);
+        
         let auxTransporte = 0;
         if (salarioBase <= smlmv * topeAuxSmlmv) {
-            auxTransporte = Math.round((diasTrabajados / 30) * auxTransporteBase);
+            auxTransporte = Math.round((diasAuxilio / 30) * auxTransporteBase);
         }
 
         // Total devengado
@@ -463,6 +466,7 @@ export class NominaService {
             horas_extra_festiva_diurnas: c.ext_festiva_diurnas,
             horas_extra_festiva_nocturnas: c.ext_festiva_nocturnas,
             // Valores
+            valor_hora: Math.round(valorHora),
             salario_base_valor: salarioBase,
             salario_devengado: salarioDevengado,
             descuento_pnr: Math.round(descuentoPNR),

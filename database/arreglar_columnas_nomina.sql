@@ -59,6 +59,7 @@ ALTER TABLE public.nomina_empleado ADD COLUMN IF NOT EXISTS deduccion_salud nume
 ALTER TABLE public.nomina_empleado ADD COLUMN IF NOT EXISTS deduccion_pension numeric DEFAULT 0;
 ALTER TABLE public.nomina_empleado ADD COLUMN IF NOT EXISTS deducciones_otras numeric DEFAULT 0;
 ALTER TABLE public.nomina_empleado ADD COLUMN IF NOT EXISTS total_pagar numeric DEFAULT 0;
+ALTER TABLE public.nomina_empleado ADD COLUMN IF NOT EXISTS valor_hora numeric DEFAULT 0;
 ALTER TABLE public.nomina_empleado ADD COLUMN IF NOT EXISTS horas_normales numeric DEFAULT 0;
 ALTER TABLE public.nomina_empleado ADD COLUMN IF NOT EXISTS horas_dominicales numeric DEFAULT 0;
 ALTER TABLE public.nomina_empleado ADD COLUMN IF NOT EXISTS generado boolean DEFAULT false;
