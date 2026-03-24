@@ -553,13 +553,33 @@ export class NominaService {
 
     async getAllPeriodos() {
         const supabase = this.supabaseService.getClient();
-        const { data, error } = await supabase
+        
+        // Obtenemos los periodos
+        const { data: periodos, error: pError } = await supabase
             .from('nomina_periodos')
             .select('*')
             .order('anio', { ascending: false })
             .order('mes', { ascending: false });
-        if (error) throw error;
-        return data;
+            
+        if (pError) throw pError;
+        
+        // Para cada periodo, obtenemos el conteo y la suma de neto
+        const enrichedPeriodos = await Promise.all(periodos.map(async (p) => {
+            const { data: stats, error: sError } = await supabase
+                .from('nomina_empleado')
+                .select('total_neto')
+                .eq('periodo_id', p.id);
+                
+            if (sError) return { ...p, empleados_count: 0, total_neto: 0 };
+            
+            return {
+                ...p,
+                empleados_count: stats.length,
+                total_neto: stats.reduce((sum, item) => sum + (item.total_neto || 0), 0)
+            };
+        }));
+        
+        return enrichedPeriodos;
     }
 
     async closePeriod(periodoId: number, userId: number) {
@@ -1125,4 +1145,5 @@ export class NominaService {
         if (error || !data) throw new NotFoundException('Periodo no encontrado');
         return data;
     }
+
 }
