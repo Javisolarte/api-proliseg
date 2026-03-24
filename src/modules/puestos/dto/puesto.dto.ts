@@ -128,6 +128,16 @@ export class CreatePuestoDto {
   @IsInt()
   @Min(0)
   cantidad_camaras?: number;
+
+  @ApiProperty({
+    example: 2300000,
+    required: false,
+    description: "Salario fijo mensual objetivo para los empleados del puesto",
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  salario_fijo?: number;
 }
 
 export class UpdatePuestoDto extends PartialType(CreatePuestoDto) { }

@@ -232,15 +232,13 @@ export class NominaService {
         return result;
     }
 
-    /**
-     * Cálculo completo de nómina para un empleado
-     */
     private calcularLiquidacionEmpleado(
         turnos: any[],
         salarioBase: number,
         parametros: any[],
         festivos: Set<string>,
         novedades: any[],
+        salarioFijo: number = 0,
     ) {
         const getParam = (tipo: string): number => {
             const p = parametros.find(p => p.tipo === tipo);
@@ -400,9 +398,23 @@ export class NominaService {
             auxTransporte = Math.round((diasAuxilio / 30) * auxTransporteBase);
         }
 
-        // Total devengado
-        const totalDevengado = salarioDevengado + totalRecargos + totalExtras
+        // Total devengado antes del ajuste de salario fijo
+        let totalDevengado = salarioDevengado + totalRecargos + totalExtras
             + auxTransporte + valorLicencia + valorVacaciones + valorIncapacidad;
+
+        // ═══ AJUSTE SALARIO FIJO (Si aplica) ═══
+        let ajusteSalarial = 0;
+        if (salarioFijo > 0) {
+            // El objetivo es que el Total Devengado (o base + transport + extras) llegue al SalarioFijo
+            // Se descuente proporcionalmente por días no pagados (PNR, Sanciones)
+            const diasPagados = 30 - turnosPNR - turnosSAN;
+            const targetAjustado = Math.round((salarioFijo / 30) * diasPagados);
+            
+            if (targetAjustado > totalDevengado) {
+                ajusteSalarial = targetAjustado - totalDevengado;
+                totalDevengado = targetAjustado;
+            }
+        }
 
         // IBC (Ingreso Base Cotización = devengado - auxilio transporte)
         const ibc = totalDevengado - auxTransporte;
@@ -493,6 +505,7 @@ export class NominaService {
             total_recargos: Math.round(totalRecargos),
             total_horas_extra: Math.round(totalExtras),
             total_devengado: Math.round(totalDevengado),
+            ajuste_salarial: Math.round(ajusteSalarial),
             ibc: Math.round(ibc),
             deduccion_salud: deduccionSalud,
             deduccion_pension: deduccionPension,
@@ -700,6 +713,12 @@ export class NominaService {
             .select('*')
             .eq('periodo_id', periodo.id);
 
+        // 7.5. Puestos y Salarios Fijos (Asignaciones activas)
+        const { data: asignacionesRaw } = await supabase
+            .from('asignacion_guardas_puesto')
+            .select('empleado_id, puesto_id, puestos_trabajo(salario_fijo)')
+            .eq('activo', true);
+
         const resultados: any[] = [];
 
         // 8. Calcular por Empleado
@@ -721,6 +740,10 @@ export class NominaService {
             // Novedades del empleado
             const novedadesEmpleado = novedadesRaw?.filter(n => n.empleado_id === emp.id) || [];
 
+            // Buscar si tiene un salario fijo asignado por el puesto
+            const asignacion = asignacionesRaw?.find(a => a.empleado_id === emp.id);
+            const salarioFijoPuesto = Number(asignacion?.puestos_trabajo?.['salario_fijo'] || 0);
+
             // Calcular liquidación
             const liquidacion = this.calcularLiquidacionEmpleado(
                 turnosEmpleado,
@@ -728,6 +751,7 @@ export class NominaService {
                 parametros,
                 festivos,
                 novedadesEmpleado,
+                salarioFijoPuesto,
             );
 
             // Aplicar deducciones adicionales (no obligatorias)
