@@ -731,20 +731,60 @@ export class NominaService {
             throw new BadRequestException('No hay contratos activos para generar nómina.');
         }
 
-        // 6. Todos los turnos del periodo
-        const { data: turnosRaw, error: errTurnos } = await supabase
-            .from('turnos')
-            .select('*')
-            .gte('fecha', periodo.fecha_inicio)
-            .lte('fecha', periodo.fecha_fin);
+        // 6. Todos los turnos del periodo (Paginado para evitar límite de 1000)
+        let turnosRaw: any[] = [];
+        let from = 0;
+        const pageSize = 1000;
+        let complete = false;
 
-        if (errTurnos) throw new InternalServerErrorException(errTurnos.message);
+        while (!complete) {
+            const { data, error } = await supabase
+                .from('turnos')
+                .select('*')
+                .gte('fecha', periodo.fecha_inicio)
+                .lte('fecha', periodo.fecha_fin)
+                .range(from, from + pageSize - 1);
 
-        // 7. Novedades del periodo
-        const { data: novedadesRaw } = await supabase
-            .from('nomina_novedades')
-            .select('*')
-            .eq('periodo_id', periodo.id);
+            if (error) throw new InternalServerErrorException(error.message);
+            
+            if (!data || data.length === 0) {
+                complete = true;
+            } else {
+                turnosRaw = [...turnosRaw, ...data];
+                if (data.length < pageSize) {
+                    complete = true;
+                } else {
+                    from += pageSize;
+                }
+            }
+        }
+
+        // 7. Novedades del periodo (Paginado)
+        let novedadesRaw: any[] = [];
+        let fromNov = 0;
+        const pageSizeNov = 1000;
+        let completeNov = false;
+
+        while (!completeNov) {
+            const { data, error } = await supabase
+                .from('nomina_novedades')
+                .select('*')
+                .eq('periodo_id', periodo.id)
+                .range(fromNov, fromNov + pageSizeNov - 1);
+
+            if (error) throw new InternalServerErrorException(error.message);
+            
+            if (!data || data.length === 0) {
+                completeNov = true;
+            } else {
+                novedadesRaw = [...novedadesRaw, ...data];
+                if (data.length < pageSizeNov) {
+                    completeNov = true;
+                } else {
+                    fromNov += pageSizeNov;
+                }
+            }
+        }
 
         // 7.5. Puestos y Salarios Fijos (Asignaciones activas)
         const { data: asignacionesRaw } = await supabase
