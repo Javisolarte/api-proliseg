@@ -16,6 +16,7 @@ interface EmpleadoInfo {
   patron_descanso: string | null; // "4-2", "5-2"
   fecha_inicio_patron: string;
   fase_inicial: number | null; // Índice de la fase del ciclo donde empieza (0=primera fase)
+  created_at: string;
   empleado: {
     id: number;
     nombre_completo: string;
@@ -166,6 +167,7 @@ export class AsignarTurnosService {
         patron_descanso,
         fecha_inicio_patron,
         fase_inicial,
+        created_at,
         empleado:empleado_id (
           id,
           nombre_completo,
@@ -290,25 +292,26 @@ export class AsignarTurnosService {
         // Limpieza y validación de fase_inicial
         const faseIni = (empRaw.fase_inicial !== null && empRaw.fase_inicial !== undefined)
           ? parseInt(empRaw.fase_inicial.toString(), 10)
-          : null;
+          : 0;
 
-        if (faseIni !== null && !isNaN(faseIni)) {
-          offsetPersonalizado = faseIni % cicloLength;
-          this.logger.log(`👤 TITULAR: ${empleado.nombre_completo} -> FASE MANUAL: ${faseIni} -> OFFSET: ${offsetPersonalizado}`);
-        } else if (empRaw.fecha_inicio_patron) {
-          const fechaInicioPatronEmpleado = new Date(empRaw.fecha_inicio_patron);
-          fechaInicioPatronEmpleado.setHours(0, 0, 0, 0);
-          const diffTime = fechaBase.getTime() - fechaInicioPatronEmpleado.getTime();
-          const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-          offsetPersonalizado = ((diffDays % cicloLength) + cicloLength) % cicloLength;
-          this.logger.log(`👤 TITULAR: ${empleado.nombre_completo} -> OFFSET FECHA: ${offsetPersonalizado}`);
-        }
+        // Establecer ancla estable: prioridad fecha_inicio_patron, luego 1ro del mes de creación, o 2026-03-01 por defecto
+        // Esto asegura que la secuencia sea continua aunque cambien los meses.
+        const anchorDateStr = empRaw.fecha_inicio_patron || 
+                             (empRaw.created_at ? empRaw.created_at.split('T')[0].substring(0, 8) + '01' : '2026-03-01');
+        
+        const [y, mon, day] = anchorDateStr.split('-').map(Number);
+        const anchorDate = new Date(y, mon - 1, day);
+        anchorDate.setHours(0, 0, 0, 0);
+        
+        const diffTime = fechaBase.getTime() - anchorDate.getTime();
+        const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+        
+        // El offset para el día 1 del mes es (fase inicial + días transcurridos) % cicloLength
+        offsetPersonalizado = ((faseIni + diffDays) % cicloLength + cicloLength) % cicloLength;
+        
+        this.logger.log(`👤 TITULAR: ${empleado.nombre_completo} -> ANCLA: ${anchorDateStr} -> FASE: ${faseIni} -> OFFSET MES: ${offsetPersonalizado}`);
 
-        const offsetInicial = offsetPersonalizado !== null ? offsetPersonalizado : ((index * offsetPorEmpleado) % cicloLength);
-
-        if (offsetPersonalizado === null) {
-          this.logger.log(`👤 TITULAR: ${empleado.nombre_completo} -> OFFSET AUTOMÁTICO: ${offsetInicial}`);
-        }
+        const offsetInicial = offsetPersonalizado;
 
         for (let dia = 0; dia < numeroDeDiasAGenerar; dia++) {
           const fechaTurno = new Date(fechaBase);
