@@ -439,8 +439,8 @@ export class NominaService {
         // Deducciones legales empleado
         const saludEmpleado = getParam('salud_empleado') || 4;
         const pensionEmpleado = getParam('pension_empleado') || 4;
-        const deduccionSalud = Math.round(ibc * (saludEmpleado / 100));
-        const deduccionPension = Math.round(ibc * (pensionEmpleado / 100));
+        const deduccionSalud = Math.round(salarioDevengado * (saludEmpleado / 100));
+        const deduccionPension = Math.round(salarioDevengado * (pensionEmpleado / 100));
         const totalDeducciones = deduccionSalud + deduccionPension;
 
         const netoPagar = Math.round(totalDevengado - totalDeducciones);
