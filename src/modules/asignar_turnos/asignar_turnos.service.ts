@@ -46,6 +46,120 @@ export class AsignarTurnosService {
   ) { }
 
   /**
+   * 🛠️ Helper: Normalizar etiquetas de tipos de turno (DIA -> D, NOCHE -> N, etc.)
+   */
+  private normalizarTipoTurno(tipo: string): string {
+    const t = (tipo || '').toUpperCase().trim();
+    if (t === 'D' || t === 'DIA' || t === 'DIURNO' || t === 'D12') return 'D';
+    if (t === 'N' || t === 'NOCHE' || t === 'NOCTURNO' || t === 'N12') return 'N';
+    if (t === 'Z' || t === 'DESCANSO' || t === 'X' || t === 'OFF' || t === 'Z_RELEVO') return 'Z';
+    return t;
+  }
+
+  /**
+   * 🔍 Detectar la fase correcta del ciclo leyendo el último turno REAL del mes anterior.
+   * Garantiza continuidad perfecta entre meses sin depender de metadatos almacenados.
+   * @returns El offset (posición en el ciclo) para el día 1 del nuevo mes, o null si no hay historial.
+   */
+  private async detectarFaseDesdeHistorial(
+    empleadoId: number,
+    subpuestoId: number,
+    fechaBaseMes: Date, // Día 1 del mes a generar
+    detalles: DetalleTurno[], // Array ordenado de detalles del ciclo
+  ): Promise<number | null> {
+    const supabase = this.supabaseService.getClient();
+    const cicloLength = detalles.length;
+
+    // Calcular rango del mes anterior
+    const mesAnterior = new Date(fechaBaseMes);
+    mesAnterior.setMonth(mesAnterior.getMonth() - 1);
+    const primerDiaMesAnt = `${mesAnterior.getFullYear()}-${String(mesAnterior.getMonth() + 1).padStart(2, '0')}-01`;
+    const ultimoDiaMesAnt = new Date(fechaBaseMes.getFullYear(), fechaBaseMes.getMonth(), 0);
+    const ultimoDiaMesAntStr = ultimoDiaMesAnt.toISOString().split('T')[0];
+
+    // Buscar los últimos turnos del mes anterior
+    // Pedimos más que cicloLength por si hay días sin turnos o duplicados
+    const { data: turnosRaw, error } = await supabase
+      .from('turnos')
+      .select('fecha, tipo_turno, orden_en_ciclo')
+      .eq('empleado_id', empleadoId)
+      // Buscamos en el subpuesto, pero si no hay, buscamos en el puesto_id (opcional)
+      .eq('subpuesto_id', subpuestoId)
+      .gte('fecha', primerDiaMesAnt)
+      .lte('fecha', ultimoDiaMesAntStr)
+      .order('fecha', { ascending: false })
+      .limit(cicloLength * 2);
+
+    if (error || !turnosRaw || turnosRaw.length === 0) {
+      return null;
+    }
+
+    // 1. Deduplicar por fecha (quedarnos con el último por día si hay varios)
+    const turnosUnicosPorFecha = new Map<string, string>();
+    turnosRaw.forEach(t => {
+      const f = t.fecha?.split('T')[0];
+      if (f && !turnosUnicosPorFecha.has(f)) {
+        turnosUnicosPorFecha.set(f, this.normalizarTipoTurno(t.tipo_turno));
+      }
+    });
+
+    // 2. Construir historial cronológico de los últimos N días
+    // Si faltan días entre medio, el patrón igual se puede alinear
+    const fechasEnRango: string[] = [];
+    const tempDate = new Date(ultimoDiaMesAnt);
+    for (let i = 0; i < cicloLength * 1.5; i++) {
+      fechasEnRango.push(tempDate.toISOString().split('T')[0]);
+      tempDate.setDate(tempDate.getDate() - 1);
+      if (tempDate < new Date(primerDiaMesAnt)) break;
+    }
+
+    const historialTipos = fechasEnRango
+      .reverse() // Orden cronológico
+      .map(f => turnosUnicosPorFecha.get(f) || null); // null si no hubo turno ese día
+
+    // 3. Normalizar tipos del ciclo
+    const tiposCiclo = detalles.map(d => this.normalizarTipoTurno(d.tipo));
+
+    // 4. Buscar la mejor alineación de este historial contra el ciclo
+    let mejorOffset = -1;
+    let mejorCoincidencias = -1;
+    let totalDiasValidos = historialTipos.filter(t => t !== null).length;
+
+    if (totalDiasValidos === 0) return null;
+
+    for (let offset = 0; offset < cicloLength; offset++) {
+      let coincidencias = 0;
+      for (let j = 0; j < historialTipos.length; j++) {
+        if (historialTipos[j] === null) continue; // Saltar huecos en historial
+        
+        const posEnCiclo = (offset + j) % cicloLength;
+        if (tiposCiclo[posEnCiclo] === historialTipos[j]) {
+          coincidencias++;
+        }
+      }
+      
+      if (coincidencias > mejorCoincidencias) {
+        mejorCoincidencias = coincidencias;
+        mejorOffset = offset;
+      }
+    }
+
+    // Si la coincidencia es muy baja, no es confiable (ej: menos del 50% de los días con turno)
+    if (mejorOffset === -1 || (totalDiasValidos > 1 && mejorCoincidencias < totalDiasValidos * 0.5)) {
+      this.logger.warn(`⚠️ Alineación de baja confianza para empleado ${empleadoId}: ${mejorCoincidencias}/${totalDiasValidos}`);
+      return null;
+    }
+
+    // El offset para el día 1 del nuevo mes es la posición siguiente a la del último día del mes anterior
+    // El último día del historial es historialTipos[historialTipos.length - 1]
+    const posUltimoDia = (mejorOffset + historialTipos.length - 1) % cicloLength;
+    const offsetNuevoMes = (posUltimoDia + 1) % cicloLength;
+
+    this.logger.log(`🎯 [OK] Empleado ${empleadoId} -> Historial: ${mejorCoincidencias}/${totalDiasValidos} coincid. -> OFFSET ABRIL: ${offsetNuevoMes}`);
+    return offsetNuevoMes;
+  }
+
+  /**
    * 📅 Helper: Obtener festivos de Colombia
    */
   private async obtenerFestivos(fechaInicio: Date, fechaFin: Date): Promise<string[]> {
@@ -284,32 +398,52 @@ export class AsignarTurnosService {
       // Mapa para rastrear huecos por día: { "[fecha]_[plaza]": { horaInc, horaFin, tipo, orden } }
       const huecosPorDia = new Map<string, any>();
 
+      // 🔍 PRE-CALCULAR offsets desde historial real del mes anterior para TODOS los titulares
+      const offsetsDesdeHistorial = new Map<number, number>();
+      for (const empRaw of titulares) {
+        const offsetHistorial = await this.detectarFaseDesdeHistorial(
+          empRaw.empleado_id, subpuesto_id, fechaBase, detalles
+        );
+        if (offsetHistorial !== null) {
+          offsetsDesdeHistorial.set(empRaw.empleado_id, offsetHistorial);
+        }
+      }
+      
+      if (offsetsDesdeHistorial.size > 0) {
+        this.logger.log(`✅ Offsets detectados desde historial para ${offsetsDesdeHistorial.size}/${titulares.length} titulares`);
+      }
+
       // 2. Generar turnos para TITULARES
       titulares.forEach((empRaw, index) => {
         const empleado = empRaw.empleado;
         let offsetPersonalizado: number | null = null;
 
-        // Limpieza y validación de fase_inicial
-        const faseIni = (empRaw.fase_inicial !== null && empRaw.fase_inicial !== undefined)
-          ? parseInt(empRaw.fase_inicial.toString(), 10)
-          : 0;
+        // 🎯 PRIORIDAD 1: Usar offset detectado desde historial real del mes anterior
+        const offsetHistorial = offsetsDesdeHistorial.get(empRaw.empleado_id);
+        
+        if (offsetHistorial !== undefined) {
+          offsetPersonalizado = offsetHistorial;
+          this.logger.log(`👤 TITULAR: ${empleado.nombre_completo} -> OFFSET DESDE HISTORIAL: ${offsetPersonalizado} (continuidad garantizada)`);
+        } else {
+          // 🔄 FALLBACK: Usar ancla + fase_inicial (para empleados nuevos sin historial)
+          const faseIni = (empRaw.fase_inicial !== null && empRaw.fase_inicial !== undefined)
+            ? parseInt(empRaw.fase_inicial.toString(), 10)
+            : 0;
 
-        // Establecer ancla estable: prioridad fecha_inicio_patron, luego 1ro del mes de creación, o 2026-03-01 por defecto
-        // Esto asegura que la secuencia sea continua aunque cambien los meses.
-        const anchorDateStr = empRaw.fecha_inicio_patron || 
-                             (empRaw.created_at ? empRaw.created_at.split('T')[0].substring(0, 8) + '01' : '2026-03-01');
-        
-        const [y, mon, day] = anchorDateStr.split('-').map(Number);
-        const anchorDate = new Date(y, mon - 1, day);
-        anchorDate.setHours(0, 0, 0, 0);
-        
-        const diffTime = fechaBase.getTime() - anchorDate.getTime();
-        const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-        
-        // El offset para el día 1 del mes es (fase inicial + días transcurridos) % cicloLength
-        offsetPersonalizado = ((faseIni + diffDays) % cicloLength + cicloLength) % cicloLength;
-        
-        this.logger.log(`👤 TITULAR: ${empleado.nombre_completo} -> ANCLA: ${anchorDateStr} -> FASE: ${faseIni} -> OFFSET MES: ${offsetPersonalizado}`);
+          const anchorDateStr = empRaw.fecha_inicio_patron || 
+                               (empRaw.created_at ? empRaw.created_at.split('T')[0].substring(0, 8) + '01' : '2026-03-01');
+          
+          const [y, mon, day] = anchorDateStr.split('-').map(Number);
+          const anchorDate = new Date(y, mon - 1, day);
+          anchorDate.setHours(0, 0, 0, 0);
+          
+          const diffTime = fechaBase.getTime() - anchorDate.getTime();
+          const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+          
+          offsetPersonalizado = ((faseIni + diffDays) % cicloLength + cicloLength) % cicloLength;
+          
+          this.logger.log(`👤 TITULAR: ${empleado.nombre_completo} -> ANCLA: ${anchorDateStr} -> FASE: ${faseIni} -> OFFSET MES: ${offsetPersonalizado} (sin historial previo)`);
+        }
 
         const offsetInicial = offsetPersonalizado;
 
