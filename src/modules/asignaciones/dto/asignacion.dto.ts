@@ -77,6 +77,15 @@ export class CreateAsignacionDto {
   @IsOptional()
   @IsInt()
   fase_inicial?: number;
+
+  @ApiProperty({
+    example: "2024-02-01",
+    description: "Fecha efectiva de la asignación. Si no se provee, se asume el primer día del mes actual.",
+    required: false
+  })
+  @IsOptional()
+  @IsDateString()
+  fecha_asignacion?: string;
 }
 
 

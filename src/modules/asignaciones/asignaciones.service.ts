@@ -197,7 +197,13 @@ export class AsignacionesService {
       );
     }
 
-    // ✅ 5. Insertar asignación
+    // ✅ 5. Determinar fecha de inicio (Default: día 1 del mes actual)
+    const fechaHoy = new Date();
+    const primerDiaMes = new Date(fechaHoy.getFullYear(), fechaHoy.getMonth(), 1).toISOString().split('T')[0];
+    
+    const fechaInicioEfectiva = dto.fecha_asignacion || primerDiaMes;
+
+    // ✅ 6. Insertar asignación
     const payload = {
       empleado_id: dto.empleado_id,
       puesto_id: puesto.id,
@@ -208,11 +214,11 @@ export class AsignacionesService {
       // --- NUEVOS CAMPOS BIOLÓGICOS / CICLO ---
       rol_puesto: dto.rol_puesto ?? 'titular',
       patron_descanso: dto.patron_descanso ?? null,
-      fecha_inicio_patron: dto.fecha_inicio_patron ?? null,
+      fecha_inicio_patron: dto.fecha_inicio_patron ?? fechaInicioEfectiva, // Default al inicio de la asignación
       fase_inicial: dto.fase_inicial ?? null,
       // ---
       activo: true,
-      fecha_asignacion: new Date().toISOString().split('T')[0],
+      fecha_asignacion: fechaInicioEfectiva,
       hora_asignacion: new Date().toISOString().split('T')[1].split('.')[0],
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -248,7 +254,7 @@ export class AsignacionesService {
     const turnosReasignados = await this.reasignarTurnosPendientes(
       dto.subpuesto_id,
       dto.empleado_id,
-      dto.fecha_inicio_patron || payload.fecha_asignacion
+      fechaInicioEfectiva
     );
 
     if (turnosReasignados > 0) {
@@ -269,7 +275,7 @@ export class AsignacionesService {
         const turnosResult = await this.asignarTurnosService.regenerarTurnos(
           dto.subpuesto_id,
           dto.asignado_por,
-          dto.fecha_inicio_patron
+          fechaInicioEfectiva
         );
 
         // Mapear resultado para mantener consistencia con respuesta anterior
@@ -789,7 +795,8 @@ export class AsignacionesService {
     asignacionId: number,
     nuevoEmpleadoId: number,
     motivo: string,
-    motivoDetalle?: string
+    motivoDetalle?: string,
+    fechaReemplazo?: string
   ) {
     const supabase = this.supabaseService.getClient();
 
@@ -804,6 +811,10 @@ export class AsignacionesService {
         contrato_id,
         asignado_por,
         observaciones,
+        rol_puesto,
+        patron_descanso,
+        fecha_inicio_patron,
+        fase_inicial,
         empleado:empleado_id (
           id,
           nombre_completo
@@ -860,7 +871,11 @@ export class AsignacionesService {
       );
     }
 
-    const fechaActual = new Date().toISOString().split('T')[0];
+    // ✅ Determinar fecha de inicio (Default: día 1 del mes actual)
+    const fechaHoy = new Date();
+    const primerDiaMes = new Date(fechaHoy.getFullYear(), fechaHoy.getMonth(), 1).toISOString().split('T')[0];
+    
+    const fechaEfectiva = fechaReemplazo || primerDiaMes;
     const horaActual = new Date().toISOString().split('T')[1].split('.')[0];
 
     // 4. Desactivar asignación anterior
@@ -868,10 +883,10 @@ export class AsignacionesService {
       .from("asignacion_guardas_puesto")
       .update({
         activo: false,
-        fecha_fin: fechaActual,
+        fecha_fin: fechaEfectiva, // Termina el día del reemplazo
         hora_fin: horaActual,
         motivo_finalizacion: `Reemplazo: ${motivo}`,
-        observaciones: `${asignacionActual.observaciones || ''}\n[${fechaActual}] Reemplazado por ${nuevoEmpleado.nombre_completo}: ${motivoDetalle || motivo}`.trim(),
+        observaciones: `${asignacionActual.observaciones || ''}\n[${fechaEfectiva}] Reemplazado por ${nuevoEmpleado.nombre_completo}: ${motivoDetalle || motivo}`.trim(),
         updated_at: new Date().toISOString()
       })
       .eq("id", asignacionId);
@@ -890,8 +905,12 @@ export class AsignacionesService {
         contrato_id: asignacionActual.contrato_id,
         asignado_por: asignacionActual.asignado_por,
         observaciones: `Reemplazo de ${empleadoAnterior?.nombre_completo} - ${motivo}`,
+        rol_puesto: asignacionActual.rol_puesto,
+        patron_descanso: asignacionActual.patron_descanso,
+        fecha_inicio_patron: asignacionActual.fecha_inicio_patron || fechaEfectiva,
+        fase_inicial: asignacionActual.fase_inicial,
         activo: true,
-        fecha_asignacion: fechaActual,
+        fecha_asignacion: fechaEfectiva,
         hora_asignacion: horaActual,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -926,7 +945,7 @@ export class AsignacionesService {
       })
       .eq("empleado_id", asignacionActual.empleado_id)
       .eq("subpuesto_id", asignacionActual.subpuesto_id)
-      .gte("fecha", fechaActual)
+      .gte("fecha", fechaEfectiva)
       .in("estado_turno", ["programado", "pendiente"])
       .select("id, fecha, tipo_turno");
 
@@ -960,7 +979,7 @@ export class AsignacionesService {
         empleado_anterior: empleadoAnterior?.nombre_completo,
         empleado_nuevo: nuevoEmpleado.nombre_completo,
         motivo,
-        fecha_reemplazo: fechaActual,
+        fecha_reemplazo: fechaEfectiva,
         turnos_afectados: turnosActualizados
       }
     };

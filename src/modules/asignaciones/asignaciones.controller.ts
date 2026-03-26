@@ -223,8 +223,9 @@ export class AsignacionesController {
     @Param("id") id: number,
     @Body("nuevo_empleado_id") nuevoEmpleadoId: number,
     @Body("motivo") motivo: string,
-    @Body("motivo_detalle") motivoDetalle?: string
+    @Body("motivo_detalle") motivoDetalle?: string,
+    @Body("fecha_reemplazo") fechaReemplazo?: string
   ) {
-    return this.asignacionesService.reemplazarEmpleado(id, nuevoEmpleadoId, motivo, motivoDetalle);
+    return this.asignacionesService.reemplazarEmpleado(id, nuevoEmpleadoId, motivo, motivoDetalle, fechaReemplazo);
   }
 }
