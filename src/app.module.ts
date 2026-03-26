@@ -83,6 +83,8 @@ import { FileManagerModule } from './modules/file-manager/file-manager.module';
 import { FestivosModule } from './modules/festivos/festivos.module';
 import { CorreosCorporativosModule } from './modules/correos-corporativos/correos-corporativos.module';
 import { CalendarioModule } from './modules/calendario/calendario.module';
+import { ConceptosTurnoModule } from './modules/conceptos_turno/conceptos_turno.module';
+import { VacacionesModule } from './modules/vacaciones/vacaciones.module';
 
 // 🆕 New modules - Document management
 import { PlantillasModule } from './modules/plantillas/plantillas.module';
@@ -218,6 +220,8 @@ import { ComplianceModule } from './modules/compliance/compliance.module';
     HelpersModule,
     CorreosCorporativosModule,
     CalendarioModule,
+    ConceptosTurnoModule,
+    VacacionesModule,
 
     // 🆕 Document management modules
     PlantillasModule,

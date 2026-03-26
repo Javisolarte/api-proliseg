@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Query, Delete, ParseIntPipe, BadRequestException, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Get, Query, Delete, ParseIntPipe, BadRequestException, UseGuards, Patch } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AsignarTurnosService } from './asignar_turnos.service';
 import { AsignarTurnosDto } from './dto/asignar_turnos.dto';
@@ -236,5 +236,30 @@ export class AsignarTurnosController {
   ) {
     const uid = asignado_por || user?.id || 1; // Fallback a 1 (sistema) si no hay usuario
     return this.asignarTurnosService.generarTurnosProximoMes(subpuesto_id, uid);
+  }
+
+  @Delete('batch')
+  @ApiOperation({
+    summary: 'Eliminar múltiples turnos por ID',
+    description: 'Elimina una lista de IDs de turnos de forma masiva.'
+  })
+  async eliminarBatch(@Body('ids') ids: number[]) {
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      throw new BadRequestException('Debe proporcionar un array de IDs');
+    }
+    return this.asignarTurnosService.eliminarTurnosBatch(ids);
+  }
+
+  @Patch('actualizar-tipo')
+  @ApiOperation({
+    summary: 'Actualizar tipo y observaciones de un turno',
+    description: 'Permite cambiar D, N, Z, etc. y las observaciones de un turno manual.'
+  })
+  async actualizarTipo(
+    @Body('id', ParseIntPipe) id: number,
+    @Body('tipo_turno') tipo_turno: string,
+    @Body('observaciones') observaciones?: string
+  ) {
+    return this.asignarTurnosService.actualizarTipoTurno(id, tipo_turno, observaciones);
   }
 }

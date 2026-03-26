@@ -1099,4 +1099,59 @@ export class AsignarTurnosService {
       asignado_por: asignado_por
     });
   }
+
+  /**
+   * 🗑️ Elimina una lista específica de turnos por sus IDs
+   */
+  async eliminarTurnosBatch(ids: number[]) {
+    const supabase = this.supabaseService.getSupabaseAdminClient();
+    this.logger.log(`🗑️ Eliminando batch de ${ids.length} turnos.`);
+
+    // 1. Limpiar dependencias
+    try {
+      await supabase
+        .from('rutas_supervision_asignacion')
+        .update({ turno_id: null })
+        .in('turno_id', ids);
+    } catch (err) {
+      this.logger.warn(`⚠️ Error desvinclulando rutas en batch: ${err.message}`);
+    }
+
+    // 2. Eliminar
+    const { data, error } = await supabase
+      .from('turnos')
+      .delete()
+      .in('id', ids)
+      .select('id');
+
+    if (error) {
+      this.logger.error(`❌ Error en borrado batch: ${error.message}`);
+      throw new BadRequestException(`Error eliminando turnos: ${error.message}`);
+    }
+
+    return {
+      message: `Se eliminaron exitosamente ${data?.length || 0} turnos.`,
+      eliminados: data?.length || 0
+    };
+  }
+
+  /**
+   * ✏️ Actualiza el tipo de turno y observaciones de un turno específico
+   */
+  async actualizarTipoTurno(id: number, tipo_turno: string, observaciones?: string) {
+    const supabase = this.supabaseService.getSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from('turnos')
+      .update({ tipo_turno, observaciones })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      this.logger.error(`❌ Error actualizando tipo de turno: ${error.message}`);
+      throw new BadRequestException(`Error actualizando turno: ${error.message}`);
+    }
+
+    return data;
+  }
 }
