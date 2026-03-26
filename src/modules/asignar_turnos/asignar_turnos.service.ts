@@ -229,6 +229,26 @@ export class AsignarTurnosService {
 
     this.logger.log(`🔄 Iniciando generación de turnos para subpuesto ${subpuesto_id}`);
 
+    // ✅ 0. Pre-cargar conceptos de turno para mapear
+    const { data: conceptos, error: conError } = await supabase
+      .from('conceptos_turno')
+      .select('id, codigo, nombre');
+    
+    if (conError) {
+      this.logger.error('Error pre-cargando conceptos de turno');
+      throw conError;
+    }
+
+    const mapaConceptos = new Map<string, {id: number, nombre: string}>();
+    (conceptos || []).forEach(c => mapaConceptos.set(c.codigo, {id: c.id, nombre: c.nombre}));
+
+    // Helper interno para inferencia
+    const inferirConcepto = (tipo: string) => {
+      const code = this.normalizarTipoTurno(tipo);
+      const conc = mapaConceptos.get(code);
+      return conc ? { id: conc.id, nombre: conc.nombre } : { id: null, nombre: tipo };
+    };
+
     // ✅ 1. Obtener subpuesto con su configuración
     const { data: subpuesto, error: subpuestoError } = await supabase
       .from('subpuestos_trabajo')
@@ -479,6 +499,7 @@ export class AsignarTurnosService {
             }
 
             if (!skipInsert) {
+              const conceptoInfoOficina = inferirConcepto('NORMAL');
               turnosOficina.forEach(t => {
                 turnosParaInsertar.push({
                   empleado_id: empleado.id,
@@ -487,7 +508,8 @@ export class AsignarTurnosService {
                   fecha: fechaStr,
                   hora_inicio: t.hora_inicio,
                   hora_fin: t.hora_fin,
-                  tipo_turno: 'NORMAL',
+                  tipo_turno: conceptoInfoOficina.nombre,
+                  concepto_id: conceptoInfoOficina.id,
                   configuracion_id: subpuesto.configuracion_id,
                   orden_en_ciclo: diaSemana,
                   plaza_no: 1,
@@ -517,6 +539,7 @@ export class AsignarTurnosService {
             }
 
             if (!skipInsert) {
+              const conceptoInfoCiclo = inferirConcepto(tipoTurno);
               turnosParaInsertar.push({
                 empleado_id: empleado.id,
                 puesto_id: subpuesto.puesto_id,
@@ -524,7 +547,8 @@ export class AsignarTurnosService {
                 fecha: fechaStr,
                 hora_inicio: esDescanso ? null : detalle.hora_inicio,
                 hora_fin: esDescanso ? null : detalle.hora_fin,
-                tipo_turno: tipoTurno,
+                tipo_turno: conceptoInfoCiclo.nombre,
+                concepto_id: conceptoInfoCiclo.id,
                 configuracion_id: subpuesto.configuracion_id,
                 orden_en_ciclo: detalle.orden,
                 plaza_no: plazaNo,
@@ -555,6 +579,7 @@ export class AsignarTurnosService {
           // usaremos una heurística o simplemente lo que diga el detalle.
           // Para el 3-3-2 de 7-7, el relevo debería trabajar 07-19 o 19-07 según la plaza.
 
+          const conceptoInfoRelevo = inferirConcepto('RELEVO');
           turnosParaInsertar.push({
             empleado_id: relevante.empleado_id,
             puesto_id: subpuesto.puesto_id,
@@ -562,7 +587,8 @@ export class AsignarTurnosService {
             fecha: hueco.fecha,
             hora_inicio: hueco.hora_inicio,
             hora_fin: hueco.hora_fin,
-            tipo_turno: 'RELEVO',
+            tipo_turno: conceptoInfoRelevo.nombre,
+            concepto_id: conceptoInfoRelevo.id,
             configuracion_id: subpuesto.configuracion_id,
             orden_en_ciclo: hueco.orden,
             plaza_no: hueco.plaza,
@@ -635,6 +661,7 @@ export class AsignarTurnosService {
             }
 
             if (asignado && candidato) {
+              const conceptoInfoRegla = inferirConcepto(regla.tipo);
               turnosParaInsertar.push({
                 empleado_id: candidato.empleado_id,
                 puesto_id: subpuesto.puesto_id,
@@ -642,7 +669,8 @@ export class AsignarTurnosService {
                 fecha: fechaStr,
                 hora_inicio: regla.hora_inicio,
                 hora_fin: regla.hora_fin,
-                tipo_turno: regla.tipo,
+                tipo_turno: conceptoInfoRegla.nombre,
+                concepto_id: conceptoInfoRegla.id,
                 configuracion_id: subpuesto.configuracion_id,
                 orden_en_ciclo: diaSemana,
                 plaza_no: plaza + 1,
@@ -1140,9 +1168,20 @@ export class AsignarTurnosService {
    */
   async actualizarTipoTurno(id: number, tipo_turno: string, observaciones?: string) {
     const supabase = this.supabaseService.getSupabaseAdminClient();
+    
+    // Buscar concepto para vincular ID y Estandarizar nombre Textual
+    const { data: concepto } = await supabase
+      .from('conceptos_turno')
+      .select('id, nombre')
+      .eq('codigo', tipo_turno)
+      .single();
+
+    const concepto_id = concepto?.id || null;
+    const tipo_turno_final = concepto?.nombre || tipo_turno; // Reemplazar la letra por el nombre oficial
+
     const { data, error } = await supabase
       .from('turnos')
-      .update({ tipo_turno, observaciones })
+      .update({ tipo_turno: tipo_turno_final, observaciones, concepto_id })
       .eq('id', id)
       .select()
       .single();

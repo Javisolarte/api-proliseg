@@ -25,6 +25,18 @@ import { ApiTags, ApiBearerAuth, ApiOperation } from "@nestjs/swagger";
 export class TurnosController {
   constructor(private readonly turnosService: TurnosService) { }
 
+  // ⚡ Endpoint rápido para grid-view (campos mínimos, máxima velocidad)
+  @Get("fast")
+  @RequirePermissions("turnos")
+  @ApiOperation({ summary: "Obtener turnos optimizados para grid-view" })
+  findAllFast(
+    @Query("fecha_inicio") fecha_inicio?: string,
+    @Query("fecha_fin") fecha_fin?: string,
+    @Query("puesto_id") puestoId?: number
+  ) {
+    return this.turnosService.findAllFast({ fecha_inicio, fecha_fin, puestoId: puestoId ? +puestoId : undefined });
+  }
+
   // ✅ Listar todos los turnos (con filtros opcionales)
   @Get()
   @RequirePermissions("turnos")
@@ -38,6 +50,7 @@ export class TurnosController {
   ) {
     return this.turnosService.findAll({ fecha, fecha_inicio, fecha_fin, empleadoId, puestoId });
   }
+
 
   // ✅ Obtener todos los turnos de un empleado específico
   @Get("empleado/:empleadoId")

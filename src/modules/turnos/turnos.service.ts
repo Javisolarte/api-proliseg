@@ -70,6 +70,64 @@ export class TurnosService {
     return allData;
   }
 
+  // ⚡ OPTIMIZADO: Endpoint rápido para grid-view con campos mínimos
+  async findAllFast(filters?: { fecha_inicio?: string; fecha_fin?: string; puestoId?: number }) {
+    const supabase = this.supabaseService.getClient();
+    this.logger.debug(`⚡ Ejecutando findAllFast con filtros: ${JSON.stringify(filters)}`);
+
+    // Solo los campos que el grid-view realmente necesita
+    const selectFields = `id, empleado_id, puesto_id, subpuesto_id, fecha, tipo_turno, estado_turno, hora_inicio, hora_fin, observaciones, es_reemplazo, concepto_id, empleado:empleado_id(id, nombre_completo, cedula), puesto:puesto_id(id, nombre, codigo_puesto), subpuesto:subpuesto_id(id, nombre)`;
+
+    let allData: any[] = [];
+    let from = 0;
+    const step = 1000;
+    let finished = false;
+
+    while (!finished) {
+      let query = supabase
+        .from("turnos")
+        .select(selectFields)
+        .order("fecha", { ascending: true })
+        .range(from, from + step - 1);
+
+      if (filters?.fecha_inicio) {
+        query = query.gte("fecha", filters.fecha_inicio);
+      }
+      if (filters?.fecha_fin) {
+        query = query.lte("fecha", filters.fecha_fin);
+      }
+      if (filters?.puestoId) {
+        query = query.eq("puesto_id", filters.puestoId);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        this.logger.error(`❌ Error Supabase (findAllFast): ${JSON.stringify(error)}`);
+        throw error;
+      }
+
+      if (!data || data.length === 0) {
+        finished = true;
+      } else {
+        allData.push(...data);
+        if (data.length < step) {
+          finished = true;
+        } else {
+          from += step;
+        }
+      }
+
+      if (from > 100000) {
+        this.logger.warn("⚠️ findAllFast alcanzó el límite de seguridad");
+        finished = true;
+      }
+    }
+
+    this.logger.debug(`⚡ Total turnos (fast): ${allData.length}`);
+    return allData;
+  }
+
   // ✅ Obtener un turno por ID
   async findOne(id: number) {
     const supabase = this.supabaseService.getClient();
