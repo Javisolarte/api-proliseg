@@ -197,6 +197,9 @@ export class TurnosService {
     const supabase = this.supabaseService.getClient();
     this.logger.debug(`🟢 Creando turno por usuario ${userId}: ${JSON.stringify(dto)}`);
 
+    // 🛡️ Prevención de duplicados
+    await this.checkForDuplicate(dto.empleado_id, dto.fecha, dto.hora_inicio, dto.hora_fin);
+
     const { data, error } = await supabase
       .from("turnos")
       .insert({
@@ -221,15 +224,27 @@ export class TurnosService {
     const supabase = this.supabaseService.getClient();
     this.logger.debug(`🟢 Actualizando turno ID ${id} por usuario ${userId}`);
 
+    // Buscar el turno actual para tener los valores base
     const { data: existing, error: findError } = await supabase
       .from("turnos")
-      .select("id")
+      .select("id, empleado_id, fecha, hora_inicio, hora_fin")
       .eq("id", id)
       .single();
 
     if (findError || !existing) {
       this.logger.warn(`⚠️ Turno no encontrado con ID ${id}`);
       throw new NotFoundException(`Turno con ID ${id} no encontrado`);
+    }
+
+    // 🛡️ Prevención de duplicados (excluyendo el actual)
+    if (dto.empleado_id || dto.fecha || dto.hora_inicio || dto.hora_fin) {
+      await this.checkForDuplicate(
+        dto.empleado_id || (existing as any).empleado_id,
+        dto.fecha || (existing as any).fecha,
+        dto.hora_inicio || (existing as any).hora_inicio,
+        dto.hora_fin || (existing as any).hora_fin,
+        id
+      );
     }
 
     const { data, error } = await supabase
@@ -251,22 +266,29 @@ export class TurnosService {
     return data;
   }
 
-  // ✅ Eliminar un turno por ID (hard delete)
+  // ✅ Eliminar un turno por ID (hard delete) con manejo de dependencias
   async softDelete(id: number, userId: number) {
     const supabase = this.supabaseService.getClient();
     this.logger.debug(`🟢 Eliminando turno ID ${id} por usuario ${userId}`);
 
-    const { data: existing, error: findError } = await supabase
-      .from("turnos")
-      .select("id")
-      .eq("id", id)
-      .single();
+    // 1. Verificar existencia y dependencias críticas (ejecuciones en curso)
+    const { data: asignacion, error: checkError } = await supabase
+      .from('rutas_supervision_asignacion')
+      .select('id, rutas_supervision_ejecucion(id)')
+      .eq('turno_id', id)
+      .maybeSingle();
 
-    if (findError || !existing) {
-      this.logger.warn(`⚠️ Turno no encontrado con ID ${id}`);
-      throw new NotFoundException(`Turno con ID ${id} no encontrado`);
+    if (asignacion && (asignacion as any).rutas_supervision_ejecucion?.length > 0) {
+      throw new BadRequestException('No se puede eliminar el turno porque tiene una ruta de supervisión en ejecución o finalizada.');
     }
 
+    // 2. Limpiar asignación de ruta si existe (DELETE en lugar de UPDATE NULL por constraint NOT NULL)
+    if (asignacion) {
+      await supabase.from('rutas_supervision_asignacion').delete().eq('id', asignacion.id);
+      this.logger.log(`🔗 Eliminada asignación de ruta vinculada al turno ${id}`);
+    }
+
+    // 3. Eliminar el turno
     const { error } = await supabase
       .from("turnos")
       .delete()
@@ -420,5 +442,69 @@ export class TurnosService {
       message: "Turnos intercambiados exitosamente",
       turnos_afectados: [t1.id, t2.id]
     };
+  }
+
+  // 🛡️ Método privado para verificar duplicados u solapamientos
+  private async checkForDuplicate(empleadoId: number, fecha: string, horaInicio: string, horaFin: string, excludeId?: number) {
+    const supabase = this.supabaseService.getClient();
+
+    let query = supabase
+      .from("turnos")
+      .select("id, tipo_turno, hora_inicio, hora_fin")
+      .eq("empleado_id", empleadoId)
+      .eq("fecha", fecha);
+
+    if (excludeId) {
+      query = query.neq("id", excludeId);
+    }
+
+    const { data: existingTurnos, error } = await query;
+
+    if (error) {
+      this.logger.error(`❌ Error verificando duplicados: ${JSON.stringify(error)}`);
+      throw error;
+    }
+
+    if (existingTurnos && existingTurnos.length > 0) {
+      // Verificar si hay solapamiento de horarios
+      for (const t of existingTurnos) {
+        const overlap = this.areIntervalsOverlapping(
+          horaInicio, horaFin,
+          t.hora_inicio, t.hora_fin
+        );
+
+        if (overlap) {
+          throw new BadRequestException(
+            `El empleado ya tiene un turno asignado (${t.tipo_turno}) en esta fecha (${fecha}) que se solapa con el horario solicitado (${horaInicio} - ${horaFin}).`
+          );
+        }
+      }
+    }
+  }
+
+  // Helper para verificar solapamiento de horas (formato HH:mm:ss)
+  private areIntervalsOverlapping(start1: string, end1: string, start2: string, end2: string): boolean {
+    const toMinutes = (time: string) => {
+      const [h, m] = time.split(':').map(Number);
+      return h * 60 + (m || 0);
+    };
+
+    let s1 = toMinutes(start1);
+    let e1 = toMinutes(end1);
+    let s2 = toMinutes(start2);
+    let e2 = toMinutes(end2);
+
+    // Manejo de turnos que cruzan la medianoche (e.g. 22:00 - 06:00)
+    if (e1 <= s1) e1 += 24 * 60;
+    if (e2 <= s2) e2 += 24 * 60;
+
+    // Caso 1: Los rangos se solapan normalmente
+    // (StartA < EndB) AND (EndA > StartB)
+    const normalOverlap = (s1 < e2 && e1 > s2);
+    
+    // Caso 2: Considerar el solapamiento cíclico si uno de los turnos cruza la medianoche
+    // (Aunque sumando 24*60 arriba cubrimos la mayoría de casos de una sola ventana de 24h)
+    
+    return normalOverlap;
   }
 }

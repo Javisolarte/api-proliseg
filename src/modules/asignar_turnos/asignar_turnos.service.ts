@@ -229,6 +229,21 @@ export class AsignarTurnosService {
 
     this.logger.log(`🔄 Iniciando generación de turnos para subpuesto ${subpuesto_id}`);
 
+    // 🔥 PREVENCIÓN DE DUPLICADOS: Limpiar turnos programados existentes en el periodo antes de generar.
+    // Esto hace que la generación sea idéntica/idempotente si se corre varias veces.
+    try {
+      const [y_c, m_c] = fecha_inicio.split('-').map(Number);
+      const start_c = `${y_c}-${String(m_c).padStart(2, '0')}-01`;
+      const end_c = `${y_c}-${String(m_c).padStart(2, '0')}-31`;
+      
+      const { eliminados } = await this.eliminarTurnos(subpuesto_id, start_c, end_c);
+      if (eliminados > 0) {
+        this.logger.log(`🧹 Limpieza previa: ${eliminados} turnos eliminados para evitar duplicados en ${m_c}/${y_c}`);
+      }
+    } catch (err) {
+      this.logger.warn(`⚠️ No se pudo realizar la limpieza previa: ${err.message}. Continuando generación...`);
+    }
+
     // ✅ 0. Pre-cargar conceptos de turno para mapear
     const { data: conceptos, error: conError } = await supabase
       .from('conceptos_turno')
@@ -889,6 +904,21 @@ export class AsignarTurnosService {
   async eliminarTurnos(subpuesto_id: number, desde: string, hasta: string) {
     const supabase = this.supabaseService.getClient();
 
+    // 🛡️ RESTRICCIÓN DE INTEGRIDAD: No permitir eliminar si hay observaciones/cambios manuales
+    const { count: obsCount, error: obsError } = await supabase
+      .from('turnos')
+      .select('id', { count: 'exact', head: true })
+      .eq('subpuesto_id', subpuesto_id)
+      .gte('fecha', desde)
+      .lte('fecha', hasta)
+      .not('observaciones', 'is', null)
+      .neq('observaciones', '');
+
+    if (obsCount && obsCount > 0) {
+      this.logger.warn(`🚫 Intento de eliminación bloqueado: ${obsCount} turnos tienen observaciones en el rango ${desde} a ${hasta}`);
+      throw new BadRequestException('No se pueden eliminar los turnos porque existen registros con observaciones o cambios manuales en este periodo.');
+    }
+
     // 0. LIMPIEZA DE DEPENDENCIAS: Desvincular de rutas de supervisión para evitar error FK
     try {
       const { data: turnosAEliminar } = await supabase
@@ -900,12 +930,13 @@ export class AsignarTurnosService {
 
       if (turnosAEliminar && turnosAEliminar.length > 0) {
         const ids = turnosAEliminar.map(t => t.id);
+        // DELETE en lugar de UPDATE NULL por constraint NOT NULL en la DB
         await supabase
           .from('rutas_supervision_asignacion')
-          .update({ turno_id: null })
+          .delete()
           .in('turno_id', ids);
 
-        this.logger.log(`🔗 Desvinculados ${ids.length} turnos de rutas de supervisión`);
+        this.logger.log(`🔗 Eliminadas ${ids.length} asignaciones de rutas vinculadas`);
       }
     } catch (err) {
       this.logger.warn(`⚠️ Error al desvincular rutas de supervisión: ${err.message}`);
@@ -1035,6 +1066,22 @@ export class AsignarTurnosService {
       fechaReferencia = fechaManana.toISOString().split('T')[0];
     }
 
+    // 🛡️ RESTRICCIÓN DE INTEGRIDAD: Validar observaciones antes de proceder a la regeneración
+    const supabase = this.supabaseService.getClient();
+    const { count: obsCount, error: obsError } = await supabase
+      .from('turnos')
+      .select('id', { count: 'exact', head: true })
+      .eq('subpuesto_id', subpuesto_id)
+      .gte('fecha', fechaReferencia)
+      .lte('fecha', '2099-12-31')
+      .not('observaciones', 'is', null)
+      .neq('observaciones', '');
+
+    if (obsCount && obsCount > 0) {
+      this.logger.warn(`🚫 Regeneración bloqueada: ${obsCount} turnos tienen observaciones desde ${fechaReferencia}`);
+      throw new BadRequestException('No es posible regenerar los turnos porque existen registros con observaciones o cambios manuales. Procesa estos cambios individualmente o elimínalos manualmente si es correcto.');
+    }
+
     // 1. Eliminar turnos futuros (desde la fecha de referencia en adelante)
     const { message, eliminados } = await this.eliminarTurnos(
       subpuesto_id,
@@ -1082,9 +1129,10 @@ export class AsignarTurnosService {
 
       if (turnosAEliminar && turnosAEliminar.length > 0) {
         const ids = turnosAEliminar.map(t => t.id);
+        // DELETE asignaciones para evitar error FK (NOT NULL constraint)
         await supabase
           .from('rutas_supervision_asignacion')
-          .update({ turno_id: null })
+          .delete()
           .in('turno_id', ids);
       }
     } catch (err) {
@@ -1135,14 +1183,14 @@ export class AsignarTurnosService {
     const supabase = this.supabaseService.getSupabaseAdminClient();
     this.logger.log(`🗑️ Eliminando batch de ${ids.length} turnos.`);
 
-    // 1. Limpiar dependencias
+    // 1. Limpiar dependencias (DELETE por constraint NOT NULL)
     try {
       await supabase
         .from('rutas_supervision_asignacion')
-        .update({ turno_id: null })
+        .delete()
         .in('turno_id', ids);
     } catch (err) {
-      this.logger.warn(`⚠️ Error desvinclulando rutas en batch: ${err.message}`);
+      this.logger.warn(`⚠️ Error eliminando rutas en batch: ${err.message}`);
     }
 
     // 2. Eliminar
