@@ -229,16 +229,26 @@ export class AsignarTurnosService {
 
     this.logger.log(`🔄 Iniciando generación de turnos para subpuesto ${subpuesto_id}`);
 
-    // 🔥 PREVENCIÓN DE DUPLICADOS: Limpiar turnos programados existentes en el periodo antes de generar.
-    // Esto hace que la generación sea idéntica/idempotente si se corre varias veces.
+    // 🛡️ PREVENCIÓN DE DUPLICADOS — Solo limpia si el mes objetivo es FUTURO.
+    // El mes actual y los meses pasados NUNCA se limpian automáticamente
+    // para proteger los turnos ya ejecutados, observaciones y novedades.
     try {
       const [y_c, m_c] = fecha_inicio.split('-').map(Number);
-      const start_c = `${y_c}-${String(m_c).padStart(2, '0')}-01`;
-      const end_c = `${y_c}-${String(m_c).padStart(2, '0')}-31`;
-      
-      const { eliminados } = await this.eliminarTurnos(subpuesto_id, start_c, end_c);
-      if (eliminados > 0) {
-        this.logger.log(`🧹 Limpieza previa: ${eliminados} turnos eliminados para evitar duplicados en ${m_c}/${y_c}`);
+      const hoy = new Date();
+      const mesActualYear = hoy.getFullYear();
+      const mesActualMes  = hoy.getMonth() + 1; // 1-indexed
+
+      const esMesFuturo = (y_c > mesActualYear) || (y_c === mesActualYear && m_c > mesActualMes);
+
+      if (esMesFuturo) {
+        const start_c = `${y_c}-${String(m_c).padStart(2, '0')}-01`;
+        const end_c   = `${y_c}-${String(m_c).padStart(2, '0')}-31`;
+        const { eliminados } = await this.eliminarTurnos(subpuesto_id, start_c, end_c);
+        if (eliminados > 0) {
+          this.logger.log(`🧹 Limpieza previa (mes futuro ${m_c}/${y_c}): ${eliminados} turnos programados eliminados para evitar duplicados`);
+        }
+      } else {
+        this.logger.log(`🔒 Mes ${m_c}/${y_c} es actual o pasado — NO se limpian turnos existentes. Insertando sin borrar.`);
       }
     } catch (err) {
       this.logger.warn(`⚠️ No se pudo realizar la limpieza previa: ${err.message}. Continuando generación...`);
@@ -700,15 +710,37 @@ export class AsignarTurnosService {
       }
     }
 
-    // ✅ 6. Insertar turnos en la base de datos
-    if (turnosParaInsertar.length > 0) {
-      const { error: insertError } = await supabase
-        .from('turnos')
-        .insert(turnosParaInsertar);
+    // ✅ 6. DEDUPLICACIÓN EN MEMORIA antes de insertar (capa de seguridad en aplicación)
+    // Clave única: empleado_id + subpuesto_id + fecha
+    // Si el mismo par ya se generó en el loop (por bug de configuración), se descarta el segundo.
+    const dedupMap = new Map<string, any>();
+    for (const t of turnosParaInsertar) {
+      const key = `${t.empleado_id}_${t.subpuesto_id ?? 'null'}_${t.fecha}`;
+      if (!dedupMap.has(key)) {
+        dedupMap.set(key, t);
+      } else {
+        this.logger.warn(`⚠️ Turno duplicado descartado en memoria: emp=${t.empleado_id} sub=${t.subpuesto_id} fecha=${t.fecha}`);
+      }
+    }
+    const turnosUnicos = Array.from(dedupMap.values());
 
-      if (insertError) {
-        this.logger.error(`❌ Error insertando turnos: ${insertError.message}`);
-        throw insertError;
+    if (turnosUnicos.length < turnosParaInsertar.length) {
+      this.logger.warn(`🔒 Deduplicación: ${turnosParaInsertar.length - turnosUnicos.length} turnos duplicados eliminados antes de insertar`);
+    }
+
+    // Insertar en lotes de 500 para evitar timeouts
+    const INSERT_BATCH = 500;
+    if (turnosUnicos.length > 0) {
+      for (let i = 0; i < turnosUnicos.length; i += INSERT_BATCH) {
+        const batch = turnosUnicos.slice(i, i + INSERT_BATCH);
+        const { error: insertError } = await supabase
+          .from('turnos')
+          .insert(batch);
+
+        if (insertError) {
+          this.logger.error(`❌ Error insertando turnos (lote ${Math.floor(i/INSERT_BATCH)+1}): ${insertError.message}`);
+          throw insertError;
+        }
       }
     }
 
