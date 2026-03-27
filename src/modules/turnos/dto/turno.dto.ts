@@ -43,15 +43,17 @@ export class CreateTurnoDto {
     example: "08:00",
     description: "Hora de inicio del turno (HH:mm)",
   })
+  @IsOptional()
   @IsString()
-  hora_inicio: string;
+  hora_inicio: string | null;
 
   @ApiProperty({
     example: "18:00",
     description: "Hora de finalización del turno (HH:mm)",
   })
+  @IsOptional()
   @IsString()
-  hora_fin: string;
+  hora_fin: string | null;
 
   @ApiProperty({
     example: "Diurno",
