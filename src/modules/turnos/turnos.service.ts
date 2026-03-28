@@ -445,7 +445,7 @@ export class TurnosService {
   }
 
   // 🛡️ Método privado para verificar duplicados u solapamientos
-  private async checkForDuplicate(empleadoId: number, fecha: string, horaInicio: string, horaFin: string, excludeId?: number) {
+  private async checkForDuplicate(empleadoId: number, fecha: string, horaInicio: string | null, horaFin: string | null, excludeId?: number) {
     const supabase = this.supabaseService.getClient();
 
     let query = supabase
@@ -483,7 +483,9 @@ export class TurnosService {
   }
 
   // Helper para verificar solapamiento de horas (formato HH:mm:ss)
-  private areIntervalsOverlapping(start1: string, end1: string, start2: string, end2: string): boolean {
+  private areIntervalsOverlapping(start1: string | null, end1: string | null, start2: string | null, end2: string | null): boolean {
+    if (!start1 || !end1 || !start2 || !end2) return false;
+
     const toMinutes = (time: string) => {
       const [h, m] = time.split(':').map(Number);
       return h * 60 + (m || 0);
