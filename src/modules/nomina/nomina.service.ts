@@ -369,7 +369,7 @@ export class NominaService {
 
         let totalExtras = valorHED + valorHEN + valorHEDD + valorHEDN + valorHEFD + valorHEFN;
 
-        // Descuentos por PNR y SAN (días no pagados)
+        // Descuentos por novedades (días no trabajados habitualmente)
         const valorDia = salarioBase / 30;
         const descuentoPNR = turnosPNR * valorDia;
         const descuentoSAN = turnosSAN * valorDia;
@@ -390,9 +390,12 @@ export class NominaService {
 
         const totalTurnosCualquiera = turnosDiurnos + turnosNocturnos + turnosMT + turnosDescanso + turnosPNR + turnosSAN + turnosLIC + turnosVAC + turnosINC;
 
-        // Salario devengado base (descontando PNR y SAN)
+        // Salario devengado base (restando todos los días que se liquidan en conceptos separados o no se pagan)
         // REGLA: Si no tiene turnos ni novedades, se pone en cero.
-        const salarioDevengado = totalTurnosCualquiera === 0 ? 0 : (salarioBase - descuentoPNR - descuentoSAN);
+        const descuentoLIC = valorLicencia;
+        const descuentoVAC = valorVacaciones;
+        const descuentoINC = turnosINC * valorDia; // El descuento al básico es el 100% del día, la incapacidad se asume abajo
+        const salarioDevengado = totalTurnosCualquiera === 0 ? 0 : (salarioBase - descuentoPNR - descuentoSAN - descuentoLIC - descuentoVAC - descuentoINC);
 
         // Auxilio de transporte (proporcional, solo si ≤ 2 SMLMV)
         // Se paga por 30 días menos los días que no dan derecho (PNR, SAN, VAC, INC, LIC)
@@ -408,22 +411,20 @@ export class NominaService {
         let totalDevengado = salarioDevengado + totalRecargos + totalExtras
             + auxTransporte + valorLicencia + valorVacaciones + valorIncapacidad;
 
-        // ═══ AJUSTE SALARIO FIJO (Si aplica) ═══
+        // ═══ AJUSTE SALARIO FIJO A NETO EXACTO (Si aplica) ═══
         let ajusteSalarial = 0;
         if (salarioFijo > 0 && totalTurnosCualquiera > 0) {
-            // El objetivo es que el Total NETO llegue EXACTAMENTE al SalarioFijo del puesto
-            // Se descuenta proporcionalmente por días no pagados (PNR, Sanciones)
-            const diasPagados = 30 - turnosPNR - turnosSAN;
-            const targetNeto = Math.round((salarioFijo / 30) * diasPagados);
+            // 1. Calcular el Devengado y Bolsa de Extras IDEAL para 30 días perfectos (sin novedades)
+            const devengadoFullIdeal = Math.round((salarioFijo - auxTransporteBase) / 0.92 + auxTransporteBase);
+            const ingresosFijosFull = salarioBase + auxTransporteBase;
+            const bolsaExtrasMensual = devengadoFullIdeal - ingresosFijosFull; // Lo que el puesto paga íntegro de extras al mes
             
-            // Fórmula Inversa: Neto = 0.92 * (Devengado - AuxTransporte) + AuxTransporte
-            // Entonces: Devengado = (Neto - AuxTransporte) / 0.92 + AuxTransporte
-            const targetDevengado = Math.round((targetNeto - auxTransporte) / 0.92 + auxTransporte);
+            // 2. Calcular cuántos días realmente aplica para cobrar esas extras (Días hábiles sin novedades de ausentismo)
+            const diasSinExtras = turnosPNR + turnosSAN + turnosLIC + turnosVAC + turnosINC;
+            const diasParaExtras = Math.max(0, 30 - diasSinExtras);
             
-            const ingresosFijos = salarioDevengado + auxTransporte + valorLicencia + valorVacaciones + valorIncapacidad;
-            const targetExtrasRecargos = targetDevengado - ingresosFijos;
-            
-            ajusteSalarial = targetDevengado - totalDevengado; // Mantener métrica de cuánto se ajustó vs bruto natural
+            // 3. Este es el valor EXACTO de extras y recargos que le tocan por los días que sí estuvo en el puesto
+            const targetExtrasRecargos = Math.max(0, Math.round((bolsaExtrasMensual / 30) * diasParaExtras));
             
             if (targetExtrasRecargos > 0) {
                 const realesBrutos = totalExtras + totalRecargos;
@@ -445,7 +446,7 @@ export class NominaService {
                     recargoFestivoDiurno = Math.round(recargoFestivoDiurno * factor);
                     recargoFestivoNocturno = Math.round(recargoFestivoNocturno * factor);
                 } else {
-                    // Si no hubo extras reales pero se exige este devengado, inventamos.
+                    // Si no hubo extras reales pero se exige esta bolsa, inventamos la distribución 70/30.
                     const parteExtras = Math.round(targetExtrasRecargos * 0.7);
                     const parteRecargos = targetExtrasRecargos - parteExtras;
                     
@@ -456,7 +457,7 @@ export class NominaService {
                     recargoDominicalDiurno = 0; recargoDominicalNocturno = 0; recargoFestivoDiurno = 0; recargoFestivoNocturno = 0;
                 }
             } else {
-                // Si la cuota ya supera el fijo sin extras (por anomalías de parametrización base), limpiamos todo a cero.
+                // Si la bolsa de extras es 0, limpiamos todo a cero.
                 valorHED = 0; valorHEN = 0; valorHEDD = 0; valorHEDN = 0; valorHEFD = 0; valorHEFN = 0;
                 recargoNocturno = 0; recargoDominicalDiurno = 0; recargoDominicalNocturno = 0; recargoFestivoDiurno = 0; recargoFestivoNocturno = 0;
             }
@@ -465,14 +466,16 @@ export class NominaService {
             totalExtras = valorHED + valorHEN + valorHEDD + valorHEDN + valorHEFD + valorHEFN;
             totalRecargos = recargoNocturno + recargoDominicalDiurno + recargoDominicalNocturno + recargoFestivoDiurno + recargoFestivoNocturno;
             
-            // Asegurarnos que errores de redondeo matemáticos obliguen a empatar al centavo exacto limitando las HE diurnas como holgura
+            // Asegurarnos que errores de redondeo matemáticos empaten al centavo estricto con la bolsa
             const diferenciaRedondeo = targetExtrasRecargos - (totalExtras + totalRecargos);
             if (diferenciaRedondeo !== 0 && targetExtrasRecargos > 0) {
+                // Inyectamos el pesito de diferencia en HED para el balance total.
                 valorHED += diferenciaRedondeo;
                 totalExtras += diferenciaRedondeo;
             }
             
-            totalDevengado = ingresosFijos + totalExtras + totalRecargos;
+            const ingresosFijosOrganicos = salarioDevengado + auxTransporte + valorLicencia + valorVacaciones + valorIncapacidad;
+            totalDevengado = ingresosFijosOrganicos + targetExtrasRecargos;
         }
 
         // IBC (Ingreso Base Cotización = devengado - auxilio transporte)
