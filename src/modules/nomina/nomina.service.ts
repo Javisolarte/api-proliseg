@@ -240,6 +240,7 @@ export class NominaService {
         festivos: Set<string>,
         novedades: any[],
         salarioFijo: number = 0,
+        diasFueraContrato: number = 0
     ) {
         const getParam = (tipo: string): number => {
             const p = parametros.find(p => p.tipo === tipo);
@@ -323,6 +324,20 @@ export class NominaService {
             turnosPorSemana[weekKey].push(turnoAnalizado);
         }
 
+        // Sumar ausentismos registrados en la tabla de Novedades
+        for (const nov of novedades) {
+            const dias = Number(nov.dias) || 0;
+            if (dias <= 0) continue;
+            
+            const tipo = nov.tipo;
+            if (tipo === 'licencia_no_remunerada') turnosPNR += dias;
+            else if (tipo === 'sancion') turnosSAN += dias;
+            else if (tipo === 'licencia_remunerada' || tipo === 'licencia_maternidad' || tipo === 'licencia_paternidad') turnosLIC += dias;
+            else if (tipo === 'incapacidad_general' || tipo === 'incapacidad_laboral') turnosINC += dias;
+            // Vacaciones suelen procesarse aparte o incluirse en 'otro' dependiendo de la implementación.
+            // PNR desde la interfaz cae aquí como 'licencia_no_remunerada'.
+        }
+
         // Clasificar horas por semana
         const totalClasificacion: ClasificacionHoras = {
             ord_diurnas: 0, ord_nocturnas: 0,
@@ -369,6 +384,8 @@ export class NominaService {
 
         let totalExtras = valorHED + valorHEN + valorHEDD + valorHEDN + valorHEFD + valorHEFN;
 
+        const diasMes = Math.max(0, 30 - diasFueraContrato);
+
         // Descuentos por novedades (días no trabajados habitualmente)
         const valorDia = salarioBase / 30;
         const descuentoPNR = turnosPNR * valorDia;
@@ -391,16 +408,16 @@ export class NominaService {
         const totalTurnosCualquiera = turnosDiurnos + turnosNocturnos + turnosMT + turnosDescanso + turnosPNR + turnosSAN + turnosLIC + turnosVAC + turnosINC;
 
         // Salario devengado base (restando todos los días que se liquidan en conceptos separados o no se pagan)
-        // REGLA: Si no tiene turnos ni novedades, se pone en cero.
+        // REGLA: Si no tiene turnos ni novedades, se pone en cero. Ajustado al mes proporcional por si entró o salió a destiempo.
         const descuentoLIC = valorLicencia;
         const descuentoVAC = valorVacaciones;
         const descuentoINC = turnosINC * valorDia; // El descuento al básico es el 100% del día, la incapacidad se asume abajo
-        const salarioDevengado = totalTurnosCualquiera === 0 ? 0 : (salarioBase - descuentoPNR - descuentoSAN - descuentoLIC - descuentoVAC - descuentoINC);
+        const salarioDevengado = totalTurnosCualquiera === 0 ? 0 : (salarioBase * (diasMes / 30) - descuentoPNR - descuentoSAN - descuentoLIC - descuentoVAC - descuentoINC);
 
         // Auxilio de transporte (proporcional, solo si ≤ 2 SMLMV)
-        // Se paga por 30 días menos los días que no dan derecho (PNR, SAN, VAC, INC, LIC)
+        // Se paga por los días vigentes del contrato menos los días que no dan derecho (PNR, SAN, VAC, INC, LIC)
         const diasNoAuxilio = turnosPNR + turnosSAN + turnosVAC + turnosINC + turnosLIC;
-        const diasAuxilio = Math.max(0, 30 - diasNoAuxilio);
+        const diasAuxilio = Math.max(0, diasMes - diasNoAuxilio);
         
         let auxTransporte = 0;
         if (salarioBase <= smlmv * topeAuxSmlmv && totalTurnosCualquiera > 0) {
@@ -421,7 +438,7 @@ export class NominaService {
             
             // 2. Calcular cuántos días realmente aplica para cobrar esas extras (Días hábiles sin novedades de ausentismo)
             const diasSinExtras = turnosPNR + turnosSAN + turnosLIC + turnosVAC + turnosINC;
-            const diasParaExtras = Math.max(0, 30 - diasSinExtras);
+            const diasParaExtras = Math.max(0, diasMes - diasSinExtras);
             
             // 3. Este es el valor EXACTO de extras y recargos que le tocan por los días que sí estuvo en el puesto
             const targetExtrasRecargos = Math.max(0, Math.round((bolsaExtrasMensual / 30) * diasParaExtras));
@@ -856,7 +873,9 @@ export class NominaService {
                     cedula: emp.cedula,
                     contrato_id: contrato.id,
                     salario_id: contrato.salario_id,
-                    salario_base: salarioBase
+                    salario_base: salarioBase,
+                    fecha_inicio_contrato: contrato.fecha_inicio,
+                    fecha_fin_contrato: contrato.fecha_fin
                 });
             }
         }
@@ -900,6 +919,21 @@ export class NominaService {
             const asignacion = asignacionesRaw?.find(a => a.empleado_id === empId);
             const salarioFijoPuesto = Number(asignacion?.puestos_trabajo?.['salario_fijo'] || 0);
 
+            // Calcular dias fuera de contrato si entró o salió a mitad de mes
+            let diasFueraContrato = 0;
+            if (empInfo.fecha_inicio_contrato && empInfo.fecha_inicio_contrato > periodo.fecha_inicio) {
+                const startP = new Date(periodo.fecha_inicio + 'T00:00:00');
+                const startC = new Date(empInfo.fecha_inicio_contrato + 'T00:00:00');
+                const diasTarde = Math.floor((startC.getTime() - startP.getTime()) / (1000 * 60 * 60 * 24));
+                if (diasTarde > 0) diasFueraContrato += diasTarde;
+            }
+            if (empInfo.fecha_fin_contrato && empInfo.fecha_fin_contrato < periodo.fecha_fin) {
+                const endP = new Date(periodo.fecha_fin + 'T00:00:00');
+                const endC = new Date(empInfo.fecha_fin_contrato + 'T00:00:00');
+                const diasTemprano = Math.floor((endP.getTime() - endC.getTime()) / (1000 * 60 * 60 * 24));
+                if (diasTemprano > 0) diasFueraContrato += diasTemprano;
+            }
+
             // Calcular liquidación
             const liquidacion = this.calcularLiquidacionEmpleado(
                 turnosEmpleado,
@@ -908,6 +942,7 @@ export class NominaService {
                 festivos,
                 novedadesEmpleado,
                 salarioFijoPuesto,
+                diasFueraContrato
             );
 
             // Aplicar deducciones adicionales (no obligatorias)
