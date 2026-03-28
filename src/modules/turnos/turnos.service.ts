@@ -76,7 +76,7 @@ export class TurnosService {
     this.logger.debug(`⚡ Ejecutando findAllFast con filtros: ${JSON.stringify(filters)}`);
 
     // Solo los campos que el grid-view realmente necesita
-    const selectFields = `id, empleado_id, puesto_id, subpuesto_id, fecha, tipo_turno, estado_turno, hora_inicio, hora_fin, observaciones, es_reemplazo, concepto_id, empleado:empleado_id(id, nombre_completo, cedula), puesto:puesto_id(id, nombre, codigo_puesto), subpuesto:subpuesto_id(id, nombre)`;
+    const selectFields = `id, empleado_id, puesto_id, subpuesto_id, fecha, tipo_turno, estado_turno, hora_inicio, hora_fin, duracion_horas, observaciones, es_reemplazo, concepto_id, empleado:empleado_id(id, nombre_completo, cedula), puesto:puesto_id(id, nombre, codigo_puesto, es_estatal, es_monitoreo), subpuesto:subpuesto_id(id, nombre)`;
 
     let allData: any[] = [];
     let from = 0;

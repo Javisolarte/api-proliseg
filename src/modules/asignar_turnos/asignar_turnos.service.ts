@@ -605,6 +605,11 @@ export class AsignarTurnosService {
           // Para el 3-3-2 de 7-7, el relevo debería trabajar 07-19 o 19-07 según la plaza.
 
           const conceptoInfoRelevo = inferirConcepto('RELEVO');
+          const horaInicio = hueco.hora_inicio || '';
+          const esNoche = horaInicio.startsWith('19') || horaInicio.startsWith('18');
+          const tipoTurnoVisual = esNoche ? 'Noche' : 'Día';
+          const conceptoInfoVisual = inferirConcepto(tipoTurnoVisual);
+
           turnosParaInsertar.push({
             empleado_id: relevante.empleado_id,
             puesto_id: subpuesto.puesto_id,
@@ -612,8 +617,8 @@ export class AsignarTurnosService {
             fecha: hueco.fecha,
             hora_inicio: hueco.hora_inicio,
             hora_fin: hueco.hora_fin,
-            tipo_turno: conceptoInfoRelevo.nombre,
-            concepto_id: conceptoInfoRelevo.id,
+            tipo_turno: conceptoInfoVisual.nombre, // 'Día' o 'Noche'
+            concepto_id: conceptoInfoRelevo.id, // Sigue siendo RELEVO para nómina
             configuracion_id: subpuesto.configuracion_id,
             orden_en_ciclo: hueco.orden,
             plaza_no: hueco.plaza,

@@ -138,6 +138,24 @@ export class CreatePuestoDto {
   @IsNumber()
   @Min(0)
   salario_fijo?: number;
+
+  @ApiProperty({
+    example: false,
+    required: false,
+    description: "Indica si es un puesto estatal (sector público)",
+  })
+  @IsOptional()
+  @IsBoolean()
+  es_estatal?: boolean;
+
+  @ApiProperty({
+    example: false,
+    required: false,
+    description: "Indica si es un puesto de monitoreo",
+  })
+  @IsOptional()
+  @IsBoolean()
+  es_monitoreo?: boolean;
 }
 
 export class UpdatePuestoDto extends PartialType(CreatePuestoDto) { }
