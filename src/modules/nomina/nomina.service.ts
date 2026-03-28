@@ -351,21 +351,21 @@ export class NominaService {
 
         // Recargos (sobre horas ordinarias - solo el % adicional)
         let recargoNocturno = c.ord_nocturnas * valorHora * factorRN;
-        const recargoDominicalDiurno = c.ord_dominical_diurnas * valorHora * factorDomFest;
-        const recargoDominicalNocturno = c.ord_dominical_nocturnas * valorHora * factorNocDomFest;
-        const recargoFestivoDiurno = c.ord_festiva_diurnas * valorHora * factorDomFest;
-        const recargoFestivoNocturno = c.ord_festiva_nocturnas * valorHora * factorNocDomFest;
+        let recargoDominicalDiurno = c.ord_dominical_diurnas * valorHora * factorDomFest;
+        let recargoDominicalNocturno = c.ord_dominical_nocturnas * valorHora * factorNocDomFest;
+        let recargoFestivoDiurno = c.ord_festiva_diurnas * valorHora * factorDomFest;
+        let recargoFestivoNocturno = c.ord_festiva_nocturnas * valorHora * factorNocDomFest;
 
         let totalRecargos = recargoNocturno + recargoDominicalDiurno + recargoDominicalNocturno
             + recargoFestivoDiurno + recargoFestivoNocturno;
 
         // Extras (valor completo de la hora extra)
         let valorHED = c.ext_diurnas * valorHora * factorHED;
-        const valorHEN = c.ext_nocturnas * valorHora * factorHEN;
-        const valorHEDD = c.ext_dominical_diurnas * valorHora * factorHEDD;
-        const valorHEDN = c.ext_dominical_nocturnas * valorHora * factorHEDN;
-        const valorHEFD = c.ext_festiva_diurnas * valorHora * factorHEDD;
-        const valorHEFN = c.ext_festiva_nocturnas * valorHora * factorHEDN;
+        let valorHEN = c.ext_nocturnas * valorHora * factorHEN;
+        let valorHEDD = c.ext_dominical_diurnas * valorHora * factorHEDD;
+        let valorHEDN = c.ext_dominical_nocturnas * valorHora * factorHEDN;
+        let valorHEFD = c.ext_festiva_diurnas * valorHora * factorHEDD;
+        let valorHEFN = c.ext_festiva_nocturnas * valorHora * factorHEDN;
 
         let totalExtras = valorHED + valorHEN + valorHEDD + valorHEDN + valorHEFD + valorHEFN;
 
@@ -411,26 +411,64 @@ export class NominaService {
         // ═══ AJUSTE SALARIO FIJO (Si aplica) ═══
         let ajusteSalarial = 0;
         if (salarioFijo > 0 && totalTurnosCualquiera > 0) {
-            // El objetivo es que el Total Devengado Bruto llegue al SalarioFijo del puesto
+            // El objetivo es que el Total Devengado Bruto llegue EXACTAMENTE al SalarioFijo del puesto
             // Se descuenta proporcionalmente por días no pagados (PNR, Sanciones)
             const diasPagados = 30 - turnosPNR - turnosSAN;
             const targetDevengado = Math.round((salarioFijo / 30) * diasPagados);
             
-            if (targetDevengado > totalDevengado) {
-                ajusteSalarial = targetDevengado - totalDevengado;
+            const ingresosFijos = salarioDevengado + auxTransporte + valorLicencia + valorVacaciones + valorIncapacidad;
+            const targetExtrasRecargos = targetDevengado - ingresosFijos;
+            
+            ajusteSalarial = targetDevengado - totalDevengado; // Mantener métrica de cuánto se ajustó vs bruto natural
+            
+            if (targetExtrasRecargos > 0) {
+                const realesBrutos = totalExtras + totalRecargos;
                 
-                // Distribución sugerida por el usuario en Extras/Recargos
-                const parteExtras = Math.round(ajusteSalarial * 0.7);
-                const parteRecargos = ajusteSalarial - parteExtras;
-                
-                valorHED += parteExtras;
-                recargoNocturno += parteRecargos;
-                
-                // Actualizar totales de salida
-                totalExtras += parteExtras;
-                totalRecargos += parteRecargos;
-                totalDevengado = targetDevengado;
+                if (realesBrutos > 0) {
+                    // Escalar los reales para que completen el target (ni más ni menos, en base a los reales)
+                    const factor = targetExtrasRecargos / realesBrutos;
+                    
+                    valorHED = Math.round(valorHED * factor);
+                    valorHEN = Math.round(valorHEN * factor);
+                    valorHEDD = Math.round(valorHEDD * factor);
+                    valorHEDN = Math.round(valorHEDN * factor);
+                    valorHEFD = Math.round(valorHEFD * factor);
+                    valorHEFN = Math.round(valorHEFN * factor);
+                    
+                    recargoNocturno = Math.round(recargoNocturno * factor);
+                    recargoDominicalDiurno = Math.round(recargoDominicalDiurno * factor);
+                    recargoDominicalNocturno = Math.round(recargoDominicalNocturno * factor);
+                    recargoFestivoDiurno = Math.round(recargoFestivoDiurno * factor);
+                    recargoFestivoNocturno = Math.round(recargoFestivoNocturno * factor);
+                } else {
+                    // Si no hubo extras reales pero se exige este devengado, inventamos.
+                    const parteExtras = Math.round(targetExtrasRecargos * 0.7);
+                    const parteRecargos = targetExtrasRecargos - parteExtras;
+                    
+                    valorHED = parteExtras;
+                    recargoNocturno = parteRecargos;
+                    
+                    valorHEN = 0; valorHEDD = 0; valorHEDN = 0; valorHEFD = 0; valorHEFN = 0;
+                    recargoDominicalDiurno = 0; recargoDominicalNocturno = 0; recargoFestivoDiurno = 0; recargoFestivoNocturno = 0;
+                }
+            } else {
+                // Si la cuota ya supera el fijo sin extras (por anomalías de parametrización base), limpiamos todo a cero.
+                valorHED = 0; valorHEN = 0; valorHEDD = 0; valorHEDN = 0; valorHEFD = 0; valorHEFN = 0;
+                recargoNocturno = 0; recargoDominicalDiurno = 0; recargoDominicalNocturno = 0; recargoFestivoDiurno = 0; recargoFestivoNocturno = 0;
             }
+            
+            // Recalcular los nuevos totales de la canasta con los factores aplicados
+            totalExtras = valorHED + valorHEN + valorHEDD + valorHEDN + valorHEFD + valorHEFN;
+            totalRecargos = recargoNocturno + recargoDominicalDiurno + recargoDominicalNocturno + recargoFestivoDiurno + recargoFestivoNocturno;
+            
+            // Asegurarnos que errores de redondeo matemáticos obliguen a empatar al centavo exacto limitando las HE diurnas como holgura
+            const diferenciaRedondeo = targetExtrasRecargos - (totalExtras + totalRecargos);
+            if (diferenciaRedondeo !== 0 && targetExtrasRecargos > 0) {
+                valorHED += diferenciaRedondeo;
+                totalExtras += diferenciaRedondeo;
+            }
+            
+            totalDevengado = ingresosFijos + totalExtras + totalRecargos;
         }
 
         // IBC (Ingreso Base Cotización = devengado - auxilio transporte)
