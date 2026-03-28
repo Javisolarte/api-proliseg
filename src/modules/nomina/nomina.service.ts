@@ -142,6 +142,7 @@ export class NominaService {
         if (t === 'v' || t === 'vac' || t.includes('vacacion')) return 'VAC';
         if (t === 'inc' || t.includes('incapacidad')) return 'INC';
         if (t === 'san' || t.includes('sancion') || t.includes('sanción')) return 'SAN';
+        if (t === 'mt' || t.includes('medio')) return 'MT';
         if (t === 't' || t.includes('tarde')) return 'D';
         return t.toUpperCase();
     }
@@ -266,6 +267,7 @@ export class NominaService {
         // Conteo de turnos por tipo
         let turnosDiurnos = 0, turnosNocturnos = 0, turnosDescanso = 0;
         let turnosPNR = 0, turnosLIC = 0, turnosVAC = 0, turnosINC = 0, turnosSAN = 0;
+        let turnosMT = 0;
 
         // Analizar turnos
         const turnosAnalizados: TurnoAnalizado[] = [];
@@ -284,11 +286,12 @@ export class NominaService {
                 case 'INC': turnosINC++; continue;
             }
 
-            // Solo D y N se calculan como horas trabajadas
-            if (tipo !== 'D' && tipo !== 'N') continue;
+            // Solo D, N, y MT se calculan como horas trabajadas
+            if (tipo !== 'D' && tipo !== 'N' && tipo !== 'MT') continue;
 
             if (tipo === 'D') turnosDiurnos++;
             if (tipo === 'N') turnosNocturnos++;
+            if (tipo === 'MT') turnosMT++;
 
             // Calcular horas reales del turno
             let horas: HorasDesglose;
@@ -296,9 +299,9 @@ export class NominaService {
                 horas = this.calcularHorasDiurnasNocturnas(turno.hora_inicio, turno.hora_fin);
             } else {
                 // Fallback si no hay hora_inicio/hora_fin
-                horas = tipo === 'N'
-                    ? { diurnas: 3, nocturnas: 9, total: 12 }
-                    : { diurnas: 12, nocturnas: 0, total: 12 };
+                if (tipo === 'N') horas = { diurnas: 3, nocturnas: 9, total: 12 };
+                else if (tipo === 'MT') horas = { diurnas: 4, nocturnas: 0, total: 4 };
+                else horas = { diurnas: 12, nocturnas: 0, total: 12 };
             }
 
             const esDomingo = this.esDomingo(fechaStr);
@@ -385,8 +388,11 @@ export class NominaService {
             valorIncapacidad = (diasEmpleador * valorDia) + (diasEPS * valorDia * 0.6667);
         }
 
+        const totalTurnosCualquiera = turnosDiurnos + turnosNocturnos + turnosMT + turnosDescanso + turnosPNR + turnosSAN + turnosLIC + turnosVAC + turnosINC;
+
         // Salario devengado base (descontando PNR y SAN)
-        const salarioDevengado = salarioBase - descuentoPNR - descuentoSAN;
+        // REGLA: Si no tiene turnos ni novedades, se pone en cero.
+        const salarioDevengado = totalTurnosCualquiera === 0 ? 0 : (salarioBase - descuentoPNR - descuentoSAN);
 
         // Auxilio de transporte (proporcional, solo si ≤ 2 SMLMV)
         // Se paga por 30 días menos los días que no dan derecho (PNR, SAN, VAC, INC, LIC)
@@ -394,7 +400,7 @@ export class NominaService {
         const diasAuxilio = Math.max(0, 30 - diasNoAuxilio);
         
         let auxTransporte = 0;
-        if (salarioBase <= smlmv * topeAuxSmlmv) {
+        if (salarioBase <= smlmv * topeAuxSmlmv && totalTurnosCualquiera > 0) {
             auxTransporte = Math.round((diasAuxilio / 30) * auxTransporteBase);
         }
 
@@ -404,20 +410,14 @@ export class NominaService {
 
         // ═══ AJUSTE SALARIO FIJO (Si aplica) ═══
         let ajusteSalarial = 0;
-        if (salarioFijo > 0) {
-            // El objetivo es que el Total Devengado (o base + transport + extras) llegue al SalarioFijo
-            // Se descuente proporcionalmente por días no pagados (PNR, Sanciones)
+        if (salarioFijo > 0 && totalTurnosCualquiera > 0) {
+            // El objetivo es que el Total Devengado Bruto llegue al SalarioFijo del puesto
+            // Se descuenta proporcionalmente por días no pagados (PNR, Sanciones)
             const diasPagados = 30 - turnosPNR - turnosSAN;
-            const targetNetoAjustado = Math.round((salarioFijo / 30) * diasPagados);
+            const targetDevengado = Math.round((salarioFijo / 30) * diasPagados);
             
-            // Queremos que Neto = 0.92 * (IBC) + AuxTransporte = targetNetoAjustado
-            // Donde IBC = DevengadoTotal - AuxTransporte
-            // Neto = 0.92 * (DevengadoTotal - AuxTransporte) + AuxTransporte = targetNetoAjustado
-            // DevengadoTotal = (targetNetoAjustado - AuxTransporte) / 0.92 + AuxTransporte
-            const devengadoRequerido = Math.round((targetNetoAjustado - auxTransporte) / 0.92 + auxTransporte);
-            
-            if (devengadoRequerido > totalDevengado) {
-                ajusteSalarial = devengadoRequerido - totalDevengado;
+            if (targetDevengado > totalDevengado) {
+                ajusteSalarial = targetDevengado - totalDevengado;
                 
                 // Distribución sugerida por el usuario en Extras/Recargos
                 const parteExtras = Math.round(ajusteSalarial * 0.7);
@@ -429,18 +429,18 @@ export class NominaService {
                 // Actualizar totales de salida
                 totalExtras += parteExtras;
                 totalRecargos += parteRecargos;
-                totalDevengado = devengadoRequerido;
+                totalDevengado = targetDevengado;
             }
         }
 
         // IBC (Ingreso Base Cotización = devengado - auxilio transporte)
         const ibc = totalDevengado - auxTransporte;
 
-        // Deducciones legales empleado
+        // Deducciones legales empleado (SOBRE EL IBC, incluyendo recargos y extras)
         const saludEmpleado = getParam('salud_empleado') || 4;
         const pensionEmpleado = getParam('pension_empleado') || 4;
-        const deduccionSalud = Math.round(salarioDevengado * (saludEmpleado / 100));
-        const deduccionPension = Math.round(salarioDevengado * (pensionEmpleado / 100));
+        const deduccionSalud = Math.round(ibc * (saludEmpleado / 100));
+        const deduccionPension = Math.round(ibc * (pensionEmpleado / 100));
         const totalDeducciones = deduccionSalud + deduccionPension;
 
         const netoPagar = Math.round(totalDevengado - totalDeducciones);
