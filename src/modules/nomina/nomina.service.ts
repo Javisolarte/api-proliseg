@@ -411,10 +411,14 @@ export class NominaService {
         // ═══ AJUSTE SALARIO FIJO (Si aplica) ═══
         let ajusteSalarial = 0;
         if (salarioFijo > 0 && totalTurnosCualquiera > 0) {
-            // El objetivo es que el Total Devengado Bruto llegue EXACTAMENTE al SalarioFijo del puesto
+            // El objetivo es que el Total NETO llegue EXACTAMENTE al SalarioFijo del puesto
             // Se descuenta proporcionalmente por días no pagados (PNR, Sanciones)
             const diasPagados = 30 - turnosPNR - turnosSAN;
-            const targetDevengado = Math.round((salarioFijo / 30) * diasPagados);
+            const targetNeto = Math.round((salarioFijo / 30) * diasPagados);
+            
+            // Fórmula Inversa: Neto = 0.92 * (Devengado - AuxTransporte) + AuxTransporte
+            // Entonces: Devengado = (Neto - AuxTransporte) / 0.92 + AuxTransporte
+            const targetDevengado = Math.round((targetNeto - auxTransporte) / 0.92 + auxTransporte);
             
             const ingresosFijos = salarioDevengado + auxTransporte + valorLicencia + valorVacaciones + valorIncapacidad;
             const targetExtrasRecargos = targetDevengado - ingresosFijos;
