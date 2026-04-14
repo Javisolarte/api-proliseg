@@ -804,16 +804,19 @@ export class AutoservicioService {
         }
 
         // 4. Validar distancia (1000m)
-        const { data: subpuesto } = await supabase.from('subpuestos_trabajo').select('*, puesto:puesto_id(*)').eq('id', turno.subpuesto_id).single();
-        if (!subpuesto) throw new NotFoundException('Subpuesto no encontrado');
+        let subpuesto: any = null;
+        if (turno.subpuesto_id) {
+            const { data } = await supabase.from('subpuestos_trabajo').select('*, puesto:puesto_id(*)').eq('id', turno.subpuesto_id).maybeSingle();
+            subpuesto = data;
+        }
 
-        const puesto = Array.isArray(subpuesto.puesto) ? subpuesto.puesto[0] : subpuesto.puesto;
+        const puesto = subpuesto ? (Array.isArray(subpuesto.puesto) ? subpuesto.puesto[0] : subpuesto.puesto) : null;
         let distancia = 0;
         if (puesto?.latitud && puesto?.longitud && dto.latitud && dto.longitud) {
             distancia = calcularDistancia(parseFloat(dto.latitud), parseFloat(dto.longitud), parseFloat(puesto.latitud), parseFloat(puesto.longitud));
         }
 
-        if (distancia > 1000) {
+        if (puesto && distancia > 1000) {
             throw new ForbiddenException(`Estás fuera del rango permitido (${Math.round(distancia)}m). Máximo 1000m.`);
         }
 
@@ -829,7 +832,8 @@ export class AutoservicioService {
 
         try {
             const empleadoIA = { nombre: empBasic.nombre_completo };
-            const iaRes = await analizarAsistenciaIA(this.gemini, empleadoIA, puesto, distancia, 'entrada');
+            const puestoIA = puesto || { nombre: 'Lugar no especificado' };
+            const iaRes = await analizarAsistenciaIA(this.gemini, empleadoIA, puestoIA, distancia, 'entrada');
             observaciones_calculadas += ` | IA: ${iaRes}`;
         } catch (e) {
             console.warn(`IA Analysis failed: ${e.message}`);
@@ -920,14 +924,18 @@ export class AutoservicioService {
         }
 
         // 5. Validar distancia
-        const { data: subpuesto } = await supabase.from('subpuestos_trabajo').select('*, puesto:puesto_id(*)').eq('id', turno.subpuesto_id).single();
-        const puesto = Array.isArray(subpuesto?.puesto) ? subpuesto.puesto[0] : subpuesto?.puesto;
+        let subpuesto: any = null;
+        if (turno.subpuesto_id) {
+            const { data } = await supabase.from('subpuestos_trabajo').select('*, puesto:puesto_id(*)').eq('id', turno.subpuesto_id).maybeSingle();
+            subpuesto = data;
+        }
+        const puesto = subpuesto ? (Array.isArray(subpuesto.puesto) ? subpuesto.puesto[0] : subpuesto.puesto) : null;
 
         let distancia = 0;
         if (puesto?.latitud && puesto?.longitud && dto.latitud && dto.longitud) {
             distancia = calcularDistancia(parseFloat(dto.latitud), parseFloat(dto.longitud), parseFloat(puesto.latitud), parseFloat(puesto.longitud));
         }
-        if (distancia > 1000) throw new ForbiddenException(`Estás demasiado lejos (${Math.round(distancia)}m). Máximo 1000m.`);
+        if (puesto && distancia > 1000) throw new ForbiddenException(`Estás demasiado lejos (${Math.round(distancia)}m). Máximo 1000m.`);
 
         // 6. Observaciones e IA
         let obsSalida = (now.getTime() - turnoFechaFin.getTime()) / (1000 * 60) >= 5 ? 'Salida Tarde.' : 'Salida Normal.';
@@ -936,7 +944,8 @@ export class AutoservicioService {
 
         try {
             const empleadoIA = { nombre: empBasic.nombre_completo };
-            const iaRes = await analizarAsistenciaIA(this.gemini, empleadoIA, puesto, distancia, 'salida');
+            const puestoIA = puesto || { nombre: 'Lugar no especificado' };
+            const iaRes = await analizarAsistenciaIA(this.gemini, empleadoIA, puestoIA, distancia, 'salida');
             nuevasObservaciones += ` | IA: ${iaRes}`;
         } catch (e) {
             console.warn(`IA Analysis failed: ${e.message}`);
