@@ -421,6 +421,7 @@ export class RadioOperacionService {
           empleado_id: puesto.empleado_id || null,
           nombre_guarda: puesto.nombre_guarda || null,
           cambio_turno: puesto.cambio_turno || false,
+          relevo_nombre: puesto.relevo_nombre || null,
           observaciones: puesto.observaciones || null,
           orden: puesto.orden ?? i,
           created_at: new Date().toISOString(),

@@ -124,6 +124,11 @@ export class CreateReporteDetalleDto {
   @Type(() => Boolean)
   cambio_turno?: boolean;
 
+  @ApiPropertyOptional({ example: ' Lindsay Rojas' })
+  @IsOptional()
+  @IsString()
+  relevo_nombre?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
