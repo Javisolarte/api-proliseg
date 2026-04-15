@@ -119,6 +119,7 @@ import { PoliticasModule } from './modules/politicas/politicas.module';
 import { BiModule } from './modules/bi/bi.module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { ComplianceModule } from './modules/compliance/compliance.module';
+import { RadioOperacionModule } from './modules/radio-operacion/radio-operacion.module';
 
 @Module({
   imports: [
@@ -256,6 +257,9 @@ import { ComplianceModule } from './modules/compliance/compliance.module';
     BiModule,
     WebhooksModule,
     ComplianceModule,
+
+    // 🆕 Radio Operación
+    RadioOperacionModule,
   ],
   providers: [
     {
