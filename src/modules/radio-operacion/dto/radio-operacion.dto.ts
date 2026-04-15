@@ -145,10 +145,10 @@ export class MarcarChequeoDto {
   @Type(() => Number)
   chequeo_id: number;
 
-  @ApiProperty({ example: 'sin_novedad', enum: ['sin_novedad', 'novedad', 'no_contesta'] })
+  @ApiProperty({ example: 'sin_novedad', enum: ['sin_novedad', 'novedad', 'no_contesta', 'pendiente'] })
   @IsNotEmpty()
   @IsString()
-  @IsIn(['sin_novedad', 'novedad', 'no_contesta'])
+  @IsIn(['sin_novedad', 'novedad', 'no_contesta', 'pendiente'])
   estado: string;
 
   @ApiPropertyOptional({ example: 'Todo en orden' })
