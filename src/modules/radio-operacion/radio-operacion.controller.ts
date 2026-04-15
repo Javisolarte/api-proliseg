@@ -216,4 +216,16 @@ export class RadioOperacionController {
   async getDashboardStats() {
     return this.radioOperacionService.getDashboardStats();
   }
+
+  @Patch('reportes/:id/detalles/:detalleId')
+  @ApiOperation({ summary: 'Actualizar una fila de detalle del reporte (relevo, observaciones)' })
+  @ApiResponse({ status: 200, description: 'Detalle actualizado' })
+  async updateDetalle(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('detalleId', ParseIntPipe) detalleId: number,
+    @Body() data: any,
+    @CurrentUser() user: any,
+  ) {
+    return this.radioOperacionService.updateReporteDetalle(id, detalleId, data, user.id);
+  }
 }

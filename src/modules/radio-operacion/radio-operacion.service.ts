@@ -456,11 +456,11 @@ export class RadioOperacionService {
 
   async updateReporte(id: number, dto: UpdateReporteDto, userId: number) {
     const supabase = this.supabaseService.getClient();
-    this.logger.debug(`✏️ Actualizando reporte ${id}`);
+    this.logger.debug(`✏️ Actualizando reporte ${id} y sincronizando puestos`);
 
     const { data: existing } = await supabase
       .from('reportes_puestos_operativos')
-      .select('id, estado')
+      .select('id, estado, turno, frecuencia_horas')
       .eq('id', id)
       .single();
 
@@ -472,26 +472,73 @@ export class RadioOperacionService {
       throw new BadRequestException('No se puede modificar un reporte cerrado');
     }
 
-    // Actualizar solo campos del encabezado (no puestos)
+    // 1. Actualizar campos del encabezado
     const { puestos, ...headerFields } = dto;
 
-    const { data, error } = await supabase
+    const { error: headerError } = await supabase
       .from('reportes_puestos_operativos')
       .update({
         ...headerFields,
         actualizado_por: userId,
         updated_at: new Date().toISOString(),
       })
-      .eq('id', id)
-      .select()
-      .single();
+      .eq('id', id);
 
-    if (error) {
-      this.logger.error(`❌ Error actualizando reporte: ${JSON.stringify(error)}`);
-      throw error;
+    if (headerError) {
+      this.logger.error(`❌ Error actualizando encabezado: ${JSON.stringify(headerError)}`);
+      throw headerError;
     }
 
-    return data;
+    // 2. Sincronizar puestos si se proporcionan
+    if (puestos && Array.isArray(puestos)) {
+      this.logger.debug(`🔄 Sincronizando ${puestos.length} puestos`);
+
+      // a. Obtener puestos actuales en la DB
+      const { data: currentDetalles } = await supabase
+        .from('reporte_puestos_detalle')
+        .select('*')
+        .eq('reporte_id', id);
+
+      const currentMap = new Map((currentDetalles || []).map(d => [d.puesto_id, d]));
+      const newPuestoIds = new Set(puestos.map(p => p.puesto_id));
+
+      // b. Eliminar puestos que ya no están en la nueva lista
+      const toDelete = (currentDetalles || []).filter(d => !newPuestoIds.has(d.puesto_id));
+      if (toDelete.length > 0) {
+        this.logger.debug(`🗑️ Eliminando ${toDelete.length} puestos obsoletos`);
+        await supabase
+          .from('reporte_puestos_detalle')
+          .delete()
+          .in('id', toDelete.map(d => d.id));
+      }
+
+      // c. Actualizar existentes o Insertar nuevos
+      for (const p of puestos) {
+        const existingDetalle = currentMap.get(p.puesto_id);
+        
+        if (existingDetalle) {
+          // Ya existe: Solo actualizamos nombre_guarda y orden
+          const { error: updateError } = await supabase
+            .from('reporte_puestos_detalle')
+            .update({
+              nombre_guarda: p.nombre_guarda,
+              orden: p.orden,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', existingDetalle.id);
+            
+          if (updateError) {
+            this.logger.error(`❌ Error actualizando detalle ${existingDetalle.id}: ${JSON.stringify(updateError)}`);
+          }
+        } else {
+          // No existe: Insertar nuevo y generar sus chequeos
+          // Reutilizamos el método addPuestosToReporte para la lógica de generación de chequeos
+          await this.addPuestosToReporte(id, [p], existing.turno, existing.frecuencia_horas);
+        }
+      }
+    }
+
+    return { id, message: 'Reporte actualizado exitosamente' };
   }
 
   /**
@@ -733,5 +780,36 @@ export class RadioOperacionService {
     }
 
     return Array.isArray(data) && data.length > 0 ? data[0] : {};
+  }
+
+  async updateReporteDetalle(reporteId: number, detalleId: number, data: any, userId: number) {
+    const supabase = this.supabaseService.getClient();
+    this.logger.debug(`✏️ Actualizando detalle ${detalleId} del reporte ${reporteId}`);
+
+    // Verificar que el reporte esté abierto
+    const { data: reporte } = await supabase
+      .from('reportes_puestos_operativos')
+      .select('id, estado')
+      .eq('id', reporteId)
+      .single();
+
+    if (!reporte) throw new NotFoundException(`Reporte ${reporteId} no encontrado`);
+    if (reporte.estado === 'cerrado') throw new BadRequestException('No se puede modificar un reporte cerrado');
+
+    const { error } = await supabase
+      .from('reporte_puestos_detalle')
+      .update({
+        ...data,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', detalleId)
+      .eq('reporte_id', reporteId);
+
+    if (error) {
+      this.logger.error(`❌ Error actualizando detalle: ${JSON.stringify(error)}`);
+      throw error;
+    }
+
+    return { message: 'Detalle actualizado exitosamente' };
   }
 }
