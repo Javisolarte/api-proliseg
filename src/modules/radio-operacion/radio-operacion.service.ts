@@ -553,9 +553,9 @@ export class RadioOperacionService {
   /**
    * Cerrar reporte - No se podrá editar más
    */
-  async cerrarReporte(id: number, userId: number) {
+  async cerrarReporte(id: number, firma: string, userId: number) {
     const supabase = this.supabaseService.getClient();
-    this.logger.debug(`🔒 Cerrando reporte ${id}`);
+    this.logger.debug(`🔒 Cerrando reporte ${id} con firma`);
 
     const { data: existing } = await supabase
       .from('reportes_puestos_operativos')
@@ -575,6 +575,7 @@ export class RadioOperacionService {
       .from('reportes_puestos_operativos')
       .update({
         estado: 'cerrado',
+        firma_operador: firma,
         cerrado_en: new Date().toISOString(),
         actualizado_por: userId,
         updated_at: new Date().toISOString(),
@@ -592,6 +593,58 @@ export class RadioOperacionService {
     return { message: 'Reporte cerrado exitosamente', data };
   }
 
+  async reabrirReporte(id: number, userId: number) {
+    const supabase = this.supabaseService.getClient();
+    this.logger.debug(`🔓 Re-abriendo reporte ${id}`);
+
+    const { data: existing } = await supabase
+      .from('reportes_puestos_operativos')
+      .select('id')
+      .eq('id', id)
+      .single();
+
+    if (!existing) {
+      throw new NotFoundException(`Reporte con ID ${id} no encontrado`);
+    }
+
+    const { data, error } = await supabase
+      .from('reportes_puestos_operativos')
+      .update({
+        estado: 'abierto',
+        updated_at: new Date().toISOString(),
+        actualizado_por: userId
+      })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      this.logger.error(`❌ Error re-abriendo reporte: ${JSON.stringify(error)}`);
+      throw error;
+    }
+
+    return { message: 'Reporte re-abierto exitosamente', data };
+  }
+
+  async deleteReporte(id: number) {
+    const supabase = this.supabaseService.getClient();
+    this.logger.debug(`🗑️ Eliminando reporte ${id} permanentemente`);
+
+    // El ON DELETE CASCADE en la base de datos manejará la eliminación 
+    // de reporte_puestos_detalle y reporte_puestos_chequeos
+    const { error } = await supabase
+      .from('reportes_puestos_operativos')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      this.logger.error(`❌ Error eliminando reporte: ${JSON.stringify(error)}`);
+      throw error;
+    }
+
+    return { message: 'Reporte eliminado permanentemente' };
+  }
+
   /**
    * Genera los datos de la plantilla para el formato de reporte
    * (similar al formulario físico de la imagen)
@@ -603,8 +656,8 @@ export class RadioOperacionService {
       titulo: 'FORMATO REPORTE PUESTOS OPERATIVOS',
       empresa: 'PROLICONTROL',
       codigo: reporte.codigo_formato || 'SIG-GO-F-09',
-      fecha_aprobacion: reporte.fecha_aprobacion || '',
-      version: reporte.version_formato || 'TRA/2020',
+      fecha_aprobacion: reporte.fecha_aprobacion || '7/04/2026',
+      version: '2',
       pagina: reporte.pagina || '1 de 1',
       fecha: reporte.fecha,
       supervisor: reporte.supervisor_turno || '',
@@ -627,6 +680,7 @@ export class RadioOperacionService {
         })),
       })),
       observaciones: reporte.observaciones || '',
+      firma_operador: reporte.firma_operador || '',
       cerrado_en: reporte.cerrado_en,
     };
 

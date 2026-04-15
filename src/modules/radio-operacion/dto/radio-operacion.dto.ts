@@ -78,7 +78,22 @@ export class CreateReporteDto {
   observaciones?: string;
 }
 
-export class UpdateReporteDto extends PartialType(CreateReporteDto) {}
+export class UpdateReporteDto extends PartialType(CreateReporteDto) {
+  @ApiPropertyOptional({ description: 'Firma digital del radio operador (Base64)' })
+  @IsOptional()
+  @IsString()
+  firma_operador?: string;
+
+  @ApiPropertyOptional({ description: 'Fecha de aprobación del formato' })
+  @IsOptional()
+  @IsString()
+  fecha_aprobacion?: string;
+
+  @ApiPropertyOptional({ description: 'Versión del formato' })
+  @IsOptional()
+  @IsString()
+  version_formato?: string;
+}
 
 export class CreateReporteDetalleDto {
   @ApiProperty({ example: 1 })

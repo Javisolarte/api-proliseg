@@ -161,13 +161,31 @@ export class RadioOperacionController {
   }
 
   @Post('reportes/:id/cerrar')
-  @ApiOperation({ summary: 'Cerrar reporte (no se podrá editar después)' })
+  @ApiOperation({ summary: 'Cerrar reporte con firma digital' })
   @ApiResponse({ status: 200, description: 'Reporte cerrado exitosamente' })
   async cerrarReporte(
     @Param('id', ParseIntPipe) id: number,
+    @Body() body: { firma_operador: string },
     @CurrentUser() user: any,
   ) {
-    return this.radioOperacionService.cerrarReporte(id, user.id);
+    return this.radioOperacionService.cerrarReporte(id, body.firma_operador, user.id);
+  }
+
+  @Post('reportes/:id/reabrir')
+  @ApiOperation({ summary: 'Re-abrir reporte para modificación' })
+  @ApiResponse({ status: 200, description: 'Reporte re-abierto exitosamente' })
+  async reabrirReporte(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: any,
+  ) {
+    return this.radioOperacionService.reabrirReporte(id, user.id);
+  }
+
+  @Delete('reportes/:id')
+  @ApiOperation({ summary: 'Eliminar reporte permanentemente' })
+  @ApiResponse({ status: 200, description: 'Reporte eliminado' })
+  async deleteReporte(@Param('id', ParseIntPipe) id: number) {
+    return this.radioOperacionService.deleteReporte(id);
   }
 
   @Get('reportes/:id/plantilla')
