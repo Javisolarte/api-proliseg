@@ -1,5 +1,7 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, Logger } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import * as puppeteer from 'puppeteer';
+import { Response } from 'express';
 import type {
   CreateRadioOperadorDto,
   UpdateRadioOperadorDto,
@@ -641,9 +643,15 @@ export class RadioOperacionService {
     return { message: 'Reporte cerrado exitosamente', data };
   }
 
-  async reabrirReporte(id: number, userId: number) {
+  async reabrirReporte(id: number, user: any) {
     const supabase = this.supabaseService.getClient();
-    this.logger.debug(`🔓 Re-abriendo reporte ${id}`);
+    this.logger.debug(`🔓 Intentando re-abrir reporte ${id} por el usuario ${user.id} con rol ${user.rol}`);
+
+    // Solo superusuarios pueden re-abrir
+    if (user.rol !== 'superusuario') {
+      this.logger.warn(`🚫 Intento de reapertura no autorizado por usuario ${user.id} (${user.rol})`);
+      throw new ForbiddenException('Solo los superusuarios pueden re-abrir un reporte ya cerrado.');
+    }
 
     const { data: existing } = await supabase
       .from('reportes_puestos_operativos')
@@ -660,7 +668,7 @@ export class RadioOperacionService {
       .update({
         estado: 'abierto',
         updated_at: new Date().toISOString(),
-        actualizado_por: userId
+        actualizado_por: user.id
       })
       .eq('id', id)
       .select()
@@ -811,5 +819,188 @@ export class RadioOperacionService {
     }
 
     return { message: 'Detalle actualizado exitosamente' };
+  }
+
+  // ============================================================
+  // PDF GENERATION (PUPPETEER)
+  // ============================================================
+
+  private browser: puppeteer.Browser | null = null;
+  private readonly browserOptions: any = {
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+  };
+
+  private async getBrowser() {
+      if (!this.browser || !this.browser.connected) {
+          this.browser = await puppeteer.launch(this.browserOptions);
+          this.logger.log('Nuevo navegador Puppeteer iniciado');
+      }
+      return this.browser;
+  }
+
+  async exportReportePDF(id: number, res: Response) {
+    let browser: puppeteer.Browser | null = null;
+    try {
+      const reporte = await this.generarPlantilla(id);
+      
+      const horasHtml = reporte.turno === 'DÍA' ? reporte.horas_dia : reporte.horas_noche;
+      
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <style>
+             @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+             body { font-family: 'Inter', sans-serif; color: #333; margin: 0; padding: 0; font-size: 11px; }
+             .container { width: 100%; max-width: 1000px; margin: 0 auto; }
+             .report-header { display: flex; align-items: stretch; border: 1px solid #1e293b; margin-bottom: 10px; }
+             .logo-area { width: 25%; display: flex; justify-content: center; align-items: center; border-right: 1px solid #1e293b; padding: 10px; }
+             .logo-brand { text-align: center; line-height: 1; }
+             .brand-top { display: block; font-size: 16px; font-weight: 800; color: #4680ff; text-transform: lowercase; }
+             .brand-bottom { display: block; font-size: 11px; font-weight: 500; color: #4680ff; letter-spacing: 0.5px; }
+             .title-area { width: 50%; display: flex; justify-content: center; align-items: center; border-right: 1px solid #1e293b; padding: 10px; }
+             .title-area h1 { margin: 0; font-size: 14px; text-align: center; font-weight: 700; color: #1e293b; }
+             .meta-area { width: 25%; font-size: 9px; }
+             .meta-row { display: flex; border-bottom: 1px solid #1e293b; }
+             .meta-row:last-child { border-bottom: none; }
+             .meta-row span { width: 40%; border-right: 1px solid #1e293b; padding: 4px 6px; font-weight: 600; background: #f8fafc; }
+             .meta-row strong { width: 60%; padding: 4px 6px; }
+             
+             .info-grid { display: flex; border: 1px solid #1e293b; border-bottom: none; background: #f8fafc; }
+             .info-item { flex: 1; border-right: 1px solid #1e293b; padding: 6px 10px; font-size: 10px; }
+             .info-item:last-child { border-right: none; }
+             .info-item span { font-weight: 600; margin-right: 5px; }
+             
+             .control-table { width: 100%; border-collapse: collapse; border: 1px solid #1e293b; font-size: 9px; }
+             .control-table th, .control-table td { border: 1px solid #1e293b; padding: 4px; text-align: left; vertical-align: middle; }
+             .control-table th { background-color: #f1f5f9; font-weight: 700; text-align: center; }
+             .text-center { text-align: center; }
+             .col-puesto { width: 20%; }
+             .col-guarda { width: 22%; }
+             .col-dn { width: 4%; }
+             .col-hora { width: 3%; font-size: 8px; }
+             .col-relevo { width: 12%; }
+             .col-obs { width: 15%; }
+             
+             .p-code { font-weight: 700; color: #4680ff; font-size: 10px; display: block; }
+             .p-name { color: #475569; display: block; }
+             .change-badge { background: #fee2e2; color: #dc2626; padding: 1px 4px; border-radius: 4px; font-size: 8px; font-weight: 700; border: 1px solid #f87171; float: right; }
+             
+             .check-box { width: 12px; height: 12px; border: 1px solid #94a3b8; margin: 0 auto; display: flex; justify-content: center; align-items: center; }
+             .check-box.checked { background-color: #1e293b; border-color: #1e293b; color: white; }
+             
+             .report-footer { display: flex; margin-top: 15px; border: 1px solid #1e293b; page-break-inside: avoid; }
+             .footer-section { flex: 1; padding: 10px; border-right: 1px solid #1e293b; }
+             .footer-section label { font-size: 10px; font-weight: 700; display: block; margin-bottom: 5px; }
+             .footer-sign { width: 250px; padding: 10px; text-align: center; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; }
+             .signature-display img { max-height: 50px; margin-bottom: 5px; }
+             .sign-line { width: 80%; border-top: 1px solid #1e293b; margin: 5px 0; }
+             .footer-sign p { font-size: 9px; font-weight: 600; margin: 0; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="report-header">
+              <div class="logo-area">
+                <div class="logo-brand">
+                  <span class="brand-top">proliseg</span>
+                  <span class="brand-bottom">Prolicontrol</span>
+                </div>
+              </div>
+              <div class="title-area">
+                <h1>${reporte.titulo}</h1>
+              </div>
+              <div class="meta-area">
+                <div class="meta-row"><span>Código:</span> <strong>${reporte.codigo}</strong></div>
+                <div class="meta-row"><span>Versión:</span> <strong>${reporte.version}</strong></div>
+                <div class="meta-row"><span>Fecha Aprob:</span> <strong>${reporte.fecha_aprobacion}</strong></div>
+                <div class="meta-row"><span>Página:</span> <strong>${reporte.pagina}</strong></div>
+              </div>
+            </div>
+
+            <div class="info-grid">
+              <div class="info-item"><span>FECHA:</span> <strong>${reporte.fecha}</strong></div>
+              <div class="info-item"><span>SUPERVISOR DE TURNO:</span> <strong>${reporte.supervisor}</strong></div>
+              <div class="info-item"><span>TURNO:</span> <strong>${reporte.turno === 'DÍA' ? 'X DÍA / NOCHE' : 'DÍA / X NOCHE'}</strong></div>
+            </div>
+
+            <table class="control-table">
+              <thead>
+                <tr>
+                  <th rowspan="2" class="col-puesto">PUESTO</th>
+                  <th rowspan="2" class="col-guarda">GUARDA DE TURNO</th>
+                  <th rowspan="2" class="col-dn">D/N</th>
+                  <th colspan="${horasHtml?.length || 0}" class="text-center">REPORTE POR HORAS</th>
+                  <th rowspan="2" class="col-relevo">CAMBIO DE TURNO</th>
+                  <th rowspan="2" class="col-obs">OBSERVACIONES</th>
+                </tr>
+                <tr>
+                  ${(horasHtml || []).map((h: string) => `<th class="col-hora">${h}</th>`).join('')}
+                </tr>
+              </thead>
+              <tbody>
+                ${(reporte.puestos || []).map((p: any) => `
+                  <tr>
+                    <td>
+                      <span class="p-code">${p.codigo_puesto}</span>
+                      <span class="p-name">${p.puesto_nombre}</span>
+                    </td>
+                    <td>
+                      ${p.guarda_turno}
+                      ${p.cambio_turno ? '<span class="change-badge">C.T</span>' : ''}
+                    </td>
+                    <td class="text-center"><strong>${reporte.turno.charAt(0)}</strong></td>
+                    ${(horasHtml || []).map((h: string) => {
+                      const c = (p.chequeos || []).find((chk: any) => chk.hora.startsWith(h));
+                      const isChecked = c && c.estado === 'sin_novedad';
+                      return `<td class="text-center"><div class="check-box ${isChecked ? 'checked' : ''}">${isChecked ? '✓' : ''}</div></td>`;
+                    }).join('')}
+                    <td>${(p as any).relevo_nombre || ''}</td>
+                    <td>${p.observaciones || ''}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+
+            <div class="report-footer">
+              <div class="footer-section">
+                <label>OBSERVACIONES GENERALES:</label>
+                <div>${reporte.observaciones || ''}</div>
+              </div>
+              <div class="footer-sign">
+                ${reporte.firma_operador ? `<div class="signature-display"><img src="${reporte.firma_operador}" /></div>` : '<div style="height: 50px;"></div>'}
+                <div class="sign-line"></div>
+                <p>Firma Radio Operador: ${reporte.radio_operador}</p>
+              </div>
+            </div>
+          </div>
+        </body>
+        </html>
+      `;
+
+      browser = await this.getBrowser();
+      const page = await browser.newPage();
+      try {
+        await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
+        const pdfBuffer = await page.pdf({
+          format: 'Letter',
+          landscape: true,
+          printBackground: true,
+          margin: { top: '10mm', right: '10mm', bottom: '15mm', left: '10mm' }
+        });
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=Reporte_Operativo_${reporte.fecha}.pdf`);
+        res.send(Buffer.from(pdfBuffer));
+      } finally {
+        await page.close();
+      }
+    } catch (error) {
+      this.logger.error('Error generando PDF de reporte operativo:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ message: 'Error al generar el PDF', error: error.message });
+      }
+    }
   }
 }

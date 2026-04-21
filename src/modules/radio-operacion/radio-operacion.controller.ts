@@ -10,7 +10,9 @@ import {
   Query,
   UseGuards,
   ParseIntPipe,
+  Res,
 } from '@nestjs/common';
+import { Response } from 'express';
 import {
   ApiTags,
   ApiOperation,
@@ -178,7 +180,7 @@ export class RadioOperacionController {
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: any,
   ) {
-    return this.radioOperacionService.reabrirReporte(id, user.id);
+    return this.radioOperacionService.reabrirReporte(id, user);
   }
 
   @Delete('reportes/:id')
@@ -193,6 +195,16 @@ export class RadioOperacionController {
   @ApiResponse({ status: 200, description: 'Datos de la plantilla del reporte' })
   async generarPlantilla(@Param('id', ParseIntPipe) id: number) {
     return this.radioOperacionService.generarPlantilla(id);
+  }
+
+  @Get('reportes/:id/pdf')
+  @ApiOperation({ summary: 'Descargar reporte completo en formato PDF' })
+  @ApiResponse({ status: 200, description: 'Archivo PDF generado' })
+  async downloadPdf(
+    @Param('id', ParseIntPipe) id: number,
+    @Res() res: Response,
+  ) {
+    return this.radioOperacionService.exportReportePDF(id, res);
   }
 
   @Post('reportes/:id/puestos')

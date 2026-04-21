@@ -754,6 +754,8 @@ export class AsistenciasService {
   async getAsistenciasByPuesto(puesto_id: number, fecha_inicio?: string, fecha_fin?: string) {
     const db = this.supabase.getClient();
 
+    // Optimizamos la consulta para filtrar en la base de datos directamente
+    // Usamos !inner para asegurar que PostgREST filtre por las tablas relacionadas
     let query = db
       .from('turnos_asistencia')
       .select(`
@@ -763,29 +765,49 @@ export class AsistenciasService {
           nombre_completo,
           cedula
         ),
-        turno:turno_id (
+        turno:turno_id!inner (
           id,
           fecha,
           hora_inicio,
           hora_fin,
-          subpuesto:subpuesto_id (
+          subpuesto:subpuesto_id!inner (
             id,
             nombre,
-            puesto:puesto_id (id, nombre)
+            puesto:puesto_id!inner (id, nombre)
           )
         )
       `)
-      .not('turno', 'is', null);
+      .eq('turno.subpuesto.puesto_id', puesto_id);
 
+    // Ajustamos filtros de fecha
+    // Si no se pasan fechas, traemos todo lo del puesto (ordenado por entrada descendente)
     if (fecha_inicio) query = query.gte('hora_entrada', fecha_inicio);
     if (fecha_fin) query = query.lte('hora_entrada', fecha_fin);
 
     const { data, error } = await query.order('hora_entrada', { ascending: false });
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) {
+      this.logger.error(`Error en getAsistenciasByPuesto: ${error.message}`);
+      throw new BadRequestException(error.message);
+    }
 
-    // Filtrar manualmente por puesto_id
-    return data.filter(a => a.turno?.subpuesto?.puesto?.id === puesto_id);
+    // Normalizamos la respuesta por si Supabase devuelve arrays en los joins (común en algunas configs)
+    return (data || []).map(asis => {
+      const turno = Array.isArray(asis.turno) ? asis.turno[0] : asis.turno;
+      const subpuesto = turno && Array.isArray(turno.subpuesto) ? turno.subpuesto[0] : (turno?.subpuesto);
+      const puesto = subpuesto && Array.isArray(subpuesto.puesto) ? subpuesto.puesto[0] : (subpuesto?.puesto);
+      
+      return {
+        ...asis,
+        turno: turno ? {
+          ...turno,
+          subpuesto: subpuesto ? {
+            ...subpuesto,
+            puesto: puesto
+          } : null
+        } : null
+      };
+    });
   }
 
   // ============================================================
