@@ -593,19 +593,20 @@ export class AsistenciasService {
 
     if (asisError) throw new BadRequestException(asisError.message);
 
-    const now = dto.hora_salida || getColombiaTime().toISOString();
+    // FIX: Usar standard ISO string para evitar desfases de zona horaria en la DB
+    const now = dto.hora_salida || new Date().toISOString();
 
     if (asistencia) {
       // 2. Actualizar salida
       await db.from('turnos_asistencia')
         .update({
           hora_salida: now,
-          observaciones: (asistencia.observaciones || '') + ' | Cierre manual: ' + (dto.observaciones || ''),
+          observaciones: (asistencia.observaciones || '') + ' | Cierre manual admin: ' + (dto.observaciones || ''),
           estado_asistencia: 'cumplido'
         })
         .eq('id', asistencia.id);
     } else {
-      // Si no hay entrada, creamos registro con hora Colombia
+      // Si no hay entrada, creamos registro
       await db.from('turnos_asistencia').insert({
         turno_id: dto.turno_id,
         empleado_id: dto.empleado_id,
@@ -622,6 +623,38 @@ export class AsistenciasService {
     }).eq('id', dto.turno_id);
 
     return { message: '✅ Turno cerrado manualmente.' };
+  }
+
+  // ============================================================
+  // 🔓 REABRIR TURNO
+  // ============================================================
+  async reabrirTurno(asistencia_id: number) {
+    const db = this.supabase.getClient();
+
+    // 1. Obtener la asistencia
+    const { data: asistencia, error } = await db
+      .from('turnos_asistencia')
+      .select('id, turno_id')
+      .eq('id', asistencia_id)
+      .single();
+
+    if (error || !asistencia) throw new NotFoundException('No se encontró el registro de asistencia');
+
+    // 2. Limpiar hora_salida y resetear estado
+    await db.from('turnos_asistencia')
+      .update({
+        hora_salida: null,
+        estado_asistencia: 'pendiente',
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', asistencia_id);
+
+    // 3. Regresar el turno a estado 'parcial' (En curso)
+    await db.from('turnos')
+      .update({ estado_turno: 'parcial' })
+      .eq('id', asistencia.turno_id);
+
+    return { message: '✅ Turno reabierto con éxito. El guarda puede marcar salida de nuevo.' };
   }
 
   // ============================================================
@@ -791,14 +824,36 @@ export class AsistenciasService {
       throw new BadRequestException(error.message);
     }
 
-    // Normalizamos la respuesta por si Supabase devuelve arrays en los joins (común en algunas configs)
+    // Normalizamos la respuesta y calculamos info adicional
     return (data || []).map(asis => {
       const turno = Array.isArray(asis.turno) ? asis.turno[0] : asis.turno;
       const subpuesto = turno && Array.isArray(turno.subpuesto) ? turno.subpuesto[0] : (turno?.subpuesto);
       const puesto = subpuesto && Array.isArray(subpuesto.puesto) ? subpuesto.puesto[0] : (subpuesto?.puesto);
       
+      // Cálculo de retraso
+      let detalle_ingreso = 'A tiempo';
+      let minutos_retraso = 0;
+      
+      if (asis.hora_entrada && turno?.hora_inicio) {
+        const entrada = new Date(asis.hora_entrada);
+        const [h, m] = turno.hora_inicio.split(':');
+        const programada = new Date(turno.fecha);
+        programada.setHours(parseInt(h), parseInt(m), 0);
+        
+        // Ajustar para turno noche si entrada es mucho después? 
+        // Simplificado: diferencia directa
+        minutos_retraso = Math.floor((entrada.getTime() - programada.getTime()) / (1000 * 60));
+        if (minutos_retraso > 0) {
+          detalle_ingreso = `Tarde (${minutos_retraso} min)`;
+        } else {
+          detalle_ingreso = 'Correcto / Temprano';
+        }
+      }
+
       return {
         ...asis,
+        detalle_ingreso,
+        minutos_retraso,
         turno: turno ? {
           ...turno,
           subpuesto: subpuesto ? {

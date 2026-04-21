@@ -212,6 +212,13 @@ export class AsistenciasController {
     return this.asistenciasService.cerrarTurnoManual(dto);
   }
 
+  @Post(":id/reabrir")
+  @RequirePermissions("asistencia.write")
+  @ApiOperation({ summary: "Reabrir un turno cerrado (Admin/Supervisor)" })
+  async reabrirTurno(@Param("id", ParseIntPipe) id: number) {
+    return this.asistenciasService.reabrirTurno(id);
+  }
+
   @Get("turnos/:turno_id/resumen")
   @RequirePermissions("asistencias.read")
   @ApiOperation({ summary: "Obtener resumen calculado del turno" })
