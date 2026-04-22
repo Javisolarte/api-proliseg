@@ -405,4 +405,11 @@ export class AsistenciasController {
   ) {
     return this.asistenciasService.uploadFoto(file, parseInt(empleado_id));
   }
+
+  @Get("empleado/:id/tracking-hoy")
+  @RequirePermissions("asistencias.read")
+  @ApiOperation({ summary: "Obtener recorrido GPS del empleado para el turno actual" })
+  async getTrackingHoy(@Param("id", ParseIntPipe) id: number) {
+    return this.asistenciasService.getTrackingHoy(id);
+  }
 }

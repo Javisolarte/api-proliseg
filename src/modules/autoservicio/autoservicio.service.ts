@@ -833,7 +833,7 @@ export class AutoservicioService {
         try {
             const empleadoIA = { nombre: empBasic.nombre_completo };
             const puestoIA = puesto || { nombre: 'Lugar no especificado' };
-            const iaRes = await analizarAsistenciaIA(this.gemini, empleadoIA, puestoIA, distancia, 'entrada');
+            const iaRes = await analizarAsistenciaIA(this.gemini, empleadoIA, puestoIA, distancia, 'entrada', dto.foto_url);
             observaciones_calculadas += ` | IA: ${iaRes}`;
         } catch (e) {
             console.warn(`IA Analysis failed: ${e.message}`);

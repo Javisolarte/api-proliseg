@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import axios from 'axios';
 
 interface ApiKeyStatus {
   key: string;
@@ -364,6 +365,44 @@ Responde en una sola línea clara y concisa.
 
 
   /**
+   * 🤖 Analiza una imagen (URL) con Gemini Vision
+   */
+  async analyzeImage(imageUrl: string, prompt: string): Promise<string> {
+    this.logger.debug(`🖼️ Analizando imagen: ${imageUrl}`);
+
+    try {
+      // 1. Descargar imagen
+      const response = await axios.get(imageUrl, { responseType: 'arraybuffer' });
+      const buffer = Buffer.from(response.data);
+      const base64Image = buffer.toString('base64');
+      const mimeType = response.headers['content-type'] || 'image/jpeg';
+
+      // 2. Ejecutar con reintentos
+      const result = await this.executeWithRetry(async (genAI) => {
+        const model = genAI.getGenerativeModel({
+          model: 'models/gemini-2.0-flash', // Cambiado a gemini-2.0-flash por ser el más reciente y capaz con visión
+        });
+
+        const imagePart = {
+          inlineData: {
+            data: base64Image,
+            mimeType,
+          },
+        };
+
+        return await model.generateContent([prompt, imagePart]);
+      });
+
+      const text = result.response.text().trim();
+      this.logger.debug(`✅ Análisis de imagen completado: ${text.substring(0, 100)}...`);
+      return text;
+    } catch (error: any) {
+      this.logger.error('❌ Error analizando imagen con Gemini:', error);
+      return `Error en análisis visual: ${error.message}`;
+    }
+  }
+
+  /**
    * 🤖 Responde de forma natural a preguntas generales (sin SQL)
    */
   async humanResponse(prompt: string): Promise<string> {
@@ -372,7 +411,7 @@ Responde en una sola línea clara y concisa.
     try {
       const result = await this.executeWithRetry(async (genAI) => {
         const model = genAI.getGenerativeModel({
-          model: 'models/gemini-2.5-flash',
+          model: 'models/gemini-2.0-flash',
         });
 
         return await model.generateContent([

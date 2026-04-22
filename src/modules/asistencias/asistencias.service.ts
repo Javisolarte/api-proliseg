@@ -10,6 +10,7 @@ import { RegistrarSalidaDto } from './dto/registrar_salida.dto';
 import { UpdateAsistenciaDto, CerrarTurnoManualDto, RegistrarEntradaManualDto, RegistrarSalidaManualDto } from './dto/asistencias.dto';
 import { calcularDistancia } from './utils/distancia.util';
 import { GeminiService } from '../ia/gemini.service';
+import { UbicacionesService } from '../ubicaciones/ubicaciones.service';
 import { analizarAsistenciaIA } from './utils/ia.util';
 import { getColombiaTime } from '../../common/helpers/time.helper';
 
@@ -20,6 +21,7 @@ export class AsistenciasService {
   constructor(
     private readonly supabase: SupabaseService,
     private readonly gemini: GeminiService,
+    private readonly ubicaciones: UbicacionesService,
   ) { }
 
   /**
@@ -151,7 +153,7 @@ export class AsistenciasService {
 
     // 6. IA Analysis
     try {
-      const iaRes = await analizarAsistenciaIA(this.gemini, empleado, puesto, distancia, 'entrada');
+      const iaRes = await analizarAsistenciaIA(this.gemini, empleado, puesto, distancia, 'entrada', dto.foto_url);
       observaciones_calculadas += ` | IA: ${iaRes}`;
     } catch (e) {
       this.logger.warn(`IA Analysis failed: ${e.message}`);
@@ -890,7 +892,9 @@ export class AsistenciasService {
           id,
           hora_entrada,
           hora_salida,
-          estado_asistencia
+          estado_asistencia,
+          foto_entrada,
+          foto_salida
         )
       `)
       .eq('fecha', hoy);
@@ -958,13 +962,15 @@ export class AsistenciasService {
 
         return {
           turno_id: t.id,
+          empleado_id: empleado?.id,
           empleado: empleado?.nombre_completo || 'Desconocido',
           puesto: subpuestoPuesto?.nombre || 'No especificado',
           subpuesto: subpuesto?.nombre || 'Sin subpuesto',
           hora_inicio: t.hora_inicio,
           hora_fin: t.hora_fin,
           status,
-          hora_entrada: asistencia?.hora_entrada || null
+          hora_entrada: asistencia?.hora_entrada || null,
+          foto_entrada: asistencia?.foto_entrada || null
         };
       });
 
@@ -1116,5 +1122,37 @@ export class AsistenciasService {
       .getPublicUrl(path);
 
     return { url: publicUrl };
+  }
+
+  /**
+   * 🗺️ Obtener el recorrido GPS de un empleado para su turno actual o más reciente de hoy
+   */
+  async getTrackingHoy(empleado_id: number) {
+    const db = this.supabase.getClient();
+
+    // 1. Buscar la asistencia activa/reciente de hoy
+    const { data: asistencia, error } = await db
+      .from('turnos_asistencia')
+      .select('id, hora_entrada, hora_salida')
+      .eq('empleado_id', empleado_id)
+      .order('hora_entrada', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      this.logger.error(`Error buscando asistencia para tracking: ${error.message}`);
+      throw new BadRequestException("No se pudo obtener la información de asistencia");
+    }
+
+    if (!asistencia) {
+      throw new NotFoundException("No hay registros de asistencia para este empleado hoy.");
+    }
+
+    // 2. Definir rango de búsqueda: desde la entrada hasta la salida (o ahora si está activo)
+    const desde = asistencia.hora_entrada;
+    const hasta = asistencia.hora_salida || new Date().toISOString();
+
+    // 3. Consultar historial de ubicaciones
+    return this.ubicaciones.getHistorial(empleado_id, { desde, hasta });
   }
 }

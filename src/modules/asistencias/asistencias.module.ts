@@ -4,9 +4,10 @@ import { AsistenciasService } from "./asistencias.service";
 import { AuthModule } from "../auth/auth.module"; // ✅ Permite usar guards y AuthService
 import { SupabaseService } from "../supabase/supabase.service"; // ✅ Conexión con Supabase
 import { GeminiService } from "../ia/gemini.service"; // ✅ IA de Google Gemini
+import { UbicacionesModule } from "../ubicaciones/ubicaciones.module";
 
 @Module({
-  imports: [AuthModule], // 🔐 Importamos autenticación
+  imports: [AuthModule, UbicacionesModule], // 🔐 Importamos autenticación y ubicaciones
   controllers: [AsistenciasController],
   providers: [
     AsistenciasService,
