@@ -82,21 +82,20 @@ export class ComunicacionesService {
      * 🌍 Obtener servidores ICE (STUN/TURN)
      */
     async getIceServers() {
-        const turnUrl = process.env.TURN_URL;
-        const turnUser = process.env.TURN_USER || 'proliseg_user';
-        const turnSecret = process.env.TURN_SECRET;
+        const turnUrl = process.env.TURN_URL || 'turn:openrelay.metered.ca:80';
+        const turnUser = process.env.TURN_USER || 'openrelayproject';
+        const turnSecret = process.env.TURN_SECRET || 'openrelayproject';
 
         const iceServers: any[] = [
             { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' }
         ];
 
-        if (turnUrl && turnSecret) {
-            iceServers.push({
-                urls: turnUrl,
-                username: turnUser,
-                credential: turnSecret,
-            });
-        }
+        iceServers.push({
+            urls: turnUrl,
+            username: turnUser,
+            credential: turnSecret,
+        });
 
         return { iceServers };
     }
