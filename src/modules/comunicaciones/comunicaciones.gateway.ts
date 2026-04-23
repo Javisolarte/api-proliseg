@@ -254,7 +254,7 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
         if (sesion) {
             sesion.state = SessionState.OFFER_SENT;
             sesion.ultima_actividad = new Date();
-            this.logger.debug(`📨 Offer en ${data.sesion_id} -> Estado: ${sesion.state}`);
+            this.logger.log(`📨 WebRTC OFFER de ${client.id} para sesión ${data.sesion_id}`);
         }
 
         client.to(data.sesion_id).emit('webrtc_offer', {
@@ -272,7 +272,7 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
         if (sesion) {
             sesion.state = SessionState.ANSWER_RECEIVED; // Transición a connected implícita
             sesion.ultima_actividad = new Date();
-            this.logger.debug(`📩 Answer en ${data.sesion_id} -> Estado: ${sesion.state}`);
+            this.logger.log(`📩 WebRTC ANSWER de ${client.id} para sesión ${data.sesion_id}`);
         }
 
         client.to(data.sesion_id).emit('webrtc_answer', {
