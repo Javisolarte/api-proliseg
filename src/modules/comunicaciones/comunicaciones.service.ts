@@ -131,32 +131,32 @@ export class ComunicacionesService {
         // Para que funcione desde DATOS MÓVILES en cualquier parte del mundo (NAT Traversal Extremo)
         
         const iceServers: any[] = [
-            // 1. GOOGLE STUNS (Gratuitos, alta velocidad para huecos en NAT)
+            // 1. GOOGLE STUNS
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
             { urls: 'stun:stun2.l.google.com:19302' },
             
-            // 2. METERED.CA RELAY (Puente de audio - NECESARIO para Datos Móviles)
-            // Usamos puerto 443 TCP para que parezca tráfico HTTPS y no lo bloqueen
+            // 2. METERED.CA RELAY - PUERTO 443 TCP (Prioridad Máxima - Salta Firewalls)
             { 
-              urls: ['turns:openrelay.metered.ca:443?transport=tcp'], 
-              username: 'openrelayproject', 
-              credential: 'openrelayproject' 
-            },
-            { 
-              urls: ['turn:openrelay.metered.ca:443?transport=tcp'], 
-              username: 'openrelayproject', 
-              credential: 'openrelayproject' 
-            },
-            { 
-              urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443'], 
+              urls: [
+                'turns:openrelay.metered.ca:443?transport=tcp',
+                'turn:openrelay.metered.ca:443?transport=tcp',
+                'turn:openrelay.metered.ca:443',
+                'turn:openrelay.metered.ca:80?transport=tcp',
+                'turn:openrelay.metered.ca:80',
+                'turn:openrelay.metered.ca:3478?transport=tcp',
+                'turn:openrelay.metered.ca:3478'
+              ], 
               username: 'openrelayproject', 
               credential: 'openrelayproject' 
             },
             
-            // 3. RESPALDO SECUNDARIO (Numb Viagenie)
+            // 3. RESPALDO SECUNDARIO
             {
-              urls: 'turn:numb.viagenie.ca:3478',
+              urls: [
+                  'turn:numb.viagenie.ca:3478',
+                  'turn:numb.viagenie.ca:3478?transport=tcp'
+              ],
               username: 'numb',
               credential: 'numb'
             }

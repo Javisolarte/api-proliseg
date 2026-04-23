@@ -141,13 +141,24 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
             { urls: 'stun:stun.voip.blackberry.com:3478' },
             // METERED.CA RELAY (TCP/UDP)
             { 
-              urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turn:openrelay.metered.ca:443?transport=tcp'], 
+              urls: [
+                'turns:openrelay.metered.ca:443?transport=tcp',
+                'turn:openrelay.metered.ca:443?transport=tcp',
+                'turn:openrelay.metered.ca:443',
+                'turn:openrelay.metered.ca:80?transport=tcp',
+                'turn:openrelay.metered.ca:80',
+                'turn:openrelay.metered.ca:3478?transport=tcp',
+                'turn:openrelay.metered.ca:3478'
+              ], 
               username: 'openrelayproject', 
               credential: 'openrelayproject' 
             },
             // SEGUNDO PROVEEDOR DE RESPALDO (Numb)
             {
-              urls: 'turn:numb.viagenie.ca:3478',
+              urls: [
+                'turn:numb.viagenie.ca:3478',
+                'turn:numb.viagenie.ca:3478?transport=tcp'
+              ],
               username: 'numb',
               credential: 'numb'
             }
