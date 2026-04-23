@@ -132,6 +132,29 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
         return { success: true };
     }
 
+    async getIceServers() {
+        // Redundancia extrema para saltar firewalls de datos móviles de cualquier operador
+        const iceServers: any[] = [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun.voip.blackberry.com:3478' },
+            // METERED.CA RELAY (TCP/UDP)
+            { 
+              urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turn:openrelay.metered.ca:443?transport=tcp'], 
+              username: 'openrelayproject', 
+              credential: 'openrelayproject' 
+            },
+            // SEGUNDO PROVEEDOR DE RESPALDO (Numb)
+            {
+              urls: 'turn:numb.viagenie.ca:3478',
+              username: 'numb',
+              credential: 'numb'
+            }
+        ];
+        return iceServers;
+    }
+
     handleDisconnect(client: Socket) {
         this.logger.log(`🔌 Cliente desconectado: ${client.id}`);
 
@@ -302,6 +325,14 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
             sesion_id: data.sesion_id,
             sender_socket_id: client.id
         });
+        return { success: true };
+    }
+
+    @SubscribeMessage('control_remoto')
+    handleControlRemoto(@MessageBody() data: { sesion_id: string, accion: string }, @ConnectedSocket() client: Socket) {
+        this.logger.log(`🎮 Control remoto: ${data.accion} en sesión ${data.sesion_id}`);
+        // Retransmitir a la sala de la sesión
+        client.to(data.sesion_id).emit('control_remoto', data);
         return { success: true };
     }
 

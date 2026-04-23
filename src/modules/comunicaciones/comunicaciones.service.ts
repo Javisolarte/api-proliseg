@@ -127,33 +127,30 @@ export class ComunicacionesService {
      * 🌍 Obtener servidores ICE (STUN/TURN) - Optimizados para Redes Móviles (NAT Traversal)
      */
     async getIceServers() {
-        const turnUser = process.env.TURN_USER || 'openrelayproject';
-        const turnSecret = process.env.TURN_SECRET || 'openrelayproject';
-
-        // Redundancia extrema para saltar firewalls de datos móviles
+        // Redundancia extrema para saltar firewalls de datos móviles de cualquier operador
+        // Incluimos múltiples proveedores (Google, Metered, Viagenie) en varios puertos y protocolos
         const iceServers: any[] = [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
             { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun.voip.blackberry.com:3478' },
+            { urls: 'stun:global.turn.twilio.com:3478' },
+            // METERED.CA RELAY (TCP/UDP) - Alta compatibilidad en puerto 443
             { 
-              urls: 'turn:openrelay.metered.ca:80', 
-              username: turnUser, 
-              credential: turnSecret 
+              urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turn:openrelay.metered.ca:443?transport=tcp'], 
+              username: 'openrelayproject', 
+              credential: 'openrelayproject' 
             },
             { 
-              urls: 'turn:openrelay.metered.ca:443', 
-              username: turnUser, 
-              credential: turnSecret 
+              urls: ['turns:openrelay.metered.ca:443?transport=tcp'], 
+              username: 'openrelayproject', 
+              credential: 'openrelayproject' 
             },
-            { 
-              urls: 'turn:openrelay.metered.ca:443?transport=tcp', 
-              username: turnUser, 
-              credential: turnSecret 
-            },
-            { 
-              urls: 'turns:openrelay.metered.ca:443?transport=tcp', 
-              username: turnUser, 
-              credential: turnSecret 
+            // SEGUNDO PROVEEDOR DE RESPALDO (Numb)
+            {
+              urls: 'turn:numb.viagenie.ca:3478',
+              username: 'numb',
+              credential: 'numb'
             }
         ];
 
@@ -162,7 +159,7 @@ export class ComunicacionesService {
             url: Array.isArray(s.urls) ? s.urls[0] : s.urls
         }));
 
-        this.logger.log('🧊 Sirviendo ICE Servers optimizados para NAT Traversal');
+        this.logger.log('🧊 Sirviendo ICE Servers optimizados para NAT Traversal Extremo');
         return { iceServers: formattedServers };
     }
 
