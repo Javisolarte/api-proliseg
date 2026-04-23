@@ -6,7 +6,7 @@ import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import type { EnviarEmailDto, EnviarWhatsAppDto, EnviarCotizacionDto } from '../comunicaciones/dto/comunicaciones.dto';
 
 @ApiTags('Public Communications')
-@Controller('api/public/comunicaciones')
+@Controller('public/comunicaciones')
 export class PublicComunicacionesController {
     constructor(private readonly comunicacionesService: ComunicacionesService) { }
 
