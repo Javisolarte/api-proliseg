@@ -127,20 +127,17 @@ export class ComunicacionesService {
      * 🌍 Obtener servidores ICE (STUN/TURN) - Optimizados para Redes Móviles (NAT Traversal)
      */
     async getIceServers() {
-        // ESTRATEGIA PROFESIONAL DE NAT TRAVERSAL (STUN/TURN)
-        // Para que funcione en 4G/5G en Colombia (Claro, Tigo, Movistar), necesitamos:
-        // 1. STUNS corporativos (Google, Twilio).
-        // 2. TURN servers que funcionen en el puerto 443 vía TLS (TURNS).
-        // 3. Redundancia total de protocolos (UDP y TCP).
+        // CONFIGURACIÓN DE CONECTIVIDAD TOTAL (STUN/TURN) - ROMPE-BLOQUEOS
+        // Para que funcione desde DATOS MÓVILES en cualquier parte del mundo (NAT Traversal Extremo)
         
         const iceServers: any[] = [
-            // STUNS (Gratuitos de Google y Twilio - Alta disponibilidad)
+            // 1. GOOGLE STUNS (Gratuitos, alta velocidad para huecos en NAT)
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:global.turn.twilio.com:3478' },
+            { urls: 'stun:stun2.l.google.com:19302' },
             
-            // TURN SERVERS (Relé de medios - NECESARIOS para Datos Móviles)
-            // Usamos Metered.ca en puerto 443 con TLS para saltar firewalls de datos
+            // 2. METERED.CA RELAY (Puente de audio - NECESARIO para Datos Móviles)
+            // Usamos puerto 443 TCP para que parezca tráfico HTTPS y no lo bloqueen
             { 
               urls: ['turns:openrelay.metered.ca:443?transport=tcp'], 
               username: 'openrelayproject', 
@@ -155,15 +152,27 @@ export class ComunicacionesService {
               urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443'], 
               username: 'openrelayproject', 
               credential: 'openrelayproject' 
+            },
+            
+            // 3. RESPALDO SECUNDARIO (Numb Viagenie)
+            {
+              urls: 'turn:numb.viagenie.ca:3478',
+              username: 'numb',
+              credential: 'numb'
             }
         ];
 
-        const formattedServers = iceServers.map(s => ({
-            ...s,
-            url: Array.isArray(s.urls) ? s.urls[0] : s.urls
-        }));
+        // Asegurar que cada entrada tenga tanto 'urls' como 'url' para compatibilidad total con Flutter/Angular
+        const formattedServers = iceServers.map(s => {
+            const urls = Array.isArray(s.urls) ? s.urls : [s.urls];
+            return {
+                ...s,
+                urls: urls,
+                url: urls[0] // Algunos clientes viejos piden 'url'
+            };
+        });
 
-        this.logger.log('📡 Sirviendo configuración ICE profesional (Modo Carrier-Grade)');
+        this.logger.log('🚀 Sirviendo configuración WebRTC de Alta disponibilidad (4G/5G Ready)');
         return { iceServers: formattedServers };
     }
 
