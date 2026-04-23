@@ -82,22 +82,33 @@ export class ComunicacionesService {
      * 🌍 Obtener servidores ICE (STUN/TURN)
      */
     async getIceServers() {
-        const turnUrl = process.env.TURN_URL || 'turn:openrelay.metered.ca:80';
         const turnUser = process.env.TURN_USER || 'openrelayproject';
         const turnSecret = process.env.TURN_SECRET || 'openrelayproject';
 
+        // Robust Ice Servers: STUN + multiple TURN ports (80 and 443)
+        // We include both 'url' and 'urls' for maximum compatibility with all WebRTC plugins
         const iceServers: any[] = [
             { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { 
+              urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443'], 
+              username: turnUser, 
+              credential: turnSecret 
+            },
+            { 
+              urls: 'turn:openrelay.metered.ca:443?transport=tcp', 
+              username: turnUser, 
+              credential: turnSecret 
+            }
         ];
 
-        iceServers.push({
-            urls: turnUrl,
-            username: turnUser,
-            credential: turnSecret,
-        });
+        // Format for flutter_webrtc and standard browsers
+        const formattedServers = iceServers.map(s => ({
+            ...s,
+            url: s.urls // Fallback for older clients
+        }));
 
-        return { iceServers };
+        return { iceServers: formattedServers };
     }
 
     /**
