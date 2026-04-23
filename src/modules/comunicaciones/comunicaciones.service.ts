@@ -124,57 +124,45 @@ export class ComunicacionesService {
     }
 
     /**
-     * 🌍 Obtener servidores ICE (STUN/TURN) - Optimizados para Redes Móviles (NAT Traversal)
+     * 🌍 Obtener servidores ICE (STUN/TURN) - Metered.ca REAL
      */
     async getIceServers() {
-        // CONFIGURACIÓN DE CONECTIVIDAD TOTAL (STUN/TURN) - ROMPE-BLOQUEOS
-        // Para que funcione desde DATOS MÓVILES en cualquier parte del mundo (NAT Traversal Extremo)
-        
+        // Credenciales REALES de Metered.ca - Cuenta PROLISEG
         const iceServers: any[] = [
-            // 1. GOOGLE STUNS
+            // STUN (gratuito e ilimitado)
+            { urls: 'stun:stun.relay.metered.ca:80' },
             { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
-            
-            // 2. METERED.CA RELAY - PUERTO 443 TCP (Prioridad Máxima - Salta Firewalls)
-            { 
-              urls: [
-                'turns:openrelay.metered.ca:443?transport=tcp',
-                'turn:openrelay.metered.ca:443?transport=tcp',
-                'turn:openrelay.metered.ca:443',
-                'turn:openrelay.metered.ca:80?transport=tcp',
-                'turn:openrelay.metered.ca:80',
-                'turn:openrelay.metered.ca:3478?transport=tcp',
-                'turn:openrelay.metered.ca:3478'
-              ], 
-              username: 'openrelayproject', 
-              credential: 'openrelayproject' 
-            },
-            
-            // 3. RESPALDO SECUNDARIO
+            // TURN UDP Puerto 80
             {
-              urls: [
-                  'turn:numb.viagenie.ca:3478',
-                  'turn:numb.viagenie.ca:3478?transport=tcp'
-              ],
-              username: 'numb',
-              credential: 'numb'
-            }
+                urls: 'turn:global.relay.metered.ca:80',
+                username: '6959f5f62b3db3b3fb64b457',
+                credential: 'M68t+dYXK48p3EES',
+            },
+            // TURN TCP Puerto 80 (bypass firewall básico)
+            {
+                urls: 'turn:global.relay.metered.ca:80?transport=tcp',
+                username: '6959f5f62b3db3b3fb64b457',
+                credential: 'M68t+dYXK48p3EES',
+            },
+            // TURN UDP Puerto 443 (parece HTTPS)
+            {
+                urls: 'turn:global.relay.metered.ca:443',
+                username: '6959f5f62b3db3b3fb64b457',
+                credential: 'M68t+dYXK48p3EES',
+            },
+            // TURNS TLS Puerto 443 (máxima compatibilidad - salta DPI)
+            {
+                urls: 'turns:global.relay.metered.ca:443?transport=tcp',
+                username: '6959f5f62b3db3b3fb64b457',
+                credential: 'M68t+dYXK48p3EES',
+            },
         ];
 
-        // Asegurar que cada entrada tenga tanto 'urls' como 'url' para compatibilidad total con Flutter/Angular
-        const formattedServers = iceServers.map(s => {
-            const urls = Array.isArray(s.urls) ? s.urls : [s.urls];
-            return {
-                ...s,
-                urls: urls,
-                url: urls[0] // Algunos clientes viejos piden 'url'
-            };
-        });
-
-        this.logger.log('🚀 Sirviendo configuración WebRTC de Alta disponibilidad (4G/5G Ready)');
-        return { iceServers: formattedServers };
+        this.logger.log(`🚀 Sirviendo ${iceServers.length} ICE servers (Metered.ca REAL)`);
+        return { iceServers };
     }
+
+
 
     /**
      * 🎙️ Subir grabación de audio y guardar metadatos

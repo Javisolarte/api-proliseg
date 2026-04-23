@@ -133,35 +133,30 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
     }
 
     async getIceServers() {
-        // Redundancia extrema para saltar firewalls de datos móviles de cualquier operador
+        // Credenciales REALES de Metered.ca - Cuenta PROLISEG
         const iceServers: any[] = [
+            { urls: 'stun:stun.relay.metered.ca:80' },
             { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
-            { urls: 'stun:stun.voip.blackberry.com:3478' },
-            // METERED.CA RELAY (TCP/UDP)
-            { 
-              urls: [
-                'turns:openrelay.metered.ca:443?transport=tcp',
-                'turn:openrelay.metered.ca:443?transport=tcp',
-                'turn:openrelay.metered.ca:443',
-                'turn:openrelay.metered.ca:80?transport=tcp',
-                'turn:openrelay.metered.ca:80',
-                'turn:openrelay.metered.ca:3478?transport=tcp',
-                'turn:openrelay.metered.ca:3478'
-              ], 
-              username: 'openrelayproject', 
-              credential: 'openrelayproject' 
-            },
-            // SEGUNDO PROVEEDOR DE RESPALDO (Numb)
             {
-              urls: [
-                'turn:numb.viagenie.ca:3478',
-                'turn:numb.viagenie.ca:3478?transport=tcp'
-              ],
-              username: 'numb',
-              credential: 'numb'
-            }
+                urls: 'turn:global.relay.metered.ca:80',
+                username: '6959f5f62b3db3b3fb64b457',
+                credential: 'M68t+dYXK48p3EES',
+            },
+            {
+                urls: 'turn:global.relay.metered.ca:80?transport=tcp',
+                username: '6959f5f62b3db3b3fb64b457',
+                credential: 'M68t+dYXK48p3EES',
+            },
+            {
+                urls: 'turn:global.relay.metered.ca:443',
+                username: '6959f5f62b3db3b3fb64b457',
+                credential: 'M68t+dYXK48p3EES',
+            },
+            {
+                urls: 'turns:global.relay.metered.ca:443?transport=tcp',
+                username: '6959f5f62b3db3b3fb64b457',
+                credential: 'M68t+dYXK48p3EES',
+            },
         ];
         return iceServers;
     }
