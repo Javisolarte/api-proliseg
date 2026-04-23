@@ -168,6 +168,17 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
         @MessageBody() data: IniciarComunicacionDto,
         @ConnectedSocket() client: Socket,
     ) {
+        // 🧹 Limpieza agresiva: Si ya existe una sesión para este empleado, cerrarla
+        for (const [id, s] of this.sesionesActivas.entries()) {
+            if (s.empleado_id === data.empleado_id) {
+                this.logger.warn(`🧹 Cerrando sesión previa de Empleado ${data.empleado_id}: ${id}`);
+                this.server.to(id).emit('sesion_finalizada', { sesion_id: id, motivo: 'Nueva sesión iniciada' });
+                this.sesionesActivas.delete(id);
+                this.socketToSesion.delete(s.socket_id);
+                if (s.dashboard_socket_id) this.socketToSesion.delete(s.dashboard_socket_id);
+            }
+        }
+
         const sesionId = `sesion_${Date.now()}_${data.empleado_id}`;
 
         const sesion: SesionActiva = {
