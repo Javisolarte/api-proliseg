@@ -127,13 +127,20 @@ export class ComunicacionesService {
      * 🌍 Obtener servidores ICE (STUN/TURN) - Optimizados para Redes Móviles (NAT Traversal)
      */
     async getIceServers() {
-        // ULTRA-PROFESSIONAL FIREWALL BREAKER
-        // Usamos puerto 443 con TLS (turns:) para que el tráfico sea indistinguible de HTTPS
+        // ESTRATEGIA PROFESIONAL DE NAT TRAVERSAL (STUN/TURN)
+        // Para que funcione en 4G/5G en Colombia (Claro, Tigo, Movistar), necesitamos:
+        // 1. STUNS corporativos (Google, Twilio).
+        // 2. TURN servers que funcionen en el puerto 443 vía TLS (TURNS).
+        // 3. Redundancia total de protocolos (UDP y TCP).
+        
         const iceServers: any[] = [
+            // STUNS (Gratuitos de Google y Twilio - Alta disponibilidad)
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun.voip.blackberry.com:3478' },
-            // METERED.CA RELAY (TÚNEL SEGURO TLS 443)
+            { urls: 'stun:global.turn.twilio.com:3478' },
+            
+            // TURN SERVERS (Relé de medios - NECESARIOS para Datos Móviles)
+            // Usamos Metered.ca en puerto 443 con TLS para saltar firewalls de datos
             { 
               urls: ['turns:openrelay.metered.ca:443?transport=tcp'], 
               username: 'openrelayproject', 
@@ -156,7 +163,7 @@ export class ComunicacionesService {
             url: Array.isArray(s.urls) ? s.urls[0] : s.urls
         }));
 
-        this.logger.log('🚀 ULTIMATE ICE: Firewalls rompiéndose...');
+        this.logger.log('📡 Sirviendo configuración ICE profesional (Modo Carrier-Grade)');
         return { iceServers: formattedServers };
     }
 
