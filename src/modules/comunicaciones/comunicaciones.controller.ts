@@ -97,6 +97,6 @@ export class ComunicacionesController {
     @Get('health')
     async healthCheck() {
         const stats = await this.comunicacionesService.getEstadisticas();
-        return { status: 'ok', module: 'comunicaciones', sessions: stats.sesiones_activas };
+        return { status: 'ok', module: 'comunicaciones', sessions: stats.comunicaciones_activas };
     }
 }
