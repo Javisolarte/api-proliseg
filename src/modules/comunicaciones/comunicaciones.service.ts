@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ComunicacionesGateway } from './comunicaciones.gateway';
+import { ComunicacionesGateway, SesionActiva } from './comunicaciones.gateway';
 import { SupabaseService } from '../supabase/supabase.service';
 import { SubirGrabacionDto } from './dto/subir-grabacion.dto';
 import { ConfigService } from '@nestjs/config';
@@ -28,15 +28,60 @@ export class ComunicacionesService {
     }
 
     /**
-     * 📊 Obtener estadísticas de comunicaciones en tiempo real
+     * 📊 Obtener estadísticas de comunicaciones (Tiempo Real + Histórico)
      */
     async getEstadisticas() {
-        const stats = this.gateway.getEstadisticas();
+        const statsRealTime = this.gateway.getEstadisticas();
+        const db = this.supabase.getClient();
+        const hoy = new Date();
+        hoy.setHours(0, 0, 0, 0);
 
-        return {
-            ...stats,
-            timestamp: new Date(),
-        };
+        try {
+            // 1. Total llamadas histórico
+            const { count: totalLlamadas } = await db
+                .from('comunicaciones_historial')
+                .select('*', { count: 'exact', head: true });
+
+            // 2. Llamadas hoy
+            const { count: llamadasHoy } = await db
+                .from('comunicaciones_historial')
+                .select('*', { count: 'exact', head: true })
+                .gte('created_at', hoy.toISOString());
+
+            // 3. Duración promedio
+            const { data: duraciones } = await db
+                .from('comunicaciones_historial')
+                .select('duracion_segundos');
+
+            let promedio = 0;
+            if (duraciones && duraciones.length > 0) {
+                const totalDuracion = duraciones.reduce((acc, curr) => acc + (curr.duracion_segundos || 0), 0);
+                promedio = Math.round(totalDuracion / duraciones.length);
+            }
+
+            return {
+                total_llamadas: totalLlamadas || 0,
+                llamadas_hoy: llamadasHoy || 0,
+                duracion_promedio: promedio,
+                comunicaciones_activas: statsRealTime.sesiones_activas,
+                clientes_conectados: statsRealTime.clientes_conectados,
+                empleados_online: statsRealTime.empleados_online,
+                sesiones_detalladas: statsRealTime.lista_sesiones,
+                timestamp: new Date(),
+            };
+        } catch (error) {
+            this.logger.error('Error calculando estadísticas:', error);
+            return {
+                total_llamadas: 0,
+                llamadas_hoy: 0,
+                duracion_promedio: 0,
+                comunicaciones_activas: statsRealTime.sesiones_activas,
+                clientes_conectados: statsRealTime.clientes_conectados,
+                empleados_online: statsRealTime.empleados_online,
+                sesiones_detalladas: statsRealTime.lista_sesiones,
+                timestamp: new Date(),
+            };
+        }
     }
 
     /**
@@ -79,17 +124,17 @@ export class ComunicacionesService {
     }
 
     /**
-     * 🌍 Obtener servidores ICE (STUN/TURN)
+     * 🌍 Obtener servidores ICE (STUN/TURN) - Optimizados para Redes Móviles (NAT Traversal)
      */
     async getIceServers() {
         const turnUser = process.env.TURN_USER || 'openrelayproject';
         const turnSecret = process.env.TURN_SECRET || 'openrelayproject';
 
-        // Robust Ice Servers: STUN + multiple TURN ports (80 and 443)
-        // We include both 'url' and 'urls' for maximum compatibility with all WebRTC plugins
+        // Redundancia extrema para saltar firewalls de datos móviles
         const iceServers: any[] = [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
             { 
               urls: 'turn:openrelay.metered.ca:80', 
               username: turnUser, 
@@ -104,15 +149,20 @@ export class ComunicacionesService {
               urls: 'turn:openrelay.metered.ca:443?transport=tcp', 
               username: turnUser, 
               credential: turnSecret 
+            },
+            { 
+              urls: 'turns:openrelay.metered.ca:443?transport=tcp', 
+              username: turnUser, 
+              credential: turnSecret 
             }
         ];
 
-        // Format for flutter_webrtc and standard browsers
         const formattedServers = iceServers.map(s => ({
             ...s,
-            url: s.urls // Fallback for older clients
+            url: Array.isArray(s.urls) ? s.urls[0] : s.urls
         }));
 
+        this.logger.log('🧊 Sirviendo ICE Servers optimizados para NAT Traversal');
         return { iceServers: formattedServers };
     }
 

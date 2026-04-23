@@ -24,7 +24,7 @@ export enum SessionState {
     CLOSED = 'CLOSED'                 // Sesión finalizada
 }
 
-interface SesionActiva {
+export interface SesionActiva {
     sesion_id: string;
     empleado_id?: number;
     empleado_nombre?: string;
@@ -321,6 +321,22 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
     // 🛑 Finalización y Limpieza
     // ==========================================
 
+    @SubscribeMessage('broadcast_ptt')
+    handleBroadcastPTT(@MessageBody() data: any, @ConnectedSocket() client: Socket) {
+        this.logger.log(`📢 Difusión Masiva bloqueadora solicitada por: ${client.id}`);
+        // Notificar a todos que una transmisión general ha comenzado
+        // Esto activará el modal en todos los dispositivos configurados
+        this.server.emit('nueva_comunicacion', {
+            sesion_id: `broadcast_${Date.now()}`,
+            empleado_nombre: 'DIFUSIÓN GENERAL',
+            tipo: 'broadcast',
+            fecha_inicio: new Date(),
+            socket_id: client.id,
+            state: SessionState.INIT
+        });
+        return { success: true };
+    }
+
     @SubscribeMessage('finalizar_comunicacion')
     handleFinalizarComunicacion(
         @MessageBody() data: FinalizarComunicacionDto,
@@ -380,12 +396,14 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
     }
 
     /**
-     * Obtener estadísticas de sesiones activas
+     * Obtener estadísticas de sesiones activas y usuarios en línea
      */
     getEstadisticas() {
         return {
             sesiones_activas: this.sesionesActivas.size,
             clientes_conectados: this.server.sockets.size,
+            empleados_online: this.empleadoToSocket.size,
+            lista_sesiones: Array.from(this.sesionesActivas.values())
         };
     }
 }
