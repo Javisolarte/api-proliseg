@@ -2,6 +2,7 @@ import { Controller, Post, Get, Param, Res } from '@nestjs/common';
 import { ControlAccesoService } from './control-acceso.service';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import type { Response } from 'express';
+import { Public } from '../auth/decorators/public.decorator';
 
 @ApiTags('Control de Acceso')
 @Controller('control-acceso')
@@ -20,6 +21,7 @@ export class ControlAccesoController {
     return this.controlAccesoService.getDeviceInfo();
   }
 
+  @Public()
   @Get('video/snapshot')
   @ApiOperation({ summary: 'Obtiene fotograma en vivo para el monitor' })
   async getSnapshot(@Res() res: Response) {

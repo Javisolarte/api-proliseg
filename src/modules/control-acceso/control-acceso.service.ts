@@ -18,7 +18,7 @@ export class ControlAccesoService {
     const url = `${this.baseUrl}/ISAPI/AccessControl/RemoteControl/door/${doorId}`;
     const xmlBody = `
       <RemoteControlDoor xmlns="http://www.isapi.org/ver20/XMLSchema" version="2.0">
-        <cmd>open</cmd>
+        <remoteControlDoor>open</remoteControlDoor>
       </RemoteControlDoor>
     `.trim();
 
