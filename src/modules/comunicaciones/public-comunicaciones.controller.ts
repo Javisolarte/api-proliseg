@@ -5,10 +5,31 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import type { EnviarEmailDto, EnviarWhatsAppDto, EnviarCotizacionDto } from '../comunicaciones/dto/comunicaciones.dto';
 
+import { LiveKitService } from './livekit.service';
+
 @ApiTags('Public Communications')
 @Controller('public/comunicaciones')
 export class PublicComunicacionesController {
-    constructor(private readonly comunicacionesService: ComunicacionesService) { }
+    constructor(
+        private readonly comunicacionesService: ComunicacionesService,
+        private readonly liveKitService: LiveKitService
+    ) { }
+
+    @Post('livekit-token')
+    @UseGuards(JwtAuthGuard)
+    @ApiBearerAuth('JWT-auth')
+    @ApiOperation({ summary: 'Obtener token de acceso para LiveKit' })
+    async getLiveKitToken(
+        @Body('identity') identity: string,
+        @Body('room') room: string,
+        @Body('canPublish') canPublish: boolean = true,
+    ) {
+        const token = await this.liveKitService.generateToken(identity, room, canPublish);
+        return { 
+            token, 
+            serverUrl: this.liveKitService.getServerUrl() 
+        };
+    }
 
     @Post('enviar-email')
     @UseGuards(JwtAuthGuard)

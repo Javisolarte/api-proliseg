@@ -6,12 +6,41 @@ import { MensajeTextoDto } from './dto/comunicacion.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { SubirGrabacionDto } from './dto/subir-grabacion.dto';
 
+import { LiveKitService } from './livekit.service';
+
 @ApiTags('Comunicaciones')
 @Controller('comunicaciones')
 export class ComunicacionesController {
     private readonly logger = new Logger(ComunicacionesController.name);
 
-    constructor(private readonly comunicacionesService: ComunicacionesService) { }
+    constructor(
+        private readonly comunicacionesService: ComunicacionesService,
+        private readonly liveKitService: LiveKitService
+    ) { }
+
+    @Get('canales')
+    @UseGuards(JwtAuthGuard)
+    @ApiBearerAuth()
+    @ApiOperation({ summary: 'Listar canales de radio (salas) activos' })
+    async listarCanales() {
+        return this.liveKitService.listRooms();
+    }
+
+    @Delete('canales/:name')
+    @UseGuards(JwtAuthGuard)
+    @ApiBearerAuth()
+    @ApiOperation({ summary: 'Cerrar un canal de radio' })
+    async cerrarCanal(@Param('name') name: string) {
+        return this.liveKitService.deleteRoom(name);
+    }
+
+    @Get('canales/:name/participantes')
+    @UseGuards(JwtAuthGuard)
+    @ApiBearerAuth()
+    @ApiOperation({ summary: 'Ver participantes de un canal' })
+    async listarParticipantes(@Param('name') name: string) {
+        return this.liveKitService.listParticipants(name);
+    }
 
     @Get('estadisticas')
     @UseGuards(JwtAuthGuard)
