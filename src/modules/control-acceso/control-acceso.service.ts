@@ -39,12 +39,25 @@ export class ControlAccesoService {
   }
 
   /**
+   * Captura una imagen en vivo de la cámara del terminal
+   */
+  async getSnapshot(): Promise<Buffer> {
+    const url = `${this.baseUrl}/ISAPI/Streaming/channels/101/picture`;
+    try {
+      return await this.makeDigestRequest('GET', url, undefined, 'arraybuffer');
+    } catch (error) {
+      this.logger.error(`Error al obtener snapshot: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
    * Helper para realizar peticiones con Digest Authentication
    */
-  private async makeDigestRequest(method: string, url: string, data?: string): Promise<any> {
+  private async makeDigestRequest(method: string, url: string, data?: string, responseType: any = 'json'): Promise<any> {
     try {
       // 1. Primer intento sin auth para obtener el challenge (401)
-      await axios({ method, url, data });
+      await axios({ method, url, data, responseType });
     } catch (error) {
       if (error.response?.status === 401) {
         const authHeader = error.response.headers['www-authenticate'];
@@ -69,9 +82,10 @@ export class ControlAccesoService {
           method,
           url,
           data,
+          responseType,
           headers: {
             'Authorization': authValue,
-            'Content-Type': 'application/xml',
+            'Content-Type': data ? 'application/xml' : undefined,
           },
         });
         return finalResponse.data;

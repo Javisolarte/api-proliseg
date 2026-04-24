@@ -1,6 +1,7 @@
-import { Controller, Post, Get, Param, Body, UseGuards } from '@nestjs/common';
+import { Controller, Post, Get, Param, Res } from '@nestjs/common';
 import { ControlAccesoService } from './control-acceso.service';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import type { Response } from 'express';
 
 @ApiTags('Control de Acceso')
 @Controller('control-acceso')
@@ -17,5 +18,23 @@ export class ControlAccesoController {
   @ApiOperation({ summary: 'Obtiene información del dispositivo de acceso' })
   async getInfo() {
     return this.controlAccesoService.getDeviceInfo();
+  }
+
+  @Get('video/snapshot')
+  @ApiOperation({ summary: 'Obtiene fotograma en vivo para el monitor' })
+  async getSnapshot(@Res() res: Response) {
+    try {
+      const buffer = await this.controlAccesoService.getSnapshot();
+      res.set({
+        'Content-Type': 'image/jpeg',
+        'Content-Length': buffer.length,
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+      });
+      res.send(buffer);
+    } catch (error) {
+      res.status(500).send({ message: 'Error obteniendo captura de video' });
+    }
   }
 }
