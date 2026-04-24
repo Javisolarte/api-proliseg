@@ -42,6 +42,46 @@ export class ComunicacionesController {
         return this.liveKitService.listParticipants(name);
     }
 
+    @Get('puestos')
+    @UseGuards(JwtAuthGuard)
+    @ApiBearerAuth()
+    @ApiOperation({ summary: 'Listar todos los puestos (canales predefinidos)' })
+    async getCanalesPuestos() {
+        return this.comunicacionesService.getCanalesPuestos();
+    }
+
+    @Post('puestos')
+    @UseGuards(JwtAuthGuard)
+    @ApiBearerAuth()
+    @ApiOperation({ summary: 'Crear un nuevo puesto (canal)' })
+    async crearCanalPuesto(@Body() data: any) {
+        return this.comunicacionesService.crearCanalPuesto(data);
+    }
+
+    @Post('puestos/:id')
+    @UseGuards(JwtAuthGuard)
+    @ApiBearerAuth()
+    @ApiOperation({ summary: 'Actualizar un puesto (canal)' })
+    async actualizarCanalPuesto(@Param('id') id: string, @Body() data: any) {
+        return this.comunicacionesService.actualizarCanalPuesto(+id, data);
+    }
+
+    @Delete('puestos/:id')
+    @UseGuards(JwtAuthGuard)
+    @ApiBearerAuth()
+    @ApiOperation({ summary: 'Eliminar un puesto (canal)' })
+    async eliminarCanalPuesto(@Param('id') id: string) {
+        return this.comunicacionesService.eliminarCanalPuesto(+id);
+    }
+
+    @Get('empleados-online')
+    @UseGuards(JwtAuthGuard)
+    @ApiBearerAuth()
+    @ApiOperation({ summary: 'Ver lista detallada de empleados online' })
+    async getEmpleadosOnline() {
+        return this.comunicacionesService.getEmpleadosOnlineDetalle();
+    }
+
     @Get('estadisticas')
     @UseGuards(JwtAuthGuard)
     @ApiBearerAuth()

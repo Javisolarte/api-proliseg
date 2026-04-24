@@ -208,11 +208,13 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
             }
         }
 
+        const user = client.data.user;
         const sesionId = `sesion_${Date.now()}_${data.empleado_id}`;
 
         const sesion: SesionActiva = {
             sesion_id: sesionId,
             empleado_id: data.empleado_id,
+            empleado_nombre: user?.nombre_completo || user?.full_name || 'Guardia Proliseg', // Intentar obtener nombre
             puesto_id: data.puesto_id,
             cliente_id: data.cliente_id,
             tipo: data.tipo,

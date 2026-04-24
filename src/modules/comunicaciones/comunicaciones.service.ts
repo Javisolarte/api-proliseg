@@ -85,6 +85,96 @@ export class ComunicacionesService {
     }
 
     /**
+     * 👥 Obtener lista detallada de empleados actualmente conectados (Online)
+     */
+    async getEmpleadosOnlineDetalle() {
+        const stats = this.gateway.getEstadisticas();
+        // Acceder a la propiedad privada usando [] para evitar error de TS
+        const empleadoToSocket = (this.gateway as any).empleadoToSocket;
+        const empleadosOnlineIds = Array.from(empleadoToSocket.keys()) as number[];
+        
+        if (empleadosOnlineIds.length === 0) return [];
+
+        const db = this.supabase.getClient();
+        const { data, error } = await db
+            .from('empleados')
+            .select(`
+                id, 
+                nombre_completo, 
+                cedula, 
+                telefono,
+                foto_url,
+                puesto_id,
+                puestos_trabajo(nombre)
+            `)
+            .in('id', empleadosOnlineIds);
+
+        if (error) {
+            this.logger.error('Error obteniendo detalles de empleados online:', error);
+            return [];
+        }
+
+        return data.map(emp => ({
+            ...emp,
+            socket_id: empleadoToSocket.get(emp.id),
+            online: true
+        }));
+    }
+
+    /**
+     * 📻 Gestión de Canales (Puestos de Trabajo)
+     */
+    async getCanalesPuestos() {
+        const db = this.supabase.getClient();
+        const { data, error } = await db
+            .from('puestos_trabajo')
+            .select(`
+                *,
+                clientes(nombre_empresa)
+            `)
+            .order('nombre');
+
+        if (error) throw new Error('Error al listar canales');
+        return data;
+    }
+
+    async crearCanalPuesto(data: any) {
+        const db = this.supabase.getSupabaseAdminClient();
+        const { data: nuevo, error } = await db
+            .from('puestos_trabajo')
+            .insert(data)
+            .select()
+            .single();
+
+        if (error) throw new Error('Error al crear canal: ' + error.message);
+        return nuevo;
+    }
+
+    async actualizarCanalPuesto(id: number, data: any) {
+        const db = this.supabase.getSupabaseAdminClient();
+        const { data: actualizado, error } = await db
+            .from('puestos_trabajo')
+            .update(data)
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (error) throw new Error('Error al actualizar canal: ' + error.message);
+        return actualizado;
+    }
+
+    async eliminarCanalPuesto(id: number) {
+        const db = this.supabase.getSupabaseAdminClient();
+        const { error } = await db
+            .from('puestos_trabajo')
+            .delete()
+            .eq('id', id);
+
+        if (error) throw new Error('Error al eliminar canal');
+        return { success: true };
+    }
+
+    /**
      * 🔍 Validar que un empleado existe y obtener su información
      */
     async validarEmpleado(empleado_id: number) {
