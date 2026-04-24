@@ -209,26 +209,41 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
         }
 
         const user = client.data.user;
-        const sesionId = `sesion_${Date.now()}_${data.empleado_id}`;
+        const empleadoNombre = user?.nombre_completo || user?.full_name || `Guardia-${data.empleado_id}`;
+        
+        // 🆔 GENERACIÓN DE NOMBRE TÁCTICO DE CANAL
+        // Formato: "1042 - Juan Perez" o "Puesto-662 - Guardia"
+        const puestoIdentificador = data.puesto_id ? `${data.puesto_id}` : 'MOVIL';
+        const canalNombreTactico = `${puestoIdentificador} - ${empleadoNombre}`;
+        const sesionId = canalNombreTactico; // El nombre es el ID ahora para máxima claridad
 
-        const sesion: SesionActiva = {
-            sesion_id: sesionId,
-            empleado_id: data.empleado_id,
-            empleado_nombre: user?.nombre_completo || user?.full_name || 'Guardia Proliseg', // Intentar obtener nombre
-            puesto_id: data.puesto_id,
-            cliente_id: data.cliente_id,
-            tipo: data.tipo,
-            mensaje_inicial: data.mensaje_inicial,
-            fecha_inicio: new Date(),
-            socket_id: client.id,
-            latitud: data.latitud,
-            longitud: data.longitud,
-            state: SessionState.INIT, // Estado Inicial
-            origen_inicial: OrigenAudio.APP,
-            ultima_actividad: new Date(),
-        };
+        // 🔄 REUTILIZAR CANAL TÁCTICO EXISTENTE
+        let sesion = this.sesionesActivas.get(sesionId);
+        
+        if (sesion) {
+            this.logger.log(`♻️ Canal táctico activo: ${sesionId}`);
+            sesion.ultima_actividad = new Date();
+            sesion.socket_id = client.id;
+        } else {
+            sesion = {
+                sesion_id: sesionId,
+                empleado_id: data.empleado_id,
+                empleado_nombre: empleadoNombre,
+                puesto_id: data.puesto_id,
+                cliente_id: data.cliente_id,
+                tipo: data.tipo,
+                fecha_inicio: new Date(),
+                socket_id: client.id,
+                latitud: data.latitud,
+                longitud: data.longitud,
+                state: SessionState.INIT,
+                origen_inicial: OrigenAudio.APP,
+                ultima_actividad: new Date(),
+            };
+            this.sesionesActivas.set(sesionId, sesion);
+        }
 
-        this.sesionesActivas.set(sesionId, sesion);
+        this.socketToSesion.set(client.id, sesionId);
         this.socketToSesion.set(client.id, sesionId);
 
         // 🌐 Unirse a la sala WebRTC
