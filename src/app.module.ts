@@ -120,6 +120,7 @@ import { BiModule } from './modules/bi/bi.module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { ComplianceModule } from './modules/compliance/compliance.module';
 import { RadioOperacionModule } from './modules/radio-operacion/radio-operacion.module';
+import { ControlAccesoModule } from './modules/control-acceso/control-acceso.module';
 
 @Module({
   imports: [
@@ -260,6 +261,7 @@ import { RadioOperacionModule } from './modules/radio-operacion/radio-operacion.
 
     // 🆕 Radio Operación
     RadioOperacionModule,
+    ControlAccesoModule,
   ],
   providers: [
     {

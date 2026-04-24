@@ -244,12 +244,20 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
         }
 
         this.socketToSesion.set(client.id, sesionId);
-        this.socketToSesion.set(client.id, sesionId);
 
         // 🌐 Unirse a la sala WebRTC
         client.join(sesionId);
 
-        this.logger.log(`🎙️ Sesión iniciada (${sesion.state}): ${sesionId}`);
+        // 📣 NOTIFICAR AL CLIENTE (APP) EL ID TÁCTICO REAL
+        // Esto obliga a la App a unirse a la sala de LiveKit con este nombre
+        client.emit('session_update', { 
+            sesion_id: sesionId,
+            empleado_id: data.empleado_id,
+            puesto_id: data.puesto_id,
+            state: SessionState.INIT
+        });
+
+        this.logger.log(`📢 Canal Táctico Establecido: ${sesionId} para Socket: ${client.id}`);
 
         // Broadcast a Dashboards
         this.server.emit('nueva_comunicacion', { ...sesion, chunks_recibidos: 0 });
