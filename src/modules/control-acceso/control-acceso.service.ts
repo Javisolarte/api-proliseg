@@ -119,17 +119,19 @@ export class ControlAccesoService {
       return this.proxyRequest('get', `/scan?base=${baseIp}`);
     }
 
-    // Escaneo Total Optimizado (Rangos de 1 a 254 en lotes de 15 para no saturar memoria)
-    this.logger.log('🌐 Iniciando barrido total de redes 192.168.1.x a 192.168.254.x');
+    // Escaneo Inteligente (Subredes más usadas en CCTV e Industria) en lugar de las 254
+    this.logger.log('🌐 Iniciando barrido inteligente de subredes CCTV principales...');
     const allFound: any[] = [];
-    const segments: string[] = [];
-    for (let i = 1; i < 255; i++) {
-      segments.push(`192.168.${i}`);
-    }
+    const segments: string[] = [
+      '192.168.0', '192.168.1', '192.168.2', '192.168.3', '192.168.4', '192.168.5',
+      '192.168.88', '192.168.100', '192.168.254', 
+      '10.0.0', '10.0.1', '10.0.2', '10.1.1', '10.10.10', '10.10.1', '10.20.10', 
+      '172.16.0', '172.16.1'
+    ];
 
-    // Lotes paralelos de 15 subredes (Aprox. 1.2 segundos por lote, total ~20 segundos)
-    for (let i = 0; i < segments.length; i += 15) {
-      const batch = segments.slice(i, i + 15);
+    // Lotes paralelos de subredes (Tomará aprox 2-3 segundos en total)
+    for (let i = 0; i < segments.length; i += 6) {
+      const batch = segments.slice(i, i + 6);
       const promises = batch.map(seg => 
         this.proxyRequest('get', `/scan?base=${seg}`).catch(() => null)
       );
@@ -142,8 +144,8 @@ export class ControlAccesoService {
       });
     }
     
-    this.logger.log(`✅ Barrido completo finalizado. Dispositivos encontrados: ${allFound.length}`);
-    return { target: '192.168.ALL', found: allFound };
+    this.logger.log(`✅ Barrido Express finalizado. Dispositivos encontrados: ${allFound.length}`);
+    return { target: 'Redes Principales CCTV', found: allFound };
   }
 
   async validarEquipo(ip: string, user: string, pass: string): Promise<any> {
