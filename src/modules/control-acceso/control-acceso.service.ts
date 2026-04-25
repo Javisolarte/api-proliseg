@@ -5,32 +5,33 @@ import axios from 'axios';
 export class ControlAccesoService {
   private readonly logger = new Logger(ControlAccesoService.name);
 
-  // Proxy de Hikvision corriendo en Ubuntu (maneja Digest Auth internamente)
-  private readonly proxyUrl = 'http://137.131.171.90:3500';
+  // Proxy de Hikvision corriendo en Ubuntu bajo subdominio corporativo
+  private readonly proxyUrl = 'https://acceso.proliseg.com/puerta';
   private readonly apiKey = 'proliseg-acceso-2026';
 
   /**
    * Abre una puerta específica a través del proxy de Ubuntu
    */
   async abrirPuerta(doorId: number = 1): Promise<any> {
-    const url = `${this.proxyUrl}/abrir/${doorId}`;
+    return this.proxyRequest('post', `/abrir/${doorId}`);
+  }
 
-    this.logger.warn(`🚀 [ABRIR PUERTA ${doorId}] Enviando solicitud al proxy Ubuntu...`);
-    this.logger.log(`📍 URL Proxy: ${url}`);
+  async cerrarPuerta(doorId: number = 1): Promise<any> {
+    return this.proxyRequest('post', `/cerrar/${doorId}`);
+  }
 
+  async siempreAbierta(doorId: number = 1): Promise<any> {
+    return this.proxyRequest('post', `/siempre-abierta/${doorId}`);
+  }
+
+  private async proxyRequest(method: string, path: string): Promise<any> {
+    const url = `${this.proxyUrl}${path}`;
+    this.logger.log(`🚀 [PROXY REQUEST] ${method.toUpperCase()} ${url}`);
     try {
-      const response = await axios.post(url, {}, {
-        headers: { 'X-API-Key': this.apiKey },
-        timeout: 10000,
-      });
-
-      this.logger.log(`✅ [ABRIR PUERTA ${doorId}] Respuesta del proxy: ${JSON.stringify(response.data)}`);
+      const response = await axios({ method, url, headers: { 'X-API-Key': this.apiKey }, timeout: 10000 });
       return response.data;
     } catch (error) {
-      this.logger.error(`❌ [ABRIR PUERTA ${doorId}] Error: ${error.message}`);
-      if (error.response) {
-        this.logger.error(`   HTTP ${error.response.status}: ${JSON.stringify(error.response.data)}`);
-      }
+      this.logger.error(`❌ [PROXY ERROR] ${path}: ${error.message}`);
       throw error;
     }
   }

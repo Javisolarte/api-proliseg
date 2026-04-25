@@ -14,15 +14,19 @@ export class ControlAccesoController {
   @Post('abrir/:id')
   @ApiOperation({ summary: 'Abre una puerta remota' })
   async abrirPuerta(@Param('id') id: string) {
-    this.logger.warn(`🔔 [CONTROLLER] Recibida solicitud de apertura puerta ${id} desde Angular`);
-    try {
-      const result = await this.controlAccesoService.abrirPuerta(parseInt(id));
-      this.logger.log(`✅ [CONTROLLER] Puerta ${id} abierta exitosamente`);
-      return result;
-    } catch (error) {
-      this.logger.error(`❌ [CONTROLLER] Error abriendo puerta ${id}: ${error.message}`);
-      throw error;
-    }
+    return this.controlAccesoService.abrirPuerta(parseInt(id));
+  }
+
+  @Post('cerrar/:id')
+  @ApiOperation({ summary: 'Cierra una puerta remota' })
+  async cerrarPuerta(@Param('id') id: string) {
+    return this.controlAccesoService.cerrarPuerta(parseInt(id));
+  }
+
+  @Post('siempre-abierta/:id')
+  @ApiOperation({ summary: 'Mantiene la puerta abierta' })
+  async siempreAbierta(@Param('id') id: string) {
+    return this.controlAccesoService.siempreAbierta(parseInt(id));
   }
 
   @Get('info')
