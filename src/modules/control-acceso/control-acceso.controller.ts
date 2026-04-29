@@ -10,7 +10,7 @@ import { CreateDispositivoDto, CreatePersonaAccesoDto } from './dto/control-acce
 export class ControlAccesoController {
   private readonly logger = new Logger(ControlAccesoController.name);
 
-  constructor(private readonly controlAccesoService: ControlAccesoService) {}
+  constructor(private readonly controlAccesoService: ControlAccesoService) { }
 
   @Post('comando')
   @ApiOperation({ summary: 'Envía un comando de puerta (abrir, cerrar, bloqueo, siempre-abierta)' })
@@ -57,17 +57,6 @@ export class ControlAccesoController {
     return this.controlAccesoService.validateCredentials(body.ip, body.user, body.pass);
   }
 
-  @Get('scan')
-  @ApiOperation({ summary: 'Escanea la red en busca de dispositivos Hikvision/VMS' })
-  async scanNetwork(@Query('range') range: string) {
-    return this.controlAccesoService.scanNetwork(range);
-  }
-
-  @Post('validar-credenciales')
-  @ApiOperation({ summary: 'Valida usuario y contraseña contra un hardware específico' })
-  async validarCredenciales(@Body() body: { ip: string, user: string, pass: string }) {
-    return this.controlAccesoService.validateCredentials(body.ip, body.user, body.pass);
-  }
 
   @Public()
   @Get('snapshot')
