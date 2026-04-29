@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Param, Res, Logger, Req, Body } from '@nestjs/common';
+import { Controller, Post, Get, Param, Res, Logger, Req, Body, Query } from '@nestjs/common';
 import { ControlAccesoService } from './control-acceso.service';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import type { Response } from 'express';
@@ -12,100 +12,77 @@ export class ControlAccesoController {
 
   constructor(private readonly controlAccesoService: ControlAccesoService) {}
 
-  @Post('abrir-puerta')
-  @ApiOperation({ summary: 'Abre una puerta remota' })
-  async abrirPuerta(@Body() body: { puestoId: number }) {
-    return this.controlAccesoService.abrirPuerta(body.puestoId);
+  @Post('comando')
+  @ApiOperation({ summary: 'Envía un comando de puerta (abrir, cerrar, bloqueo, siempre-abierta)' })
+  async enviarComando(@Body() body: { ip: string, doorId?: number, command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada' }) {
+    this.logger.log(`🚪 [COMANDO] Enviando ${body.command} a la IP ${body.ip}`);
+    return this.controlAccesoService.controlPuerta(body.ip, body.doorId || 1, body.command);
   }
 
   @Get('dispositivos')
-  @ApiOperation({ summary: 'Obtener lista de dispositivos IoT' })
+  @ApiOperation({ summary: 'Obtener lista de dispositivos IoT registrados' })
   async getDispositivos() {
     return this.controlAccesoService.findAllDispositivos();
   }
 
-  @Post('dispositivos')
-  @ApiOperation({ summary: 'Registrar nuevo dispositivo' })
-  async createDispositivo(@Body() dto: CreateDispositivoDto) {
-    return this.controlAccesoService.createDispositivo(dto);
-  }
-
   @Get('personas')
-  @ApiOperation({ summary: 'Obtener lista de personas con acceso' })
+  @ApiOperation({ summary: 'Obtener lista de personas en el sistema' })
   async getPersonas() {
     return this.controlAccesoService.findAllPersonas();
   }
 
-  @Post('personas')
-  @ApiOperation({ summary: 'Sincronizar nueva persona al sistema' })
-  async createPersona(@Body() dto: CreatePersonaAccesoDto) {
-    return this.controlAccesoService.createPersona(dto);
+  @Post('sync-hardware')
+  @ApiOperation({ summary: 'Extrae usuarios y rostros directamente del hardware' })
+  async syncHardware(@Body() body: { ip: string }) {
+    this.logger.log(`🔄 [SYNC] Extrayendo datos del hardware en ${body.ip}`);
+    return this.controlAccesoService.syncUsuariosHardware(body.ip);
   }
 
-  @Get('logs')
-  @ApiOperation({ summary: 'Historial global de accesos y aperturas' })
-  async getLogs() {
-    return this.controlAccesoService.findAllLogs();
+  @Post('subir-rostro')
+  @ApiOperation({ summary: 'Sincroniza foto de rostro al hardware' })
+  async subirRostro(@Body() body: { ip: string, userId: string, faceBase64: string }) {
+    this.logger.log(`👤 [ROSTRO] Subiendo cara para el usuario ${body.userId} en ${body.ip}`);
+    return this.controlAccesoService.uploadRostro(body.ip, body.userId, body.faceBase64);
   }
 
-  @Post('cerrar/:id')
-  @ApiOperation({ summary: 'Cierra una puerta remota' })
-  async cerrarPuerta(@Param('id') id: string) {
-    return this.controlAccesoService.cerrarPuerta(parseInt(id));
+  @Get('scan')
+  @ApiOperation({ summary: 'Escanea la red en busca de dispositivos Hikvision/VMS' })
+  async scanNetwork(@Query('range') range: string) {
+    return this.controlAccesoService.scanNetwork(range);
   }
 
-  @Get('escanear-red')
-  @ApiOperation({ summary: 'Busca equipos en la red a través del túnel' })
-  async escanearRed(@Req() req: any) {
-    const baseIp = req.query.base as string;
-    this.logger.log(`Radar encendido. Buscando equipos en subred: ${baseIp || 'default'}`);
-    return this.controlAccesoService.escanearRed(baseIp);
+  @Post('validar-credenciales')
+  @ApiOperation({ summary: 'Valida usuario y contraseña contra un hardware específico' })
+  async validarCredenciales(@Body() body: { ip: string, user: string, pass: string }) {
+    return this.controlAccesoService.validateCredentials(body.ip, body.user, body.pass);
   }
 
-  @Post('validar-equipo')
-  @ApiOperation({ summary: 'Valida credenciales ISAPI con el equipo real' })
-  async validarEquipo(@Body() body: any) {
-    this.logger.log(`Validando credenciales en IP: ${body.ip}`);
-    return this.controlAccesoService.validarEquipo(body.ip, body.usuario, body.password);
+  @Get('scan')
+  @ApiOperation({ summary: 'Escanea la red en busca de dispositivos Hikvision/VMS' })
+  async scanNetwork(@Query('range') range: string) {
+    return this.controlAccesoService.scanNetwork(range);
   }
 
-  @Post('siempre-abierta/:id')
-  @ApiOperation({ summary: 'Mantiene la puerta abierta' })
-  async siempreAbierta(@Param('id') id: string) {
-    return this.controlAccesoService.siempreAbierta(parseInt(id));
-  }
-
-  @Get('info')
-  @ApiOperation({ summary: 'Obtiene información del dispositivo de acceso' })
-  async getInfo() {
-    this.logger.log(`📡 [CONTROLLER] Solicitando info del dispositivo`);
-    try {
-      const result = await this.controlAccesoService.getDeviceInfo();
-      this.logger.log(`✅ [CONTROLLER] Info del dispositivo obtenida`);
-      return result;
-    } catch (error) {
-      this.logger.error(`❌ [CONTROLLER] Error obteniendo info: ${error.message}`);
-      throw error;
-    }
+  @Post('validar-credenciales')
+  @ApiOperation({ summary: 'Valida usuario y contraseña contra un hardware específico' })
+  async validarCredenciales(@Body() body: { ip: string, user: string, pass: string }) {
+    return this.controlAccesoService.validateCredentials(body.ip, body.user, body.pass);
   }
 
   @Public()
-  @Get('video/snapshot')
-  @ApiOperation({ summary: 'Obtiene fotograma en vivo para el monitor' })
-  async getSnapshot(@Res() res: Response) {
+  @Get('snapshot')
+  @ApiOperation({ summary: 'Obtiene captura en vivo del dispositivo' })
+  async getSnapshot(@Query('ip') ip: string, @Res() res: Response) {
     try {
-      const buffer = await this.controlAccesoService.getSnapshot();
+      const buffer = await this.controlAccesoService.getSnapshot(ip || '192.168.1.117');
       res.set({
         'Content-Type': 'image/jpeg',
         'Content-Length': buffer.length,
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache',
-        'Expires': '0',
+        'Cache-Control': 'no-cache',
       });
       res.send(buffer);
     } catch (error) {
-      this.logger.error(`❌ [CONTROLLER] Error snapshot: ${error.message}`);
-      res.status(500).send({ message: 'Error obteniendo captura de video' });
+      res.status(500).send({ message: 'Error snapshot' });
     }
   }
 }
