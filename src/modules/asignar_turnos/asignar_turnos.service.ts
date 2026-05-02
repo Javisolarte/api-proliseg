@@ -1128,24 +1128,64 @@ export class AsignarTurnosService {
 
     this.logger.log(`🗑️ Se eliminaron ${eliminados} turnos futuros (desde ${fechaReferencia})`);
 
-    // 2. Generar nuevos turnos
+    // 2. Generar nuevos turnos para múltiples meses (desde fechaReferencia hasta fin del próximo mes)
     try {
-      const resultadoGeneracion = await this.asignarTurnos({
-        subpuesto_id,
-        fecha_inicio: fechaReferencia,
-        asignado_por: userId
-      }, undefined, false); // ✅ fillFromMonthStart: false para respetar fecha_inicio
+      const [startYear, startMonth] = fechaReferencia.split('-').map(Number);
+      const hoy = new Date();
+      const endYear = hoy.getFullYear() + (hoy.getMonth() === 11 ? 1 : 0);
+      const endMonth = (hoy.getMonth() + 1) % 12 + 1; // Próximo mes (1-indexed)
+      
+      // Asegurar que endMonth tenga el valor correcto si es diciembre/enero
+      const targetEndMonth = hoy.getMonth() === 11 ? 1 : hoy.getMonth() + 2;
+
+      let currentYear = startYear;
+      let currentMonth = startMonth;
+      let totalGenerados = 0;
+      const detallesGeneracion: { mes: string; generados: number }[] = [];
+
+      this.logger.log(`📅 Iniciando ciclo de generación desde ${currentMonth}/${currentYear} hasta ${targetEndMonth}/${endYear}`);
+
+      while (currentYear < endYear || (currentYear === endYear && currentMonth <= targetEndMonth)) {
+        const fechaInicioMes = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
+        
+        // Para el primer mes, usamos la fechaReferencia exacta. Para los demás, el día 1.
+        const isFirstMonth = currentYear === startYear && currentMonth === startMonth;
+        const fechaIteracion = isFirstMonth ? fechaReferencia : fechaInicioMes;
+        const shouldFillMonth = !isFirstMonth;
+
+        this.logger.log(` month 🚀 Generando mes: ${currentMonth}/${currentYear} (desde ${fechaIteracion}, fill: ${shouldFillMonth})`);
+
+        const resultadoGeneracion = await this.asignarTurnos({
+          subpuesto_id,
+          fecha_inicio: fechaIteracion,
+          asignado_por: userId
+        }, undefined, shouldFillMonth);
+
+        totalGenerados += resultadoGeneracion.total_turnos;
+        detallesGeneracion.push({
+          mes: `${currentMonth}/${currentYear}`,
+          generados: resultadoGeneracion.total_turnos
+        });
+
+        // Avanzar al siguiente mes
+        if (currentMonth === 12) {
+          currentMonth = 1;
+          currentYear++;
+        } else {
+          currentMonth++;
+        }
+      }
 
       return {
-        message: 'Turnos regenerados exitosamente',
+        message: 'Turnos regenerados exitosamente para el periodo solicitado',
         eliminados,
-        generados: resultadoGeneracion.total_turnos,
-        detalle: resultadoGeneracion
+        generados: totalGenerados,
+        periodos: detallesGeneracion
       };
 
     } catch (error: any) {
-      this.logger.error(`❌ Error al regenerar turnos: ${error.message}`);
-      throw new BadRequestException(`Error al regenerar: ${error.message}`);
+      this.logger.error(`❌ Error al regenerar turnos en lote: ${error.message}`);
+      throw new BadRequestException(`Error al regenerar periodos: ${error.message}`);
     }
   }
 
