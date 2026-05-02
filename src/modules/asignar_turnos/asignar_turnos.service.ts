@@ -980,15 +980,45 @@ export class AsignarTurnosService {
       this.logger.warn(`⚠️ Error al desvincular rutas de supervisión: ${err.message}`);
     }
 
-    const { data, error } = await supabase
+    // 1. Identificar turnos que tienen dependencias (rutas, asistencias, minutas, etc.)
+    // Estos turnos NO se eliminarán para evitar errores de FK y pérdida de datos
+    const { data: turnosConDeps } = await supabase
+      .from('turnos')
+      .select('id')
+      .eq('subpuesto_id', subpuesto_id)
+      .gte('fecha', desde)
+      .lte('fecha', hasta)
+      .or('estado_turno.in.(cumplido,parcial),observaciones.neq."",observaciones.not.is.null');
+
+    // También buscar los que tienen rutas de supervisión vinculadas
+    const { data: turnosConRutas } = await supabase
+      .from('rutas_supervision_asignacion')
+      .select('turno_id')
+      .in('turno_id', (await supabase.from('turnos').select('id').eq('subpuesto_id', subpuesto_id).gte('fecha', desde).lte('fecha', hasta)).data?.map(t => t.id) || []);
+
+    const idsBloqueados = new Set([
+      ...(turnosConDeps?.map(t => t.id) || []),
+      ...(turnosConRutas?.map(t => t.turno_id) || [])
+    ]);
+
+    if (idsBloqueados.size > 0) {
+      this.logger.warn(`🛡️ Se omitirá la eliminación de ${idsBloqueados.size} turnos con dependencias activas (rutas, asistencias o notas).`);
+    }
+
+    // 2. Ejecutar eliminación filtrada
+    const query = supabase
       .from('turnos')
       .delete()
       .eq('subpuesto_id', subpuesto_id)
       .gte('fecha', desde)
       .lte('fecha', hasta)
-      .neq('tipo_turno', 'RET') // ✅ NUNCA eliminar turnos de empleados retirados
-      // .eq('estado_turno', 'programado') // Comentado para asegurar limpieza completa en rangos dados
-      .select();
+      .neq('tipo_turno', 'RET');
+
+    if (idsBloqueados.size > 0) {
+      query.not('id', 'in', Array.from(idsBloqueados));
+    }
+
+    const { data, error } = await query.select();
 
     if (error) {
       this.logger.error(`❌ Error eliminando turnos: ${error.message}`);

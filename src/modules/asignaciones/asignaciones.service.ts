@@ -806,6 +806,24 @@ export class AsignacionesService {
 
     if (reasignados > 0) {
       this.logger.log(`🔄 ${reasignados} turnos de la plaza ${plazaTarget} reasignados al nuevo empleado`);
+      
+      // 🚀 SYNC SUPERVISIÓN: Si estos turnos están en rutas de supervisión, actualizar el supervisor
+      try {
+        const idsTurnos = turnosReasignados.map(t => t.id);
+        const { error: syncError } = await supabase
+          .from('rutas_supervision_asignacion')
+          .update({ 
+            supervisor_id: nuevo_empleado_id,
+            updated_at: new Date().toISOString()
+          })
+          .in('turno_id', idsTurnos);
+        
+        if (!syncError) {
+          this.logger.log(`🔗 Sincronización de supervisión completada para ${idsTurnos.length} turnos`);
+        }
+      } catch (err) {
+        this.logger.warn(`⚠️ Error sincronizando supervisión: ${err.message}`);
+      }
     }
 
     return reasignados;

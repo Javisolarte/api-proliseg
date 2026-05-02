@@ -728,6 +728,7 @@ export class RadioOperacionService {
         puesto_nombre: d.puesto_nombre,
         guarda_turno: d.nombre_guarda || d.empleado_nombre_completo || 'Sin asignar',
         cambio_turno: d.cambio_turno,
+        relevo_nombre: d.relevo_nombre || '',
         observaciones: d.observaciones || '',
         chequeos: (d.chequeos || []).map((c: any) => ({
           hora: c.hora_chequeo,
@@ -897,6 +898,10 @@ export class RadioOperacionService {
              .signature-display img { max-height: 50px; margin-bottom: 5px; }
              .sign-line { width: 80%; border-top: 1px solid #1e293b; margin: 5px 0; }
              .footer-sign p { font-size: 9px; font-weight: 600; margin: 0; }
+              
+             /* Prevenir saltos de página en medio de filas */
+             tr { page-break-inside: avoid !important; }
+             .report-header, .info-grid { page-break-inside: avoid; }
           </style>
         </head>
         <body>
@@ -982,7 +987,10 @@ export class RadioOperacionService {
       browser = await this.getBrowser();
       const page = await browser.newPage();
       try {
-        await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
+        await page.setContent(htmlContent, { 
+          waitUntil: ['domcontentloaded', 'networkidle0'],
+          timeout: 60000 
+        });
         const pdfBuffer = await page.pdf({
           format: 'Letter',
           landscape: true,
