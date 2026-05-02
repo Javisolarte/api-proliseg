@@ -282,7 +282,7 @@ export class AsignacionesService {
         const resultadoMapeado = {
           total_turnos: turnosResult.generados,
           empleados: empleadosNecesarios, // Aproximado
-          detalle: turnosResult.detalle
+          detalle: turnosResult.periodos
         };
 
         this.logger.log(
