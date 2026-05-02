@@ -473,7 +473,7 @@ export class AsignarTurnosService {
           // 🔄 FALLBACK: Usar ancla + fase_inicial (para empleados nuevos sin historial)
           const faseIni = (empRaw.fase_inicial !== null && empRaw.fase_inicial !== undefined)
             ? parseInt(empRaw.fase_inicial.toString(), 10)
-            : 0;
+            : (index * offsetPorEmpleado); // 🚀 FIX: Staggered offset for automatic mode
 
           const anchorDateStr = empRaw.fecha_inicio_patron || 
                                (empRaw.created_at ? empRaw.created_at.split('T')[0].substring(0, 8) + '01' : '2026-03-01');

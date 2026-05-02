@@ -201,7 +201,7 @@ export class AsignacionesService {
     const fechaHoy = new Date();
     const primerDiaMes = new Date(fechaHoy.getFullYear(), fechaHoy.getMonth(), 1).toISOString().split('T')[0];
     
-    const fechaInicioEfectiva = dto.fecha_asignacion || primerDiaMes;
+    const fechaInicioEfectiva = dto.fecha_asignacion || dto.fecha_inicio_patron || primerDiaMes;
 
     // ✅ 6. Insertar asignación
     const payload = {
