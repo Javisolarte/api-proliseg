@@ -543,23 +543,27 @@ export class AsignacionesService {
       await supabase.from('empleados').update({ asignado: false }).eq('id', asignacion.empleado_id);
     }
 
-    // 3. ELIMINAR turnos futuros (en lugar de marcarlos como pendientes)
-    // El usuario solicitó: "se eliminen los turnos asignados al empleado"
-    const { data: turnosEliminados, error: turnosError } = await supabase
+    // 3. MARCAR turnos futuros como PENDIENTES (Soft De-assignment)
+    // En lugar de borrar, los dejamos "libres" para que otro guarda los herede
+    const { data: turnosActualizados, error: turnosError } = await supabase
       .from("turnos")
-      .delete()
+      .update({
+        empleado_id: null,
+        estado_turno: "pendiente_asignar",
+        updated_at: new Date().toISOString()
+      })
       .eq("empleado_id", asignacion.empleado_id)
       .eq("subpuesto_id", asignacion.subpuesto_id)
       .gte("fecha", fechaActual)
       .in("estado_turno", ["programado", "pendiente"])
       .select("id");
 
-    const cantidadEliminados = turnosEliminados?.length || 0;
+    const cantidadActualizados = turnosActualizados?.length || 0;
 
     if (turnosError) {
-      this.logger.warn(`⚠️ Error eliminando turnos: ${turnosError.message}`);
+      this.logger.warn(`⚠️ Error actualizando turnos a pendiente: ${turnosError.message}`);
     } else {
-      this.logger.log(`🗑️ ${cantidadEliminados} turnos futuros eliminados para el empleado`);
+      this.logger.log(`🔄 ${cantidadActualizados} turnos futuros liberados para el empleado (marcados como pendientes)`);
     }
 
     this.logger.log(
@@ -567,15 +571,15 @@ export class AsignacionesService {
     );
 
     return {
-      message: "Empleado desasignado exitosamente",
+      message: "Empleado desasignado exitosamente. Los turnos futuros han sido liberados.",
       asignacion: asignacionActualizada,
-      turnos_eliminados: cantidadEliminados,
+      turnos_liberados: cantidadActualizados,
       detalles: {
         empleado: empleado?.nombre_completo,
         subpuesto: subpuesto?.nombre,
         motivo,
         fecha_desasignacion: fechaActual,
-        turnos_eliminados: cantidadEliminados
+        turnos_liberados: cantidadActualizados
       }
     };
   }
@@ -758,8 +762,27 @@ export class AsignacionesService {
     const fechaActual = new Date().toISOString().split('T')[0];
     const fechaFiltro = fecha_inicio || fechaActual;
 
-    // Buscar turnos pendientes de asignación en este subpuesto
-    const { data: turnosPendientes, error } = await supabase
+    // 1. Encontrar cuál es la primera plaza disponible (sin empleado asignado en sus turnos pendientes)
+    // Esto evita que un solo guarda se apropie de todas las plazas vacantes
+    const { data: plazasDisponibles } = await supabase
+      .from("turnos")
+      .select("plaza_no")
+      .eq("subpuesto_id", subpuesto_id)
+      .gte("fecha", fechaFiltro)
+      .eq("estado_turno", "pendiente_asignar")
+      .is("empleado_id", null)
+      .order("plaza_no", { ascending: true })
+      .limit(1);
+
+    if (!plazasDisponibles || plazasDisponibles.length === 0) {
+      this.logger.log(`ℹ️ No se encontraron plazas vacantes (pendiente_asignar) para rellenar en subpuesto ${subpuesto_id}`);
+      return 0;
+    }
+    
+    const plazaTarget = plazasDisponibles[0].plaza_no;
+
+    // 2. Reasignar solo esa plaza específica
+    const { data: turnosReasignados, error } = await supabase
       .from("turnos")
       .update({
         empleado_id: nuevo_empleado_id,
@@ -768,6 +791,7 @@ export class AsignacionesService {
         updated_at: new Date().toISOString()
       })
       .eq("subpuesto_id", subpuesto_id)
+      .eq("plaza_no", plazaTarget) // 🎯 Solo llenamos una plaza por empleado
       .gte("fecha", fechaFiltro)
       .eq("estado_turno", "pendiente_asignar")
       .is("empleado_id", null)
@@ -778,10 +802,10 @@ export class AsignacionesService {
       return 0;
     }
 
-    const reasignados = turnosPendientes?.length || 0;
+    const reasignados = turnosReasignados?.length || 0;
 
     if (reasignados > 0) {
-      this.logger.log(`🔄 ${reasignados} turnos pendientes reasignados al nuevo empleado`);
+      this.logger.log(`🔄 ${reasignados} turnos de la plaza ${plazaTarget} reasignados al nuevo empleado`);
     }
 
     return reasignados;

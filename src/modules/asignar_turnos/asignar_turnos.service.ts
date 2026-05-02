@@ -740,7 +740,7 @@ export class AsignarTurnosService {
         const batch = turnosUnicos.slice(i, i + INSERT_BATCH);
         const { error: insertError } = await supabase
           .from('turnos')
-          .insert(batch);
+          .upsert(batch, { onConflict: 'subpuesto_id,fecha,plaza_no' });
 
         if (insertError) {
           this.logger.error(`❌ Error insertando turnos (lote ${Math.floor(i/INSERT_BATCH)+1}): ${insertError.message}`);
@@ -941,8 +941,8 @@ export class AsignarTurnosService {
   async eliminarTurnos(subpuesto_id: number, desde: string, hasta: string) {
     const supabase = this.supabaseService.getClient();
 
-    // 🛡️ RESTRICCIÓN DE INTEGRIDAD: No permitir eliminar si hay observaciones/cambios manuales
-    const { count: obsCount, error: obsError } = await supabase
+    // 🛡️ RESTRICCIÓN DE SEGURIDAD: Identificar turnos con observaciones para NO borrarlos
+    const { count: obsCount } = await supabase
       .from('turnos')
       .select('id', { count: 'exact', head: true })
       .eq('subpuesto_id', subpuesto_id)
@@ -952,8 +952,7 @@ export class AsignarTurnosService {
       .neq('observaciones', '');
 
     if (obsCount && obsCount > 0) {
-      this.logger.warn(`🚫 Intento de eliminación bloqueado: ${obsCount} turnos tienen observaciones en el rango ${desde} a ${hasta}`);
-      throw new BadRequestException('No se pueden eliminar los turnos porque existen registros con observaciones o cambios manuales en este periodo.');
+      this.logger.warn(`⚠️ Se detectaron ${obsCount} turnos con observaciones. Estos registros NO serán eliminados para preservar la información.`);
     }
 
     // 0. LIMPIEZA DE DEPENDENCIAS: Desvincular de rutas de supervisión para evitar error FK
@@ -963,7 +962,9 @@ export class AsignarTurnosService {
         .select('id')
         .eq('subpuesto_id', subpuesto_id)
         .gte('fecha', desde)
-        .lte('fecha', hasta);
+        .lte('fecha', hasta)
+        .or('observaciones.is.null,observaciones.eq.""'); // 🛡️ SOLO los que NO tienen observaciones
+
 
       if (turnosAEliminar && turnosAEliminar.length > 0) {
         const ids = turnosAEliminar.map(t => t.id);
