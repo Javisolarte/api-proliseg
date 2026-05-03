@@ -334,11 +334,14 @@ export class EntregasInventarioService {
             *,
             detalles:entregas_inventario_detalles(*),
             cliente:clientes(nombre_empresa, nombre_completo, identificacion, direccion),
-            puesto:puestos_trabajo(nombre, codigo_puesto, cliente:clientes(nombre_empresa)),
+            puesto:puestos_trabajo(nombre, codigo_puesto, cliente_id),
             empleado:empleados(nombre_completo, cedula, cargo_oficial)
         `).eq('id', id).single();
 
-        if(error) throw new NotFoundException('Acta no encontrada');
+        if (error) {
+            this.logger.error(`Error in findOne(id: ${id}): ${error.message} - ${error.details} - ${error.hint}`);
+            throw new NotFoundException('Acta no encontrada');
+        }
         return data;
     }
 
