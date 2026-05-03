@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, BadRequestException } from '@nestjs/common';
 import { EntregasInventarioService } from './entregas-inventario.service';
 import { CreateEntregaInventarioDto, DevolucionInventarioDto, DestruccionInventarioDto } from './dto/entrega-inventario.dto';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
@@ -45,5 +45,15 @@ export class EntregasInventarioController {
   @Get('cliente/:id')
   findByCliente(@Param('id') id: string) {
     return this.entregasInventarioService.findComodatosByCliente(+id);
+  }
+
+  @Post(':id/generar-pdf')
+  @ApiOperation({ summary: 'Generar o regenerar el PDF de un acta' })
+  async generarPdf(@Param('id') id: string) {
+    const url = await this.entregasInventarioService.generarActaPdf(+id);
+    if (!url) {
+        throw new BadRequestException('No se pudo generar el PDF del acta. Revise los logs.');
+    }
+    return { url_pdf: url };
   }
 }

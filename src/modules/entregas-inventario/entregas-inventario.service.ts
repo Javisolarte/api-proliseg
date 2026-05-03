@@ -314,7 +314,7 @@ export class EntregasInventarioService {
     }
 
     async findAll() {
-        const supabase = this.supabaseService.getClient();
+        const supabase = this.supabaseService.getSupabaseAdminClient();
         const { data, error } = await supabase.from('entregas_inventario').select(`
             *,
             empleado:empleados(id, nombre_completo),
@@ -329,7 +329,7 @@ export class EntregasInventarioService {
     }
 
     async findOne(id: number) {
-        const supabase = this.supabaseService.getClient();
+        const supabase = this.supabaseService.getSupabaseAdminClient();
         const { data, error } = await supabase.from('entregas_inventario').select(`
             *,
             detalles:entregas_inventario_detalles(*),
@@ -343,7 +343,7 @@ export class EntregasInventarioService {
     }
 
     async findComodatosByCliente(clienteId: number) {
-        const supabase = this.supabaseService.getClient();
+        const supabase = this.supabaseService.getSupabaseAdminClient();
         const { data, error } = await supabase.from('inventario_cliente').select(`
             *,
             variante:articulos_dotacion_variantes(talla, articulo:articulos_dotacion(nombre, codigo, categoria:categorias_dotacion(nombre)))
@@ -357,7 +357,7 @@ export class EntregasInventarioService {
             const acta = await this.findOne(id);
             if (!acta) return null;
 
-            const supabase = this.supabaseService.getClient();
+            const supabase = this.supabaseService.getSupabaseAdminClient();
 
             // Obtener detalles con info del artículo y categoría
             const { data: detallesCompletos } = await supabase
