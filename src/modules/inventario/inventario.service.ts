@@ -208,18 +208,16 @@ export class InventarioService {
                 .select(`
                     id, 
                     nombre, 
-                    marca, 
-                    modelo, 
                     codigo,
+                    descripcion,
                     variantes:articulos_dotacion_variantes(
                         id, 
                         talla, 
-                        stock_actual, 
-                        ubicacion, 
-                        condicion
+                        stock_actual
                     )
                 `)
-                .eq('categoria_id', categoriaId);
+                .eq('categoria_id', categoriaId)
+                .eq('activo', true);
 
             if (!articulos || articulos.length === 0) {
                 throw new NotFoundException(`No hay artículos para la categoría ${categoria.nombre}`);
@@ -262,10 +260,10 @@ export class InventarioService {
                         itemsFormat.push({
                             index: index++,
                             descripcion: art.nombre || 'Sin descripción',
-                            marca_modelo: `${art.marca || ''} ${art.modelo || ''}`.trim() || 'N/A',
+                            marca_modelo: art.codigo || 'N/A',
                             serial: varItem.talla || 'N/A', 
-                            ubicacion: varItem.ubicacion || 'Bodega Principal',
-                            estado: varItem.condicion === 'nuevo' ? 'NUEVO' : 'BUENO',
+                            ubicacion: 'Bodega Principal',
+                            estado: 'BUENO',
                             cantidad: varItem.stock_actual || 0
                         });
                         totalCantidad += varItem.stock_actual || 0;
@@ -274,7 +272,7 @@ export class InventarioService {
                     itemsFormat.push({
                         index: index++,
                         descripcion: art.nombre || 'Sin descripción',
-                        marca_modelo: `${art.marca || ''} ${art.modelo || ''}`.trim() || 'N/A',
+                        marca_modelo: art.codigo || 'N/A',
                         serial: 'N/A',
                         ubicacion: 'Bodega Principal',
                         estado: 'N/A',
