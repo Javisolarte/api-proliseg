@@ -81,17 +81,23 @@ export class CreateVarianteArticuloDto {
     @IsOptional()
     stock_minimo?: number;
 
-    @ApiProperty({ description: 'Stock actual inicial', example: 10, default: 0 })
+    @ApiProperty({ description: 'Stock actual inicial (Total)', example: 10, default: 0 })
     @IsInt()
     @Min(0)
     @IsOptional()
     stock_actual?: number;
 
-    // Note: stock_actual should ideally not be set directly on create, but managed via movements.
-    // However, for initialization it might be useful. The prompt doesn't strictly forbid it,
-    // but implies logic flows through 'inventario_movimientos'.
-    // I will omit stock_actual here to force using the inventory entry process, 
-    // OR allow it with default 0 if not provided.
+    @ApiProperty({ description: 'Stock nuevo inicial', example: 10, default: 0 })
+    @IsInt()
+    @Min(0)
+    @IsOptional()
+    stock_nuevo?: number;
+
+    @ApiProperty({ description: 'Stock de segunda inicial', example: 0, default: 0 })
+    @IsInt()
+    @Min(0)
+    @IsOptional()
+    stock_segunda?: number;
 }
 
 export class UpdateVarianteArticuloDto {
@@ -116,4 +122,16 @@ export class UpdateVarianteArticuloDto {
     @Min(0)
     @IsOptional()
     stock_actual?: number;
+
+    @ApiProperty({ description: 'Stock nuevo', required: false })
+    @IsInt()
+    @Min(0)
+    @IsOptional()
+    stock_nuevo?: number;
+
+    @ApiProperty({ description: 'Stock de segunda', required: false })
+    @IsInt()
+    @Min(0)
+    @IsOptional()
+    stock_segunda?: number;
 }

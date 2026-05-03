@@ -1,10 +1,17 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { CreateInventarioDocumentoDto, CreateInventarioMovimientoDto } from './dto/inventario.dto';
+import { DocumentosGeneradosService } from '../documentos-generados/documentos-generados.service';
+import { EntidadTipo } from '../documentos-generados/dto/documento-generado.dto';
 
 @Injectable()
 export class InventarioService {
-    constructor(private readonly supabaseService: SupabaseService) { }
+    private readonly logger = new Logger(InventarioService.name);
+
+    constructor(
+        private readonly supabaseService: SupabaseService,
+        private readonly documentosService: DocumentosGeneradosService
+    ) { }
 
     // --- DOCUMENTOS ---
 
@@ -178,5 +185,144 @@ export class InventarioService {
             total_variantes: variantes || 0,
             fecha_reporte: new Date()
         };
+    }
+
+    async generarReportePorCategoria(categoriaId: number, userId: number) {
+        try {
+            const supabase = this.supabaseService.getClient();
+
+            // 1. Obtener la categoría
+            const { data: categoria } = await supabase
+                .from('categorias_dotacion')
+                .select('nombre')
+                .eq('id', categoriaId)
+                .single();
+
+            if (!categoria) {
+                throw new NotFoundException(`Categoría no encontrada`);
+            }
+
+            // 2. Obtener los artículos de esta categoría
+            const { data: articulos } = await supabase
+                .from('articulos_dotacion')
+                .select(`
+                    id, 
+                    nombre, 
+                    marca, 
+                    modelo, 
+                    codigo,
+                    variantes:articulos_dotacion_variantes(
+                        id, 
+                        talla, 
+                        stock_actual, 
+                        ubicacion, 
+                        condicion
+                    )
+                `)
+                .eq('categoria_id', categoriaId);
+
+            if (!articulos || articulos.length === 0) {
+                throw new NotFoundException(`No hay artículos para la categoría ${categoria.nombre}`);
+            }
+
+            // 3. Obtener el empleado que genera el reporte
+            const { data: empleado } = await supabase
+                .from('empleados')
+                .select('nombre_completo, cargo_oficial, firma_digital_base64')
+                .eq('id', userId)
+                .single();
+
+            const generadoPor = empleado?.nombre_completo || 'Usuario del Sistema';
+            const cargoGenerador = empleado?.cargo_oficial || 'Administrador';
+            const firmaGenerador = empleado?.firma_digital_base64 ? `data:image/png;base64,${empleado.firma_digital_base64}` : null;
+
+            // 4. Buscar la plantilla SIG-GO-F-20
+            const { data: plantilla } = await supabase
+                .from('plantillas_documentos')
+                .select('id')
+                .eq('nombre', 'SIG-GO-F-20')
+                .eq('activa', true)
+                .order('version', { ascending: false })
+                .limit(1)
+                .single();
+
+            if (!plantilla) {
+                this.logger.warn("No se encontró plantilla activa SIG-GO-F-20");
+                throw new NotFoundException(`Plantilla SIG-GO-F-20 no encontrada`);
+            }
+
+            // 5. Formatear los ítems
+            let itemsFormat: any[] = [];
+            let index = 1;
+            let totalCantidad = 0;
+
+            for (const art of articulos) {
+                if (art.variantes && art.variantes.length > 0) {
+                    for (const varItem of art.variantes) {
+                        itemsFormat.push({
+                            index: index++,
+                            descripcion: art.nombre || 'Sin descripción',
+                            marca_modelo: `${art.marca || ''} ${art.modelo || ''}`.trim() || 'N/A',
+                            serial: varItem.talla || 'N/A', 
+                            ubicacion: varItem.ubicacion || 'Bodega Principal',
+                            estado: varItem.condicion === 'nuevo' ? 'NUEVO' : 'BUENO',
+                            cantidad: varItem.stock_actual || 0
+                        });
+                        totalCantidad += varItem.stock_actual || 0;
+                    }
+                } else {
+                    itemsFormat.push({
+                        index: index++,
+                        descripcion: art.nombre || 'Sin descripción',
+                        marca_modelo: `${art.marca || ''} ${art.modelo || ''}`.trim() || 'N/A',
+                        serial: 'N/A',
+                        ubicacion: 'Bodega Principal',
+                        estado: 'N/A',
+                        cantidad: 0
+                    });
+                }
+            }
+
+            // Formatear fecha
+            const options: Intl.DateTimeFormatOptions = { 
+                timeZone: 'America/Bogota',
+                year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+                hour12: false
+            };
+            const formatter = new Intl.DateTimeFormat('es-CO', options);
+            const dateParts = formatter.formatToParts(new Date());
+            const getPart = (type: string) => dateParts.find(p => p.type === type)?.value;
+            const fechaReporte = `${getPart('day')}/${getPart('month')}/${getPart('year')} ${getPart('hour')}:${getPart('minute')}`;
+
+            const datos = {
+                fecha_reporte: fechaReporte,
+                generado_por: generadoPor,
+                total_items: totalCantidad,
+                items: itemsFormat,
+                firma_generador: firmaGenerador,
+                cargo_generador: cargoGenerador
+            };
+
+            // 6. Crear documento
+            const doc = await this.documentosService.create({
+                plantilla_id: plantilla.id,
+                entidad_tipo: EntidadTipo.EMPLEADO,
+                entidad_id: userId,
+                datos_json: datos
+            });
+
+            // 7. Generar PDF
+            const pdfResult = await this.documentosService.generarPdf(doc.id);
+
+            return { 
+                url_pdf: pdfResult?.url_pdf || null,
+                mensaje: `Reporte generado para ${categoria.nombre}`
+            };
+
+        } catch (error) {
+            this.logger.error("Error al generar reporte por categoría:", error);
+            throw error;
+        }
     }
 }

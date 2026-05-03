@@ -109,6 +109,7 @@ import { VerificacionReferenciasModule } from './modules/verificacion-referencia
 import { VisitasTecnicasModule } from './modules/visitas-tecnicas/visitas-tecnicas.module';
 import { VisitasPreliminareModule } from './modules/visitas-preliminares/visitas-preliminares.module';
 import { InventarioPuestoModule } from './modules/inventario-puesto/inventario-puesto.module';
+import { EntregasInventarioModule } from './modules/entregas-inventario/entregas-inventario.module';
 
 // 🆕 Production modules
 import { HealthModule } from './modules/health/health.module';
@@ -250,6 +251,7 @@ import { ControlAccesoModule } from './modules/control-acceso/control-acceso.mod
     VisitasTecnicasModule,
     VisitasPreliminareModule,
     InventarioPuestoModule,
+    EntregasInventarioModule,
 
     // 🆕 Production-ready modules
     HealthModule,

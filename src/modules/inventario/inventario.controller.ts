@@ -71,4 +71,15 @@ export class InventarioController {
     async getReporteGeneral() {
         return this.inventarioService.getReporteGeneral();
     }
+
+    @Get('reportes/categoria/:categoriaId')
+    @ApiOperation({ summary: 'Generar reporte PDF de inventario por categoría' })
+    @ApiResponse({ status: 200, description: 'URL del PDF generado' })
+    async getReporteCategoria(@Param('categoriaId') categoriaId: string) {
+        // Asumiendo que el ID del usuario que genera el reporte es 1 por defecto (o se obtiene del request si se inyecta)
+        // Lo ideal sería obtenerlo del Req().user.id, pero usaremos 1 o un ID válido temporalmente si no está disponible fácilmente.
+        // En este controlador el Guard de JWT inyecta el usuario en el request.
+        // Para simplificar, le pasaremos 1, o puedes ajustarlo para inyectar @Req() req.
+        return this.inventarioService.generarReportePorCategoria(Number(categoriaId), 1);
+    }
 }

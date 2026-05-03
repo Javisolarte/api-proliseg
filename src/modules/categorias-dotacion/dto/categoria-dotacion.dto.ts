@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsNumber, IsIn } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateCategoriaDotacionDto {
@@ -11,6 +11,22 @@ export class CreateCategoriaDotacionDto {
     @IsString()
     @IsOptional()
     descripcion?: string;
+
+    @ApiProperty({ description: 'ID de la plantilla para el acta', required: false })
+    @IsNumber()
+    @IsOptional()
+    plantilla_acta_id?: number;
+
+    @ApiProperty({ description: 'ID de la plantilla para el reporte', required: false })
+    @IsNumber()
+    @IsOptional()
+    plantilla_reporte_id?: number;
+
+    @ApiProperty({ description: 'Tipo de destinatario por defecto', enum: ['empleado', 'puesto', 'cliente'], required: false })
+    @IsString()
+    @IsOptional()
+    @IsIn(['empleado', 'puesto', 'cliente'])
+    tipo_destinatario_default?: string;
 }
 
 export class UpdateCategoriaDotacionDto {
@@ -23,4 +39,20 @@ export class UpdateCategoriaDotacionDto {
     @IsString()
     @IsOptional()
     descripcion?: string;
+
+    @ApiProperty({ description: 'ID de la plantilla para el acta', required: false })
+    @IsNumber()
+    @IsOptional()
+    plantilla_acta_id?: number;
+
+    @ApiProperty({ description: 'ID de la plantilla para el reporte', required: false })
+    @IsNumber()
+    @IsOptional()
+    plantilla_reporte_id?: number;
+
+    @ApiProperty({ description: 'Tipo de destinatario por defecto', enum: ['empleado', 'puesto', 'cliente'], required: false })
+    @IsString()
+    @IsOptional()
+    @IsIn(['empleado', 'puesto', 'cliente'])
+    tipo_destinatario_default?: string;
 }
