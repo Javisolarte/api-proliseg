@@ -17,10 +17,16 @@ export class EntregasInventarioService {
         const supabase = this.supabaseService.getClient();
 
         // Obtener datos del empleado que está creando el acta (quien entrega)
-        const { data: empleadoCreador } = await supabase.from('empleados').select('nombre_completo, firma_digital_base64, cargo_oficial').eq('id', userId).single();
+        const { data: empleadoCreador } = await supabase
+            .from('empleados')
+            .select('nombre_completo, firma_digital_base64, cargo_oficial, cedula')
+            .eq('usuario_id', userId)
+            .single();
+
         const nombreEntrega = empleadoCreador?.nombre_completo || 'Funcionario Proliseg';
         const firmaEntrega = empleadoCreador?.firma_digital_base64 || null;
         const cargoEntrega = empleadoCreador?.cargo_oficial || 'Funcionario';
+        const cedulaEntrega = empleadoCreador?.cedula || '';
 
         // 1. Crear el registro maestro de la entrega
         const codigoActa = `ENT-${Date.now()}`;
@@ -42,7 +48,10 @@ export class EntregasInventarioService {
                 cargo_entrega: cargoEntrega,
                 firma_recibe: createDto.firma_cliente_base64 || null,
                 nombre_recibe: createDto.nombre_cliente || null,
-                cargo_recibe: createDto.cargo_cliente || null
+                cargo_recibe: createDto.cargo_cliente || null,
+                cedula_entrega: cedulaEntrega,
+                cedula_recibe: createDto.cedula_recibe || '',
+                fotos_evidencia: createDto.fotos_evidencia || null
             })
             .select()
             .single();
@@ -140,7 +149,12 @@ export class EntregasInventarioService {
         const codigoActa = `DEV-${Date.now()}`;
 
         // Obtener datos del empleado que está creando el acta (quien RECIBE en una devolución)
-        const { data: empleadoCreador } = await supabase.from('empleados').select('nombre_completo, firma_digital_base64, cargo_oficial').eq('id', userId).single();
+        const { data: empleadoCreador } = await supabase
+            .from('empleados')
+            .select('nombre_completo, firma_digital_base64, cargo_oficial')
+            .eq('usuario_id', userId)
+            .single();
+
         const nombreRecibe = empleadoCreador?.nombre_completo || 'Funcionario Proliseg';
         const firmaRecibe = empleadoCreador?.firma_digital_base64 || null;
         const cargoRecibe = empleadoCreador?.cargo_oficial || 'Funcionario';
@@ -272,7 +286,10 @@ export class EntregasInventarioService {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase.from('entregas_inventario').select(`
             *,
-            detalles:entregas_inventario_detalles(*)
+            detalles:entregas_inventario_detalles(*),
+            cliente:clientes(nombre_empresa, nombre_completo, identificacion, direccion),
+            puesto:puestos_trabajo(nombre, codigo_puesto, cliente:clientes(nombre_empresa)),
+            empleado:empleados(nombre_completo, cedula, cargo_oficial)
         `).eq('id', id).single();
 
         if(error) throw new NotFoundException('Acta no encontrada');
@@ -296,19 +313,53 @@ export class EntregasInventarioService {
 
             const supabase = this.supabaseService.getClient();
 
-            // Buscar la plantilla (SIG-GO-F-19)
-            const { data: plantilla } = await supabase
-                .from('plantillas_documentos')
-                .select('id')
-                .eq('nombre', 'SIG-GO-F-19')
-                .eq('activa', true)
-                .order('version', { ascending: false })
-                .limit(1)
-                .single();
+            // Obtener detalles con info del artículo y categoría
+            const { data: detallesCompletos } = await supabase
+                .from('entregas_inventario_detalles')
+                .select(`
+                    *,
+                    variante:articulos_dotacion_variantes(
+                        talla,
+                        articulo:articulos_dotacion(
+                            nombre,
+                            codigo,
+                            descripcion,
+                            metadata,
+                            categoria:categorias_dotacion(
+                                id,
+                                nombre,
+                                plantilla_acta_id
+                            )
+                        )
+                    )
+                `)
+                .eq('entrega_id', id);
 
-            if (!plantilla) {
-                this.logger.warn("No se encontró plantilla activa SIG-GO-F-19");
-                return null;
+            // Determinar la plantilla correcta: usar la categoría del primer artículo
+            let plantillaId: number | null = null;
+            if (detallesCompletos && detallesCompletos.length > 0) {
+                const primerCategoria = detallesCompletos[0]?.variante?.articulo?.categoria;
+                if (primerCategoria?.plantilla_acta_id) {
+                    plantillaId = primerCategoria.plantilla_acta_id;
+                }
+            }
+
+            // Fallback: buscar SIG-GO-F-19 si no hay plantilla en la categoría
+            if (!plantillaId) {
+                const { data: plantillaDefault } = await supabase
+                    .from('plantillas_documentos')
+                    .select('id')
+                    .eq('nombre', 'SIG-GO-F-19')
+                    .eq('activa', true)
+                    .order('version', { ascending: false })
+                    .limit(1)
+                    .single();
+
+                if (!plantillaDefault) {
+                    this.logger.warn("No se encontró plantilla activa SIG-GO-F-19 ni plantilla por categoría");
+                    return null;
+                }
+                plantillaId = plantillaDefault.id;
             }
 
             // Formatear fechas
@@ -346,19 +397,35 @@ export class EntregasInventarioService {
                 lugarActa = acta.empleado?.nombre_completo || 'Sede principal';
             }
 
-            // Formatear items para la tabla (Handlebars iterará sobre 'items')
-            const itemsFormatted = acta.detalles?.map((d: any) => ({
-                cantidad: d.cantidad,
-                descripcion: d.variante?.articulo?.nombre || 'Artículo sin descripción',
-                serial: d.variante?.talla || 'N/A', // O el serial real si existe
-                estado: d.condicion === 'nuevo' ? 'NUEVO' : 'BUENO'
-            })) || [];
+            // Formatear items para la tabla usando detalles enriquecidos
+            const itemsSource = detallesCompletos || acta.detalles || [];
+            const itemsFormatted = itemsSource.map((d: any) => {
+                const art = d.variante?.articulo;
+                const meta = art?.metadata || {};
+                const marca = meta.marca || '';
+                const modelo = meta.modelo || '';
+                const serial = meta.serial || '';
+                const marcaModeloSerial = [marca, modelo, serial].filter(Boolean).join(' / ') || d.variante?.talla || 'N/A';
+                const nombre = art?.nombre || 'Artículo sin descripción';
+                const codigo = art?.codigo || '';
+                const descripcionFull = codigo ? `[${codigo}] ${nombre}` : nombre;
+
+                return {
+                    cantidad: d.cantidad,
+                    descripcion: descripcionFull,
+                    serial: marcaModeloSerial,
+                    estado: d.condicion === 'nuevo' ? 'NUEVO' : 'BUENO'
+                };
+            });
 
             const ensureBase64Prefix = (signature: string | null) => {
                 if (!signature) return null;
                 if (signature.startsWith('data:image')) return signature;
                 return `data:image/png;base64,${signature}`;
             };
+
+            // Obtener fotos de evidencia (almacenadas en el acta)
+            const fotosEvidencia: string[] = (acta as any).fotos_evidencia || [];
 
             const datos = {
                 fecha_acta: fechaActa,
@@ -374,16 +441,18 @@ export class EntregasInventarioService {
                 cargo_entrega: acta.cargo_entrega || 'No especificado',
                 nombre_recibe: acta.nombre_recibe || 'No especificado',
                 cargo_recibe: acta.cargo_recibe || 'No especificado',
+                id_entrega: acta.cedula_entrega || '',
+                id_recibe: acta.cedula_recibe || '',
                 items: itemsFormatted,
                 observaciones: acta.observaciones || 'Sin observaciones.',
-                fotos_evidencia_urls: [], // Opcional, si agregamos tabla de evidencias luego
+                fotos_evidencia_urls: fotosEvidencia,
                 firma_entrega: ensureBase64Prefix(acta.firma_entrega),
                 firma_recibe: ensureBase64Prefix(acta.firma_recibe)
             };
 
             // Crear registro en documentos_generados
             const doc = await this.documentosService.create({
-                plantilla_id: plantilla.id,
+                plantilla_id: Number(plantillaId),
                 entidad_tipo: entidadTipo,
                 entidad_id: entidadId || 0,
                 datos_json: datos

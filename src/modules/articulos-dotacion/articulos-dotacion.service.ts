@@ -19,7 +19,8 @@ export class ArticulosDotacionService {
             .from('articulos_dotacion')
             .select(`
         *,
-        categoria:categorias_dotacion(id, nombre)
+        categoria:categorias_dotacion(id, nombre),
+        variantes:articulos_dotacion_variantes(id, talla, stock_actual, stock_nuevo, stock_segunda)
       `)
             .order('nombre', { ascending: true });
 

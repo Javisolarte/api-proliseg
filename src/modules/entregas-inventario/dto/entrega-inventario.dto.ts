@@ -76,6 +76,16 @@ export class CreateEntregaInventarioDto {
     @IsString()
     @IsOptional()
     cargo_cliente?: string;
+
+    @ApiProperty({ description: 'Cédula de quien recibe', required: false })
+    @IsString()
+    @IsOptional()
+    cedula_recibe?: string;
+
+    @ApiProperty({ description: 'URLs o base64 de fotos de evidencia', required: false })
+    @IsArray()
+    @IsOptional()
+    fotos_evidencia?: string[];
 }
 
 export class DevolucionInventarioDto {
