@@ -225,7 +225,6 @@ export class InventarioService {
             }
 
             // 3. Obtener el empleado vinculado al usuario
-            // Primero intentamos con empleadoId directo (del JWT guard), si no, buscamos por usuario_id
             let empleado: any = null;
             if (empleadoId) {
                 const { data } = await supabase
@@ -243,7 +242,7 @@ export class InventarioService {
                     .single();
                 empleado = data;
             }
-            // Fallback al nombre del usuario_externo si no hay empleado
+
             let generadoPor = 'Usuario del Sistema';
             let cedulaGenerador = '';
             let cargoGenerador = 'Administrador';
@@ -253,11 +252,15 @@ export class InventarioService {
                 generadoPor = empleado.nombre_completo;
                 cedulaGenerador = empleado.cedula || '';
                 cargoGenerador = empleado.cargo_oficial || 'Operador';
-                firmaGenerador = empleado.firma_digital_base64 
-                    ? `data:image/png;base64,${empleado.firma_digital_base64}` 
-                    : null;
+                
+                // 🔥 Corregir prefijo de firma para evitar duplicidad o falta de formato
+                if (empleado.firma_digital_base64) {
+                    const rawFirma = empleado.firma_digital_base64;
+                    firmaGenerador = rawFirma.startsWith('data:image') 
+                        ? rawFirma 
+                        : `data:image/png;base64,${rawFirma}`;
+                }
             } else if (userId) {
-                // Buscar en usuarios_externos como fallback
                 const { data: usuario } = await supabase
                     .from('usuarios_externos')
                     .select('nombre_completo')
@@ -295,11 +298,18 @@ export class InventarioService {
                 const ubicacion = meta.ubicacion || 'Bodega Principal';
                 const condicion = meta.condicion || 'Bueno';
 
+                // 🔥 Mejorar descripción: Código - Nombre | Detalle
+                const fullDescripcion = [
+                    art.codigo ? `[${art.codigo}]` : '',
+                    art.nombre,
+                    art.descripcion ? `(${art.descripcion})` : ''
+                ].filter(Boolean).join(' ');
+
                 if (art.variantes && art.variantes.length > 0) {
                     for (const varItem of art.variantes) {
                         itemsFormat.push({
                             index: index++,
-                            descripcion: art.nombre || 'Sin descripción',
+                            descripcion: fullDescripcion,
                             marca_modelo: marcaModelo,
                             serial: serial !== 'N/A' ? serial : (varItem.talla || 'N/A'),
                             ubicacion: ubicacion,
@@ -311,7 +321,7 @@ export class InventarioService {
                 } else {
                     itemsFormat.push({
                         index: index++,
-                        descripcion: art.nombre || 'Sin descripción',
+                        descripcion: fullDescripcion,
                         marca_modelo: marcaModelo,
                         serial: serial,
                         ubicacion: ubicacion,

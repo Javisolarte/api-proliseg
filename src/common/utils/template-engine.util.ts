@@ -19,16 +19,22 @@ export class TemplateEngine {
 
         // 3. Replace all {{variable}} placeholders in one pass
         // This handles {{ var }} with whitespace and nested properties {{ user.name }}
-        html = html.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (match, path) => {
-            const value = TemplateEngine.getValueByPath(data, path);
+        // 🔥 Soporte para {{this.prop}} y {{this}}
+        html = html.replace(/\{\{\s*([#/@]?[a-zA-Z0-9_.]+)\s*\}\}/g, (match, path) => {
+            // Limpiar prefijo 'this.' si existe
+            const cleanPath = path.startsWith('this.') ? path.substring(5) : path;
+            
+            if (cleanPath === 'this') return String(data || '');
+
+            const value = TemplateEngine.getValueByPath(data, cleanPath);
             if (value === undefined || value === null) {
-                // If it looks like a helper or is already processed, leave it
-                if (path.startsWith('#') || path.startsWith('/') || path === 'else' || path === 'this') {
+                // Si parece un helper o ya está procesado, dejarlo
+                if (path.startsWith('#') || path.startsWith('/') || path === 'else') {
                     return match;
                 }
-                return ''; // Undefined variables become empty string
+                return ''; // Variables no definidas se vuelven string vacío
             }
-            if (Array.isArray(value)) return match; // Arrays are for #each
+            if (Array.isArray(value)) return match; // Los arrays son para #each
             return String(value);
         });
 
@@ -39,9 +45,12 @@ export class TemplateEngine {
      * Get value from object by path (desc.name)
      */
     private static getValueByPath(obj: any, path: string): any {
-        if (!path) return undefined;
+        if (!path || path === 'this') return obj;
         try {
-            return path.split('.').reduce((prev, curr) => {
+            // 🔥 Manejar prefijo 'this.'
+            const cleanPath = path.startsWith('this.') ? path.substring(5) : path;
+            
+            return cleanPath.split('.').reduce((prev, curr) => {
                 return (prev && prev[curr] !== undefined) ? prev[curr] : undefined;
             }, obj);
         } catch (e) {
@@ -70,8 +79,15 @@ export class TemplateEngine {
                 // If item is an object, replace {{key}} with item.key
                 if (typeof item === 'object' && item !== null) {
                     itemHtml = itemHtml.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (match, key) => {
-                        const val = TemplateEngine.getValueByPath(item, key);
-                        return val !== undefined ? String(val) : match;
+                        // 🔥 Manejar prefijo 'this.' dentro del each
+                        const cleanKey = key.startsWith('this.') ? key.substring(5) : key;
+                        
+                        const val = TemplateEngine.getValueByPath(item, cleanKey);
+                        if (val !== undefined) return String(val);
+                        
+                        // Si no está en el item, tal vez esté en el root data?
+                        const rootVal = TemplateEngine.getValueByPath(data, cleanKey);
+                        return rootVal !== undefined ? String(rootVal) : match;
                     });
                 }
                 
