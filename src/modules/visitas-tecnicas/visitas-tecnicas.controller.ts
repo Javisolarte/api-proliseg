@@ -1,5 +1,6 @@
-import { Controller, Get, Post, Patch, Body, Param, UseGuards, ParseIntPipe, Query } from "@nestjs/common";
+import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, ParseIntPipe, Query, UseInterceptors, UploadedFile, BadRequestException } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from "@nestjs/swagger";
+import { FileInterceptor } from "@nestjs/platform-express";
 import { VisitasTecnicasService } from "./visitas-tecnicas.service";
 import { CreateVisitaTecnicaDto, UpdateVisitaTecnicaDto } from "./dto/visita-tecnica.dto";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
@@ -97,6 +98,16 @@ export class VisitasTecnicasController {
         return this.visitasService.notificarVisita(id, canales);
     }
 
+    @Patch(":id")
+    @RequirePermissions("visitas")
+    @ApiOperation({ summary: "Actualizar visita técnica (Reprogramar/Editar)" })
+    async update(
+        @Param("id", ParseIntPipe) id: number,
+        @Body() body: UpdateVisitaTecnicaDto
+    ) {
+        return this.visitasService.update(id, body);
+    }
+
     @Post(":id/finalizar")
     @RequirePermissions("visitas")
     @ApiOperation({ summary: "Finalizar visita técnica desde la web (con firmas)" })
@@ -112,14 +123,20 @@ export class VisitasTecnicasController {
 
     @Post(":id/foto-evidencia")
     @RequirePermissions("visitas")
-    @ApiOperation({ summary: "Subir foto de evidencia" })
+    @ApiOperation({ summary: "Subir foto de evidencia física" })
+    @UseInterceptors(FileInterceptor('file'))
     async subirFotoEvidencia(
         @Param("id", ParseIntPipe) id: number,
-        @Body() body: any
+        @UploadedFile() file: any
     ) {
-        if (body.url) {
-            return this.visitasService.subirEvidencia(id, body.url);
-        }
-        throw new Error("URL de la foto es requerida");
+        if (!file) throw new BadRequestException("El archivo es requerido");
+        return this.visitasService.subirEvidenciaFile(id, file);
+    }
+
+    @Delete(":id")
+    @RequirePermissions("visitas")
+    @ApiOperation({ summary: "Eliminar visita técnica" })
+    async remove(@Param("id", ParseIntPipe) id: number) {
+        return this.visitasService.remove(id);
     }
 }

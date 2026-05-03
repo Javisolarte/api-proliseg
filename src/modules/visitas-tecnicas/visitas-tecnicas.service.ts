@@ -229,6 +229,28 @@ export class VisitasTecnicasService {
         }
     }
 
+
+    async update(id: number, updateDto: UpdateVisitaTecnicaDto) {
+        try {
+            const supabase = this.supabaseService.getClient();
+            const { data, error } = await supabase
+                .from("visitas_tecnicas_puesto")
+                .update(updateDto)
+                .eq("id", id)
+                .select()
+                .single();
+
+            if (error) {
+                this.logger.error(`❌ Error actualizando visita ${id}:`, error);
+                throw new BadRequestException(`No se pudo actualizar la visita: ${error.message}`);
+            }
+            return data;
+        } catch (error) {
+            this.logger.error(`Error en update(${id}):`, error);
+            throw error;
+        }
+    }
+
     async registrarSalida(id: number, updateDto: UpdateVisitaTecnicaDto) {
         try {
             const supabase = this.supabaseService.getClient();
@@ -430,7 +452,7 @@ export class VisitasTecnicasService {
             .from("visitas_tecnicas_puesto")
             .update({
                 fotos_evidencia_urls: nuevasFotos,
-                estado: 'en_proceso',
+                estado: 'en_curso',
                 fecha_llegada: new Date().toISOString()
             })
             .eq("id", id)
@@ -694,6 +716,22 @@ export class VisitasTecnicasService {
         }
 
         return { ...data, mensaje: 'Visita finalizada exitosamente.' };
+    }
+
+    async remove(id: number) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from("visitas_tecnicas_puesto")
+            .delete()
+            .eq("id", id)
+            .select()
+            .single();
+
+        if (error) {
+            this.logger.error(`❌ Error eliminando visita ${id}:`, error);
+            throw new BadRequestException(`No se pudo eliminar la visita: ${error.message}`);
+        }
+        return data;
     }
 }
 
