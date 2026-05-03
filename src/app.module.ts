@@ -91,6 +91,7 @@ import { PlantillasModule } from './modules/plantillas/plantillas.module';
 import { DocumentosGeneradosModule } from './modules/documentos-generados/documentos-generados.module';
 import { FirmasModule } from './modules/firmas/firmas.module';
 import { CotizacionesModule } from './modules/cotizaciones/cotizaciones.module';
+import { ClientesPotencialesModule } from './modules/clientes-potenciales/clientes-potenciales.module';
 
 // 🆕 New modules - Access control & residential
 import { ResidentesModule } from './modules/residentes/residentes.module';
@@ -230,6 +231,7 @@ import { ControlAccesoModule } from './modules/control-acceso/control-acceso.mod
     DocumentosGeneradosModule,
     FirmasModule,
     CotizacionesModule,
+    ClientesPotencialesModule,
 
     // 🆕 Access control & residential modules
     ResidentesModule,

@@ -1,5 +1,5 @@
 import { ApiProperty, PartialType } from "@nestjs/swagger"
-import { IsString, IsOptional, IsInt, IsBoolean } from "class-validator"
+import { IsString, IsOptional, IsInt, IsBoolean, IsEmail, MinLength } from "class-validator"
 
 export class CreateClienteDto {
   @ApiProperty({ example: 1, required: false })
@@ -26,6 +26,11 @@ export class CreateClienteDto {
   @IsString()
   telefono?: string
 
+  @ApiProperty({ example: "correo@empresa.com", required: false })
+  @IsOptional()
+  @IsEmail()
+  email?: string
+
   @ApiProperty({ example: "María González", required: false })
   @IsOptional()
   @IsString()
@@ -35,6 +40,18 @@ export class CreateClienteDto {
   @IsOptional()
   @IsBoolean()
   activo?: boolean
+
+  // Campos para la creación automática de usuario
+  @ApiProperty({ example: "login@empresa.com", required: false })
+  @IsOptional()
+  @IsEmail()
+  access_email?: string
+
+  @ApiProperty({ example: "password123", required: false })
+  @IsOptional()
+  @IsString()
+  @MinLength(6)
+  password?: string
 }
 
 export class UpdateClienteDto extends PartialType(CreateClienteDto) {}
