@@ -298,18 +298,13 @@ export class InventarioService {
                 const ubicacion = meta.ubicacion || 'Bodega Principal';
                 const condicion = meta.condicion || 'Bueno';
 
-                // 🔥 Mejorar descripción: Código - Nombre | Detalle
-                const fullDescripcion = [
-                    art.codigo ? `[${art.codigo}]` : '',
-                    art.nombre,
-                    art.descripcion ? `(${art.descripcion})` : ''
-                ].filter(Boolean).join(' ');
-
                 if (art.variantes && art.variantes.length > 0) {
                     for (const varItem of art.variantes) {
                         itemsFormat.push({
                             index: index++,
-                            descripcion: fullDescripcion,
+                            codigo: art.codigo || 'N/A',
+                            nombre: art.nombre || 'Sin nombre',
+                            descripcion: art.descripcion || '',
                             marca_modelo: marcaModelo,
                             serial: serial !== 'N/A' ? serial : (varItem.talla || 'N/A'),
                             ubicacion: ubicacion,
@@ -321,7 +316,9 @@ export class InventarioService {
                 } else {
                     itemsFormat.push({
                         index: index++,
-                        descripcion: fullDescripcion,
+                        codigo: art.codigo || 'N/A',
+                        nombre: art.nombre || 'Sin nombre',
+                        descripcion: art.descripcion || '',
                         marca_modelo: marcaModelo,
                         serial: serial,
                         ubicacion: ubicacion,
