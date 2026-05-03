@@ -107,6 +107,7 @@ import { VerificacionReferenciasModule } from './modules/verificacion-referencia
 
 // 🆕 New modules - Operations & Maintenance
 import { VisitasTecnicasModule } from './modules/visitas-tecnicas/visitas-tecnicas.module';
+import { VisitasPreliminareModule } from './modules/visitas-preliminares/visitas-preliminares.module';
 import { InventarioPuestoModule } from './modules/inventario-puesto/inventario-puesto.module';
 
 // 🆕 Production modules
@@ -247,6 +248,7 @@ import { ControlAccesoModule } from './modules/control-acceso/control-acceso.mod
 
     // 🆕 Operations & Maintenance modules
     VisitasTecnicasModule,
+    VisitasPreliminareModule,
     InventarioPuestoModule,
 
     // 🆕 Production-ready modules
