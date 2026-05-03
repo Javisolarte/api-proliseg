@@ -18,10 +18,11 @@ export class ArticulosDotacionService {
         const { data, error } = await supabase
             .from('articulos_dotacion')
             .select(`
-        *,
-        categoria:categorias_dotacion(id, nombre),
-        variantes:articulos_dotacion_variantes(id, talla, stock_actual, stock_nuevo, stock_segunda)
-      `)
+                *,
+                categoria:categorias_dotacion(id, nombre),
+                variantes:articulos_dotacion_variantes(id, talla, stock_actual, stock_nuevo, stock_segunda)
+            `)
+            .eq('activo', true)
             .order('nombre', { ascending: true });
 
         if (error) throw error;
