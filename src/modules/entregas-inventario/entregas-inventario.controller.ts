@@ -14,21 +14,21 @@ export class EntregasInventarioController {
   @Post()
   @ApiOperation({ summary: 'Crear una nueva acta de entrega' })
   create(@Body() createDto: CreateEntregaInventarioDto, @Req() req: any) {
-    const userId = req.user?.sub;
+    const userId = req.user?.id || req.user?.sub;
     return this.entregasInventarioService.create(createDto, userId);
   }
 
   @Post('devolucion')
   @ApiOperation({ summary: 'Registrar la devolución de artículos y generar acta de recibido' })
   devolucion(@Body() devolucionDto: DevolucionInventarioDto, @Req() req: any) {
-    const userId = req.user?.sub;
+    const userId = req.user?.id || req.user?.sub;
     return this.entregasInventarioService.procesarDevolucion(devolucionDto, userId);
   }
 
   @Post('destruccion')
   @ApiOperation({ summary: 'Registrar la baja o destrucción de un artículo' })
   destruccion(@Body() destruccionDto: DestruccionInventarioDto, @Req() req: any) {
-    const userId = req.user?.sub;
+    const userId = req.user?.id || req.user?.sub;
     return this.entregasInventarioService.procesarDestruccion(destruccionDto, userId);
   }
 
