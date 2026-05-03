@@ -13,6 +13,44 @@ export class EntregasInventarioService {
         private readonly documentosService: DocumentosGeneradosService
     ) { }
 
+    /**
+     * Sube fotos de evidencia al bucket de Supabase
+     */
+    private async uploadEvidencePhotos(photosBase64: string[], actaId: number): Promise<string[]> {
+        if (!photosBase64 || photosBase64.length === 0) return [];
+        
+        const urls: string[] = [];
+        const bucket = 'evidencias';
+        
+        for (let i = 0; i < photosBase64.length; i++) {
+            const base64 = photosBase64[i];
+            if (!base64.startsWith('data:image')) continue;
+
+            try {
+                const matches = base64.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+                if (!matches || matches.length !== 3) continue;
+
+                const mimeType = matches[1];
+                const buffer = Buffer.from(matches[2], 'base64');
+                const extension = mimeType.split('/')[1] || 'png';
+                const fileName = `entregas/${actaId}/evidencia_${i}_${Date.now()}.${extension}`;
+
+                // Subir al bucket
+                await this.supabaseService.uploadFile(bucket, fileName, buffer, mimeType);
+                
+                // Obtener URL pública (asumiendo que el bucket evidencias es público o accesible vía link)
+                // Si el bucket es privado, necesitaríamos generar URLs firmadas cada vez que veamos el acta,
+                // pero por simplicidad usaremos la URL pública si el bucket lo permite, o el path.
+                const { data } = this.supabaseService.getClient().storage.from(bucket).getPublicUrl(fileName);
+                urls.push(data.publicUrl);
+            } catch (error) {
+                this.logger.error(`Error subiendo foto ${i}: ${error.message}`);
+            }
+        }
+        
+        return urls;
+    }
+
     async create(createDto: CreateEntregaInventarioDto, userId: number) {
         const supabase = this.supabaseService.getClient();
 
@@ -28,7 +66,15 @@ export class EntregasInventarioService {
         const cargoEntrega = empleadoCreador?.cargo_oficial || 'Funcionario';
         const cedulaEntrega = empleadoCreador?.cedula || '';
 
-        // 1. Crear el registro maestro de la entrega
+        // 1. Procesar fotos (subir al bucket si existen)
+        let fotosEvidenciaUrls: string[] = [];
+        if (createDto.fotos_evidencia && createDto.fotos_evidencia.length > 0) {
+            // Necesitamos un ID temporal o usar el timestamp para la carpeta
+            const tempId = Date.now();
+            fotosEvidenciaUrls = await this.uploadEvidencePhotos(createDto.fotos_evidencia, tempId);
+        }
+
+        // 2. Crear el registro maestro de la entrega
         const codigoActa = `ENT-${Date.now()}`;
         const { data: entrega, error: entregaError } = await supabase
             .from('entregas_inventario')
@@ -51,7 +97,7 @@ export class EntregasInventarioService {
                 cargo_recibe: createDto.cargo_cliente || null,
                 cedula_entrega: cedulaEntrega,
                 cedula_recibe: createDto.cedula_recibe || '',
-                fotos_evidencia: createDto.fotos_evidencia || null
+                fotos_evidencia: fotosEvidenciaUrls
             })
             .select()
             .single();
