@@ -28,6 +28,10 @@ export class CreateArticuloDotacionDto {
     @IsInt()
     @IsOptional()
     creado_por?: number;
+
+    @ApiProperty({ description: 'Metadatos dinámicos por categoría', required: false })
+    @IsOptional()
+    metadata?: any;
 }
 
 export class UpdateArticuloDotacionDto {
@@ -60,6 +64,10 @@ export class UpdateArticuloDotacionDto {
     @IsInt()
     @IsOptional()
     actualizado_por?: number;
+
+    @ApiProperty({ description: 'Metadatos dinámicos por categoría', required: false })
+    @IsOptional()
+    metadata?: any;
 }
 
 // --- VARIANTES ---

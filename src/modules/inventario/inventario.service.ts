@@ -187,7 +187,7 @@ export class InventarioService {
         };
     }
 
-    async generarReportePorCategoria(categoriaId: number, userId: number) {
+    async generarReportePorCategoria(categoriaId: number, userId: number, empleadoId?: number) {
         try {
             const supabase = this.supabaseService.getClient();
 
@@ -210,6 +210,7 @@ export class InventarioService {
                     nombre, 
                     codigo,
                     descripcion,
+                    metadata,
                     variantes:articulos_dotacion_variantes(
                         id, 
                         talla, 
@@ -223,16 +224,49 @@ export class InventarioService {
                 throw new NotFoundException(`No hay artículos para la categoría ${categoria.nombre}`);
             }
 
-            // 3. Obtener el empleado que genera el reporte
-            const { data: empleado } = await supabase
-                .from('empleados')
-                .select('nombre_completo, cargo_oficial, firma_digital_base64')
-                .eq('id', userId)
-                .single();
+            // 3. Obtener el empleado vinculado al usuario
+            // Primero intentamos con empleadoId directo (del JWT guard), si no, buscamos por usuario_id
+            let empleado: any = null;
+            if (empleadoId) {
+                const { data } = await supabase
+                    .from('empleados')
+                    .select('nombre_completo, cedula, cargo_oficial, firma_digital_base64')
+                    .eq('id', empleadoId)
+                    .single();
+                empleado = data;
+            }
+            if (!empleado && userId) {
+                const { data } = await supabase
+                    .from('empleados')
+                    .select('nombre_completo, cedula, cargo_oficial, firma_digital_base64')
+                    .eq('usuario_id', userId)
+                    .single();
+                empleado = data;
+            }
+            // Fallback al nombre del usuario_externo si no hay empleado
+            let generadoPor = 'Usuario del Sistema';
+            let cedulaGenerador = '';
+            let cargoGenerador = 'Administrador';
+            let firmaGenerador: string | null = null;
 
-            const generadoPor = empleado?.nombre_completo || 'Usuario del Sistema';
-            const cargoGenerador = empleado?.cargo_oficial || 'Administrador';
-            const firmaGenerador = empleado?.firma_digital_base64 ? `data:image/png;base64,${empleado.firma_digital_base64}` : null;
+            if (empleado) {
+                generadoPor = empleado.nombre_completo;
+                cedulaGenerador = empleado.cedula || '';
+                cargoGenerador = empleado.cargo_oficial || 'Operador';
+                firmaGenerador = empleado.firma_digital_base64 
+                    ? `data:image/png;base64,${empleado.firma_digital_base64}` 
+                    : null;
+            } else if (userId) {
+                // Buscar en usuarios_externos como fallback
+                const { data: usuario } = await supabase
+                    .from('usuarios_externos')
+                    .select('nombre_completo')
+                    .eq('id', userId)
+                    .single();
+                if (usuario) {
+                    generadoPor = usuario.nombre_completo;
+                }
+            }
 
             // 4. Buscar la plantilla SIG-GO-F-20
             const { data: plantilla } = await supabase
@@ -249,21 +283,27 @@ export class InventarioService {
                 throw new NotFoundException(`Plantilla SIG-GO-F-20 no encontrada`);
             }
 
-            // 5. Formatear los ítems
+            // 5. Formatear los ítems usando metadata dinámico
             let itemsFormat: any[] = [];
             let index = 1;
             let totalCantidad = 0;
 
             for (const art of articulos) {
+                const meta = (art as any).metadata || {};
+                const marcaModelo = [meta.marca, meta.modelo].filter(Boolean).join(' ') || art.codigo || 'N/A';
+                const serial = meta.serial || 'N/A';
+                const ubicacion = meta.ubicacion || 'Bodega Principal';
+                const condicion = meta.condicion || 'Bueno';
+
                 if (art.variantes && art.variantes.length > 0) {
                     for (const varItem of art.variantes) {
                         itemsFormat.push({
                             index: index++,
                             descripcion: art.nombre || 'Sin descripción',
-                            marca_modelo: art.codigo || 'N/A',
-                            serial: varItem.talla || 'N/A', 
-                            ubicacion: 'Bodega Principal',
-                            estado: 'BUENO',
+                            marca_modelo: marcaModelo,
+                            serial: serial !== 'N/A' ? serial : (varItem.talla || 'N/A'),
+                            ubicacion: ubicacion,
+                            estado: condicion.toUpperCase(),
                             cantidad: varItem.stock_actual || 0
                         });
                         totalCantidad += varItem.stock_actual || 0;
@@ -272,10 +312,10 @@ export class InventarioService {
                     itemsFormat.push({
                         index: index++,
                         descripcion: art.nombre || 'Sin descripción',
-                        marca_modelo: art.codigo || 'N/A',
-                        serial: 'N/A',
-                        ubicacion: 'Bodega Principal',
-                        estado: 'N/A',
+                        marca_modelo: marcaModelo,
+                        serial: serial,
+                        ubicacion: ubicacion,
+                        estado: condicion.toUpperCase(),
                         cantidad: 0
                     });
                 }
@@ -296,6 +336,7 @@ export class InventarioService {
             const datos = {
                 fecha_reporte: fechaReporte,
                 generado_por: generadoPor,
+                cedula_generador: cedulaGenerador,
                 total_items: totalCantidad,
                 items: itemsFormat,
                 firma_generador: firmaGenerador,
