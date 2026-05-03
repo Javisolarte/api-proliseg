@@ -333,7 +333,7 @@ export class EntregasInventarioService {
         const { data, error } = await supabase.from('entregas_inventario').select(`
             *,
             detalles:entregas_inventario_detalles(*),
-            cliente:clientes(nombre_empresa, identificacion, direccion),
+            cliente:clientes(nombre_empresa),
             puesto:puestos_trabajo(nombre, codigo_puesto, cliente_id),
             empleado:empleados(nombre_completo, cedula, cargo_oficial)
         `).eq('id', id).single();
