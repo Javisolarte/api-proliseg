@@ -334,7 +334,7 @@ export class EntregasInventarioService {
             *,
             detalles:entregas_inventario_detalles(*),
             cliente:clientes(nombre_empresa),
-            puesto:puestos_trabajo(nombre, codigo_puesto, cliente_id),
+            puesto:puestos_trabajo(nombre, codigo_puesto),
             empleado:empleados(nombre_completo, cedula, cargo_oficial)
         `).eq('id', id).single();
 
