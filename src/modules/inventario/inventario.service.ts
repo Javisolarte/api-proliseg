@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger, BadRequestException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { CreateInventarioDocumentoDto, CreateInventarioMovimientoDto } from './dto/inventario.dto';
 import { DocumentosGeneradosService } from '../documentos-generados/documentos-generados.service';
@@ -191,15 +191,19 @@ export class InventarioService {
         try {
             const supabase = this.supabaseService.getClient();
 
-            // 1. Obtener la categoría
+            // 1. Obtener la categoría y su plantilla asociada (usando la columna real de la DB)
             const { data: categoria } = await supabase
                 .from('categorias_dotacion')
-                .select('nombre')
+                .select('nombre, plantilla_reporte_id')
                 .eq('id', categoriaId)
                 .single();
 
             if (!categoria) {
                 throw new NotFoundException(`Categoría no encontrada`);
+            }
+
+            if (!categoria.plantilla_reporte_id) {
+                throw new BadRequestException(`La categoría ${categoria.nombre} no tiene una plantilla de reporte configurada.`);
             }
 
             // 2. Obtener los artículos de esta categoría
@@ -271,19 +275,17 @@ export class InventarioService {
                 }
             }
 
-            // 4. Buscar la plantilla SIG-GO-F-20
+            // 4. Buscar la plantilla configurada por su ID
             const { data: plantilla } = await supabase
                 .from('plantillas_documentos')
-                .select('id')
-                .eq('nombre', 'SIG-GO-F-20')
+                .select('id, nombre')
+                .eq('id', categoria.plantilla_reporte_id)
                 .eq('activa', true)
-                .order('version', { ascending: false })
-                .limit(1)
                 .single();
 
             if (!plantilla) {
-                this.logger.warn("No se encontró plantilla activa SIG-GO-F-20");
-                throw new NotFoundException(`Plantilla SIG-GO-F-20 no encontrada`);
+                this.logger.warn(`No se encontró plantilla activa con ID: ${categoria.plantilla_reporte_id}`);
+                throw new NotFoundException(`La plantilla asignada a esta categoría no existe o está inactiva.`);
             }
 
             // 5. Formatear los ítems usando metadata dinámico
