@@ -308,13 +308,71 @@ export class CotizacionesService {
         return data;
     }
 
-    // implementar cron para vencimiento automatico (simulado aqui con check manual)
-    async checkVencimiento(id: number) {
-        const supabase = this.supabaseService.getClient();
-        const { data } = await supabase.from("cotizaciones").select("fecha_vencimiento").eq("id", id).single();
-        if (data && data.fecha_vencimiento && new Date(data.fecha_vencimiento) < new Date()) {
-            await supabase.from("cotizaciones").update({ estado: 'vencida' }).eq("id", id);
+    // --- Métodos Públicos (Token) ---
+
+    async findByToken(token: string) {
+        const { data, error } = await this.supabaseService.getClient()
+            .from('cotizaciones')
+            .select(`
+                *,
+                items:items_cotizacion(*),
+                cliente:clientes(nombre_empresa, nit, direccion, contacto, telefono)
+            `)
+            .eq('public_token', token)
+            .single();
+
+        if (error || !data) {
+            throw new NotFoundException('Cotización no encontrada o token inválido');
         }
+
+        return data;
+    }
+
+    async aceptarPublico(token: string) {
+        const cotizacion = await this.findByToken(token);
+
+        if (cotizacion.estado !== 'enviada' && cotizacion.estado !== 'en_proceso') {
+            throw new BadRequestException('Esta cotización no puede ser aceptada en su estado actual');
+        }
+
+        if (cotizacion.public_token_expires_at && new Date(cotizacion.public_token_expires_at) < new Date()) {
+            throw new BadRequestException('La cotización ha expirado');
+        }
+
+        const { data, error } = await this.supabaseService.getClient()
+            .from('cotizaciones')
+            .update({
+                estado: 'aceptada',
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', cotizacion.id)
+            .select()
+            .single();
+
+        if (error) throw new InternalServerErrorException('Error al aceptar cotización');
+        return data;
+    }
+
+    async rechazarPublico(token: string, motivo: string, detalle?: string) {
+        const cotizacion = await this.findByToken(token);
+
+        if (cotizacion.estado !== 'enviada' && cotizacion.estado !== 'en_proceso') {
+            throw new BadRequestException('Esta cotización no puede ser rechazada en su estado actual');
+        }
+
+        const { data, error } = await this.supabaseService.getClient()
+            .from('cotizaciones')
+            .update({
+                estado: 'rechazada',
+                motivo_rechazo: motivo,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', cotizacion.id)
+            .select()
+            .single();
+
+        if (error) throw new InternalServerErrorException('Error al rechazar cotización');
+        return data;
     }
 
     // Resto de métodos estándar...
