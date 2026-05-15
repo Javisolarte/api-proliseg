@@ -1,4 +1,4 @@
-import { Injectable, Logger, BadRequestException, NotFoundException, ForbiddenException } from "@nestjs/common";
+import { Injectable, Logger, BadRequestException, NotFoundException, ForbiddenException, InternalServerErrorException } from "@nestjs/common";
 import { SupabaseService } from "../supabase/supabase.service";
 import type { CreateCotizacionDto, UpdateCotizacionDto, CreateCotizacionItemDto as CreateItemDto } from "./dto/cotizacion.dto";
 import { DocumentosGeneradosService } from "../documentos-generados/documentos-generados.service";
