@@ -185,8 +185,8 @@ export class CotizacionesService {
 
         if (!current) throw new NotFoundException("Cotización no encontrada");
 
-        // Solo se puede enviar si está en borrador
-        if (current.estado !== 'borrador') {
+        // Solo se puede enviar si está en borrador o aprobada
+        if (current.estado !== 'borrador' && current.estado !== 'aprobada') {
             throw new BadRequestException(`No se puede enviar una cotización en estado ${current.estado}`);
         }
 
@@ -323,6 +323,16 @@ export class CotizacionesService {
 
         if (error || !data) {
             throw new NotFoundException('Cotización no encontrada o token inválido');
+        }
+
+        // Registrar primera vista si no se ha visto aún
+        if (!data.fecha_vista_cliente) {
+            const fechaVista = new Date().toISOString();
+            await this.supabaseService.getClient()
+                .from('cotizaciones')
+                .update({ fecha_vista_cliente: fechaVista })
+                .eq('id', data.id);
+            data.fecha_vista_cliente = fechaVista;
         }
 
         return data;
