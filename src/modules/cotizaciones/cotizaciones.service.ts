@@ -39,7 +39,7 @@ export class CotizacionesService {
     }
 
     async create(createDto: CreateCotizacionDto, user: any) {
-        const userId = typeof user === 'number' ? user : user.id;
+        const userId = typeof user === 'number' ? user : (user.user?.id || user.id);
         try {
             const supabase = this.supabaseService.getClient();
             const { data, error } = await supabase.from("cotizaciones").insert({
@@ -57,11 +57,54 @@ export class CotizacionesService {
 
             if (error) throw new BadRequestException(error.message);
 
+            // Si hay items en el dto, insertarlos en lote
+            const items = (createDto as any).items || [];
+            if (items.length > 0) {
+                const itemsToInsert = items.map(item => ({
+                    cotizacion_id: data.id,
+                    tipo_servicio_id: item.tipo_servicio_id,
+                    descripcion: item.descripcion,
+                    cantidad: item.cantidad,
+                    valor_unitario: item.valor_unitario,
+                    total_linea: item.cantidad * item.valor_unitario
+                }));
+                const { error: itemsError } = await supabase.from("cotizaciones_items").insert(itemsToInsert);
+                if (itemsError) {
+                    this.logger.error("Error al insertar items en creación:", itemsError.message);
+                }
+            }
+
             // Si se pasa plantilla, crear el documento vinculado
             if (createDto.plantilla_id) {
                 // Preparar variables requeridas por la plantilla para pasar validación inicial
                 const formatter = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 });
                 const dateOptions: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'long', day: 'numeric' };
+
+                // Buscar el empleado creador
+                const { data: empleado } = await supabase
+                    .from("empleados")
+                    .select("*, usuario:usuarios_externos(*)")
+                    .eq("usuario_id", userId)
+                    .maybeSingle();
+
+                const base64Firma = empleado?.firma_digital_base64 
+                    ? (empleado.firma_digital_base64.startsWith('data:image') 
+                        ? empleado.firma_digital_base64 
+                        : `data:image/png;base64,${empleado.firma_digital_base64}`)
+                    : '';
+
+                // Construir tabla items HTML
+                const itemsHtml = items.map((item: any, index: number) => `
+                    <tr>
+                        <td style="padding: 8px; border-bottom: 1px solid #eee;">${index + 1}</td>
+                        <td style="padding: 8px; border-bottom: 1px solid #eee;">
+                             <strong>${item.descripcion || 'Servicio'}</strong>
+                        </td>
+                        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${item.cantidad}</td>
+                        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${formatter.format(item.valor_unitario)}</td>
+                        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${formatter.format(item.cantidad * item.valor_unitario)}</td>
+                    </tr>
+                `).join('');
 
                 const variablesIniciales = {
                     ...createDto,
@@ -71,21 +114,28 @@ export class CotizacionesService {
                     cliente_nit: createDto.prospecto_datos?.nit || '',
                     cliente_contacto: createDto.prospecto_datos?.contacto || '',
                     numero_propuesta: `COT-${data.id.toString().padStart(4, '0')}`,
-                    items: '<tr><td colspan="5" style="padding:10px; text-align:center; color:#888;">Detalle de items pendiente de carga...</td></tr>',
+                    items: itemsHtml || '<tr><td colspan="5" style="padding:10px; text-align:center; color:#888;">Detalle de items vacío...</td></tr>',
                     mostrar_total: 'true',
                     subtotal_formateado: formatter.format(createDto.subtotal || 0),
                     impuestos_formateado: formatter.format(createDto.impuestos || 0),
                     total_formateado: formatter.format(createDto.total || 0),
-                    asesor_nombre: 'Asesor Comercial Proliseg', // Podríamos obtenerlo de `user` si tuviéramos tabla usuarios completa a mano
-                    asesor_telefono: '(601) 745 5555'
+                    asesor_nombre: empleado?.usuario?.nombre_completo || 'Asesor Comercial Proliseg',
+                    asesor_telefono: empleado?.telefono_contacto || empleado?.usuario?.telefono || '(601) 745 5555',
+                    asesor_cargo: empleado?.cargo_oficial || 'Asesor Comercial',
+                    asesor_firma: base64Firma,
+                    creado_por_nombre: empleado?.usuario?.nombre_completo || 'Asesor Comercial Proliseg',
+                    creado_por_cargo: empleado?.cargo_oficial || 'Asesor Comercial',
+                    creado_por_firma: base64Firma,
+                    firma_asesor: base64Firma,
+                    firma_tecnico: base64Firma
                 };
 
                 const docGenerado = await this.documentosService.create({
                     plantilla_id: createDto.plantilla_id,
-                    entidad_tipo: EntidadTipo.CLIENTE, // TODO: Debería ser COTIZACION idealmente, pero usamos CLIENTE por compatibilidad actual? Revisar EntidadTipo.
+                    entidad_tipo: EntidadTipo.CLIENTE,
                     entidad_id: data.id,
                     datos_json: variablesIniciales
-                }, typeof user === 'object' ? user : undefined);
+                }, user && user.user ? user.user : user);
 
                 await supabase.from("cotizaciones").update({ documento_generado_id: docGenerado.id }).eq("id", data.id);
             }
@@ -106,14 +156,37 @@ export class CotizacionesService {
                 throw new ForbiddenException(`No se puede editar una cotización en estado ${current.estado}`);
             }
 
+            // Separar items para actualización por lotes
+            const { items, ...headerData } = updateDto as any;
+
             const { data, error } = await supabase
                 .from("cotizaciones")
-                .update({ ...updateDto, updated_at: new Date().toISOString() })
+                .update({ ...headerData, updated_at: new Date().toISOString() })
                 .eq("id", id)
                 .select()
                 .single();
 
-            if (error) throw new BadRequestException("Error al actualizar");
+            if (error) throw new BadRequestException("Error al actualizar: " + error.message);
+
+            // Si hay items, eliminar anteriores e insertar nuevos
+            if (items && Array.isArray(items)) {
+                await supabase.from("cotizaciones_items").delete().eq("cotizacion_id", id);
+                if (items.length > 0) {
+                    const itemsToInsert = items.map(item => ({
+                        cotizacion_id: id,
+                        tipo_servicio_id: item.tipo_servicio_id,
+                        descripcion: item.descripcion,
+                        cantidad: item.cantidad,
+                        valor_unitario: item.valor_unitario,
+                        total_linea: item.cantidad * item.valor_unitario
+                    }));
+                    const { error: itemsError } = await supabase.from("cotizaciones_items").insert(itemsToInsert);
+                    if (itemsError) {
+                        this.logger.error("Error al insertar items en actualización:", itemsError.message);
+                    }
+                }
+            }
+
             return data;
         } catch (error) {
             this.logger.error("Error update:", error);
@@ -315,7 +388,7 @@ export class CotizacionesService {
             .from('cotizaciones')
             .select(`
                 *,
-                items:items_cotizacion(*),
+                items:items_cotizacion(*, tipo_servicio:tipo_servicio(*)),
                 cliente:clientes(nombre_empresa, nit, direccion, contacto, telefono)
             `)
             .eq('public_token', token)
@@ -389,17 +462,24 @@ export class CotizacionesService {
     async findAll(filters?: any) {
         const supabase = this.supabaseService.getClient();
         // ... implementar filtros
-        const { data } = await supabase.from("cotizaciones").select("*");
+        let query = supabase.from("cotizaciones").select("*, cliente:clientes(*)");
+        if (filters && filters.cliente_id) {
+            query = query.eq("cliente_id", filters.cliente_id);
+        }
+        if (filters && filters.estado) {
+            query = query.eq("estado", filters.estado);
+        }
+        const { data } = await query;
         return data || [];
     }
     async findOne(id: number) {
         const supabase = this.supabaseService.getClient();
-        const { data } = await supabase.from("cotizaciones").select("*, items:cotizaciones_items(*)").eq("id", id).single();
+        const { data } = await supabase.from("cotizaciones").select("*, cliente:clientes(*), items:cotizaciones_items(*, tipo_servicio:tipo_servicio(*))").eq("id", id).single();
         return data;
     }
     async getItems(id: number) {
         const supabase = this.supabaseService.getClient();
-        const { data } = await supabase.from("cotizaciones_items").select("*").eq("cotizacion_id", id);
+        const { data } = await supabase.from("cotizaciones_items").select("*, tipo_servicio:tipo_servicio(*)").eq("cotizacion_id", id);
         return data;
     }
 
@@ -471,6 +551,19 @@ export class CotizacionesService {
         const formatter = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 });
         const dateOptions: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'long', day: 'numeric' };
 
+        // Buscar el empleado creador
+        const { data: empleado } = await supabase
+            .from("empleados")
+            .select("*, usuario:usuarios_externos(*)")
+            .eq("usuario_id", cotizacion.creado_por)
+            .maybeSingle();
+
+        const base64Firma = empleado?.firma_digital_base64 
+            ? (empleado.firma_digital_base64.startsWith('data:image') 
+                ? empleado.firma_digital_base64 
+                : `data:image/png;base64,${empleado.firma_digital_base64}`)
+            : '';
+
         // Construir tabla items HTML
         const itemsHtml = (cotizacion.items || []).map((item: any, index: number) => `
             <tr>
@@ -496,9 +589,15 @@ export class CotizacionesService {
             subtotal_formateado: formatter.format(cotizacion.subtotal || 0),
             impuestos_formateado: formatter.format(cotizacion.impuestos || 0),
             total_formateado: formatter.format(cotizacion.total || 0),
-            // TODO: Obtener del usuario real si es posible. Por ahora hardcode de ejemplo.
-            asesor_nombre: 'Asesor Comercial Proliseg',
-            asesor_telefono: '(601) 745 5555'
+            asesor_nombre: empleado?.usuario?.nombre_completo || 'Asesor Comercial Proliseg',
+            asesor_telefono: empleado?.telefono_contacto || empleado?.usuario?.telefono || '(601) 745 5555',
+            asesor_cargo: empleado?.cargo_oficial || 'Asesor Comercial',
+            asesor_firma: base64Firma,
+            creado_por_nombre: empleado?.usuario?.nombre_completo || 'Asesor Comercial Proliseg',
+            creado_por_cargo: empleado?.cargo_oficial || 'Asesor Comercial',
+            creado_por_firma: base64Firma,
+            firma_asesor: base64Firma,
+            firma_tecnico: base64Firma
         };
 
         // 3. Actualizar datos en documentos_generados
