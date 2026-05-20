@@ -988,7 +988,7 @@ export class RadioOperacionService {
       const page = await browser.newPage();
       try {
         await page.setContent(htmlContent, { 
-          waitUntil: ['domcontentloaded', 'networkidle2'],
+          waitUntil: 'domcontentloaded', 
           timeout: 60000 
         });
         const pdfBuffer = await page.pdf({

@@ -211,8 +211,8 @@ export class DocumentosGeneradosService {
 
         if (docError || !doc) throw new NotFoundException("Documento no encontrado");
 
-        // Solo se puede generar PDF si está en borrador o generando_pdf (reintento)
-        if (doc.estado !== 'borrador' && doc.estado !== 'generando_pdf') {
+        // Solo se puede generar PDF si está en borrador, generando_pdf (reintento) o pendiente_firmas
+        if (doc.estado !== 'borrador' && doc.estado !== 'generando_pdf' && doc.estado !== 'pendiente_firmas') {
             throw new BadRequestException(`No se puede generar PDF de un documento en estado ${doc.estado}`);
         }
 
@@ -346,7 +346,7 @@ export class DocumentosGeneradosService {
                 this.logger.debug(`Iniciando renderización Puppeteer para doc ${id}...`);
                 // Aumentamos el timeout a 60s para entornos lentos como Render
                 await page.setContent(htmlContenido, {
-                    waitUntil: 'networkidle2', // Wait for most assets but allow slow/blocked CDNs
+                    waitUntil: 'domcontentloaded', // Fast DOM parsing without network constraints
                     timeout: 60000
                 });
 
@@ -376,7 +376,7 @@ export class DocumentosGeneradosService {
                 const { data: updatedDoc, error: updateError } = await supabase
                     .from("documentos_generados")
                     .update({
-                        estado: 'generando_pdf',
+                        estado: doc.estado === 'borrador' ? 'generando_pdf' : doc.estado,
                         url_pdf: publicUrl,
                         fecha_generacion: new Date().toISOString(),
                         updated_at: new Date().toISOString()
