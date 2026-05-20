@@ -346,7 +346,7 @@ export class DocumentosGeneradosService {
                 this.logger.debug(`Iniciando renderización Puppeteer para doc ${id}...`);
                 // Aumentamos el timeout a 60s para entornos lentos como Render
                 await page.setContent(htmlContenido, {
-                    waitUntil: 'networkidle0', // Wait for all images to finish loading
+                    waitUntil: 'networkidle2', // Wait for most assets but allow slow/blocked CDNs
                     timeout: 60000
                 });
 
