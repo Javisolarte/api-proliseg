@@ -24,13 +24,13 @@ export class CreateCotizacionItemDto {
     @ApiProperty({ example: 1, required: false })
     @IsOptional()
     @IsInt()
-    @Transform(({ value }) => parseInt(value))
+    @Transform(({ value }) => value ? parseInt(value) : undefined)
     cotizacion_id?: number;
 
     @ApiProperty({ example: 1, required: false })
     @IsOptional()
     @IsInt()
-    @Transform(({ value }) => parseInt(value))
+    @Transform(({ value }) => value ? parseInt(value) : undefined)
     tipo_servicio_id?: number;
 
     @ApiProperty({ example: "Servicio de vigilancia diurna" })
@@ -57,7 +57,7 @@ export class CreateCotizacionDto {
     @ApiProperty({ example: 1, required: false, description: "ID del cliente. Null si es prospecto" })
     @IsOptional()
     @IsInt()
-    @Transform(({ value }) => parseInt(value))
+    @Transform(({ value }) => value ? parseInt(value) : undefined)
     cliente_id?: number;
 
     @ApiProperty({

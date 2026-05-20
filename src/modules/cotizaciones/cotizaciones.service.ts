@@ -115,7 +115,7 @@ export class CotizacionesService {
                     cliente_contacto: createDto.prospecto_datos?.contacto || '',
                     numero_propuesta: `COT-${data.id.toString().padStart(4, '0')}`,
                     items: itemsHtml || '<tr><td colspan="5" style="padding:10px; text-align:center; color:#888;">Detalle de items vacío...</td></tr>',
-                    mostrar_total: 'true',
+                    mostrar_total: createDto.prospecto_datos?.es_opciones ? '' : 'true',
                     subtotal_formateado: formatter.format(createDto.subtotal || 0),
                     impuestos_formateado: formatter.format(createDto.impuestos || 0),
                     total_formateado: formatter.format(createDto.total || 0),
