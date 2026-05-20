@@ -7,8 +7,10 @@ import {
     IsEnum,
     IsDateString,
     IsObject,
+    IsArray,
+    ValidateNested,
 } from "class-validator";
-import { Transform } from "class-transformer";
+import { Transform, Type } from "class-transformer";
 
 export enum EstadoCotizacion {
     BORRADOR = 'borrador',
@@ -16,6 +18,39 @@ export enum EstadoCotizacion {
     APROBADA = 'aprobada',
     RECHAZADA = 'rechazada',
     VENCIDA = 'vencida'
+}
+
+export class CreateCotizacionItemDto {
+    @ApiProperty({ example: 1, required: false })
+    @IsOptional()
+    @IsInt()
+    @Transform(({ value }) => parseInt(value))
+    cotizacion_id?: number;
+
+    @ApiProperty({ example: 1, required: false })
+    @IsOptional()
+    @IsInt()
+    @Transform(({ value }) => parseInt(value))
+    tipo_servicio_id?: number;
+
+    @ApiProperty({ example: "Servicio de vigilancia diurna" })
+    @IsString()
+    descripcion: string;
+
+    @ApiProperty({ example: 30 })
+    @IsNumber()
+    @Transform(({ value }) => parseFloat(value))
+    cantidad: number;
+
+    @ApiProperty({ example: 50000 })
+    @IsNumber()
+    @Transform(({ value }) => parseFloat(value))
+    valor_unitario: number;
+
+    @ApiProperty({ example: 1500000 })
+    @IsNumber()
+    @Transform(({ value }) => parseFloat(value))
+    total_linea: number;
 }
 
 export class CreateCotizacionDto {
@@ -68,6 +103,13 @@ export class CreateCotizacionDto {
     @IsInt()
     @Transform(({ value }) => value ? parseInt(value) : undefined)
     plantilla_id?: number;
+
+    @ApiProperty({ type: () => [CreateCotizacionItemDto], required: false, description: "Items de la cotización" })
+    @IsOptional()
+    @IsArray()
+    @ValidateNested({ each: true })
+    @Type(() => CreateCotizacionItemDto)
+    items?: CreateCotizacionItemDto[];
 }
 
 export class UpdateCotizacionDto extends PartialType(CreateCotizacionDto) {
@@ -77,34 +119,3 @@ export class UpdateCotizacionDto extends PartialType(CreateCotizacionDto) {
     estado?: EstadoCotizacion;
 }
 
-export class CreateCotizacionItemDto {
-    @ApiProperty({ example: 1 })
-    @IsInt()
-    @Transform(({ value }) => parseInt(value))
-    cotizacion_id: number;
-
-    @ApiProperty({ example: 1, required: false })
-    @IsOptional()
-    @IsInt()
-    @Transform(({ value }) => parseInt(value))
-    tipo_servicio_id?: number;
-
-    @ApiProperty({ example: "Servicio de vigilancia diurna" })
-    @IsString()
-    descripcion: string;
-
-    @ApiProperty({ example: 30 })
-    @IsNumber()
-    @Transform(({ value }) => parseFloat(value))
-    cantidad: number;
-
-    @ApiProperty({ example: 50000 })
-    @IsNumber()
-    @Transform(({ value }) => parseFloat(value))
-    valor_unitario: number;
-
-    @ApiProperty({ example: 1500000 })
-    @IsNumber()
-    @Transform(({ value }) => parseFloat(value))
-    total_linea: number;
-}

@@ -83,7 +83,7 @@ export class CotizacionesService {
                 // Buscar el empleado creador
                 const { data: empleado } = await supabase
                     .from("empleados")
-                    .select("*, usuario:usuarios_externos(*)")
+                    .select("*, usuario:usuarios_externos!empleados_usuario_id_fkey(*)")
                     .eq("usuario_id", userId)
                     .maybeSingle();
 
@@ -108,7 +108,7 @@ export class CotizacionesService {
 
                 const variablesIniciales = {
                     ...createDto,
-                    ciudad: 'Bogotá D.C.',
+                    ciudad: createDto.prospecto_datos?.ciudad || 'Ciudad',
                     fecha_formato: new Date(data.fecha_emision).toLocaleDateString('es-ES', dateOptions),
                     cliente_empresa: createDto.prospecto_datos?.empresa || 'Prospecto',
                     cliente_nit: createDto.prospecto_datos?.nit || '',
@@ -554,7 +554,7 @@ export class CotizacionesService {
         // Buscar el empleado creador
         const { data: empleado } = await supabase
             .from("empleados")
-            .select("*, usuario:usuarios_externos(*)")
+            .select("*, usuario:usuarios_externos!empleados_usuario_id_fkey(*)")
             .eq("usuario_id", cotizacion.creado_por)
             .maybeSingle();
 
@@ -577,14 +577,21 @@ export class CotizacionesService {
             </tr>
         `).join('');
 
+        const itemsFormatted = (cotizacion.items || []).map((item: any) => ({
+            descripcion: item.descripcion || 'Servicio ' + (item.tipo_servicio_id || ''),
+            detalle: item.detalle || '',
+            total_formateado: formatter.format(item.total_linea || 0)
+        }));
+
         const variables = {
-            ciudad: 'Bogotá D.C.',
+            ciudad: cotizacion.prospecto_datos?.ciudad || 'Ciudad',
             fecha_formato: new Date(cotizacion.fecha_emision).toLocaleDateString('es-ES', dateOptions),
             cliente_empresa: cotizacion.prospecto_datos?.empresa || 'CLIENTE',
             cliente_nit: cotizacion.prospecto_datos?.nit || '',
             cliente_contacto: cotizacion.prospecto_datos?.contacto || '',
             numero_propuesta: `COT-${cotizacion.id.toString().padStart(4, '0')}`,
-            items: itemsHtml,
+            items: itemsFormatted,
+            items_html: itemsHtml,
             mostrar_total: 'true',
             subtotal_formateado: formatter.format(cotizacion.subtotal || 0),
             impuestos_formateado: formatter.format(cotizacion.impuestos || 0),

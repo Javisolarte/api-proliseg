@@ -149,7 +149,7 @@ export class CotizacionesController {
     @ApiOperation({ summary: "Agregar item a cotización" })
     @ApiResponse({ status: 201, description: "Item creado" })
     async createItem(@Body() createItemDto: CreateCotizacionItemDto) {
-        return this.cotizacionesService.createItem(createItemDto.cotizacion_id, createItemDto);
+        return this.cotizacionesService.createItem(createItemDto.cotizacion_id!, createItemDto);
     }
 
     @Delete("items/:id")
