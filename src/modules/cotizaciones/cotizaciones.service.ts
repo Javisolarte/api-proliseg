@@ -239,9 +239,22 @@ export class CotizacionesService {
             throw new BadRequestException("Estado inválido para aprobar");
         }
 
+        const crypto = require('crypto');
+        const publicToken = current.public_token || crypto.randomBytes(32).toString('hex');
+        let expiresAt = current.public_token_expires_at ? new Date(current.public_token_expires_at) : new Date();
+        if (!current.public_token) {
+            expiresAt.setDate(expiresAt.getDate() + 30); // 30 días
+        }
+
         // Cambio de estado
         const { data, error } = await supabase.from("cotizaciones")
-            .update({ estado: 'aprobada', aprobado_por: userId, updated_at: new Date().toISOString() })
+            .update({ 
+                estado: 'aprobada', 
+                aprobado_por: userId,
+                public_token: publicToken,
+                public_token_expires_at: expiresAt.toISOString(),
+                updated_at: new Date().toISOString() 
+            })
             .eq("id", id)
             .select().single();
 
@@ -272,11 +285,13 @@ export class CotizacionesService {
             throw new BadRequestException("La cotización debe tener al menos un item");
         }
 
-        // Generar token público para acceso sin login (BLOQUE 4)
+        // Generar token público para acceso sin login si no existe
         const crypto = require('crypto');
-        const publicToken = crypto.randomBytes(32).toString('hex');
-        const expiresAt = new Date();
-        expiresAt.setDate(expiresAt.getDate() + 30); // 30 días
+        const publicToken = current.public_token || crypto.randomBytes(32).toString('hex');
+        let expiresAt = current.public_token_expires_at ? new Date(current.public_token_expires_at) : new Date();
+        if (!current.public_token) {
+            expiresAt.setDate(expiresAt.getDate() + 30); // 30 días
+        }
 
         const { data, error } = await supabase.from("cotizaciones")
             .update({
@@ -474,7 +489,7 @@ export class CotizacionesService {
     }
     async findOne(id: number) {
         const supabase = this.supabaseService.getClient();
-        const { data } = await supabase.from("cotizaciones").select("*, cliente:clientes(*), items:cotizaciones_items(*, tipo_servicio:tipo_servicio(*))").eq("id", id).single();
+        const { data } = await supabase.from("cotizaciones").select("*, cliente:clientes(*), items:cotizaciones_items(*, tipo_servicio:tipo_servicio(*)), documento_generado:documentos_generados(*)").eq("id", id).single();
         return data;
     }
     async getItems(id: number) {
@@ -524,15 +539,16 @@ export class CotizacionesService {
         return contrato;
     }
 
-    async generarPdf(id: number) {
+    async generarPdf(id: number, forceRegenerate = false) {
         const supabase = this.supabaseService.getClient();
 
-        // 1. Obtener cotización completa con items (Query simplificada)
+        // 1. Obtener cotización completa con items (Query simplificada con documento_generado)
         const { data: cotizacion, error } = await supabase
             .from("cotizaciones")
             .select(`
                 *,
-                items:cotizaciones_items (*)
+                items:cotizaciones_items (*),
+                documento_generado:documentos_generados(*)
             `)
             .eq("id", id)
             .single();
@@ -545,6 +561,12 @@ export class CotizacionesService {
 
         if (!cotizacion.documento_generado_id) {
             throw new BadRequestException("Esta cotización no tiene una plantilla vinculada.");
+        }
+
+        // Si ya existe el PDF generado y no estamos forzando la regeneración, retornarlo inmediatamente sin llamar a Puppeteer!
+        if (cotizacion.documento_generado?.url_pdf && !forceRegenerate) {
+            this.logger.log(`Retornando PDF existente para cotización ${id}: ${cotizacion.documento_generado.url_pdf}`);
+            return cotizacion.documento_generado;
         }
 
         // 2. Preparar variables enriquecidas

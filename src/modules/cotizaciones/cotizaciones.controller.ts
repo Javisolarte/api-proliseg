@@ -170,7 +170,12 @@ export class CotizacionesController {
     @Get(":id/pdf")
     @RequirePermissions("cotizaciones")
     @ApiOperation({ summary: "Descargar PDF de cotización" })
-    async getPdf(@Param("id", ParseIntPipe) id: number) {
-        return this.cotizacionesService.generarPdf(id);
+    @ApiQuery({ name: "force", required: false, type: Boolean })
+    async getPdf(
+        @Param("id", ParseIntPipe) id: number,
+        @Query("force") force?: string
+    ) {
+        const forceRegenerate = force === 'true';
+        return this.cotizacionesService.generarPdf(id, forceRegenerate);
     }
 }
