@@ -1,9 +1,11 @@
 import { Controller, Get, Post, Body, Param, NotFoundException } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { CotizacionesService } from './cotizaciones.service';
+import { Public } from '../auth/decorators/public.decorator';
 
 @ApiTags('Public')
 @Controller('api/public/cotizaciones')
+@Public()
 export class PublicCotizacionesController {
     constructor(private readonly cotizacionesService: CotizacionesService) { }
 
