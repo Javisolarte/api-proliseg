@@ -548,7 +548,7 @@ export class CotizacionesService {
             .from("cotizaciones")
             .select(`
                 *,
-                items:cotizaciones_items (*),
+                items:cotizaciones_items (*, tipo_servicio:tipo_servicio(*)),
                 documento_generado:documentos_generados(*)
             `)
             .eq("id", id)
@@ -592,7 +592,8 @@ export class CotizacionesService {
             <tr>
                 <td style="padding: 8px; border-bottom: 1px solid #eee;">${index + 1}</td>
                 <td style="padding: 8px; border-bottom: 1px solid #eee;">
-                     <strong>${item.descripcion || 'Servicio ' + item.tipo_servicio_id}</strong>
+                     <strong>${item.tipo_servicio?.nombre || 'Servicio'}</strong><br/>
+                     <span style="font-size:12px; color:#555;">${item.descripcion || ''}</span>
                 </td>
                 <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${item.cantidad}</td>
                 <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${formatter.format(item.valor_unitario)}</td>
@@ -601,8 +602,8 @@ export class CotizacionesService {
         `).join('');
 
         const itemsFormatted = (cotizacion.items || []).map((item: any) => ({
-            descripcion: item.descripcion || 'Servicio ' + (item.tipo_servicio_id || ''),
-            detalle: item.detalle || '',
+            titulo: item.tipo_servicio?.nombre || 'Servicio',
+            descripcion: item.descripcion || '',
             total_formateado: formatter.format(item.total_linea || 0)
         }));
 
