@@ -18,7 +18,7 @@ export class ComplianceService {
         usuario_id: number;
         entidad: string;
         entidad_id: string;
-        accion: 'VIEW' | 'DOWNLOAD' | 'MODIFY' | 'DELETE';
+        accion: 'VIEW' | 'DOWNLOAD' | 'MODIFY' | 'DELETE' | 'ACCEPT' | 'REJECT' | 'REVOKE' | 'CREATE_VERSION';
         detalles?: any;
         ip?: string;
         user_agent?: string;
