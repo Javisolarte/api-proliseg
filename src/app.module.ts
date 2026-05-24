@@ -124,6 +124,7 @@ import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { ComplianceModule } from './modules/compliance/compliance.module';
 import { RadioOperacionModule } from './modules/radio-operacion/radio-operacion.module';
 import { ControlAccesoModule } from './modules/control-acceso/control-acceso.module';
+import { ControlRondasModule } from './modules/control-rondas/control-rondas.module';
 
 @Module({
   imports: [
@@ -268,6 +269,7 @@ import { ControlAccesoModule } from './modules/control-acceso/control-acceso.mod
     // 🆕 Radio Operación
     RadioOperacionModule,
     ControlAccesoModule,
+    ControlRondasModule,
   ],
   providers: [
     {

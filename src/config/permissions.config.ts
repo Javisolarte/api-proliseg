@@ -48,6 +48,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, string[]> = {
         'turnos_reemplazos',
         'minutas', 'minutas.read', 'minutas.write',
         'rutas',
+        'rondas',
 
         // Comercial
         'clientes', 'clientes.read', 'clientes.write', 'clientes.delete', 'clientes.contracts',
@@ -92,6 +93,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, string[]> = {
         'turnos_reemplazos',
         'minutas', 'minutas.read', 'minutas.write',
         'rutas',
+        'rondas',
 
         // Comercial
         'clientes', 'clientes.read', 'clientes.write', 'clientes.delete', 'clientes.contracts',
@@ -135,6 +137,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, string[]> = {
         'turnos_reemplazos',
         'minutas', 'minutas.read', 'minutas.write',
         'rutas',
+        'rondas',
         'asignar-turnos',
 
         // Comercial (solo lectura)
@@ -168,6 +171,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, string[]> = {
         'recorridos', 'recorridos.read',
         'minutas', 'minutas.read',
         'rutas',
+        'rondas',
 
         // Seguridad / Novedades (solo lectura)
         'novedades', 'novedades.read',
@@ -187,6 +191,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, string[]> = {
         'minutas', 'minutas.read', 'minutas.write',
         'novedades', 'novedades.read', 'novedades.write',
         'rutas',
+        'rondas',
         'listar-notificaciones',
         'app_movil_vigilante',
     ],
@@ -199,6 +204,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, string[]> = {
         'minutas', 'minutas.read',
         'novedades', 'novedades.read',
         'rutas',
+        'rondas',
         'listar-notificaciones',
     ],
 };
