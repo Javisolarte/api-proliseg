@@ -74,4 +74,47 @@ export class ControlAccesoController {
       res.status(500).send({ message: 'Error snapshot' });
     }
   }
+
+  @Get('recopilacion/lugares')
+  @ApiOperation({ summary: 'Lista lugares de recopilacion de datos' })
+  async getLugaresRecopilacion() {
+    return this.controlAccesoService.getLugaresRecopilacion();
+  }
+
+  @Post('recopilacion/lugares')
+  @ApiOperation({ summary: 'Crea lugar y link de recopilacion de datos' })
+  async createLugarRecopilacion(
+    @Body() body: {
+      nombre_lugar: string;
+      descripcion?: string;
+      requiere_torre?: boolean;
+      creado_por?: number;
+    }
+  ) {
+    return this.controlAccesoService.createLugarRecopilacion(body);
+  }
+
+  @Get('recopilacion/lugares/:lugarId/registros')
+  @ApiOperation({ summary: 'Lista registros de recopilacion por lugar' })
+  async getRegistrosRecopilacion(@Param('lugarId') lugarId: string) {
+    return this.controlAccesoService.getRegistrosRecopilacion(Number(lugarId));
+  }
+
+  @Public()
+  @Get('recopilacion/public/:token')
+  @ApiOperation({ summary: 'Obtiene metadata publica del formulario por token' })
+  async getPublicForm(@Param('token') token: string) {
+    return this.controlAccesoService.getPublicForm(token);
+  }
+
+  @Public()
+  @Post('recopilacion/public/:token/registrar')
+  @ApiOperation({ summary: 'Registra datos del formulario publico con consentimiento' })
+  async registrarPublico(
+    @Param('token') token: string,
+    @Body() body: any,
+    @Req() req: any
+  ) {
+    return this.controlAccesoService.registrarPublico(token, body, req);
+  }
 }

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { SupabaseService } from '../supabase/supabase.service';
 import { CreateDispositivoDto, CreatePersonaAccesoDto } from './dto/control-acceso.dto';
+import { randomBytes } from 'crypto';
 
 @Injectable()
 export class ControlAccesoService {
@@ -176,5 +177,118 @@ export class ControlAccesoService {
       this.logger.error(`❌ [DYNAMIC PROXY ERROR] ${targetIp} -> ${path}: ${error.message}`);
       throw error;
     }
+  }
+
+  async getLugaresRecopilacion() {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('control_acceso_recoleccion_lugares')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  }
+
+  async createLugarRecopilacion(input: {
+    nombre_lugar: string;
+    descripcion?: string;
+    requiere_torre?: boolean;
+    creado_por?: number;
+  }) {
+    const token = randomBytes(16).toString('hex');
+    const payload = {
+      nombre_lugar: input.nombre_lugar,
+      descripcion: input.descripcion || null,
+      requiere_torre: input.requiere_torre ?? false,
+      token_publico: token,
+      activo: true,
+      creado_por: input.creado_por || null,
+    };
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('control_acceso_recoleccion_lugares')
+      .insert(payload)
+      .select('*')
+      .single();
+    if (error) throw error;
+    return {
+      ...data,
+      link_publico: `/public/control-acceso/recopilacion/${token}`,
+    };
+  }
+
+  async getRegistrosRecopilacion(lugarId: number) {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('control_acceso_recoleccion_registros')
+      .select('*')
+      .eq('lugar_id', lugarId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  }
+
+  async getPublicForm(token: string) {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('control_acceso_recoleccion_lugares')
+      .select('id,nombre_lugar,descripcion,requiere_torre,activo')
+      .eq('token_publico', token)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data || !data.activo) return null;
+    return data;
+  }
+
+  async registrarPublico(token: string, body: any, req: any) {
+    const form = await this.getPublicForm(token);
+    if (!form) throw new Error('Formulario no disponible');
+    if (!body?.acepta_tratamiento_datos) throw new Error('Debe aceptar tratamiento de datos');
+
+    let fotoUrl: string | null = null;
+    if (body.foto_base64 && String(body.foto_base64).startsWith('data:image/')) {
+      const match = String(body.foto_base64).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+      if (match) {
+        const ext = match[1].includes('png') ? 'png' : 'jpg';
+        const fileName = `control-acceso-${form.id}-${Date.now()}.${ext}`;
+        const filePath = `${form.id}/${fileName}`;
+        const fileBuffer = Buffer.from(match[2], 'base64');
+        const { error: uploadError } = await this.supabase
+          .getClient()
+          .storage
+          .from('control-acceso-faces')
+          .upload(filePath, fileBuffer, { upsert: true, contentType: match[1] });
+        if (!uploadError) {
+          const { data: pub } = this.supabase.getClient().storage.from('control-acceso-faces').getPublicUrl(filePath);
+          fotoUrl = pub?.publicUrl || null;
+        }
+      }
+    }
+
+    const payload = {
+      lugar_id: form.id,
+      nombre_completo: body.nombre_completo,
+      cedula: body.cedula,
+      telefono: body.telefono,
+      telefono2: body.telefono2 || null,
+      correo_electronico: body.correo_electronico || null,
+      apartamento: body.apartamento || null,
+      torre: body.torre || null,
+      placa_vehiculo: body.placa_vehiculo || null,
+      color_vehiculo: body.color_vehiculo || null,
+      foto_rostro_url: fotoUrl,
+      acepta_tratamiento_datos: true,
+      acepta_ingreso_prolicontrol: !!body.acepta_ingreso_prolicontrol,
+      user_agent: req?.headers?.['user-agent'] || null,
+      ip_origen: req?.ip || null,
+    };
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('control_acceso_recoleccion_registros')
+      .insert(payload)
+      .select('*')
+      .single();
+    if (error) throw error;
+    return data;
   }
 }
