@@ -19,7 +19,7 @@ import {
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth("JWT-auth")
 export class ControlRondasController {
-  constructor(private readonly service: ControlRondasService) {}
+  constructor(private readonly service: ControlRondasService) { }
 
   @Get("dashboard")
   @RequirePermissions("rondas")
@@ -43,14 +43,14 @@ export class ControlRondasController {
   }
 
   @Post("configuracion")
-  @RequirePermissions("rondas", "crear")
+  @RequirePermissions("rondas")
   @ApiOperation({ summary: "Activar o actualizar control de rondas en un puesto" })
   upsertConfiguracion(@Body() dto: UpsertConfiguracionRondaDto, @CurrentUser() user: any) {
     return this.service.upsertConfiguracion(dto, user?.id);
   }
 
   @Post("configuracion/:configuracionId/puntos")
-  @RequirePermissions("rondas", "crear")
+  @RequirePermissions("rondas")
   @ApiOperation({ summary: "Crear o actualizar un punto QR de control" })
   upsertPunto(
     @Param("configuracionId", ParseIntPipe) configuracionId: number,
@@ -60,7 +60,7 @@ export class ControlRondasController {
   }
 
   @Post("configuracion/:configuracionId/puntos/bulk")
-  @RequirePermissions("rondas", "crear")
+  @RequirePermissions("rondas")
   @ApiOperation({ summary: "Crear o actualizar varios puntos de control" })
   replacePuntos(
     @Param("configuracionId", ParseIntPipe) configuracionId: number,
@@ -70,21 +70,21 @@ export class ControlRondasController {
   }
 
   @Patch("puntos/:puntoId/rotar-qr")
-  @RequirePermissions("rondas", "actualizar")
+  @RequirePermissions("rondas")
   @ApiOperation({ summary: "Rotar el secreto QR de un punto antifraude" })
   rotateQr(@Param("puntoId", ParseIntPipe) puntoId: number) {
     return this.service.rotateQr(puntoId);
   }
 
   @Post("ejecuciones/iniciar")
-  @RequirePermissions("rondas", "crear")
+  @RequirePermissions("rondas")
   @ApiOperation({ summary: "Iniciar una ronda desde app móvil o web" })
   iniciar(@Body() dto: IniciarRondaControlDto, @CurrentUser() user: any) {
     return this.service.iniciar(dto, user);
   }
 
   @Post("ejecuciones/:ejecucionId/lecturas")
-  @RequirePermissions("rondas", "crear")
+  @RequirePermissions("rondas")
   @ApiOperation({ summary: "Registrar lectura QR, GPS y evidencia de un punto" })
   registrarLectura(
     @Param("ejecucionId", ParseIntPipe) ejecucionId: number,
@@ -95,7 +95,7 @@ export class ControlRondasController {
   }
 
   @Patch("ejecuciones/:ejecucionId/finalizar")
-  @RequirePermissions("rondas", "actualizar")
+  @RequirePermissions("rondas")
   @ApiOperation({ summary: "Finalizar una ronda y calcular cumplimiento" })
   finalizar(@Param("ejecucionId", ParseIntPipe) ejecucionId: number, @Body() dto: FinalizarRondaControlDto) {
     return this.service.finalizar(ejecucionId, dto);
