@@ -51,13 +51,23 @@ export class PuestosService {
         ),
         subpuestos:subpuestos_trabajo!subpuestos_trabajo_puesto_id_fkey(
           *,
-          configuracion:turnos_configuracion!subpuestos_trabajo_configuracion_id_fkey (
+        configuracion:turnos_configuracion!subpuestos_trabajo_configuracion_id_fkey (
+          id,
+          nombre,
+          dias_ciclo,
+          activo,
+          tipo_proyeccion,
+          detalles:turnos_detalle_configuracion!turnos_detalle_configuracion_configuracion_id_fkey(
             id,
-            nombre,
-            dias_ciclo,
-            activo,
-            detalles:turnos_detalle_configuracion!turnos_detalle_configuracion_configuracion_id_fkey(tipo)
-          ),
+            orden,
+            tipo,
+            hora_inicio,
+            hora_fin,
+            plazas,
+            dias_semana,
+            aplica_festivos
+          )
+        ),
           asignaciones:asignacion_guardas_puesto!asignacion_guardas_puesto_subpuesto_id_fkey(
             id,
             activo
@@ -103,13 +113,23 @@ export class PuestosService {
         ),
         subpuestos:subpuestos_trabajo!subpuestos_trabajo_puesto_id_fkey(
           *,
-          configuracion:turnos_configuracion!subpuestos_trabajo_configuracion_id_fkey (
+        configuracion:turnos_configuracion!subpuestos_trabajo_configuracion_id_fkey (
+          id,
+          nombre,
+          dias_ciclo,
+          activo,
+          tipo_proyeccion,
+          detalles:turnos_detalle_configuracion!turnos_detalle_configuracion_configuracion_id_fkey(
             id,
-            nombre,
-            dias_ciclo,
-            activo,
-            detalles:turnos_detalle_configuracion!turnos_detalle_configuracion_configuracion_id_fkey(tipo)
-          ),
+            orden,
+            tipo,
+            hora_inicio,
+            hora_fin,
+            plazas,
+            dias_semana,
+            aplica_festivos
+          )
+        ),
           asignaciones:asignacion_guardas_puesto!asignacion_guardas_puesto_subpuesto_id_fkey(
             id,
             activo
@@ -137,7 +157,19 @@ export class PuestosService {
         configuracion:configuracion_id (
           id,
           nombre,
-          dias_ciclo
+          dias_ciclo,
+          activo,
+          tipo_proyeccion,
+          detalles:turnos_detalle_configuracion!turnos_detalle_configuracion_configuracion_id_fkey(
+            id,
+            orden,
+            tipo,
+            hora_inicio,
+            hora_fin,
+            plazas,
+            dias_semana,
+            aplica_festivos
+          )
         )
       `)
       .eq("puesto_id", id)
@@ -309,7 +341,18 @@ export class PuestosService {
           id,
           nombre,
           dias_ciclo,
-          activo
+          activo,
+          tipo_proyeccion,
+          detalles:turnos_detalle_configuracion!turnos_detalle_configuracion_configuracion_id_fkey(
+            id,
+            orden,
+            tipo,
+            hora_inicio,
+            hora_fin,
+            plazas,
+            dias_semana,
+            aplica_festivos
+          )
         )
       `)
       .eq("puesto_id", puestoId)

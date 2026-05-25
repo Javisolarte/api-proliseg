@@ -32,7 +32,18 @@ export class SubpuestosService {
           id,
           nombre,
           dias_ciclo,
-          activo
+          activo,
+          tipo_proyeccion,
+          detalles:turnos_detalle_configuracion!turnos_detalle_configuracion_configuracion_id_fkey(
+            id,
+            orden,
+            tipo,
+            hora_inicio,
+            hora_fin,
+            plazas,
+            dias_semana,
+            aplica_festivos
+          )
         )
       `)
       .order("created_at", { ascending: false });
@@ -60,7 +71,18 @@ export class SubpuestosService {
           id,
           nombre,
           dias_ciclo,
-          activo
+          activo,
+          tipo_proyeccion,
+          detalles:turnos_detalle_configuracion!turnos_detalle_configuracion_configuracion_id_fkey(
+            id,
+            orden,
+            tipo,
+            hora_inicio,
+            hora_fin,
+            plazas,
+            dias_semana,
+            aplica_festivos
+          )
         )
       `)
       .eq("id", id)

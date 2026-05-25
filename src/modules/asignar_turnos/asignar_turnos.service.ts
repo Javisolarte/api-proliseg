@@ -20,6 +20,7 @@ interface EmpleadoInfo {
   empleado: {
     id: number;
     nombre_completo: string;
+    orden?: number;
     activo: boolean;
   };
 }
@@ -54,6 +55,42 @@ export class AsignarTurnosService {
     if (t === 'N' || t === 'NOCHE' || t === 'NOCTURNO' || t === 'N12') return 'N';
     if (t === 'Z' || t === 'DESCANSO' || t === 'X' || t === 'OFF' || t === 'Z_RELEVO') return 'Z';
     return t;
+  }
+
+  private calcularFasesAutomaticas(detalles: DetalleTurno[], guardasActivos: number): number[] {
+    const guardasPorBloque = Math.max(1, Number(guardasActivos) || 1);
+    const bloques: { inicio: number; largo: number; tipo: string }[] = [];
+
+    detalles.forEach((detalle, index) => {
+      const tipo = this.normalizarTipoTurno(detalle.tipo);
+      const ultimo = bloques[bloques.length - 1];
+
+      if (ultimo && ultimo.tipo === tipo) {
+        ultimo.largo++;
+      } else {
+        bloques.push({ inicio: index, largo: 1, tipo });
+      }
+    });
+
+    const fases: number[] = [];
+
+    bloques.forEach((bloque) => {
+      for (let plaza = 0; plaza < guardasPorBloque; plaza++) {
+        fases.push(bloque.inicio + (plaza % bloque.largo));
+      }
+    });
+
+    return fases.length > 0 ? fases : [0];
+  }
+
+  private obtenerFaseAutomatica(
+    indexTitular: number,
+    detalles: DetalleTurno[],
+    guardasActivos: number,
+  ): number {
+    const fases = this.calcularFasesAutomaticas(detalles, guardasActivos);
+    const cicloLength = Math.max(1, detalles.length);
+    return fases[indexTitular % fases.length] % cicloLength;
   }
 
   /**
@@ -330,6 +367,7 @@ export class AsignarTurnosService {
         empleado:empleado_id (
           id,
           nombre_completo,
+          orden,
           activo
         )
       `)
@@ -433,12 +471,21 @@ export class AsignarTurnosService {
       this.logger.log('🔄 Usando Estrategia Cíclica (Rotativa)');
 
       // 1. Separar equipo por roles
-      const equipo = (empleadosRaw || []).sort((a, b) => a.id - b.id);
+      const equipo = (empleadosRaw || []).sort((a, b) => {
+        const ordenA = Number(a.empleado?.orden);
+        const ordenB = Number(b.empleado?.orden);
+        const tieneOrdenA = Number.isFinite(ordenA);
+        const tieneOrdenB = Number.isFinite(ordenB);
+
+        if (tieneOrdenA && tieneOrdenB && ordenA !== ordenB) return ordenA - ordenB;
+        if (tieneOrdenA !== tieneOrdenB) return tieneOrdenA ? -1 : 1;
+        return a.id - b.id;
+      });
       const titulares = equipo.filter(e => !e.rol_puesto || e.rol_puesto === 'titular');
       const relevantes = equipo.filter(e => e.rol_puesto === 'relevante');
 
-      // Calcular offset automático base si no hay manual (solo sobre titulares)
-      const offsetPorEmpleado = titulares.length > 0 ? Math.floor(cicloLength / titulares.length) : 0;
+      const fasesAutomaticas = this.calcularFasesAutomaticas(detalles, guardasActivos);
+      this.logger.log(`Fases automaticas por configuracion: ${fasesAutomaticas.join(', ')}`);
 
       // Mapa para rastrear huecos por día: { "[fecha]_[plaza]": { horaInc, horaFin, tipo, orden } }
       const huecosPorDia = new Map<string, any>();
@@ -471,9 +518,12 @@ export class AsignarTurnosService {
           this.logger.log(`👤 TITULAR: ${empleado.nombre_completo} -> OFFSET DESDE HISTORIAL: ${offsetPersonalizado} (continuidad garantizada)`);
         } else {
           // 🔄 FALLBACK: Usar ancla + fase_inicial (para empleados nuevos sin historial)
-          const faseIni = (empRaw.fase_inicial !== null && empRaw.fase_inicial !== undefined)
+          const faseManual = (empRaw.fase_inicial !== null && empRaw.fase_inicial !== undefined)
             ? parseInt(empRaw.fase_inicial.toString(), 10)
-            : (index * offsetPorEmpleado); // 🚀 FIX: Staggered offset for automatic mode
+            : null;
+          const faseIni = typeof faseManual === 'number' && Number.isFinite(faseManual)
+            ? faseManual
+            : this.obtenerFaseAutomatica(index, detalles, guardasActivos);
 
           const anchorDateStr = empRaw.fecha_inicio_patron || 
                                (empRaw.created_at ? empRaw.created_at.split('T')[0].substring(0, 8) + '01' : '2026-03-01');
@@ -635,7 +685,16 @@ export class AsignarTurnosService {
       // ===========================================================================
       this.logger.log('🧠 Usando Estrategia Inteligente (Reglas + Turneros)');
 
-      const equipo = (empleadosRaw || []).sort((a, b) => a.id - b.id);
+      const equipo = (empleadosRaw || []).sort((a, b) => {
+        const ordenA = Number(a.empleado?.orden);
+        const ordenB = Number(b.empleado?.orden);
+        const tieneOrdenA = Number.isFinite(ordenA);
+        const tieneOrdenB = Number.isFinite(ordenB);
+
+        if (tieneOrdenA && tieneOrdenB && ordenA !== ordenB) return ordenA - ordenB;
+        if (tieneOrdenA !== tieneOrdenB) return tieneOrdenA ? -1 : 1;
+        return a.id - b.id;
+      });
       const titulares = equipo.filter(e => !e.rol_puesto || e.rol_puesto === 'titular');
       const relevantes = equipo.filter(e => e.rol_puesto === 'relevante');
 
@@ -718,9 +777,12 @@ export class AsignarTurnosService {
     // ✅ 6. DEDUPLICACIÓN EN MEMORIA antes de insertar (capa de seguridad en aplicación)
     // Clave única: empleado_id + subpuesto_id + fecha
     // Si el mismo par ya se generó en el loop (por bug de configuración), se descarta el segundo.
+    const keyTurnoEmpleadoDia = (t: any) =>
+      `${t.empleado_id}_${t.subpuesto_id ?? 'null'}_${String(t.fecha).split('T')[0]}`;
+
     const dedupMap = new Map<string, any>();
     for (const t of turnosParaInsertar) {
-      const key = `${t.empleado_id}_${t.subpuesto_id ?? 'null'}_${t.fecha}`;
+      const key = keyTurnoEmpleadoDia(t);
       if (!dedupMap.has(key)) {
         dedupMap.set(key, t);
       } else {
@@ -733,19 +795,52 @@ export class AsignarTurnosService {
       this.logger.warn(`🔒 Deduplicación: ${turnosParaInsertar.length - turnosUnicos.length} turnos duplicados eliminados antes de insertar`);
     }
 
+    let turnosAInsertar = turnosUnicos;
+    let omitidosPorExistir = 0;
+
+    if (turnosUnicos.length > 0) {
+      const fechas = turnosUnicos.map(t => String(t.fecha).split('T')[0]).sort();
+      const fechaMin = fechas[0];
+      const fechaMax = fechas[fechas.length - 1];
+
+      const { data: turnosExistentes, error: existentesError } = await supabase
+        .from('turnos')
+        .select('empleado_id, subpuesto_id, fecha')
+        .eq('subpuesto_id', subpuesto_id)
+        .gte('fecha', fechaMin)
+        .lte('fecha', fechaMax)
+        .not('empleado_id', 'is', null);
+
+      if (existentesError) {
+        this.logger.error(`❌ Error verificando turnos existentes: ${existentesError.message}`);
+        throw existentesError;
+      }
+
+      const existentesSet = new Set((turnosExistentes || []).map(keyTurnoEmpleadoDia));
+      turnosAInsertar = turnosUnicos.filter(t => !existentesSet.has(keyTurnoEmpleadoDia(t)));
+      omitidosPorExistir = turnosUnicos.length - turnosAInsertar.length;
+
+      if (omitidosPorExistir > 0) {
+        this.logger.warn(`ℹ️ ${omitidosPorExistir} turnos ya existian y no se duplicaron`);
+      }
+    }
+
     // Insertar en lotes de 500 para evitar timeouts
     const INSERT_BATCH = 500;
-    if (turnosUnicos.length > 0) {
-      for (let i = 0; i < turnosUnicos.length; i += INSERT_BATCH) {
-        const batch = turnosUnicos.slice(i, i + INSERT_BATCH);
+    let turnosInsertados = 0;
+    if (turnosAInsertar.length > 0) {
+      for (let i = 0; i < turnosAInsertar.length; i += INSERT_BATCH) {
+        const batch = turnosAInsertar.slice(i, i + INSERT_BATCH);
         const { error: insertError } = await supabase
           .from('turnos')
-          .upsert(batch, { onConflict: 'subpuesto_id,fecha,plaza_no' });
+          .insert(batch);
 
         if (insertError) {
           this.logger.error(`❌ Error insertando turnos (lote ${Math.floor(i/INSERT_BATCH)+1}): ${insertError.message}`);
           throw insertError;
         }
+
+        turnosInsertados += batch.length;
       }
     }
 
@@ -758,18 +853,19 @@ export class AsignarTurnosService {
         mes: fechaBase.getMonth() + 1,
         año: fechaBase.getFullYear(),
         generado_por: asignado_por,
-        descripcion: `Generados ${turnosParaInsertar.length} turnos para ${empleados.length} empleados con ${guardasActivos} activos (incluye descansos)`,
+        descripcion: `Generados ${turnosInsertados} turnos para ${empleados.length} empleados con ${guardasActivos} activos (incluye descansos)`,
       });
     } catch (logError) {
       this.logger.warn('⚠️ No se pudo registrar el log de generación, pero los turnos se insertaron.');
     }
 
-    this.logger.log(`✅ ${turnosParaInsertar.length} turnos generados exitosamente`);
+    this.logger.log(`✅ ${turnosInsertados} turnos generados exitosamente`);
     this.logger.log(`📊 Distribución: ${empleados.length} empleados en ${Math.ceil(empleados.length / guardasActivos)} grupos`);
 
     return {
       message: 'Turnos generados exitosamente',
-      total_turnos: turnosParaInsertar.length,
+      total_turnos: turnosInsertados,
+      omitidos_por_existir: omitidosPorExistir,
       empleados: empleados.length,
       dias: numeroDeDiasAGenerar,
       guardas_activos: guardasActivos,

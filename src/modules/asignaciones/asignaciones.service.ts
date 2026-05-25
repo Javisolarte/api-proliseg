@@ -19,6 +19,18 @@ export class AsignacionesService {
     private readonly turnosHelper: TurnosHelperService,
   ) { }
 
+  private formatDateOnly(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  private getPrimerDiaMesActual(): string {
+    const fechaHoy = new Date();
+    return this.formatDateOnly(new Date(fechaHoy.getFullYear(), fechaHoy.getMonth(), 1));
+  }
+
   // 🔹 Listar todas las asignaciones
   async findAll() {
     const supabase = this.supabaseService.getClient();
@@ -198,8 +210,7 @@ export class AsignacionesService {
     }
 
     // ✅ 5. Determinar fecha de inicio (Default: día 1 del mes actual)
-    const fechaHoy = new Date();
-    const primerDiaMes = new Date(fechaHoy.getFullYear(), fechaHoy.getMonth(), 1).toISOString().split('T')[0];
+    const primerDiaMes = this.getPrimerDiaMesActual();
     
     const fechaInicioEfectiva = dto.fecha_asignacion || dto.fecha_inicio_patron || primerDiaMes;
 
@@ -914,8 +925,7 @@ export class AsignacionesService {
     }
 
     // ✅ Determinar fecha de inicio (Default: día 1 del mes actual)
-    const fechaHoy = new Date();
-    const primerDiaMes = new Date(fechaHoy.getFullYear(), fechaHoy.getMonth(), 1).toISOString().split('T')[0];
+    const primerDiaMes = this.getPrimerDiaMesActual();
     
     const fechaEfectiva = fechaReemplazo || primerDiaMes;
     const horaActual = new Date().toISOString().split('T')[1].split('.')[0];

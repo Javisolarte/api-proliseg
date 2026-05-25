@@ -11,9 +11,10 @@ import { IaModule } from '../ia/ia.module';
 import { BotonPanicoModule } from '../boton-panico/boton-panico.module';
 import { UbicacionesModule } from '../ubicaciones/ubicaciones.module';
 import { VisitasTecnicasModule } from '../visitas-tecnicas/visitas-tecnicas.module';
+import { ControlRondasModule } from '../control-rondas/control-rondas.module';
 
 @Module({
-    imports: [SupabaseModule, AuthModule, PqrsfModule, IaModule, BotonPanicoModule, UbicacionesModule, VisitasTecnicasModule],
+    imports: [SupabaseModule, AuthModule, PqrsfModule, IaModule, BotonPanicoModule, UbicacionesModule, VisitasTecnicasModule, ControlRondasModule],
     controllers: [
         AutoservicioEmpleadoController, 
         AutoservicioClienteController, 

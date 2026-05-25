@@ -11,6 +11,12 @@ import {
     RegistrarMiAsistenciaEntradaDto,
     RegistrarMiAsistenciaSalidaDto
 } from './dto/autoservicio-empleado.dto';
+import {
+    FinalizarMiRondaDto,
+    IniciarMiRondaDto,
+    RegistrarCheckQrRondaDto,
+    TrackingMiRondaDto
+} from './dto/autoservicio-rondas.dto';
 
 @ApiTags('Autoservicio - Empleado')
 @Controller('mi-nomina')
@@ -184,5 +190,90 @@ export class AutoservicioEmpleadoController {
     @ApiOperation({ summary: 'Crear minuta (solo si tiene turno activo)' })
     async createMinuta(@CurrentUser() user: any, @Body() minutaDto: CreateMinutaDto) {
         return this.autoservicioService.createMinuta(user.id, minutaDto);
+    }
+
+    // --- CONTROL DE RONDAS (APP MOVIL VIGILANTE) ---
+    @Get('mi-rondas')
+    @ApiOperation({ summary: 'Listar rondas disponibles para el puesto actual del vigilante' })
+    async getMisRondas(@CurrentUser() user: any) {
+        return this.autoservicioService.getMisRondas(user.id);
+    }
+
+    @Get('mi-rondas/pendientes')
+    @ApiOperation({ summary: 'Rondas pendientes o con recordatorio para el vigilante' })
+    async getMisRondasPendientes(@CurrentUser() user: any) {
+        return this.autoservicioService.getMisRondasPendientes(user.id);
+    }
+
+    @Get('mi-rondas/activa')
+    @ApiOperation({ summary: 'Obtener la ronda actualmente en proceso del vigilante' })
+    async getMiRondaActiva(@CurrentUser() user: any) {
+        return this.autoservicioService.getMiRondaActiva(user.id);
+    }
+
+    @Post('mi-rondas/iniciar')
+    @ApiOperation({ summary: 'Iniciar una ronda desde la app movil' })
+    async iniciarMiRonda(@CurrentUser() user: any, @Body() dto: IniciarMiRondaDto) {
+        return this.autoservicioService.iniciarMiRonda(user.id, dto);
+    }
+
+    @Post('mi-rondas/:ejecucionId/check')
+    @ApiOperation({ summary: 'Registrar lectura QR de un punto de ronda' })
+    async registrarCheckRonda(
+        @CurrentUser() user: any,
+        @Param('ejecucionId', ParseIntPipe) ejecucionId: number,
+        @Body() dto: RegistrarCheckQrRondaDto
+    ) {
+        return this.autoservicioService.registrarCheckMiRonda(user.id, ejecucionId, dto);
+    }
+
+    @Post('mi-rondas/:ejecucionId/check-foto')
+    @ApiOperation({ summary: 'Subir foto al bucket evidenciaronda y registrar lectura QR' })
+    @UseInterceptors(FileInterceptor('file'))
+    async registrarCheckRondaConFoto(
+        @CurrentUser() user: any,
+        @Param('ejecucionId', ParseIntPipe) ejecucionId: number,
+        @UploadedFile() file: any,
+        @Body() dto: RegistrarCheckQrRondaDto
+    ) {
+        return this.autoservicioService.registrarCheckMiRondaConFoto(user.id, ejecucionId, dto, file);
+    }
+
+    @Post('mi-rondas/:ejecucionId/evidencia')
+    @ApiOperation({ summary: 'Subir evidencia fotografica de la ronda al bucket evidenciaronda' })
+    @UseInterceptors(FileInterceptor('file'))
+    async subirEvidenciaRonda(
+        @CurrentUser() user: any,
+        @Param('ejecucionId', ParseIntPipe) ejecucionId: number,
+        @UploadedFile() file: any,
+        @Body() body: any
+    ) {
+        return this.autoservicioService.subirEvidenciaMiRonda(user.id, ejecucionId, file, body);
+    }
+
+    @Post('mi-rondas/:ejecucionId/tracking')
+    @ApiOperation({ summary: 'Enviar tracking GPS durante una ronda' })
+    async trackingMiRonda(
+        @CurrentUser() user: any,
+        @Param('ejecucionId', ParseIntPipe) ejecucionId: number,
+        @Body() dto: TrackingMiRondaDto
+    ) {
+        return this.autoservicioService.registrarTrackingMiRonda(user.id, ejecucionId, dto);
+    }
+
+    @Get('mi-rondas/:ejecucionId/tracking')
+    @ApiOperation({ summary: 'Consultar tracking, lecturas y evidencias de mi ronda' })
+    async getTrackingMiRonda(@CurrentUser() user: any, @Param('ejecucionId', ParseIntPipe) ejecucionId: number) {
+        return this.autoservicioService.getTrackingMiRonda(user.id, ejecucionId);
+    }
+
+    @Post('mi-rondas/:ejecucionId/finalizar')
+    @ApiOperation({ summary: 'Finalizar ronda desde la app movil' })
+    async finalizarMiRonda(
+        @CurrentUser() user: any,
+        @Param('ejecucionId', ParseIntPipe) ejecucionId: number,
+        @Body() dto: FinalizarMiRondaDto
+    ) {
+        return this.autoservicioService.finalizarMiRonda(user.id, ejecucionId, dto);
     }
 }

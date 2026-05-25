@@ -6,12 +6,19 @@ import { calcularDistancia } from '../asistencias/utils/distancia.util';
 import { analizarAsistenciaIA } from '../asistencias/utils/ia.util';
 import { BotonPanicoService } from '../boton-panico/boton-panico.service';
 import { UbicacionesService } from '../ubicaciones/ubicaciones.service';
+import { ControlRondasService } from '../control-rondas/control-rondas.service';
 import {
     ActivarMiPanicoDto,
     RegistrarMiUbicacionDto,
     RegistrarMiAsistenciaEntradaDto,
     RegistrarMiAsistenciaSalidaDto
 } from './dto/autoservicio-empleado.dto';
+import {
+    FinalizarMiRondaDto,
+    IniciarMiRondaDto,
+    RegistrarCheckQrRondaDto,
+    TrackingMiRondaDto
+} from './dto/autoservicio-rondas.dto';
 import { getColombiaTime } from '../../common/helpers/time.helper';
 import {
     IniciarSupervisionDto,
@@ -41,7 +48,8 @@ export class AutoservicioService {
         private readonly pqrsfService: PqrsfService,
         private readonly gemini: GeminiService,
         private readonly panicoService: BotonPanicoService,
-        private readonly ubicacionesService: UbicacionesService
+        private readonly ubicacionesService: UbicacionesService,
+        private readonly controlRondasService: ControlRondasService
     ) { }
 
     // ------------------------------------------------------------------
@@ -1042,6 +1050,359 @@ export class AutoservicioService {
             .getPublicUrl(path);
 
         return { url: publicUrl };
+    }
+
+    // ------------------------------------------------------------------
+    // CONTROL DE RONDAS - AUTOSERVICIO VIGILANTE / APP FLUTTER
+    // ------------------------------------------------------------------
+
+    async getMisRondas(userId: number) {
+        const empleado = await this.getEmpleadoByUserId(userId);
+        const puesto = await this.getPuestoOperativoActual(empleado.id);
+        if (!puesto) return { empleado_id: empleado.id, puesto: null, rondas: [], activa: null };
+
+        const supabase = this.supabaseService.getClient();
+        const { data: configs, error } = await supabase
+            .from('rondas_configuracion_puesto')
+            .select(`
+                *,
+                puesto:puestos_trabajo(id,nombre,codigo_puesto,direccion,ciudad,latitud,longitud),
+                puntos:rondas_puntos_control(*)
+            `)
+            .eq('puesto_id', puesto.id)
+            .eq('activo', true)
+            .order('created_at', { ascending: false });
+
+        if (error) throw new BadRequestException(error.message);
+        const activa = await this.getMiRondaActiva(userId);
+
+        return {
+            empleado_id: empleado.id,
+            puesto,
+            activa: activa?.id ? activa : null,
+            rondas: (configs || []).map((config) => ({
+                ...config,
+                puntos: (config.puntos || []).filter((p) => p.activo).sort((a, b) => a.orden - b.orden),
+                recordatorio: this.buildRondaReminder(config)
+            }))
+        };
+    }
+
+    async getMisRondasPendientes(userId: number) {
+        const empleado = await this.getEmpleadoByUserId(userId);
+        const payload = await this.getMisRondas(userId);
+        const supabase = this.supabaseService.getClient();
+
+        const rondas = await Promise.all((payload.rondas || []).map(async (config) => {
+            const { data: ultima } = await supabase
+                .from('rondas_ejecuciones_control')
+                .select('id,estado,inicio_real,fin_real,fin_programado,porcentaje_cumplimiento')
+                .eq('configuracion_id', config.id)
+                .eq('empleado_id', empleado.id)
+                .order('inicio_real', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+            const nextAt = this.calcularProximaRonda(ultima?.inicio_real, Number(config.frecuencia_minutos || 60));
+            const vencida = !ultima || nextAt.getTime() <= Date.now();
+            return {
+                configuracion_id: config.id,
+                puesto: payload.puesto,
+                nombre: config.nombre,
+                frecuencia_minutos: config.frecuencia_minutos,
+                duracion_objetivo_minutos: config.duracion_objetivo_minutos,
+                puntos_pendientes: config.puntos?.length || 0,
+                ultima_ronda: ultima || null,
+                proxima_ronda_at: nextAt.toISOString(),
+                debe_recordar: vencida,
+                mensaje: vencida ? 'Es hora de iniciar la ronda del puesto.' : 'La ronda aun no esta vencida.'
+            };
+        }));
+
+        return {
+            empleado_id: empleado.id,
+            activa: payload.activa,
+            pendientes: rondas.filter((r) => r.debe_recordar || payload.activa?.configuracion_id === r.configuracion_id),
+            todas: rondas
+        };
+    }
+
+    async getMiRondaActiva(userId: number) {
+        const empleado = await this.getEmpleadoByUserId(userId);
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('rondas_ejecuciones_control')
+            .select(`
+                *,
+                configuracion:rondas_configuracion_puesto(*, puntos:rondas_puntos_control(*)),
+                puesto:puestos_trabajo(id,nombre,codigo_puesto,direccion,ciudad,latitud,longitud)
+            `)
+            .eq('empleado_id', empleado.id)
+            .eq('estado', 'en_proceso')
+            .order('inicio_real', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+        if (error && error.code !== 'PGRST116') throw new BadRequestException(error.message);
+        if (!data) return null;
+
+        const tracking = await this.controlRondasService.getTracking(data.id);
+        return {
+            ...data,
+            configuracion: data.configuracion ? {
+                ...data.configuracion,
+                puntos: (data.configuracion.puntos || []).filter((p) => p.activo).sort((a, b) => a.orden - b.orden)
+            } : null,
+            lecturas: tracking.lecturas,
+            evidencias: await this.addSignedUrlsToEvidence(tracking.evidencias || [])
+        };
+    }
+
+    async iniciarMiRonda(userId: number, dto: IniciarMiRondaDto) {
+        const empleado = await this.getEmpleadoByUserId(userId);
+        const activa = await this.getMiRondaActiva(userId);
+        if (activa?.id) throw new BadRequestException('Ya tienes una ronda en proceso. Finalizala antes de iniciar otra.');
+
+        const configuracionId = dto.configuracion_id || await this.getConfiguracionRondaActualId(empleado.id);
+        const ronda = await this.controlRondasService.iniciar({
+            configuracion_id: configuracionId,
+            empleado_id: empleado.id,
+            dispositivo_id: dto.dispositivo_id
+        }, { id: userId, empleado_id: empleado.id });
+
+        if (dto.latitud && dto.longitud) {
+            await this.registrarTrackingMiRonda(userId, ronda.id, {
+                latitud: dto.latitud,
+                longitud: dto.longitud,
+                evento: 'inicio_gps',
+                dispositivo_id: dto.dispositivo_id
+            });
+        }
+
+        return this.getTrackingMiRonda(userId, ronda.id);
+    }
+
+    async registrarCheckMiRonda(userId: number, ejecucionId: number, dto: RegistrarCheckQrRondaDto) {
+        const empleado = await this.getEmpleadoByUserId(userId);
+        await this.assertMiRonda(empleado.id, ejecucionId);
+        return this.controlRondasService.registrarLectura(ejecucionId, dto, { id: userId, empleado_id: empleado.id });
+    }
+
+    async registrarCheckMiRondaConFoto(userId: number, ejecucionId: number, dto: RegistrarCheckQrRondaDto, file: any) {
+        const evidencia = file
+            ? await this.subirEvidenciaMiRonda(userId, ejecucionId, file, {
+                punto_id: dto.punto_id,
+                tipo: 'foto_check',
+                latitud: dto.latitud,
+                longitud: dto.longitud
+            })
+            : null;
+
+        const lectura = await this.registrarCheckMiRonda(userId, ejecucionId, {
+            ...dto,
+            punto_id: Number(dto.punto_id),
+            latitud: dto.latitud !== undefined ? Number(dto.latitud) : undefined,
+            longitud: dto.longitud !== undefined ? Number(dto.longitud) : undefined,
+            precision_metros: dto.precision_metros !== undefined ? Number(dto.precision_metros) : undefined,
+            evidencia_foto_url: evidencia?.signed_url || dto.evidencia_foto_url,
+            evidencia_foto_path: evidencia?.storage_path || dto.evidencia_foto_path
+        });
+
+        if (evidencia?.id) {
+            await this.supabaseService.getSupabaseAdminClient()
+                .from('rondas_evidencias')
+                .update({ lectura_id: lectura.id })
+                .eq('id', evidencia.id);
+        }
+
+        return { lectura, evidencia };
+    }
+
+    async subirEvidenciaMiRonda(userId: number, ejecucionId: number, file: any, body: any = {}) {
+        if (!file?.buffer) throw new BadRequestException('Debes enviar una foto de evidencia');
+        const empleado = await this.getEmpleadoByUserId(userId);
+        const ejecucion = await this.assertMiRonda(empleado.id, ejecucionId);
+        const ext = (file.originalname?.split('.').pop() || 'jpg').toLowerCase();
+        const safeName = (file.originalname || `evidencia.${ext}`).split('.')[0].replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        const path = `${empleado.id}/${ejecucionId}/${Date.now()}_${safeName}.${ext}`;
+        const bucket = 'evidenciaronda';
+
+        await this.supabaseService.uploadFile(bucket, path, file.buffer, file.mimetype || 'image/jpeg');
+        const signedUrl = await this.supabaseService.getSignedUrl(bucket, path, 60 * 60 * 24);
+        const supabase = this.supabaseService.getSupabaseAdminClient();
+        const { data, error } = await supabase
+            .from('rondas_evidencias')
+            .insert({
+                ejecucion_id: ejecucionId,
+                empleado_id: empleado.id,
+                tipo: body.tipo || 'foto',
+                bucket,
+                storage_path: path,
+                public_url: signedUrl,
+                tomada_at: new Date().toISOString(),
+                latitud: body.latitud !== undefined ? Number(body.latitud) : null,
+                longitud: body.longitud !== undefined ? Number(body.longitud) : null,
+                metadata: {
+                    punto_id: body.punto_id ? Number(body.punto_id) : null,
+                    originalname: file.originalname,
+                    mimetype: file.mimetype,
+                    size: file.size,
+                    puesto_id: ejecucion.puesto_id,
+                    origen: 'app_flutter'
+                }
+            })
+            .select()
+            .single();
+
+        if (error) throw new BadRequestException(error.message);
+        await this.insertRondaTracking(ejecucionId, empleado.id, body.tipo || 'evidencia_foto', {
+            latitud: body.latitud !== undefined ? Number(body.latitud) : null,
+            longitud: body.longitud !== undefined ? Number(body.longitud) : null,
+            punto_id: body.punto_id ? Number(body.punto_id) : null,
+            payload: { evidencia_id: data.id, storage_path: path }
+        });
+
+        return { ...data, signed_url: signedUrl };
+    }
+
+    async registrarTrackingMiRonda(userId: number, ejecucionId: number, dto: TrackingMiRondaDto) {
+        const empleado = await this.getEmpleadoByUserId(userId);
+        await this.assertMiRonda(empleado.id, ejecucionId);
+        return this.insertRondaTracking(ejecucionId, empleado.id, dto.evento || 'gps', {
+            latitud: Number(dto.latitud),
+            longitud: Number(dto.longitud),
+            dispositivo_id: dto.dispositivo_id,
+            payload: {
+                precision_metros: dto.precision_metros,
+                bateria: dto.bateria,
+                velocidad: dto.velocidad,
+                origen: 'app_flutter'
+            }
+        });
+    }
+
+    async getTrackingMiRonda(userId: number, ejecucionId: number) {
+        const empleado = await this.getEmpleadoByUserId(userId);
+        await this.assertMiRonda(empleado.id, ejecucionId);
+        const tracking = await this.controlRondasService.getTracking(ejecucionId);
+        return {
+            ...tracking,
+            evidencias: await this.addSignedUrlsToEvidence(tracking.evidencias || [])
+        };
+    }
+
+    async finalizarMiRonda(userId: number, ejecucionId: number, dto: FinalizarMiRondaDto) {
+        const empleado = await this.getEmpleadoByUserId(userId);
+        await this.assertMiRonda(empleado.id, ejecucionId);
+        const finalizada = await this.controlRondasService.finalizar(ejecucionId, dto);
+        await this.insertRondaTracking(ejecucionId, empleado.id, 'finalizacion_app', { payload: { estado: finalizada.estado } });
+        return finalizada;
+    }
+
+    private async getPuestoOperativoActual(empleadoId: number) {
+        const supabase = this.supabaseService.getClient();
+        const { data: asignacion } = await supabase
+            .from('asignacion_guardas_puesto')
+            .select('puesto_id, puestos_trabajo(id,nombre,codigo_puesto,direccion,ciudad,latitud,longitud)')
+            .eq('empleado_id', empleadoId)
+            .eq('activo', true)
+            .maybeSingle();
+
+        if (asignacion?.puestos_trabajo) return this.normalizeSupabaseRelation(asignacion.puestos_trabajo);
+
+        const today = new Date().toISOString().slice(0, 10);
+        const { data: turno } = await supabase
+            .from('turnos')
+            .select('puesto_id, puestos_trabajo(id,nombre,codigo_puesto,direccion,ciudad,latitud,longitud)')
+            .eq('empleado_id', empleadoId)
+            .eq('fecha', today)
+            .order('hora_inicio', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+
+        return turno?.puestos_trabajo ? this.normalizeSupabaseRelation(turno.puestos_trabajo) : null;
+    }
+
+    private async getConfiguracionRondaActualId(empleadoId: number): Promise<number> {
+        const puesto = await this.getPuestoOperativoActual(empleadoId);
+        if (!puesto?.id) throw new BadRequestException('No tienes puesto operativo asignado para iniciar ronda');
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('rondas_configuracion_puesto')
+            .select('id')
+            .eq('puesto_id', puesto.id)
+            .eq('activo', true)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+        if (error && error.code !== 'PGRST116') throw new BadRequestException(error.message);
+        if (!data?.id) throw new BadRequestException('El puesto actual no tiene control de rondas activo');
+        return data.id;
+    }
+
+    private async assertMiRonda(empleadoId: number, ejecucionId: number) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('rondas_ejecuciones_control')
+            .select('*')
+            .eq('id', ejecucionId)
+            .eq('empleado_id', empleadoId)
+            .maybeSingle();
+        if (error && error.code !== 'PGRST116') throw new BadRequestException(error.message);
+        if (!data) throw new ForbiddenException('No tienes autorizacion sobre esta ronda');
+        return data;
+    }
+
+    private async insertRondaTracking(ejecucionId: number, empleadoId: number, evento: string, data: any) {
+        const supabase = this.supabaseService.getSupabaseAdminClient();
+        const { data: row, error } = await supabase
+            .from('rondas_tracking_eventos')
+            .insert({
+                ejecucion_id: ejecucionId,
+                empleado_id: empleadoId,
+                evento,
+                punto_id: data.punto_id,
+                latitud: data.latitud,
+                longitud: data.longitud,
+                dispositivo_id: data.dispositivo_id,
+                payload: data.payload || {}
+            })
+            .select()
+            .single();
+        if (error) throw new BadRequestException(error.message);
+        return row;
+    }
+
+    private async addSignedUrlsToEvidence(evidencias: any[]) {
+        return Promise.all((evidencias || []).map(async (ev) => {
+            if (!ev.storage_path) return ev;
+            try {
+                return {
+                    ...ev,
+                    signed_url: await this.supabaseService.getSignedUrl(ev.bucket || 'evidenciaronda', ev.storage_path, 60 * 60 * 24)
+                };
+            } catch {
+                return ev;
+            }
+        }));
+    }
+
+    private calcularProximaRonda(ultimaInicio: string | null | undefined, frecuenciaMinutos: number) {
+        if (!ultimaInicio) return new Date();
+        return new Date(new Date(ultimaInicio).getTime() + frecuenciaMinutos * 60000);
+    }
+
+    private buildRondaReminder(config: any) {
+        return {
+            frecuencia_minutos: config.frecuencia_minutos,
+            duracion_objetivo_minutos: config.duracion_objetivo_minutos,
+            mensaje_base: `Cada ${config.frecuencia_minutos || 60} minutos debes realizar la ronda ${config.nombre}.`
+        };
+    }
+
+    private normalizeSupabaseRelation(value: any) {
+        return Array.isArray(value) ? value[0] : value;
     }
 
     // ------------------------------------------------------------------
