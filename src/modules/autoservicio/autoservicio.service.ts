@@ -300,7 +300,7 @@ export class AutoservicioService {
         const supabase = this.supabaseService.getClient();
 
         const puestoActual = await this.getPuestoOperativoActual(empleado.id);
-        if (!puestoActual?.puesto_id) return [];
+        if (!puestoActual?.id) return [];
 
         // 2. Ver historial completo del puesto
         const { data, error } = await supabase
@@ -309,7 +309,7 @@ export class AutoservicioService {
                 *,
                 creador:creada_por(nombre_completo) 
             `)
-            .eq('puesto_id', puestoActual.puesto_id)
+            .eq('puesto_id', puestoActual.id)
             .order('created_at', { ascending: false })
             .limit(100);
 

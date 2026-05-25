@@ -373,27 +373,10 @@ export class AsistenciasService {
       throw new BadRequestException(error.message);
     }
 
-    // Filtrar solo turnos donde el empleado estÃ¡ asignado al subpuesto
-    const turnosHabilitados: any[] = [];
-    for (const turno of turnos || []) {
-      const { data: asignacion } = await db
-        .from('asignacion_guardas_puesto')
-        .select('id')
-        .eq('empleado_id', empleado_id)
-        .eq('subpuesto_id', (turno as any).subpuesto_id)
-        .eq('activo', true)
-        .limit(1)
-        .maybeSingle();
-
-      if (asignacion) {
-        turnosHabilitados.push({
-          ...turno,
-          asistencia_habilitada: true,
-        });
-      }
-    }
-
-    return turnosHabilitados;
+    return (turnos || []).map((turno) => ({
+      ...turno,
+      asistencia_habilitada: true,
+    }));
   }
 
   // ============================================================
