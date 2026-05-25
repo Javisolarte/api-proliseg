@@ -43,6 +43,46 @@ export class ControlRondasService {
     };
   }
 
+  async getEnCurso() {
+    const supabase = this.supabaseService.getClient();
+    const { data, error } = await supabase
+      .from("rondas_ejecuciones_control")
+      .select(`
+        *,
+        empleado:empleados(id,nombres,apellidos,numero_documento),
+        puesto:puestos_trabajo(id,nombre,codigo_puesto,direccion,ciudad,latitud,longitud),
+        configuracion:rondas_configuracion_puesto(id,nombre,frecuencia_minutos,duracion_objetivo_minutos)
+      `)
+      .eq("estado", "en_proceso")
+      .order("inicio_real", { ascending: false });
+
+    if (error) throw new BadRequestException(error.message);
+
+    const ejecuciones = await Promise.all(
+      (data || []).map(async (ronda) => {
+        const { data: eventos } = await supabase
+          .from("rondas_tracking_eventos")
+          .select("*")
+          .eq("ejecucion_id", ronda.id)
+          .order("created_at", { ascending: false })
+          .limit(10);
+
+        const ultimoGps = (eventos || []).find((evento) => evento.latitud && evento.longitud);
+        return {
+          ...ronda,
+          ultimo_evento: eventos?.[0] || null,
+          ultimo_gps: ultimoGps || null,
+          tracking_reciente: eventos || [],
+        };
+      }),
+    );
+
+    return {
+      total: ejecuciones.length,
+      ejecuciones,
+    };
+  }
+
   async getPuestoControl(puestoId: number) {
     const supabase = this.supabaseService.getClient();
     const { data: puesto, error: puestoError } = await supabase

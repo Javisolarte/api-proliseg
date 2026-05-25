@@ -28,6 +28,13 @@ export class ControlRondasController {
     return this.service.dashboard();
   }
 
+  @Get("tracking/en-curso")
+  @RequirePermissions("rondas")
+  @ApiOperation({ summary: "Rondas en curso con último GPS para mapa operativo" })
+  getEnCurso() {
+    return this.service.getEnCurso();
+  }
+
   @Get("puestos/:puestoId")
   @RequirePermissions("rondas")
   @ApiOperation({ summary: "Configuración, puntos y últimas rondas de un puesto" })
