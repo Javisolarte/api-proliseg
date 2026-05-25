@@ -772,12 +772,18 @@ export class AsistenciasService {
     if (subpuestosError) throw new BadRequestException(subpuestosError.message);
 
     const subpuestoIds = (subpuestos || []).map((s: any) => s.id);
-    if (!subpuestoIds.length) return [];
 
-    const { data: turnos, error: turnosError } = await db
+    let turnosQuery = db
       .from('turnos')
-      .select('id, fecha, hora_inicio, hora_fin, subpuesto_id')
-      .in('subpuesto_id', subpuestoIds);
+      .select('id, fecha, hora_inicio, hora_fin, subpuesto_id, puesto_id');
+
+    if (subpuestoIds.length) {
+      turnosQuery = turnosQuery.or(`puesto_id.eq.${puesto_id},subpuesto_id.in.(${subpuestoIds.join(',')})`);
+    } else {
+      turnosQuery = turnosQuery.eq('puesto_id', puesto_id);
+    }
+
+    const { data: turnos, error: turnosError } = await turnosQuery;
     if (turnosError) throw new BadRequestException(turnosError.message);
 
     const turnoIds = (turnos || []).map((t: any) => t.id);
