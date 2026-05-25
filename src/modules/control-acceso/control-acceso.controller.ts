@@ -88,6 +88,7 @@ export class ControlAccesoController {
       nombre_lugar: string;
       descripcion?: string;
       requiere_torre?: boolean;
+      codigo_seguridad?: string;
       creado_por?: number;
     }
   ) {
@@ -105,6 +106,13 @@ export class ControlAccesoController {
   @ApiOperation({ summary: 'Obtiene metadata publica del formulario por token' })
   async getPublicForm(@Param('token') token: string) {
     return this.controlAccesoService.getPublicForm(token);
+  }
+
+  @Public()
+  @Post('recopilacion/public/:token/validar-codigo')
+  @ApiOperation({ summary: 'Valida codigo de seguridad del formulario publico' })
+  async validarCodigo(@Param('token') token: string, @Body() body: { codigo_seguridad: string }) {
+    return this.controlAccesoService.validarCodigo(token, body?.codigo_seguridad || '');
   }
 
   @Public()

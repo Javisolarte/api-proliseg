@@ -193,6 +193,7 @@ export class ControlAccesoService {
     nombre_lugar: string;
     descripcion?: string;
     requiere_torre?: boolean;
+    codigo_seguridad?: string;
     creado_por?: number;
   }) {
     const token = randomBytes(16).toString('hex');
@@ -201,6 +202,7 @@ export class ControlAccesoService {
       descripcion: input.descripcion || null,
       requiere_torre: input.requiere_torre ?? false,
       token_publico: token,
+      codigo_seguridad: input.codigo_seguridad || null,
       activo: true,
       creado_por: input.creado_por || null,
     };
@@ -240,9 +242,25 @@ export class ControlAccesoService {
     return data;
   }
 
+  async validarCodigo(token: string, codigo: string) {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('control_acceso_recoleccion_lugares')
+      .select('id,codigo_seguridad,activo')
+      .eq('token_publico', token)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data || !data.activo) return { ok: false };
+    const requiredCode = String((data as any).codigo_seguridad || '').trim();
+    if (!requiredCode) return { ok: true };
+    return { ok: requiredCode === String(codigo || '').trim() };
+  }
+
   async registrarPublico(token: string, body: any, req: any) {
     const form = await this.getPublicForm(token);
     if (!form) throw new Error('Formulario no disponible');
+    const checkCode = await this.validarCodigo(token, body?.codigo_seguridad || '');
+    if (!checkCode.ok) throw new Error('Código de seguridad inválido');
     if (!body?.acepta_tratamiento_datos) throw new Error('Debe aceptar tratamiento de datos');
 
     let fotoUrl: string | null = null;
