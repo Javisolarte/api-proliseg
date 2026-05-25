@@ -13,9 +13,10 @@ export class UbicacionesService {
      */
     async registrar(dto: RegistrarUbicacionDto) {
         const db = this.supabase.getClient();
+        const { timestamp, ...insertData } = dto as any;
         const { data, error } = await db
             .from('empleado_ubicaciones')
-            .insert(dto)
+            .insert(insertData)
             .select()
             .single();
 

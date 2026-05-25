@@ -49,7 +49,7 @@ export class ControlRondasService {
       .from("rondas_ejecuciones_control")
       .select(`
         *,
-        empleado:empleados(id,nombres,apellidos,numero_documento),
+        empleado:empleados(id,nombre_completo,cedula),
         puesto:puestos_trabajo(id,nombre,codigo_puesto,direccion,ciudad,latitud,longitud),
         configuracion:rondas_configuracion_puesto(id,nombre,frecuencia_minutos,duracion_objetivo_minutos)
       `)
@@ -99,12 +99,24 @@ export class ControlRondasService {
       .eq("puesto_id", puestoId)
       .maybeSingle();
 
-    const { data: ejecuciones } = await supabase
+    const { data: ejecuciones, error: ejecucionesError } = await supabase
       .from("rondas_ejecuciones_control")
-      .select("*, empleado:empleados(id,nombres,apellidos,numero_documento)")
+      .select("*, empleado:empleados(id,nombre_completo,cedula)")
       .eq("puesto_id", puestoId)
       .order("created_at", { ascending: false })
-      .limit(20);
+      .limit(100);
+
+    if (ejecucionesError) throw new BadRequestException(ejecucionesError.message);
+
+    const resumenEjecuciones = (ejecuciones || []).reduce(
+      (acc, ejecucion) => {
+        const estado = String(ejecucion.estado || "sin_estado").toLowerCase();
+        acc[estado] = (acc[estado] || 0) + 1;
+        acc.total += 1;
+        return acc;
+      },
+      { total: 0 } as Record<string, number>,
+    );
 
     return {
       puesto,
@@ -114,6 +126,7 @@ export class ControlRondasService {
             puntos: (configuracion.puntos || []).sort((a, b) => a.orden - b.orden),
           }
         : null,
+      resumen_ejecuciones: resumenEjecuciones,
       ejecuciones: ejecuciones || [],
     };
   }
@@ -360,7 +373,7 @@ export class ControlRondasService {
     const supabase = this.supabaseService.getClient();
     const { data: ejecucion } = await supabase
       .from("rondas_ejecuciones_control")
-      .select("*, empleado:empleados(id,nombres,apellidos,numero_documento), puesto:puestos_trabajo(id,nombre,codigo_puesto)")
+      .select("*, empleado:empleados(id,nombre_completo,cedula), puesto:puestos_trabajo(id,nombre,codigo_puesto)")
       .eq("id", ejecucionId)
       .single();
 
