@@ -78,10 +78,15 @@ export class NotificacionesService implements OnModuleInit {
 
   async registrarDispositivo(userId: number, dto: RegistrarDispositivoDto, tipoUsuario: 'usuario' | 'empleado' = 'usuario') {
     const supabase = this.supabaseService.getClient();
+    const tokenDispositivo = dto.token_dispositivo || (dto as any).token;
+
+    if (!tokenDispositivo) {
+      throw new Error('Token de dispositivo requerido');
+    }
 
     const dataToUpsert: any = {
-      token_dispositivo: dto.token_dispositivo,
-      plataforma: dto.plataforma,
+      token_dispositivo: tokenDispositivo,
+      plataforma: dto.plataforma || 'android',
       modelo_dispositivo: dto.modelo_dispositivo,
       app_version: dto.app_version,
       activo: true,

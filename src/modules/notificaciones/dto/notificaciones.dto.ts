@@ -29,6 +29,7 @@ export class ConfigurarPreferenciasDto {
 
 // DTOs para Dispositivos
 export class RegistrarDispositivoDto {
+    token?: string;
     token_dispositivo: string;
     plataforma: 'android' | 'ios' | 'web';
     modelo_dispositivo?: string;

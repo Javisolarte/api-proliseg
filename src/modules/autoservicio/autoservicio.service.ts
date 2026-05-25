@@ -1192,7 +1192,7 @@ export class AutoservicioService {
             await this.registrarTrackingMiRonda(userId, ronda.id, {
                 latitud: dto.latitud,
                 longitud: dto.longitud,
-                evento: 'inicio_gps',
+                evento: 'inicio',
                 dispositivo_id: dto.dispositivo_id
             });
         }
@@ -1273,11 +1273,11 @@ export class AutoservicioService {
             .single();
 
         if (error) throw new BadRequestException(error.message);
-        await this.insertRondaTracking(ejecucionId, empleado.id, body.tipo || 'evidencia_foto', {
+        await this.insertRondaTracking(ejecucionId, empleado.id, 'foto_tomada', {
             latitud: body.latitud !== undefined ? Number(body.latitud) : null,
             longitud: body.longitud !== undefined ? Number(body.longitud) : null,
             punto_id: body.punto_id ? Number(body.punto_id) : null,
-            payload: { evidencia_id: data.id, storage_path: path }
+            payload: { evidencia_id: data.id, storage_path: path, tipo: body.tipo || 'foto' }
         });
 
         return { ...data, signed_url: signedUrl };
@@ -1286,9 +1286,12 @@ export class AutoservicioService {
     async registrarTrackingMiRonda(userId: number, ejecucionId: number, dto: TrackingMiRondaDto) {
         const empleado = await this.getEmpleadoByUserId(userId);
         await this.assertMiRonda(empleado.id, ejecucionId);
-        return this.insertRondaTracking(ejecucionId, empleado.id, dto.evento || 'gps', {
+        return this.insertRondaTracking(ejecucionId, empleado.id, this.normalizeRondaEvento(dto.evento || 'ubicacion'), {
             latitud: Number(dto.latitud),
             longitud: Number(dto.longitud),
+            precision_metros: dto.precision_metros,
+            velocidad_mps: dto.velocidad,
+            bateria: dto.bateria,
             dispositivo_id: dto.dispositivo_id,
             payload: {
                 precision_metros: dto.precision_metros,
@@ -1313,7 +1316,7 @@ export class AutoservicioService {
         const empleado = await this.getEmpleadoByUserId(userId);
         await this.assertMiRonda(empleado.id, ejecucionId);
         const finalizada = await this.controlRondasService.finalizar(ejecucionId, dto);
-        await this.insertRondaTracking(ejecucionId, empleado.id, 'finalizacion_app', { payload: { estado: finalizada.estado } });
+        await this.insertRondaTracking(ejecucionId, empleado.id, 'finalizacion', { payload: { estado: finalizada.estado } });
         return finalizada;
     }
 
@@ -1374,6 +1377,26 @@ export class AutoservicioService {
         return data;
     }
 
+    private normalizeRondaEvento(evento: string) {
+        const allowed = new Set([
+            'inicio', 'ubicacion', 'qr_escaneado', 'qr_rechazado', 'foto_tomada',
+            'punto_validado', 'punto_fallido', 'pausa', 'reanuda', 'finalizacion',
+            'alerta_antifraude', 'motivo_incompleta'
+        ]);
+        const aliases: Record<string, string> = {
+            gps: 'ubicacion',
+            tracking: 'ubicacion',
+            inicio_gps: 'inicio',
+            evidencia_foto: 'foto_tomada',
+            foto_check: 'foto_tomada',
+            foto_cierre: 'foto_tomada',
+            finalizacion_app: 'finalizacion',
+            cierre: 'finalizacion'
+        };
+        const normalized = aliases[evento] || evento;
+        return allowed.has(normalized) ? normalized : 'ubicacion';
+    }
+
     private async insertRondaTracking(ejecucionId: number, empleadoId: number, evento: string, data: any) {
         const supabase = this.supabaseService.getSupabaseAdminClient();
         const { data: row, error } = await supabase
@@ -1381,10 +1404,13 @@ export class AutoservicioService {
             .insert({
                 ejecucion_id: ejecucionId,
                 empleado_id: empleadoId,
-                evento,
+                evento: this.normalizeRondaEvento(evento),
                 punto_id: data.punto_id,
                 latitud: data.latitud,
                 longitud: data.longitud,
+                precision_metros: data.precision_metros,
+                velocidad_mps: data.velocidad_mps,
+                bateria: data.bateria,
                 dispositivo_id: data.dispositivo_id,
                 payload: data.payload || {}
             })
