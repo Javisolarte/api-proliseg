@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger } from '@nestjs/common';
+﻿import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { PqrsfService } from '../pqrsf/pqrsf.service';
 import { GeminiService } from '../ia/gemini.service';
@@ -60,14 +60,14 @@ export class AutoservicioService {
     async getEmpleadoByUserId(userId: number) {
         const supabase = this.supabaseService.getClient();
         const { data: empleado } = await supabase.from('empleados').select('*').eq('usuario_id', userId).single();
-        if (!empleado) throw new NotFoundException('No se encontró registro de empleado asociado a este usuario');
+        if (!empleado) throw new NotFoundException('No se encontrÃ³ registro de empleado asociado a este usuario');
         return empleado;
     }
 
     async getClienteByUserId(userId: number) {
         const supabase = this.supabaseService.getClient();
         const { data: cliente } = await supabase.from('clientes').select('*').eq('usuario_id', userId).single();
-        if (!cliente) throw new NotFoundException('No se encontró registro de cliente asociado a este usuario');
+        if (!cliente) throw new NotFoundException('No se encontrÃ³ registro de cliente asociado a este usuario');
         return cliente;
     }
 
@@ -76,7 +76,7 @@ export class AutoservicioService {
     // ------------------------------------------------------------------
     async getPerfilEmpleado(userId: number) {
         const empleado = await this.getEmpleadoByUserId(userId);
-        // Retornar objeto limpio sin métricas sensibles
+        // Retornar objeto limpio sin mÃ©tricas sensibles
         const {
             nivel_confianza,
             riesgo_ausencia,
@@ -98,7 +98,7 @@ export class AutoservicioService {
             .single();
 
         if (errorBasic || !empBasic) {
-            throw new NotFoundException('No se encontró registro de empleado asociado a este usuario');
+            throw new NotFoundException('No se encontrÃ³ registro de empleado asociado a este usuario');
         }
 
         const sql = `
@@ -133,7 +133,7 @@ export class AutoservicioService {
             throw new NotFoundException(`Empleado no encontrado`);
         }
 
-        // Retornar información sin métricas sensibles (similar a getMiPerfil)
+        // Retornar informaciÃ³n sin mÃ©tricas sensibles (similar a getMiPerfil)
         const {
             nivel_confianza,
             riesgo_ausencia,
@@ -180,13 +180,13 @@ export class AutoservicioService {
             .eq('empleado_id', empleado.id)
             .single();
 
-        if (!nomina) throw new NotFoundException('No se encontró nomina para este periodo');
+        if (!nomina) throw new NotFoundException('No se encontrÃ³ nomina para este periodo');
 
         // TODO: Generate PDF
         // Mocking return
         return {
             url: `https://api.proliseg.com/downloads/nomina/${empleado.id}/${periodoId}/desprendible.pdf`, // Mock
-            mensaje: "La generación de PDF real requiere integración con librería PDF"
+            mensaje: "La generaciÃ³n de PDF real requiere integraciÃ³n con librerÃ­a PDF"
         };
     }
 
@@ -323,7 +323,7 @@ export class AutoservicioService {
         const empleado = await this.getEmpleadoByUserId(userId);
         const supabase = this.supabaseService.getClient();
 
-        // VALIDACIÓN: Solo puede crear si tiene turno ACTIVO ('parcial' es el estado "En Curso" según DB)
+        // VALIDACIÃ“N: Solo puede crear si tiene turno ACTIVO ('parcial' es el estado "En Curso" segÃºn DB)
         const { data: turnoActivo } = await supabase
             .from('turnos')
             .select('id, puesto_id')
@@ -603,7 +603,7 @@ export class AutoservicioService {
 
         if (error) throw error;
 
-        // 4. Mapear con información del puesto
+        // 4. Mapear con informaciÃ³n del puesto
         const puestosMap = puestos.reduce((acc, p) => ({ ...acc, [p.id]: p.nombre }), {});
 
         return asignaciones.map(a => ({
@@ -674,7 +674,7 @@ export class AutoservicioService {
         const cliente = await this.getClienteByUserId(userId);
         const supabase = this.supabaseService.getClient();
 
-        // Validar si contrato/puesto pertenecen al cliente si se envían
+        // Validar si contrato/puesto pertenecen al cliente si se envÃ­an
         if (dto.contrato_id) {
             const { data: contrato } = await supabase
                 .from('contratos')
@@ -685,7 +685,7 @@ export class AutoservicioService {
             if (!contrato) throw new ForbiddenException('El contrato especificado no pertenece a su cuenta');
         }
 
-        // TODO: Validar puesto si se envía (aunque puesto depende de contrato, doble check es bueno)
+        // TODO: Validar puesto si se envÃ­a (aunque puesto depende de contrato, doble check es bueno)
 
         const { data, error } = await supabase
             .from('pqrsf')
@@ -719,7 +719,7 @@ export class AutoservicioService {
         }
 
         // 2. Usar servicio de PQRSF para subir archivo
-        // Determinar tipo básico
+        // Determinar tipo bÃ¡sico
         let tipo = 'otro';
         if (file.mimetype.startsWith('image/')) tipo = 'imagen';
         else if (file.mimetype === 'application/pdf') tipo = 'pdf';
@@ -796,7 +796,8 @@ export class AutoservicioService {
     }
 
     async marcarAsistenciaEntrada(userId: number, dto: RegistrarMiAsistenciaEntradaDto) {
-        console.log(`📥 [AutoservicioService] Intentando registrar ENTRADA para usuario ${userId}:`, {
+        dto.foto_url = await this.ensureAsistenciaFotoUrl(dto.foto_url, (dto as any).foto, userId, dto.turno_id, 'entrada');
+        console.log(`ðŸ“¥ [AutoservicioService] Intentando registrar ENTRADA para usuario ${userId}:`, {
             turno_id: dto.turno_id,
             lat: dto.latitud,
             lng: dto.longitud,
@@ -828,7 +829,7 @@ export class AutoservicioService {
 
         const diffMinutos = (turnoFechaInicio.getTime() - now.getTime()) / (1000 * 60);
         if (diffMinutos > 20) {
-            throw new ForbiddenException('Aún no puedes marcar entrada. Se habilita 20 minutos antes del inicio.');
+            throw new ForbiddenException('AÃºn no puedes marcar entrada. Se habilita 20 minutos antes del inicio.');
         }
 
         // 4. Validar distancia (1000m)
@@ -845,7 +846,7 @@ export class AutoservicioService {
         }
 
         if (puesto && distancia > 1000) {
-            throw new ForbiddenException(`Estás fuera del rango permitido (${Math.round(distancia)}m). Máximo 1000m.`);
+            throw new ForbiddenException(`EstÃ¡s fuera del rango permitido (${Math.round(distancia)}m). MÃ¡ximo 1000m.`);
         }
 
         // 5. Preparar observaciones e IA
@@ -892,21 +893,22 @@ export class AutoservicioService {
             latitud_entrada: dto.latitud,
             longitud_entrada: dto.longitud,
             registrada_por: userId,
-            evidencia_foto_url: dto.foto_url // Guardar foto en histórico
+            evidencia_foto_url: dto.foto_url // Guardar foto en histÃ³rico
         });
 
         // 8. Actualizar Turno
         await supabase.from('turnos').update({ estado_turno: 'parcial' }).eq('id', dto.turno_id);
 
         return {
-            message: '✅ Entrada registrada con éxito',
+            message: 'âœ… Entrada registrada con Ã©xito',
             distancia_metros: distancia,
             asistencia_id: newAsis.id
         };
     }
 
     async marcarAsistenciaSalida(userId: number, dto: RegistrarMiAsistenciaSalidaDto) {
-        console.log(`📥 [AutoservicioService] Intentando registrar SALIDA para usuario ${userId}:`, {
+        dto.foto_url = await this.ensureAsistenciaFotoUrl(dto.foto_url, (dto as any).foto, userId, dto.turno_id, 'salida');
+        console.log(`ðŸ“¥ [AutoservicioService] Intentando registrar SALIDA para usuario ${userId}:`, {
             turno_id: dto.turno_id,
             asistencia_id: dto.asistencia_id || (dto as any).id,
             lat: dto.latitud,
@@ -930,7 +932,7 @@ export class AutoservicioService {
             .eq('empleado_id', empBasic.id)
             .single();
 
-        if (asisError || !asistencia) throw new NotFoundException('No se encontró registro de entrada para esta salida');
+        if (asisError || !asistencia) throw new NotFoundException('No se encontrÃ³ registro de entrada para esta salida');
         if (asistencia.hora_salida) throw new ForbiddenException('La salida ya fue registrada');
 
         // 3. Verificar turno
@@ -948,7 +950,7 @@ export class AutoservicioService {
 
         const minutosParaFin = (turnoFechaFin.getTime() - now.getTime()) / (1000 * 60);
         if (minutosParaFin > 10) {
-            throw new ForbiddenException('Aún es muy temprano para registrar la salida.');
+            throw new ForbiddenException('AÃºn es muy temprano para registrar la salida.');
         }
 
         // 5. Validar distancia
@@ -963,7 +965,7 @@ export class AutoservicioService {
         if (puesto?.latitud && puesto?.longitud && dto.latitud && dto.longitud) {
             distancia = calcularDistancia(parseFloat(dto.latitud), parseFloat(dto.longitud), parseFloat(puesto.latitud), parseFloat(puesto.longitud));
         }
-        if (puesto && distancia > 1000) throw new ForbiddenException(`Estás demasiado lejos (${Math.round(distancia)}m). Máximo 1000m.`);
+        if (puesto && distancia > 1000) throw new ForbiddenException(`EstÃ¡s demasiado lejos (${Math.round(distancia)}m). MÃ¡ximo 1000m.`);
 
         // 6. Observaciones e IA
         let obsSalida = (now.getTime() - turnoFechaFin.getTime()) / (1000 * 60) >= 5 ? 'Salida Tarde.' : 'Salida Normal.';
@@ -998,17 +1000,17 @@ export class AutoservicioService {
             latitud_salida: dto.latitud,
             longitud_salida: dto.longitud,
             registrada_por: userId,
-            evidencia_foto_url: dto.foto_url // Guardar foto en histórico
+            evidencia_foto_url: dto.foto_url // Guardar foto en histÃ³rico
         });
 
         // 9. Actualizar Turno
         await supabase.from('turnos').update({ estado_turno: 'cumplido' }).eq('id', dto.turno_id);
 
-        return { message: '✅ Salida registrada con éxito. Turno finalizado.' };
+        return { message: 'âœ… Salida registrada con Ã©xito. Turno finalizado.' };
     }
 
     // ------------------------------------------------------------------
-    // BOTÓN DE PÁNICO & UBICACIÓN (AUTOSERVICIO)
+    // BOTÃ“N DE PÃNICO & UBICACIÃ“N (AUTOSERVICIO)
     // ------------------------------------------------------------------
 
     async activarMiPanico(userId: number, dto: ActivarMiPanicoDto, ipAddress: string) {
@@ -1025,7 +1027,7 @@ export class AutoservicioService {
     async registrarMiUbicacion(userId: number, dto: RegistrarMiUbicacionDto) {
         const empleado = await this.getEmpleadoByUserId(userId);
 
-        // Mapeamos explícitamente para evitar enviar campos que la DB no tenga (como timestamp)
+        // Mapeamos explÃ­citamente para evitar enviar campos que la DB no tenga (como timestamp)
         // y asegurar que los nombres coincidan con la tabla empleado_ubicaciones
         return this.ubicacionesService.registrar({
             empleado_id: empleado.id,
@@ -1041,7 +1043,7 @@ export class AutoservicioService {
     }
 
     // ============================================================
-    // 📸 SUBIR FOTO EVIDENCIA (AUTOSERVICIO)
+    // ðŸ“¸ SUBIR FOTO EVIDENCIA (AUTOSERVICIO)
     // ============================================================
     async uploadFoto(file: any, userId: number) {
         const empleado = await this.getEmpleadoByUserId(userId);
@@ -1061,10 +1063,10 @@ export class AutoservicioService {
             });
 
         if (error) {
-            throw new BadRequestException("Error al subir la evidencia fotográfica");
+            throw new BadRequestException("Error al subir la evidencia fotogrÃ¡fica");
         }
 
-        // Obtener URL Pública
+        // Obtener URL PÃºblica
         const { data: { publicUrl } } = supabase.storage
             .from('asistencias-fotos')
             .getPublicUrl(path);
@@ -1290,6 +1292,28 @@ export class AutoservicioService {
         return { ...data, signed_url: signedUrl };
     }
 
+    private async ensureAsistenciaFotoUrl(fotoUrl: string | undefined, fotoBase64: string | undefined, userId: number, turnoId: number, tipo: 'entrada' | 'salida') {
+        if (fotoUrl) return fotoUrl;
+        if (!fotoBase64) return undefined;
+
+        const match = fotoBase64.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+        if (!match) throw new BadRequestException('Formato de foto invalido. Usa data:image/...;base64,...');
+
+        const mimeType = match[1];
+        const extension = mimeType.includes('png') ? 'png' : mimeType.includes('webp') ? 'webp' : 'jpg';
+        const buffer = Buffer.from(match[2], 'base64');
+        if (!buffer.length) throw new BadRequestException('La foto enviada esta vacia');
+
+        const empleado = await this.getEmpleadoByUserId(userId);
+        const bucket = 'asistencias-fotos';
+        const path = `${empleado.id}/${turnoId}/${tipo}_${Date.now()}.${extension}`;
+        await this.supabaseService.uploadFile(bucket, path, buffer, mimeType);
+
+        const supabase = this.supabaseService.getSupabaseAdminClient();
+        const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+        return data.publicUrl;
+    }
+
     async registrarTrackingMiRonda(userId: number, ejecucionId: number, dto: TrackingMiRondaDto) {
         const empleado = await this.getEmpleadoByUserId(userId);
         await this.assertMiRonda(empleado.id, ejecucionId);
@@ -1459,16 +1483,16 @@ export class AutoservicioService {
     }
 
     // ------------------------------------------------------------------
-    // AUTOSERVICIO SUPERVISOR - RUTAS DE SUPERVISIÓN
+    // AUTOSERVICIO SUPERVISOR - RUTAS DE SUPERVISIÃ“N
     // ------------------------------------------------------------------
 
     /**
-     * Obtiene la ruta asignada al supervisor para una fecha específica
+     * Obtiene la ruta asignada al supervisor para una fecha especÃ­fica
      */
     async obtenerRutaAsignadaFecha(supervisorId: number, fecha: string) {
         const supabase = this.supabaseService.getClient();
 
-        // 1. Buscar asignación activa para la fecha
+        // 1. Buscar asignaciÃ³n activa para la fecha
         const { data: asignacion, error: asigError } = await supabase
             .from('rutas_supervision_asignacion')
             .select(`
@@ -1525,7 +1549,7 @@ export class AutoservicioService {
             .eq('ruta_id', asignacion.ruta_id)
             .order('orden', { ascending: true });
 
-        // 3. Verificar si ya tiene ejecución activa
+        // 3. Verificar si ya tiene ejecuciÃ³n activa
         const { data: ejecucion } = await supabase
             .from('rutas_supervision_ejecucion')
             .select('id, estado, fecha_inicio')
@@ -1568,12 +1592,12 @@ export class AutoservicioService {
     }
 
     /**
-     * Inicia la supervisión de ruta
+     * Inicia la supervisiÃ³n de ruta
      */
     async iniciarSupervision(dto: IniciarSupervisionDto, supervisorId: number) {
         const supabase = this.supabaseService.getClient();
 
-        // 1. Verificar que no tenga supervisión activa
+        // 1. Verificar que no tenga supervisiÃ³n activa
         const { data: activa } = await supabase
             .from('rutas_supervision_ejecucion')
             .select('id')
@@ -1582,10 +1606,10 @@ export class AutoservicioService {
             .maybeSingle();
 
         if (activa) {
-            throw new BadRequestException('Ya tienes una supervisión en progreso. Finalízala antes de iniciar otra.');
+            throw new BadRequestException('Ya tienes una supervisiÃ³n en progreso. FinalÃ­zala antes de iniciar otra.');
         }
 
-        // 2. Verificar asignación
+        // 2. Verificar asignaciÃ³n
         const { data: asignacion } = await supabase
             .from('rutas_supervision_asignacion')
             .select('*, vehiculos(id)')
@@ -1595,13 +1619,13 @@ export class AutoservicioService {
             .single();
 
         if (!asignacion) {
-            throw new NotFoundException('Asignación de ruta no encontrada o no autorizada');
+            throw new NotFoundException('AsignaciÃ³n de ruta no encontrada o no autorizada');
         }
 
         const vehiculo = Array.isArray(asignacion.vehiculos) ? asignacion.vehiculos[0] : asignacion.vehiculos;
         const vehiculoId = dto.vehiculo_id || asignacion.vehiculo_id || vehiculo?.id;
 
-        // 3. Crear ejecución
+        // 3. Crear ejecuciÃ³n
         const { data: ejecucion, error } = await supabase
             .from('rutas_supervision_ejecucion')
             .insert({
@@ -1622,24 +1646,24 @@ export class AutoservicioService {
             tipo_evento: 'gps',
             lat: dto.latitud_inicio,
             lng: dto.longitud_inicio,
-            observacion: 'Supervisión iniciada'
+            observacion: 'SupervisiÃ³n iniciada'
         });
 
         return {
             ejecucion_id: ejecucion.id,
             estado: ejecucion.estado,
             fecha_inicio: ejecucion.fecha_inicio,
-            mensaje: 'Supervisión iniciada correctamente. Buen recorrido!'
+            mensaje: 'SupervisiÃ³n iniciada correctamente. Buen recorrido!'
         };
     }
 
     /**
-     * Registra ubicación GPS del supervisor
+     * Registra ubicaciÃ³n GPS del supervisor
      */
     async registrarUbicacion(dto: RegistrarUbicacionSupervisorDto, supervisorId: number) {
         const supabase = this.supabaseService.getClient();
 
-        // Verificar que la ejecución pertenezca al supervisor
+        // Verificar que la ejecuciÃ³n pertenezca al supervisor
         const { data: ejecucion } = await supabase
             .from('rutas_supervision_ejecucion')
             .select('id')
@@ -1648,7 +1672,7 @@ export class AutoservicioService {
             .single();
 
         if (!ejecucion) {
-            throw new NotFoundException('Ejecución no encontrada');
+            throw new NotFoundException('EjecuciÃ³n no encontrada');
         }
 
         // Registrar evento GPS
@@ -1667,13 +1691,13 @@ export class AutoservicioService {
         if (error) throw error;
 
         return {
-            mensaje: 'Ubicación registrada',
+            mensaje: 'UbicaciÃ³n registrada',
             evento_id: data.id
         };
     }
 
     /**
-     * Valida si el supervisor está dentro del radio del puesto (Haversine)
+     * Valida si el supervisor estÃ¡ dentro del radio del puesto (Haversine)
      */
     async validarLlegadaPuesto(dto: ValidarLlegadaPuestoDto) {
         const supabase = this.supabaseService.getClient();
@@ -1717,7 +1741,7 @@ export class AutoservicioService {
             puede_crear_minuta: dentroRadio,
             mensaje: dentroRadio
                 ? `Dentro del radio permitido. Puedes crear minuta.`
-                : `Estás a ${Math.round(distancia)}m del puesto. Debes acercarte a menos de ${radioPermitido}m.`
+                : `EstÃ¡s a ${Math.round(distancia)}m del puesto. Debes acercarte a menos de ${radioPermitido}m.`
         };
     }
 
@@ -1727,7 +1751,7 @@ export class AutoservicioService {
     async crearMinutaRuta(dto: CrearMinutaRutaDto, supervisorId: number) {
         const supabase = this.supabaseService.getClient();
 
-        // 1. Verificar ejecución
+        // 1. Verificar ejecuciÃ³n
         const { data: ejecucion } = await supabase
             .from('rutas_supervision_ejecucion')
             .select('id')
@@ -1737,7 +1761,7 @@ export class AutoservicioService {
             .single();
 
         if (!ejecucion) {
-            throw new NotFoundException('Supervisión activa no encontrada');
+            throw new NotFoundException('SupervisiÃ³n activa no encontrada');
         }
 
         // 2. Crear minuta en minutas_rutas
@@ -1848,12 +1872,12 @@ export class AutoservicioService {
     }
 
     /**
-     * Finaliza la supervisión
+     * Finaliza la supervisiÃ³n
      */
     async finalizarSupervision(dto: FinalizarSupervisionDto, supervisorId: number) {
         const supabase = this.supabaseService.getClient();
 
-        // 1. Obtener ejecución
+        // 1. Obtener ejecuciÃ³n
         const { data: ejecucion } = await supabase
             .from('rutas_supervision_ejecucion')
             .select(`
@@ -1870,7 +1894,7 @@ export class AutoservicioService {
             .single();
 
         if (!ejecucion) {
-            throw new NotFoundException('No tienes supervisión activa');
+            throw new NotFoundException('No tienes supervisiÃ³n activa');
         }
 
         // 2. Actualizar estado
@@ -1885,7 +1909,7 @@ export class AutoservicioService {
 
         if (error) throw error;
 
-        // 3. Calcular duración
+        // 3. Calcular duraciÃ³n
         const fechaInicio = new Date(ejecucion.fecha_inicio);
         const duracionMs = fechaFin.getTime() - fechaInicio.getTime();
         const duracionMinutos = Math.floor(duracionMs / 60000);
@@ -1907,13 +1931,13 @@ export class AutoservicioService {
             .select('*', { count: 'exact', head: true })
             .eq('ejecucion_id', dto.ejecucion_id);
 
-        // 5. Registrar evento de finalización
+        // 5. Registrar evento de finalizaciÃ³n
         await supabase.from('rutas_supervision_eventos').insert({
             ejecucion_id: dto.ejecucion_id,
             tipo_evento: 'gps',
             lat: dto.latitud_fin,
             lng: dto.longitud_fin,
-            observacion: 'Supervisión finalizada'
+            observacion: 'SupervisiÃ³n finalizada'
         });
 
         const ruta: any = Array.isArray(asignacion.rutas_supervision)
@@ -1930,7 +1954,7 @@ export class AutoservicioService {
             total_puntos: totalPuntos || 0,
             puntos_visitados: minutasCreadas || 0,
             minutas_creadas: minutasCreadas || 0,
-            mensaje: '✅ Supervisión finalizada correctamente. ¡Buen trabajo!'
+            mensaje: 'âœ… SupervisiÃ³n finalizada correctamente. Â¡Buen trabajo!'
         };
     }
 
@@ -2006,12 +2030,12 @@ export class AutoservicioService {
     }
 
     /**
-     * Generar reporte detallado de una supervisión
+     * Generar reporte detallado de una supervisiÃ³n
      */
     async generarReporteRuta(ejecucionId: number, supervisorId: number) {
         const supabase = this.supabaseService.getClient();
 
-        // 1. Obtener ejecución
+        // 1. Obtener ejecuciÃ³n
         const { data: ejecucion } = await supabase
             .from('rutas_supervision_ejecucion')
             .select(`
@@ -2027,7 +2051,7 @@ export class AutoservicioService {
             .single();
 
         if (!ejecucion) {
-            throw new NotFoundException('Ejecución no encontrada');
+            throw new NotFoundException('EjecuciÃ³n no encontrada');
         }
 
         const asignacion: any = Array.isArray(ejecucion.rutas_supervision_asignacion)
@@ -2115,7 +2139,7 @@ export class AutoservicioService {
     }
 
     /**
-     * Obtiene los ítems (preguntas) de un checklist granular
+     * Obtiene los Ã­tems (preguntas) de un checklist granular
      */
     async getChecklistItems(tipoChequeoId: number) {
         const supabase = this.supabaseService.getClient();
@@ -2137,7 +2161,7 @@ export class AutoservicioService {
 
         return {
             tipo_chequeo_id: tipoChequeoId,
-            nombre: categoria?.nombre || 'Categoría no encontrada',
+            nombre: categoria?.nombre || 'CategorÃ­a no encontrada',
             items: items || []
         };
     }
@@ -2169,7 +2193,7 @@ export class AutoservicioService {
 
     /**
      * Obtiene la ruta asignada al turno de hoy
-     * NUEVO: Método que busca correctamente en rutas_supervision_asignacion
+     * NUEVO: MÃ©todo que busca correctamente en rutas_supervision_asignacion
      */
     async obtenerRutaAsignadaHoy(supervisorId: number) {
         const supabase = this.supabaseService.getClient();
@@ -2177,7 +2201,7 @@ export class AutoservicioService {
         // 1. Obtener turno de hoy
         const turno = await this.obtenerSupervisionActiva(supervisorId);
 
-        // 2. Buscar asignación de ruta para este turno
+        // 2. Buscar asignaciÃ³n de ruta para este turno
         const { data: asignacion, error: errorAsign } = await supabase
             .from('rutas_supervision_asignacion')
             .select(`
@@ -2203,7 +2227,7 @@ export class AutoservicioService {
             throw new NotFoundException('No tienes ruta asignada para tu turno de hoy');
         }
 
-        // 3. Verificar si ya se inició la ejecución
+        // 3. Verificar si ya se iniciÃ³ la ejecuciÃ³n
         const { data: ejecucion } = await supabase
             .from('rutas_supervision_ejecucion')
             .select('*')
@@ -2228,7 +2252,7 @@ export class AutoservicioService {
     }
 
     /**
-     * Obtiene estadísticas del supervisor
+     * Obtiene estadÃ­sticas del supervisor
      */
     async obtenerEstadisticasSupervisor(supervisorId: number, mes?: number, anio?: number) {
         const supabase = this.supabaseService.getClient();
@@ -2282,7 +2306,7 @@ export class AutoservicioService {
         const empleado = await this.getEmpleadoByUserId(userId);
         const supabase = this.supabaseService.getClient();
 
-        // Obtener información del usuario para incluir correo y rol
+        // Obtener informaciÃ³n del usuario para incluir correo y rol
         const { data: usuario, error: userError } = await supabase
             .from('usuarios_externos')
             .select('id, correo, rol')
@@ -2291,7 +2315,7 @@ export class AutoservicioService {
 
         if (userError) throw userError;
 
-        // Retornar perfil completo sin métricas sensibles
+        // Retornar perfil completo sin mÃ©tricas sensibles
         const {
             nivel_confianza,
             riesgo_ausencia,
@@ -2307,12 +2331,12 @@ export class AutoservicioService {
     }
 
     /**
-     * Obtiene la última ubicación registrada del supervisor
+     * Obtiene la Ãºltima ubicaciÃ³n registrada del supervisor
      */
     async getUltimaUbicacion(supervisorId: number) {
         const supabase = this.supabaseService.getClient();
 
-        // Primero obtener la ejecución activa del supervisor
+        // Primero obtener la ejecuciÃ³n activa del supervisor
         const { data: ejecucion } = await supabase
             .from('rutas_supervision_ejecucion')
             .select('id')
@@ -2321,10 +2345,10 @@ export class AutoservicioService {
             .maybeSingle();
 
         if (!ejecucion) {
-            throw new NotFoundException('No tienes supervisión activa');
+            throw new NotFoundException('No tienes supervisiÃ³n activa');
         }
 
-        // Ahora buscar el último evento de esa ejecución
+        // Ahora buscar el Ãºltimo evento de esa ejecuciÃ³n
         const { data, error } = await supabase
             .from('rutas_supervision_eventos')
             .select('*')
@@ -2492,7 +2516,7 @@ export class AutoservicioService {
         return data;
     }
 
-    // Helper: calcular duración
+    // Helper: calcular duraciÃ³n
     private calcularDuracion(inicio: string, fin: string): string {
         const duracionMs = new Date(fin).getTime() - new Date(inicio).getTime();
         const minutos = Math.floor(duracionMs / 60000);
@@ -2550,7 +2574,7 @@ export class AutoservicioService {
     }
 
     /**
-     * Pausa una ruta en ejecución
+     * Pausa una ruta en ejecuciÃ³n
      */
     async pausarRuta(dto: PausarReanudarRutaDto, supervisorId: number) {
         const supabase = this.supabaseService.getClient();
@@ -2598,7 +2622,7 @@ export class AutoservicioService {
     }
 
     /**
-     * Reporta novedad crítica inmediata
+     * Reporta novedad crÃ­tica inmediata
      */
     async reportarNovedadInmediata(dto: ReportarNovedadDto, supervisorId: number) {
         const supabase = this.supabaseService.getClient();
@@ -2610,7 +2634,7 @@ export class AutoservicioService {
                 tipo_evento: 'gps',
                 lat: dto.latitud,
                 lng: dto.longitud,
-                observacion: `🚨 NOVEDAD CRÍTICA: [${dto.tipo_novedad}] ${dto.descripcion}`,
+                observacion: `ðŸš¨ NOVEDAD CRÃTICA: [${dto.tipo_novedad}] ${dto.descripcion}`,
             })
             .select()
             .single();
@@ -2744,7 +2768,7 @@ export class AutoservicioService {
     }
 
     /**
-     * Registra información del dispositivo
+     * Registra informaciÃ³n del dispositivo
      */
     async registrarDispositivo(dto: DispositivoInfoDto, supervisorId: number) {
         const supabase = this.supabaseService.getClient();
@@ -2759,12 +2783,12 @@ export class AutoservicioService {
     }
 
     /**
-     * Obtiene información del dispositivo logueado
+     * Obtiene informaciÃ³n del dispositivo logueado
      */
     async getDispositivoInfo(supervisorId: number) {
         const supabase = this.supabaseService.getClient();
 
-        // Obtener la ejecución activa del supervisor
+        // Obtener la ejecuciÃ³n activa del supervisor
         const { data: ejecucion } = await supabase
             .from('rutas_supervision_ejecucion')
             .select('id')
@@ -2773,7 +2797,7 @@ export class AutoservicioService {
             .maybeSingle();
 
         if (!ejecucion) {
-            return { registrado: false, detalle: 'No hay supervisión activa' };
+            return { registrado: false, detalle: 'No hay supervisiÃ³n activa' };
         }
 
         const { data } = await supabase
@@ -2789,14 +2813,14 @@ export class AutoservicioService {
     }
 
     /**
-     * Resuelve una novedad crítica desde Central
+     * Resuelve una novedad crÃ­tica desde Central
      */
     async resolverNovedad(dto: ResolverNovedadDto, adminId: number) {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase
             .from('rutas_supervision_eventos')
             .update({
-                observacion: `✅ RESUELTO: ${dto.resolucion} (por admin ID ${adminId})`,
+                observacion: `âœ… RESUELTO: ${dto.resolucion} (por admin ID ${adminId})`,
                 fecha: new Date()
             })
             .eq('id', dto.evento_id)
@@ -2808,13 +2832,13 @@ export class AutoservicioService {
     }
 
     /**
-     * Obtiene el vehículo asignado al supervisor
-     * CORREGIDO: Busca primero en asignación de turno, luego en asignación permanente
+     * Obtiene el vehÃ­culo asignado al supervisor
+     * CORREGIDO: Busca primero en asignaciÃ³n de turno, luego en asignaciÃ³n permanente
      */
     async getVehiculoAsignadoHoy(supervisorId: number) {
         const supabase = this.supabaseService.getClient();
 
-        //  Opción 1: Buscar en asignación del turno
+        //  OpciÃ³n 1: Buscar en asignaciÃ³n del turno
         try {
             const turno = await this.obtenerSupervisionActiva(supervisorId);
 
@@ -2835,10 +2859,10 @@ export class AutoservicioService {
                 };
             }
         } catch (error) {
-            // Si no hay turno hoy, continuar a verificar asignación permanente
+            // Si no hay turno hoy, continuar a verificar asignaciÃ³n permanente
         }
 
-        // Opción 2: Fallback a asignación permanente
+        // OpciÃ³n 2: Fallback a asignaciÃ³n permanente
         const { data: vehiculoPermanente, error } = await supabase
             .from('supervisor_vehiculos')
             .select(`
@@ -2853,7 +2877,7 @@ export class AutoservicioService {
 
         if (!vehiculoPermanente || !vehiculoPermanente.vehiculo) {
             return {
-                mensaje: 'No tienes vehículo asignado',
+                mensaje: 'No tienes vehÃ­culo asignado',
                 vehiculo: null,
                 tiene_asignacion: false
             };
@@ -2868,14 +2892,14 @@ export class AutoservicioService {
     }
 
     /**
-     * Obtiene los documentos del vehículo asignado
-     * NUEVO: Endpoint para ver documentos del vehículo desde la app móvil
+     * Obtiene los documentos del vehÃ­culo asignado
+     * NUEVO: Endpoint para ver documentos del vehÃ­culo desde la app mÃ³vil
      */
     async getVehiculoDocumentos(supervisorId: number) {
         const vehiculoData = await this.getVehiculoAsignadoHoy(supervisorId);
 
         if (!vehiculoData.tiene_asignacion || !vehiculoData.vehiculo) {
-            throw new NotFoundException('No tienes vehículo asignado');
+            throw new NotFoundException('No tienes vehÃ­culo asignado');
         }
 
         const v = vehiculoData.vehiculo;
@@ -2916,3 +2940,5 @@ export class AutoservicioService {
         };
     }
 }
+
+

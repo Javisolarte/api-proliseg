@@ -63,6 +63,11 @@ export class RegistrarMiAsistenciaEntradaDto {
     @IsOptional()
     @IsString()
     foto_url?: string;
+
+    @ApiProperty({ example: 'data:image/jpeg;base64,...', description: 'Foto en base64 enviada por la app', required: false })
+    @IsOptional()
+    @IsString()
+    foto?: string;
 }
 
 export class RegistrarMiAsistenciaSalidaDto {
@@ -100,6 +105,11 @@ export class RegistrarMiAsistenciaSalidaDto {
     @IsOptional()
     @IsString()
     foto_url?: string;
+
+    @ApiProperty({ example: 'data:image/jpeg;base64,...', description: 'Foto en base64 enviada por la app', required: false })
+    @IsOptional()
+    @IsString()
+    foto?: string;
 }
 
 export class RegistrarMiUbicacionDto {

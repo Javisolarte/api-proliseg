@@ -765,80 +765,86 @@ export class AsistenciasService {
   async getAsistenciasByPuesto(puesto_id: number, fecha_inicio?: string, fecha_fin?: string) {
     const db = this.supabase.getClient();
 
-    // Optimizamos la consulta para filtrar en la base de datos directamente
-    // Usamos !inner para asegurar que PostgREST filtre por las tablas relacionadas
+    const { data: subpuestos, error: subpuestosError } = await db
+      .from('subpuestos_trabajo')
+      .select('id, nombre, puesto:puesto_id(id, nombre)')
+      .eq('puesto_id', puesto_id);
+    if (subpuestosError) throw new BadRequestException(subpuestosError.message);
+
+    const subpuestoIds = (subpuestos || []).map((s: any) => s.id);
+    if (!subpuestoIds.length) return [];
+
+    const { data: turnos, error: turnosError } = await db
+      .from('turnos')
+      .select('id, fecha, hora_inicio, hora_fin, subpuesto_id')
+      .in('subpuesto_id', subpuestoIds);
+    if (turnosError) throw new BadRequestException(turnosError.message);
+
+    const turnoIds = (turnos || []).map((t: any) => t.id);
+    if (!turnoIds.length) return [];
+
     let query = db
       .from('turnos_asistencia')
-      .select(`
-        *,
-        empleado:empleado_id (
-          id,
-          nombre_completo,
-          cedula
-        ),
-        turno:turno_id!inner (
-          id,
-          fecha,
-          hora_inicio,
-          hora_fin,
-          subpuesto:subpuesto_id!inner (
-            id,
-            nombre,
-            puesto:puesto_id!inner (id, nombre)
-          )
-        )
-      `)
-      .eq('turno.subpuesto.puesto_id', puesto_id);
-
-    // Ajustamos filtros de fecha
-    // Si no se pasan fechas, traemos todo lo del puesto (ordenado por entrada descendente)
+      .select('*, empleado:empleado_id(id,nombre_completo,cedula)')
+      .in('turno_id', turnoIds);
     if (fecha_inicio) query = query.gte('hora_entrada', fecha_inicio);
     if (fecha_fin) query = query.lte('hora_entrada', fecha_fin);
 
     const { data, error } = await query.order('hora_entrada', { ascending: false });
+    if (error) throw new BadRequestException(error.message);
 
-    if (error) {
-      this.logger.error(`Error en getAsistenciasByPuesto: ${error.message}`);
-      throw new BadRequestException(error.message);
-    }
+    let legacyQuery = db
+      .from('asistencias')
+      .select('*, empleado:empleado_id(id,nombre_completo,cedula)')
+      .in('turno_id', turnoIds);
+    if (fecha_inicio) legacyQuery = legacyQuery.gte('timestamp', fecha_inicio);
+    if (fecha_fin) legacyQuery = legacyQuery.lte('timestamp', fecha_fin);
+    const { data: legacy } = await legacyQuery.order('timestamp', { ascending: false });
 
-    // Normalizamos la respuesta y calculamos info adicional
-    return (data || []).map(asis => {
-      const turno = Array.isArray(asis.turno) ? asis.turno[0] : asis.turno;
-      const subpuesto = turno && Array.isArray(turno.subpuesto) ? turno.subpuesto[0] : (turno?.subpuesto);
-      const puesto = subpuesto && Array.isArray(subpuesto.puesto) ? subpuesto.puesto[0] : (subpuesto?.puesto);
-      
-      // CÃ¡lculo de retraso
+    const principales = new Set((data || []).map((a: any) => `${a.turno_id}:${a.empleado_id}`));
+    const legacyNormalizadas = (legacy || [])
+      .filter((a: any) => !principales.has(`${a.turno_id}:${a.empleado_id}`))
+      .map((a: any) => ({
+        id: `legacy-${a.id}`,
+        legacy_id: a.id,
+        turno_id: a.turno_id,
+        empleado_id: a.empleado_id,
+        empleado: a.empleado,
+        hora_entrada: a.tipo_marca === 'entrada' ? a.timestamp : null,
+        hora_salida: a.tipo_marca === 'salida' ? a.timestamp : null,
+        estado_asistencia: 'registrado_legacy',
+        foto_entrada: a.tipo_marca === 'entrada' ? a.evidencia_foto_url : null,
+        foto_salida: a.tipo_marca === 'salida' ? a.evidencia_foto_url : null,
+        latitud_entrada: a.latitud_entrada,
+        longitud_entrada: a.longitud_entrada,
+        latitud_salida: a.latitud_salida,
+        longitud_salida: a.longitud_salida,
+        created_at: a.created_at
+      }));
+
+    const turnosMap = new Map((turnos || []).map((t: any) => [t.id, t]));
+    const subpuestosMap = new Map((subpuestos || []).map((s: any) => [s.id, s]));
+
+    return [...(data || []), ...legacyNormalizadas].map((asis: any) => {
+      const turno = turnosMap.get(asis.turno_id) as any;
+      const subpuesto = turno ? subpuestosMap.get(turno.subpuesto_id) : null;
       let detalle_ingreso = 'A tiempo';
       let minutos_retraso = 0;
-      
+
       if (asis.hora_entrada && turno?.hora_inicio) {
         const entrada = new Date(asis.hora_entrada);
         const [h, m] = turno.hora_inicio.split(':');
         const programada = new Date(turno.fecha);
         programada.setHours(parseInt(h), parseInt(m), 0);
-        
-        // Ajustar para turno noche si entrada es mucho despuÃ©s? 
-        // Simplificado: diferencia directa
         minutos_retraso = Math.floor((entrada.getTime() - programada.getTime()) / (1000 * 60));
-        if (minutos_retraso > 0) {
-          detalle_ingreso = `Tarde (${minutos_retraso} min)`;
-        } else {
-          detalle_ingreso = 'Correcto / Temprano';
-        }
+        detalle_ingreso = minutos_retraso > 0 ? `Tarde (${minutos_retraso} min)` : 'Correcto / Temprano';
       }
 
       return {
         ...asis,
         detalle_ingreso,
         minutos_retraso,
-        turno: turno ? {
-          ...turno,
-          subpuesto: subpuesto ? {
-            ...subpuesto,
-            puesto: puesto
-          } : null
-        } : null
+        turno: turno ? { ...turno, subpuesto } : null
       };
     });
   }
