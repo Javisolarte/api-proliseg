@@ -1,4 +1,4 @@
-import {
+﻿import {
   Injectable,
   Logger,
   NotFoundException,
@@ -25,8 +25,8 @@ export class AsistenciasService {
   ) { }
 
   /**
-   * ✅ Verificar si un empleado puede registrar asistencia
-   * Solo se permite si está asignado a un subpuesto activo
+   * Verificar si un empleado puede registrar asistencia.
+   * El turno asignado habilita la asistencia aunque sea un reemplazo por un dia.
    */
   async verificarPermisoAsistencia(empleado_id: number, turno_id: number) {
     const db = this.supabase.getClient();
@@ -56,7 +56,7 @@ export class AsistenciasService {
       throw new BadRequestException('Este turno no pertenece al empleado');
     }
 
-    // Verificar que el empleado está asignado al subpuesto
+    // La asignacion fija es informativa: un turno del dia tambien habilita reemplazos.
     const { data: asignacion, error: asignError } = await db
       .from('asignacion_guardas_puesto')
       .select('id, activo')
@@ -67,16 +67,9 @@ export class AsistenciasService {
       .maybeSingle();
 
     if (asignError) {
-      this.logger.error(`Error verificando asignación: ${asignError.message}`);
+      this.logger.error(`Error verificando asignaciÃ³n: ${asignError.message}`);
       throw asignError;
     }
-
-    if (!asignacion) {
-      throw new BadRequestException(
-        'No tienes una asignación activa al subpuesto de este turno. Las asistencias solo se habilitan cuando estás asignado a un subpuesto.'
-      );
-    }
-
     // Normalizar empleado (por si Supabase devuelve array)
     const empData = Array.isArray(turno.empleado) ? turno.empleado[0] : turno.empleado;
     const empleadoInfo = {
@@ -84,19 +77,19 @@ export class AsistenciasService {
       nombre: empData?.nombre_completo || 'Empleado'
     };
 
-    return { turno, asignacion, empleado: empleadoInfo };
+    return { turno, asignacion: asignacion || null, empleado: empleadoInfo };
   }
 
   // ============================================================
-  // 🚪 REGISTRAR ENTRADA
+  // ðŸšª REGISTRAR ENTRADA
   // ============================================================
   // ============================================================
-  // 🚪 REGISTRAR ENTRADA
+  // ðŸšª REGISTRAR ENTRADA
   // ============================================================
   async registrarEntrada(dto: RegistrarEntradaDto) {
     const db = this.supabase.getClient();
 
-    // 1. Verificar permiso y datos básicos
+    // 1. Verificar permiso y datos bÃ¡sicos
     const { turno, empleado } = await this.verificarPermisoAsistencia(dto.empleado_id, dto.turno_id);
 
     // 2. Verificar duplicados en turnos_asistencia
@@ -121,7 +114,7 @@ export class AsistenciasService {
     const diffMinutos = (turnoFechaInicio.getTime() - now.getTime()) / (1000 * 60);
 
     if (diffMinutos > 20) {
-      throw new BadRequestException('Aún no puedes marcar entrada. Se habilita 20 minutos antes del inicio del turno.');
+      throw new BadRequestException('AÃºn no puedes marcar entrada. Se habilita 20 minutos antes del inicio del turno.');
     }
 
     // 4. Validar distancia (1000m)
@@ -135,13 +128,13 @@ export class AsistenciasService {
     }
 
     if (distancia > 1000) {
-      throw new BadRequestException(`Estás fuera del rango permitido (${Math.round(distancia)}m). Máximo 1000m.`);
+      throw new BadRequestException(`EstÃ¡s fuera del rango permitido (${Math.round(distancia)}m). MÃ¡ximo 1000m.`);
     }
 
-    // 5. Calcular Observación de Puntualidad
+    // 5. Calcular ObservaciÃ³n de Puntualidad
     let observaciones_calculadas = '';
     // Si now > turnoFechaInicio -> Tarde
-    // diffMinutos es positivo si faltan minutos (temprano), negativo si ya pasó (tarde)
+    // diffMinutos es positivo si faltan minutos (temprano), negativo si ya pasÃ³ (tarde)
     const minutosTarde = Math.floor((now.getTime() - turnoFechaInicio.getTime()) / (1000 * 60));
 
     if (minutosTarde > 0) {
@@ -160,7 +153,7 @@ export class AsistenciasService {
     }
 
     // 7. Registrar en turnos_asistencia
-    // Si ya existía registro sin entrada (raro, pero posible si se creó el registro antes), update. Si no, insert.
+    // Si ya existÃ­a registro sin entrada (raro, pero posible si se creÃ³ el registro antes), update. Si no, insert.
     let asistenciaId = asistenciaExistente?.id;
 
     if (asistenciaId) {
@@ -184,7 +177,7 @@ export class AsistenciasService {
       asistenciaId = newAsis.id;
     }
 
-    // 7. También insertar en tabla histórica 'asistencias' (para logs de GPS y legacy support)
+    // 7. TambiÃ©n insertar en tabla histÃ³rica 'asistencias' (para logs de GPS y legacy support)
     const { data: logAsistencia } = await db.from('asistencias').insert({
       empleado_id: dto.empleado_id,
       turno_id: dto.turno_id,
@@ -193,21 +186,21 @@ export class AsistenciasService {
       latitud_entrada: dto.latitud,
       longitud_entrada: dto.longitud,
       registrada_por: dto.empleado_id,
-      evidencia_foto_url: dto.foto_url // Guardar foto en histórico
+      evidencia_foto_url: dto.foto_url // Guardar foto en histÃ³rico
     }).select().single();
     void logAsistencia; // evitar warning de variable no usada
 
-    // 8. Actualizar ESTADO DEL TURNO a 'parcial' (Significa En Curso según lógica usuario)
+    // 8. Actualizar ESTADO DEL TURNO a 'parcial' (Significa En Curso segÃºn lÃ³gica usuario)
     await db.from('turnos').update({
       estado_turno: 'parcial',
       // No cambiamos hora_inicio del turno, esa es la programada. Solo estado.
     }).eq('id', dto.turno_id);
 
     // 9. IA Analysis (Optional hook)
-    // ... (Mantener lógica IA existente si se desea, o simplificar)
+    // ... (Mantener lÃ³gica IA existente si se desea, o simplificar)
 
     return {
-      message: '✅ Entrada registrada. Turno en curso.',
+      message: 'âœ… Entrada registrada. Turno en curso.',
       observaciones_generadas: observaciones_calculadas,
       distancia_metros: distancia,
       turnos_asistencia_id: asistenciaId
@@ -215,10 +208,10 @@ export class AsistenciasService {
   }
 
   // ============================================================
-  // 🚶‍♂️ REGISTRAR SALIDA
+  // ðŸš¶â€â™‚ï¸ REGISTRAR SALIDA
   // ============================================================
   // ============================================================
-  // 🚶‍♂️ REGISTRAR SALIDA
+  // ðŸš¶â€â™‚ï¸ REGISTRAR SALIDA
   // ============================================================
   async registrarSalida(dto: RegistrarSalidaDto) {
     const db = this.supabase.getClient();
@@ -236,7 +229,7 @@ export class AsistenciasService {
       .maybeSingle();
 
     if (asisError || !asistencia) {
-      throw new BadRequestException('No se encontró registro de entrada para este turno en turnos_asistencia.');
+      throw new BadRequestException('No se encontrÃ³ registro de entrada para este turno en turnos_asistencia.');
     }
     if (asistencia.hora_salida) {
       throw new BadRequestException('Ya se ha registrado la salida para este turno.');
@@ -251,7 +244,7 @@ export class AsistenciasService {
       distancia = calcularDistancia(parseFloat(dto.latitud), parseFloat(dto.longitud), parseFloat(puesto.latitud), parseFloat(puesto.longitud));
     }
     if (distancia > 1000) {
-      throw new BadRequestException(`Estás demasiado lejos (${Math.round(distancia)}m). Máximo 1000m.`);
+      throw new BadRequestException(`EstÃ¡s demasiado lejos (${Math.round(distancia)}m). MÃ¡ximo 1000m.`);
     }
 
     // 3. Calcular Observaciones de Salida
@@ -265,10 +258,10 @@ export class AsistenciasService {
     }
 
     const minutosParaFin = (turnoFechaFin.getTime() - now.getTime()) / (1000 * 60);
-    // Si minutosParaFin > 0 -> Salió antes
-    // Si minutosParaFin < 0 -> Salió después (extras/tarde)
+    // Si minutosParaFin > 0 -> SaliÃ³ antes
+    // Si minutosParaFin < 0 -> SaliÃ³ despuÃ©s (extras/tarde)
 
-    // Validar salida muy temprana (más de 10 mins antes)
+    // Validar salida muy temprana (mÃ¡s de 10 mins antes)
     if (minutosParaFin > 10) {
       throw new BadRequestException('Muy temprano para salir. Solo se permite 10 minutos antes del fin.');
     }
@@ -277,7 +270,7 @@ export class AsistenciasService {
     const minutosDespues = Math.floor((now.getTime() - turnoFechaFin.getTime()) / (1000 * 60));
 
     if (minutosDespues >= 5) {
-      // Marcó más de 5 mins tarde
+      // MarcÃ³ mÃ¡s de 5 mins tarde
       observaciones_salida = `Salida Tarde / Tiempo Extra: ${minutosDespues} min.`;
     } else {
       observaciones_salida = 'Salida Normal.';
@@ -314,26 +307,26 @@ export class AsistenciasService {
       latitud_salida: dto.latitud,
       longitud_salida: dto.longitud,
       registrada_por: (dto as any).empleado_id,
-      evidencia_foto_url: dto.foto_url // Guardar foto en histórico
+      evidencia_foto_url: dto.foto_url // Guardar foto en histÃ³rico
     });
-    // Log guardado, continúa flujo
+    // Log guardado, continÃºa flujo
 
     // 6. Actualizar ESTADO DEL TURNO a 'cumplido'
-    // La DB se encargará de calcular horas_reportadas y duracion_horas vía trigger en turnos_asistencia
+    // La DB se encargarÃ¡ de calcular horas_reportadas y duracion_horas vÃ­a trigger en turnos_asistencia
     await db.from('turnos').update({
       estado_turno: 'cumplido',
     }).eq('id', dto.turno_id);
 
     return {
-      message: '✅ Salida registrada. Turno Finalizado.',
+      message: 'âœ… Salida registrada. Turno Finalizado.',
       observaciones_salida: observaciones_salida,
       distancia_metros: distancia
     };
   }
 
   /**
-   * 📋 Obtener turnos con asistencias habilitadas para un empleado
-   * Solo retorna turnos de subpuestos donde el empleado está asignado
+   * ðŸ“‹ Obtener turnos con asistencias habilitadas para un empleado
+   * Solo retorna turnos de subpuestos donde el empleado estÃ¡ asignado
    */
   async obtenerTurnosHabilitados(empleado_id: number, fecha?: string) {
     const db = this.supabase.getClient();
@@ -368,7 +361,7 @@ export class AsistenciasService {
     if (fecha) {
       query = query.eq('fecha', fecha);
     } else {
-      // Por defecto, últimos 7 días
+      // Por defecto, Ãºltimos 7 dÃ­as
       const hace7Dias = new Date();
       hace7Dias.setDate(hace7Dias.getDate() - 7);
       query = query.gte('fecha', hace7Dias.toISOString().split('T')[0]);
@@ -380,7 +373,7 @@ export class AsistenciasService {
       throw new BadRequestException(error.message);
     }
 
-    // Filtrar solo turnos donde el empleado está asignado al subpuesto
+    // Filtrar solo turnos donde el empleado estÃ¡ asignado al subpuesto
     const turnosHabilitados: any[] = [];
     for (const turno of turnos || []) {
       const { data: asignacion } = await db
@@ -404,7 +397,7 @@ export class AsistenciasService {
   }
 
   // ============================================================
-  // 📊 MÉTRICAS DE CUMPLIMIENTO
+  // ðŸ“Š MÃ‰TRICAS DE CUMPLIMIENTO
   // ============================================================
   async obtenerMetricaCumplimiento() {
     const db = this.supabase.getClient();
@@ -437,7 +430,7 @@ export class AsistenciasService {
       t.asistencias?.some((a: any) => a.tipo_marca === 'salida')
     ).length || 0;
 
-    // Calcular métricas adicionales desde turnos_asistencia (últimos 30 días)
+    // Calcular mÃ©tricas adicionales desde turnos_asistencia (Ãºltimos 30 dÃ­as)
     const { data: turnosAsis } = await db
       .from('turnos_asistencia')
       .select('tiempo_total_horas, horas_extras, horas_nocturnas, horas_dominicales, horas_festivas, estado_asistencia')
@@ -452,7 +445,7 @@ export class AsistenciasService {
     const cumplimiento = totalTurnos > 0 ? (turnosConEntrada / totalTurnos) * 100 : 0;
 
     return {
-      message: '📈 Métrica de cumplimiento generada correctamente',
+      message: 'ðŸ“ˆ MÃ©trica de cumplimiento generada correctamente',
       cumplimiento: {
         total_turnos: totalTurnos,
         turnos_con_entrada: turnosConEntrada,
@@ -472,7 +465,7 @@ export class AsistenciasService {
   }
 
   // ============================================================
-  // 🤖 Registrar resultados de IA
+  // ðŸ¤– Registrar resultados de IA
   // ============================================================
   private async registrarAnalisisIA(
     db: any,
@@ -505,14 +498,14 @@ export class AsistenciasService {
     });
 
     if (error) {
-      this.logger.warn(`⚠️ No se pudo guardar análisis IA: ${error.message}`);
+      this.logger.warn(`âš ï¸ No se pudo guardar anÃ¡lisis IA: ${error.message}`);
     } else {
-      this.logger.log(`🧠 [IA] Análisis registrado (nivel: ${nivel}) para empleado ${empleado_id}`);
+      this.logger.log(`ðŸ§  [IA] AnÃ¡lisis registrado (nivel: ${nivel}) para empleado ${empleado_id}`);
     }
   }
 
   // ============================================================
-  // 📋 LISTAR ASISTENCIAS POR EMPLEADO
+  // ðŸ“‹ LISTAR ASISTENCIAS POR EMPLEADO
   // ============================================================
   async findAllByEmpleado(empleado_id: number) {
     const db = this.supabase.getClient();
@@ -543,7 +536,7 @@ export class AsistenciasService {
   }
 
   // ============================================================
-  // 📝 ACTUALIZAR ASISTENCIA
+  // ðŸ“ ACTUALIZAR ASISTENCIA
   // ============================================================
   async update(id: number, dto: UpdateAsistenciaDto) {
     const db = this.supabase.getClient();
@@ -563,7 +556,7 @@ export class AsistenciasService {
   }
 
   // ============================================================
-  // 🗑️ ELIMINAR ASISTENCIA
+  // ðŸ—‘ï¸ ELIMINAR ASISTENCIA
   // ============================================================
   async remove(id: number) {
     const db = this.supabase.getClient();
@@ -578,7 +571,7 @@ export class AsistenciasService {
   }
 
   // ============================================================
-  // 🔒 CERRAR TURNO MANUALMENTE
+  // ðŸ”’ CERRAR TURNO MANUALMENTE
   // ============================================================
   async cerrarTurnoManual(dto: CerrarTurnoManualDto) {
     const db = this.supabase.getClient();
@@ -624,11 +617,11 @@ export class AsistenciasService {
       estado_turno: 'cumplido'
     }).eq('id', dto.turno_id);
 
-    return { message: '✅ Turno cerrado manualmente.' };
+    return { message: 'âœ… Turno cerrado manualmente.' };
   }
 
   // ============================================================
-  // 🔓 REABRIR TURNO
+  // ðŸ”“ REABRIR TURNO
   // ============================================================
   async reabrirTurno(asistencia_id: number) {
     const db = this.supabase.getClient();
@@ -640,7 +633,7 @@ export class AsistenciasService {
       .eq('id', asistencia_id)
       .single();
 
-    if (error || !asistencia) throw new NotFoundException('No se encontró el registro de asistencia');
+    if (error || !asistencia) throw new NotFoundException('No se encontrÃ³ el registro de asistencia');
 
     // 2. Limpiar hora_salida y resetear estado
     await db.from('turnos_asistencia')
@@ -656,11 +649,11 @@ export class AsistenciasService {
       .update({ estado_turno: 'parcial' })
       .eq('id', asistencia.turno_id);
 
-    return { message: '✅ Turno reabierto con éxito. El guarda puede marcar salida de nuevo.' };
+    return { message: 'âœ… Turno reabierto con Ã©xito. El guarda puede marcar salida de nuevo.' };
   }
 
   // ============================================================
-  // 📊 RESUMEN DEL TURNO (Calculado por DB)
+  // ðŸ“Š RESUMEN DEL TURNO (Calculado por DB)
   // ============================================================
   async getTurnoResumen(turno_id: number) {
     const db = this.supabase.getClient();
@@ -688,7 +681,7 @@ export class AsistenciasService {
       .maybeSingle();
 
     if (error) throw new BadRequestException(error.message);
-    if (!data) throw new NotFoundException('No se encontró resumen de asistencia para este turno');
+    if (!data) throw new NotFoundException('No se encontrÃ³ resumen de asistencia para este turno');
 
     return {
       horas_totales: data.tiempo_total_horas,
@@ -705,7 +698,7 @@ export class AsistenciasService {
   }
 
   // ============================================================
-  // 📜 HISTORIAL LABORAL POR EMPLEADO
+  // ðŸ“œ HISTORIAL LABORAL POR EMPLEADO
   // ============================================================
   async getHistorialLaboral(empleado_id: number) {
     const db = this.supabase.getClient();
@@ -737,7 +730,7 @@ export class AsistenciasService {
   }
 
   // ============================================================
-  // 🏢 OBTENER PUESTOS CON ASISTENCIA
+  // ðŸ¢ OBTENER PUESTOS CON ASISTENCIA
   // ============================================================
   async getPuestosConAsistencia() {
     const db = this.supabase.getClient();
@@ -784,7 +777,7 @@ export class AsistenciasService {
   }
 
   // ============================================================
-  // 📍 LISTAR ASISTENCIAS POR PUESTO (Con filtros de fecha)
+  // ðŸ“ LISTAR ASISTENCIAS POR PUESTO (Con filtros de fecha)
   // ============================================================
   async getAsistenciasByPuesto(puesto_id: number, fecha_inicio?: string, fecha_fin?: string) {
     const db = this.supabase.getClient();
@@ -832,7 +825,7 @@ export class AsistenciasService {
       const subpuesto = turno && Array.isArray(turno.subpuesto) ? turno.subpuesto[0] : (turno?.subpuesto);
       const puesto = subpuesto && Array.isArray(subpuesto.puesto) ? subpuesto.puesto[0] : (subpuesto?.puesto);
       
-      // Cálculo de retraso
+      // CÃ¡lculo de retraso
       let detalle_ingreso = 'A tiempo';
       let minutos_retraso = 0;
       
@@ -842,7 +835,7 @@ export class AsistenciasService {
         const programada = new Date(turno.fecha);
         programada.setHours(parseInt(h), parseInt(m), 0);
         
-        // Ajustar para turno noche si entrada es mucho después? 
+        // Ajustar para turno noche si entrada es mucho despuÃ©s? 
         // Simplificado: diferencia directa
         minutos_retraso = Math.floor((entrada.getTime() - programada.getTime()) / (1000 * 60));
         if (minutos_retraso > 0) {
@@ -868,7 +861,7 @@ export class AsistenciasService {
   }
 
   // ============================================================
-  // 🖥️ MONITOREO DE HOY
+  // ðŸ–¥ï¸ MONITOREO DE HOY
   // ============================================================
   async getMonitoreoHoy() {
     const db = this.supabase.getClient();
@@ -928,7 +921,7 @@ export class AsistenciasService {
             resumen.en_sitio++;
           }
         } else {
-          // Verificar si ya debería haber llegado
+          // Verificar si ya deberÃ­a haber llegado
           if (t.hora_inicio) {
             const [h, m] = t.hora_inicio.split(':');
             const start = new Date();
@@ -982,7 +975,7 @@ export class AsistenciasService {
   }
 
   // ============================================================
-  // 🚪 REGISTRAR ENTRADA MANUAL (Sin GPS)
+  // ðŸšª REGISTRAR ENTRADA MANUAL (Sin GPS)
   // ============================================================
   async registrarEntradaManual(dto: RegistrarEntradaManualDto) {
     const db = this.supabase.getClient();
@@ -1019,20 +1012,20 @@ export class AsistenciasService {
     }).eq('id', dto.turno_id);
 
     return {
-      message: '✅ Entrada manual registrada exitosamente.',
+      message: 'âœ… Entrada manual registrada exitosamente.',
       asistencia: attendance
     };
   }
 
   // ============================================================
-  // 🚶‍♂️ REGISTRAR SALIDA MANUAL (Sin GPS)
+  // ðŸš¶â€â™‚ï¸ REGISTRAR SALIDA MANUAL (Sin GPS)
   // ============================================================
   async registrarSalidaManual(dto: RegistrarSalidaManualDto) {
     const db = this.supabase.getClient();
     // Usar hora colombiana (UTC-5) en lugar de hora UTC del servidor
     const now = getColombiaTime();
 
-    // 1. Buscar registro de entrada — usar maybeSingle para no lanzar error si no existe
+    // 1. Buscar registro de entrada â€” usar maybeSingle para no lanzar error si no existe
     const { data: asistencia, error: asisError } = await db
       .from('turnos_asistencia')
       .select('*')
@@ -1047,7 +1040,7 @@ export class AsistenciasService {
     let updated: any;
 
     if (asistencia) {
-      // 2a. Existe registro previo — solo actualizar la salida
+      // 2a. Existe registro previo â€” solo actualizar la salida
       const { data, error } = await db.from('turnos_asistencia').update({
         hora_salida: now.toISOString(),
         observaciones: (asistencia.observaciones || '') + ` | Salida manual (Super Usuario). ${dto.observaciones || ''}`,
@@ -1056,7 +1049,7 @@ export class AsistenciasService {
       if (error) throw new BadRequestException(error.message);
       updated = data;
     } else {
-      // 2b. No existe registro previo — crear uno con solo salida (turno forzado)
+      // 2b. No existe registro previo â€” crear uno con solo salida (turno forzado)
       const { data, error } = await db.from('turnos_asistencia').insert({
         turno_id: dto.turno_id,
         empleado_id: dto.empleado_id,
@@ -1068,7 +1061,7 @@ export class AsistenciasService {
       }).select().single();
       if (error) throw new BadRequestException(error.message);
       updated = data;
-      this.logger.warn(`⚠️ Salida manual registrada sin entrada previa para turno ${dto.turno_id}, empleado ${dto.empleado_id}`);
+      this.logger.warn(`âš ï¸ Salida manual registrada sin entrada previa para turno ${dto.turno_id}, empleado ${dto.empleado_id}`);
     }
 
     // 3. Registrar en log legacy
@@ -1086,16 +1079,16 @@ export class AsistenciasService {
     }).eq('id', dto.turno_id);
 
     return {
-      message: '✅ Salida manual registrada exitosamente.',
+      message: 'âœ… Salida manual registrada exitosamente.',
       asistencia: updated
     };
   }
 
   // ============================================================
-  // 📸 SUBIR FOTO EVIDENCIA
+  // ðŸ“¸ SUBIR FOTO EVIDENCIA
   // ============================================================
   async uploadFoto(file: any, empleado_id: number) {
-    if (!file) throw new BadRequestException("No se ha subido ningún archivo");
+    if (!file) throw new BadRequestException("No se ha subido ningÃºn archivo");
 
     const db = this.supabase.getClient();
     const timestamp = Date.now();
@@ -1113,7 +1106,7 @@ export class AsistenciasService {
 
     if (error) {
       this.logger.error(`Error subiendo foto asistencia: ${error.message}`);
-      throw new BadRequestException("Error al subir la evidencia fotográfica");
+      throw new BadRequestException("Error al subir la evidencia fotogrÃ¡fica");
     }
 
     // Get Public URL
@@ -1125,7 +1118,7 @@ export class AsistenciasService {
   }
 
   /**
-   * 🗺️ Obtener el recorrido GPS de un empleado para su turno actual o más reciente de hoy
+   * ðŸ—ºï¸ Obtener el recorrido GPS de un empleado para su turno actual o mÃ¡s reciente de hoy
    */
   async getTrackingHoy(empleado_id: number) {
     const db = this.supabase.getClient();
@@ -1141,14 +1134,14 @@ export class AsistenciasService {
 
     if (error) {
       this.logger.error(`Error buscando asistencia para tracking: ${error.message}`);
-      throw new BadRequestException("No se pudo obtener la información de asistencia");
+      throw new BadRequestException("No se pudo obtener la informaciÃ³n de asistencia");
     }
 
     if (!asistencia) {
       throw new NotFoundException("No hay registros de asistencia para este empleado hoy.");
     }
 
-    // 2. Definir rango de búsqueda: desde la entrada hasta la salida (o ahora si está activo)
+    // 2. Definir rango de bÃºsqueda: desde la entrada hasta la salida (o ahora si estÃ¡ activo)
     const desde = asistencia.hora_entrada;
     const hasta = asistencia.hora_salida || new Date().toISOString();
 
@@ -1156,3 +1149,4 @@ export class AsistenciasService {
     return this.ubicaciones.getHistorial(empleado_id, { desde, hasta });
   }
 }
+

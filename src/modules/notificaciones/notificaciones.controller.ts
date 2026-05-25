@@ -10,7 +10,7 @@ import {
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @ApiTags('Notificaciones')
-@Controller('api/notificaciones')
+@Controller('notificaciones')
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth('JWT-auth')
 export class NotificacionesController {

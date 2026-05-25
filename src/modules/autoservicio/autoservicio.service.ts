@@ -233,7 +233,32 @@ export class AutoservicioService {
             .single(); // Assuming single assignment at a time
 
         if (error && error.code !== 'PGRST116') throw error;
-        return data || { message: 'No tiene puesto asignado actualmente' };
+        if (data) return data;
+
+        const today = new Date().toISOString().slice(0, 10);
+        const { data: turno, error: turnoError } = await supabase
+            .from('turnos')
+            .select(`
+                id,
+                puesto_id,
+                subpuesto_id,
+                fecha,
+                hora_inicio,
+                hora_fin,
+                estado_turno,
+                es_reemplazo,
+                puestos_trabajo(nombre, direccion, ciudad, latitud, longitud, contratos(id, cliente_id)),
+                subpuestos_trabajo(nombre)
+            `)
+            .eq('empleado_id', empleado.id)
+            .eq('fecha', today)
+            .not('hora_inicio', 'is', null)
+            .order('hora_inicio', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+
+        if (turnoError && turnoError.code !== 'PGRST116') throw turnoError;
+        return turno ? { ...turno, origen: 'turno_dia' } : { message: 'No tiene puesto asignado actualmente' };
     }
 
     async getMisTurnos(userId: number) {
@@ -274,15 +299,8 @@ export class AutoservicioService {
         const empleado = await this.getEmpleadoByUserId(userId);
         const supabase = this.supabaseService.getClient();
 
-        // 1. Obtener puesto asignado actual
-        const { data: asignacion } = await supabase
-            .from('asignacion_guardas_puesto')
-            .select('puesto_id')
-            .eq('empleado_id', empleado.id)
-            .eq('activo', true)
-            .single();
-
-        if (!asignacion) return []; // No asignado, no ve nada
+        const puestoActual = await this.getPuestoOperativoActual(empleado.id);
+        if (!puestoActual?.puesto_id) return [];
 
         // 2. Ver historial completo del puesto
         const { data, error } = await supabase
@@ -291,7 +309,7 @@ export class AutoservicioService {
                 *,
                 creador:creada_por(nombre_completo) 
             `)
-            .eq('puesto_id', asignacion.puesto_id)
+            .eq('puesto_id', puestoActual.puesto_id)
             .order('created_at', { ascending: false })
             .limit(100);
 
@@ -1301,6 +1319,19 @@ export class AutoservicioService {
 
     private async getPuestoOperativoActual(empleadoId: number) {
         const supabase = this.supabaseService.getClient();
+        const today = new Date().toISOString().slice(0, 10);
+        const { data: turno } = await supabase
+            .from('turnos')
+            .select('puesto_id, puestos_trabajo(id,nombre,codigo_puesto,direccion,ciudad,latitud,longitud)')
+            .eq('empleado_id', empleadoId)
+            .eq('fecha', today)
+            .not('hora_inicio', 'is', null)
+            .order('hora_inicio', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+
+        if (turno?.puestos_trabajo) return this.normalizeSupabaseRelation(turno.puestos_trabajo);
+
         const { data: asignacion } = await supabase
             .from('asignacion_guardas_puesto')
             .select('puesto_id, puestos_trabajo(id,nombre,codigo_puesto,direccion,ciudad,latitud,longitud)')
@@ -1309,18 +1340,7 @@ export class AutoservicioService {
             .maybeSingle();
 
         if (asignacion?.puestos_trabajo) return this.normalizeSupabaseRelation(asignacion.puestos_trabajo);
-
-        const today = new Date().toISOString().slice(0, 10);
-        const { data: turno } = await supabase
-            .from('turnos')
-            .select('puesto_id, puestos_trabajo(id,nombre,codigo_puesto,direccion,ciudad,latitud,longitud)')
-            .eq('empleado_id', empleadoId)
-            .eq('fecha', today)
-            .order('hora_inicio', { ascending: true })
-            .limit(1)
-            .maybeSingle();
-
-        return turno?.puestos_trabajo ? this.normalizeSupabaseRelation(turno.puestos_trabajo) : null;
+        return null;
     }
 
     private async getConfiguracionRondaActualId(empleadoId: number): Promise<number> {
