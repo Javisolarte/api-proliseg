@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -81,7 +81,7 @@ export class NotificacionesService implements OnModuleInit {
     const tokenDispositivo = dto.token_dispositivo || (dto as any).token;
 
     if (!tokenDispositivo) {
-      throw new Error('Token de dispositivo requerido');
+      throw new BadRequestException('Token de dispositivo requerido');
     }
 
     const dataToUpsert: any = {

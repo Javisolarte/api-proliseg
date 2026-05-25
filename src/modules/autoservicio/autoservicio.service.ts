@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { PqrsfService } from '../pqrsf/pqrsf.service';
 import { GeminiService } from '../ia/gemini.service';
@@ -43,6 +43,8 @@ import {
 
 @Injectable()
 export class AutoservicioService {
+    private readonly logger = new Logger(AutoservicioService.name);
+
     constructor(
         private readonly supabaseService: SupabaseService,
         private readonly pqrsfService: PqrsfService,
@@ -1164,7 +1166,12 @@ export class AutoservicioService {
         if (error && error.code !== 'PGRST116') throw new BadRequestException(error.message);
         if (!data) return null;
 
-        const tracking = await this.controlRondasService.getTracking(data.id);
+        let tracking: any = { lecturas: [], evidencias: [] };
+        try {
+            tracking = await this.controlRondasService.getTracking(data.id);
+        } catch (error) {
+            this.logger.warn(`No se pudo cargar tracking de ronda activa ${data.id}: ${error?.message || error}`);
+        }
         return {
             ...data,
             configuracion: data.configuracion ? {

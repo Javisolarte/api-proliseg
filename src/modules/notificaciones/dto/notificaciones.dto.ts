@@ -1,3 +1,5 @@
+import { IsIn, IsOptional, IsString } from 'class-validator';
+
 // DTOs para Eventos
 export class CrearEventoDto {
     codigo: string;
@@ -29,10 +31,24 @@ export class ConfigurarPreferenciasDto {
 
 // DTOs para Dispositivos
 export class RegistrarDispositivoDto {
+    @IsOptional()
+    @IsString()
     token?: string;
+
+    @IsOptional()
+    @IsString()
     token_dispositivo: string;
+
+    @IsOptional()
+    @IsIn(['android', 'ios', 'web'])
     plataforma: 'android' | 'ios' | 'web';
+
+    @IsOptional()
+    @IsString()
     modelo_dispositivo?: string;
+
+    @IsOptional()
+    @IsString()
     app_version?: string;
 }
 
