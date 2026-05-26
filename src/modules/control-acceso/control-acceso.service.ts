@@ -302,6 +302,10 @@ export class ControlAccesoService {
       foto_rostro_url: fotoUrl,
       acepta_tratamiento_datos: true,
       acepta_ingreso_prolicontrol: !!body.acepta_ingreso_prolicontrol,
+      consentimiento_aceptado_at: body.consentimiento_aceptado_at || new Date().toISOString(),
+      geolocation_lat: body.geolocation_lat || null,
+      geolocation_lng: body.geolocation_lng || null,
+      geolocation_accuracy: body.geolocation_accuracy || null,
       user_agent: req?.headers?.['user-agent'] || null,
       ip_origen: req?.ip || null,
     };
