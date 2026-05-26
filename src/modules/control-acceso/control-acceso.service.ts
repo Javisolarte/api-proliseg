@@ -262,26 +262,31 @@ export class ControlAccesoService {
     const checkCode = await this.validarCodigo(token, body?.codigo_seguridad || '');
     if (!checkCode.ok) throw new Error('Código de seguridad inválido');
     if (!body?.acepta_tratamiento_datos) throw new Error('Debe aceptar tratamiento de datos');
+    if (!body?.foto_base64) throw new Error('Debe adjuntar una foto de rostro');
 
     let fotoUrl: string | null = null;
     if (body.foto_base64 && String(body.foto_base64).startsWith('data:image/')) {
       const match = String(body.foto_base64).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
       if (match) {
-        const ext = match[1].includes('png') ? 'png' : 'jpg';
+        const contentType = match[1] === 'image/png' ? 'image/png' : 'image/jpeg';
+        const ext = contentType === 'image/png' ? 'png' : 'jpg';
         const fileName = `control-acceso-${form.id}-${Date.now()}.${ext}`;
         const filePath = `${form.id}/${fileName}`;
         const fileBuffer = Buffer.from(match[2], 'base64');
         const { error: uploadError } = await this.supabase
-          .getClient()
+          .getSupabaseAdminClient()
           .storage
           .from('control-acceso-faces')
-          .upload(filePath, fileBuffer, { upsert: true, contentType: match[1] });
-        if (!uploadError) {
-          const { data: pub } = this.supabase.getClient().storage.from('control-acceso-faces').getPublicUrl(filePath);
-          fotoUrl = pub?.publicUrl || null;
+          .upload(filePath, fileBuffer, { upsert: true, contentType });
+        if (uploadError) {
+          this.logger.error(`Error subiendo rostro de recopilacion: ${uploadError.message}`);
+          throw uploadError;
         }
+        const { data: pub } = this.supabase.getSupabaseAdminClient().storage.from('control-acceso-faces').getPublicUrl(filePath);
+        fotoUrl = pub?.publicUrl || null;
       }
     }
+    if (!fotoUrl) throw new Error('No se pudo guardar la foto de rostro');
 
     const payload = {
       lugar_id: form.id,
@@ -301,7 +306,7 @@ export class ControlAccesoService {
       ip_origen: req?.ip || null,
     };
     const { data, error } = await this.supabase
-      .getClient()
+      .getSupabaseAdminClient()
       .from('control_acceso_recoleccion_registros')
       .insert(payload)
       .select('*')
