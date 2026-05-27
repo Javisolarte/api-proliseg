@@ -125,6 +125,7 @@ import { ComplianceModule } from './modules/compliance/compliance.module';
 import { RadioOperacionModule } from './modules/radio-operacion/radio-operacion.module';
 import { ControlAccesoModule } from './modules/control-acceso/control-acceso.module';
 import { ControlRondasModule } from './modules/control-rondas/control-rondas.module';
+import { FacturacionModule } from './modules/facturacion/facturacion.module';
 
 @Module({
   imports: [
@@ -270,6 +271,7 @@ import { ControlRondasModule } from './modules/control-rondas/control-rondas.mod
     RadioOperacionModule,
     ControlAccesoModule,
     ControlRondasModule,
+    FacturacionModule,
   ],
   providers: [
     {
