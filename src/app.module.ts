@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
-import { APP_GUARD, APP_FILTER } from '@nestjs/core';
+import { APP_GUARD, APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { PrometheusModule } from '@willsoto/nestjs-prometheus';
 import { SentryFilter } from './common/filters/sentry.filter';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
@@ -11,6 +11,7 @@ import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { CacheModule } from '@nestjs/cache-manager';
 import { redisStore } from 'cache-manager-redis-store';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { HttpCacheInterceptor } from './common/interceptors/cache.interceptor';
 import * as Sentry from '@sentry/nestjs';
 
 // Configuration
@@ -153,7 +154,7 @@ import { FacturacionModule } from './modules/facturacion/facturacion.module';
       store: redisStore,
       host: process.env.REDIS_HOST || 'localhost',
       port: parseInt(process.env.REDIS_PORT || '6379'),
-      ttl: 600, // 10 minutes default
+      ttl: 30, // 30 seconds default for global micro-cache (safe and extremely fast)
     }),
 
     // Rate limiting
@@ -285,6 +286,10 @@ import { FacturacionModule } from './modules/facturacion/facturacion.module';
     {
       provide: APP_FILTER,
       useClass: GlobalExceptionFilter,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: HttpCacheInterceptor,
     },
   ],
 })
