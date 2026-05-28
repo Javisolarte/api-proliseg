@@ -436,10 +436,16 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
         }));
         client.emit('sesiones_activas', sesiones);
     }
-
     private checkInactiveSessions() {
         const now = new Date().getTime();
         for (const [sesionId, sesion] of this.sesionesActivas.entries()) {
+            // Si el socket del cliente (App) sigue conectado, actualizar actividad para prevenir timeout
+            const appSocket = this.server.sockets.get(sesion.socket_id);
+            if (appSocket && appSocket.connected) {
+                sesion.ultima_actividad = new Date();
+                continue;
+            }
+
             if (now - sesion.ultima_actividad.getTime() > this.SESSION_TIMEOUT_MS) {
                 this.logger.warn(`🧹 Timeout de sesión: ${sesionId}`);
                 this.server.to(sesionId).emit('sesion_finalizada', {
@@ -450,6 +456,7 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
             }
         }
     }
+
     /**
      * Método público para emitir eventos desde el servicio
      */
