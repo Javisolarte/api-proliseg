@@ -8,7 +8,7 @@ import {
 import { AppModule } from "./app.module";
 import { NestExpressApplication } from "@nestjs/platform-express";
 import * as Sentry from "@sentry/nestjs";
-import * as compression from "compression";
+import compression from "compression";
 import "dotenv/config";
 
 Sentry.init({
