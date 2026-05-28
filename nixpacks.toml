@@ -1,0 +1,6 @@
+# Configuración de Nixpacks para compilar la API de Proliseg con Node 22 y npm install
+[phases.install]
+cmds = ["npm install"]
+
+[providers.node]
+nodeVersion = "22"
