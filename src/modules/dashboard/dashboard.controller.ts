@@ -5,7 +5,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RlsHelperService } from '../../common/services/rls-helper.service';
-import type { VigilanteDashboardDto, ClienteDashboardDto, AdminDashboardDto } from './dto/dashboard.dto';
+import type { VigilanteDashboardDto, ClienteDashboardDto, AdminDashboardDto, RecentActivityDto } from './dto/dashboard.dto';
 
 /**
  * 📊 CONTROLADOR DE DASHBOARD
@@ -44,5 +44,21 @@ export class DashboardController {
     ): Promise<VigilanteDashboardDto | ClienteDashboardDto | AdminDashboardDto> {
         const rlsContext = this.rlsHelper.createRlsContext(user);
         return this.dashboardService.getDashboard(rlsContext);
+    }
+
+    @Get('actividad-reciente')
+    @ApiOperation({
+        summary: 'Obtener actividad reciente según rol del usuario',
+        description: 'Retorna la lista de actividad reciente de forma ultra-rápida y ligera para feeds en tiempo real',
+    })
+    @ApiResponse({
+        status: 200,
+        description: 'Actividad reciente obtenida exitosamente',
+    })
+    async getRecentActivity(
+        @CurrentUser() user: any,
+    ): Promise<RecentActivityDto[]> {
+        const rlsContext = this.rlsHelper.createRlsContext(user);
+        return this.dashboardService.getRecentActivity(rlsContext);
     }
 }

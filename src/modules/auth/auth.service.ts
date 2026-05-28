@@ -161,7 +161,8 @@ export class AuthService {
         null;
       const userAgent = req?.headers['user-agent'] || 'unknown';
 
-      const { error: sesionError } = await supabase
+      // 📌 Registrar sesión en la tabla sesiones_usuario en segundo plano (asíncrono) para no demorar la respuesta de login
+      supabase
         .from('sesiones_usuario')
         .insert({
           usuario_id: usuarioExterno.id,
@@ -169,14 +170,14 @@ export class AuthService {
           ip_address: ipAddress,
           user_agent: userAgent,
           activa: true,
+        })
+        .then(({ error: sesionError }) => {
+          if (sesionError) {
+            this.logger.error(`⚠️ Error al registrar sesión: ${sesionError.message}`);
+          } else {
+            this.logger.log(`🟢 Sesión registrada correctamente en segundo plano para ${loginDto.email}`);
+          }
         });
-
-      if (sesionError) {
-        this.logger.error(`⚠️ Error al registrar sesión: ${sesionError.message}`);
-        // No interrumpe el login, solo registra el error
-      } else {
-        this.logger.log(`🟢 Sesión registrada correctamente para ${loginDto.email}`);
-      }
 
       this.logger.log(`✅ Login exitoso: ${loginDto.email}`);
 

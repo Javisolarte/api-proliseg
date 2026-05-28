@@ -56,9 +56,30 @@ export class DashboardService {
             case 'administrativo':
             case 'gerencia':
             case 'superusuario':
-                return this.getAdminDashboard(rlsContext);
             default:
                 return this.getAdminDashboard(rlsContext);
+        }
+    }
+
+    /**
+     * Obtener actividad reciente según el rol del usuario (ultraligero)
+     */
+    async getRecentActivity(rlsContext: RlsContext): Promise<RecentActivityDto[]> {
+        this.logger.log(`Getting recent activity only for role: ${rlsContext.rol}`);
+
+        switch (rlsContext.rol) {
+            case 'vigilante':
+                return this.getMiActividadReciente(rlsContext, 10);
+            case 'cliente':
+                return this.getActividadCliente(rlsContext, 10);
+            case 'supervisor':
+                return this.getActividadSupervisor(rlsContext, 10);
+            case 'coordinador':
+            case 'administrativo':
+            case 'gerencia':
+            case 'superusuario':
+            default:
+                return this.getActividadReciente(10);
         }
     }
 
@@ -1210,21 +1231,26 @@ export class DashboardService {
 
     private async getTurnosPorMesSupervisor(rlsContext: RlsContext): Promise<Record<string, number>> {
         const supabase = this.supabaseService.getClient();
-        const sixMonthsAgo = new Date();
-        sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
         const { data } = await supabase
-            .from('turnos')
-            .select('fecha')
-            .gte('fecha', sixMonthsAgo.toISOString().split('T')[0]);
+            .from('view_turnos_por_mes')
+            .select('*');
 
         const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
         const result: Record<string, number> = {};
 
+        // Inicializar los últimos 6 meses para consistencia visual
+        const now = new Date();
+        for (let i = 5; i >= 0; i--) {
+            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            result[monthNames[d.getMonth()]] = 0;
+        }
+
         data?.forEach(t => {
-            const date = new Date(t.fecha);
-            const monthName = monthNames[date.getMonth()];
-            result[monthName] = (result[monthName] || 0) + 1;
+            const monthName = monthNames[t.mes_num - 1];
+            if (monthName) {
+                result[monthName] = t.cantidad;
+            }
         });
 
         return result;
@@ -1628,17 +1654,16 @@ export class DashboardService {
 
     private async getCumplimientoTurnosAdmin(): Promise<Record<string, number>> {
         const supabase = this.supabaseService.getClient();
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
         const { data } = await supabase
-            .from('turnos')
-            .select('estado_turno')
-            .gte('fecha', thirtyDaysAgo.toISOString().split('T')[0]);
+            .from('view_cumplimiento_turnos_30d')
+            .select('*');
 
         const result: Record<string, number> = {};
         data?.forEach(t => {
-            result[t.estado_turno] = (result[t.estado_turno] || 0) + 1;
+            if (t.estado_turno) {
+                result[t.estado_turno] = t.cantidad;
+            }
         });
 
         return result;
@@ -1663,21 +1688,26 @@ export class DashboardService {
 
     private async getTurnosPorMesAdmin(): Promise<Record<string, number>> {
         const supabase = this.supabaseService.getClient();
-        const sixMonthsAgo = new Date();
-        sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
         const { data } = await supabase
-            .from('turnos')
-            .select('fecha')
-            .gte('fecha', sixMonthsAgo.toISOString().split('T')[0]);
+            .from('view_turnos_por_mes')
+            .select('*');
 
         const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
         const result: Record<string, number> = {};
 
+        // Inicializar los últimos 6 meses para consistencia visual
+        const now = new Date();
+        for (let i = 5; i >= 0; i--) {
+            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            result[monthNames[d.getMonth()]] = 0;
+        }
+
         data?.forEach(t => {
-            const date = new Date(t.fecha);
-            const monthName = monthNames[date.getMonth()];
-            result[monthName] = (result[monthName] || 0) + 1;
+            const monthName = monthNames[t.mes_num - 1];
+            if (monthName) {
+                result[monthName] = t.cantidad;
+            }
         });
 
         return result;
@@ -1685,26 +1715,26 @@ export class DashboardService {
 
     private async getEmpleadosPorMes(): Promise<Record<string, number>> {
         const supabase = this.supabaseService.getClient();
-        const sixMonthsAgo = new Date();
-        sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
         const { data } = await supabase
-            .from('empleados')
-            .select('created_at')
-            .gte('created_at', sixMonthsAgo.toISOString());
+            .from('view_empleados_por_mes')
+            .select('*');
 
         const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
         const result: Record<string, number> = {};
 
-        // Inicializar todos los meses
-        monthNames.forEach(month => {
-            result[month] = 0;
-        });
+        // Inicializar los últimos 6 meses para consistencia visual
+        const now = new Date();
+        for (let i = 5; i >= 0; i--) {
+            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            result[monthNames[d.getMonth()]] = 0;
+        }
 
         data?.forEach(e => {
-            const date = new Date(e.created_at);
-            const monthName = monthNames[date.getMonth()];
-            result[monthName] = (result[monthName] || 0) + 1;
+            const monthName = monthNames[e.mes_num - 1];
+            if (monthName) {
+                result[monthName] = e.cantidad;
+            }
         });
 
         return result;
