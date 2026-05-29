@@ -279,7 +279,8 @@ export class AsignarTurnosService {
 
       if (esMesFuturo) {
         const start_c = `${y_c}-${String(m_c).padStart(2, '0')}-01`;
-        const end_c   = `${y_c}-${String(m_c).padStart(2, '0')}-31`;
+        const ultimoDia = new Date(y_c, m_c, 0).getDate();
+        const end_c   = `${y_c}-${String(m_c).padStart(2, '0')}-${String(ultimoDia).padStart(2, '0')}`;
         const { eliminados } = await this.eliminarTurnos(subpuesto_id, start_c, end_c);
         if (eliminados > 0) {
           this.logger.log(`🧹 Limpieza previa (mes futuro ${m_c}/${y_c}): ${eliminados} turnos programados eliminados para evitar duplicados`);
@@ -954,12 +955,15 @@ export class AsignarTurnosService {
         // pero como 'turnos' usa 'fecha', buscaremos si hay al menos un turno en ese mes.
         const fechaFinPeriodo = `${a}-${String(m).padStart(2, '0')}-28`; // Suficiente para detectar presencia
 
+        const ultimoDiaPeriodo = new Date(a, m, 0).getDate();
+        const fechaFinPeriodoMax = `${a}-${String(m).padStart(2, '0')}-${String(ultimoDiaPeriodo).padStart(2, '0')}`;
+
         const { count: turnosExistentes } = await supabase
           .from('turnos')
           .select('id', { count: 'exact', head: true })
           .eq('subpuesto_id', subpuesto.id)
           .gte('fecha', fechaInicioPeriodo)
-          .lte('fecha', `${a}-${String(m).padStart(2, '0')}-31`);
+          .lte('fecha', fechaFinPeriodoMax);
 
         if (yaGenerado && (turnosExistentes && turnosExistentes > 10)) {
           omitidosTotal++;
