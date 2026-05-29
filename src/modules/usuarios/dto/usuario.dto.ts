@@ -21,6 +21,16 @@ export class UpdateUsuarioDto {
   @IsOptional()
   @IsBoolean()
   estado?: boolean
+
+  @ApiProperty({ example: false, required: false })
+  @IsOptional()
+  @IsBoolean()
+  notif_comunicaciones?: boolean
+
+  @ApiProperty({ example: false, required: false })
+  @IsOptional()
+  @IsBoolean()
+  notif_comunicaciones_sonido?: boolean
 }
 
 export class AsignarModuloDto {
