@@ -10,6 +10,7 @@ import {
 import { Server, Socket, Namespace } from 'socket.io';
 import { Logger } from '@nestjs/common';
 import { AuthService } from '../auth/auth.service';
+import { SupabaseService } from '../supabase/supabase.service';
 import { IniciarComunicacionDto, FinalizarComunicacionDto, MensajeTextoDto, ResponderComunicacionDto, OrigenAudio, IniciarComunicacionDashboardDto, RegistrarDispositivoDto, WebRTCOfferDto, WebRTCAnswerDto, WebRTCCandidateDto, JoinRoomDto } from './dto/comunicacion.dto';
 
 // 🟢 Máquina de Estados (FSM)
@@ -70,7 +71,8 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
 
     constructor(
         // 🛡️ Inyección de Auth para validar tokens
-        private readonly authService: AuthService
+        private readonly authService: AuthService,
+        private readonly supabaseService: SupabaseService,
     ) {
         this.cleanupInterval = setInterval(() => this.checkInactiveSessions(), 60 * 1000);
     }
@@ -193,7 +195,7 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
      * 🎙️ Iniciar Sesión (App -> Server)
      */
     @SubscribeMessage('iniciar_comunicacion')
-    handleIniciarComunicacion(
+    async handleIniciarComunicacion(
         @MessageBody() data: IniciarComunicacionDto,
         @ConnectedSocket() client: Socket,
     ) {
@@ -209,7 +211,27 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
         }
 
         const user = client.data.user;
-        const empleadoNombre = user?.nombre_completo || user?.full_name || `Guardia-${data.empleado_id}`;
+        let empleadoNombre = user?.nombre_completo || user?.full_name;
+
+        if (!empleadoNombre && data.empleado_id) {
+            try {
+                const supabaseClient = this.supabaseService.getClient();
+                const { data: emp } = await supabaseClient
+                    .from('empleados')
+                    .select('nombre_completo')
+                    .eq('id', data.empleado_id)
+                    .single();
+                if (emp && emp.nombre_completo) {
+                    empleadoNombre = emp.nombre_completo;
+                }
+            } catch (err) {
+                this.logger.warn(`⚠️ No se pudo obtener nombre de empleado desde Supabase: ${err.message}`);
+            }
+        }
+
+        if (!empleadoNombre) {
+            empleadoNombre = `Guardia-${data.empleado_id}`;
+        }
         
         // 🆔 GENERACIÓN DE NOMBRE TÁCTICO DE CANAL
         // Formato: "1042 - Juan Perez" o "Puesto-662 - Guardia"
