@@ -408,16 +408,34 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
     @SubscribeMessage('broadcast_ptt')
     handleBroadcastPTT(@MessageBody() data: any, @ConnectedSocket() client: Socket) {
         this.logger.log(`📢 Difusión Masiva bloqueadora solicitada por: ${client.id}`);
+        
+        const sesionId = 'GENERAL';
+        let sesion = this.sesionesActivas.get(sesionId);
+        
+        if (sesion) {
+            sesion.ultima_actividad = new Date();
+            sesion.socket_id = client.id;
+            sesion.state = SessionState.INIT;
+        } else {
+            sesion = {
+                sesion_id: sesionId,
+                empleado_nombre: 'DIFUSIÓN GENERAL',
+                tipo: 'broadcast',
+                fecha_inicio: new Date(),
+                socket_id: client.id,
+                state: SessionState.INIT,
+                origen_inicial: OrigenAudio.DASHBOARD,
+                ultima_actividad: new Date(),
+            };
+            this.sesionesActivas.set(sesionId, sesion);
+        }
+        
+        this.socketToSesion.set(client.id, sesionId);
+        client.join(sesionId);
+
         // Notificar a todos que una transmisión general ha comenzado
-        // Esto activará el modal en todos los dispositivos configurados
-        this.server.emit('nueva_comunicacion', {
-            sesion_id: `broadcast_${Date.now()}`,
-            empleado_nombre: 'DIFUSIÓN GENERAL',
-            tipo: 'broadcast',
-            fecha_inicio: new Date(),
-            socket_id: client.id,
-            state: SessionState.INIT
-        });
+        this.server.emit('nueva_comunicacion', { ...sesion, chunks_recibidos: 0 });
+        
         return { success: true };
     }
 

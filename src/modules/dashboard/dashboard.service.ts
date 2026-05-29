@@ -794,36 +794,44 @@ export class DashboardService {
             .select('id, nombre, ciudad, activo')
             .in('contrato_id', contratos.map(c => c.id));
 
-        // Obtener guardas desde subpuestos y asignaciones por puesto
-        const puestosConAsignaciones = await Promise.all(
-            (data || []).map(async (p) => {
-                // Calcular guardas_activos desde subpuestos
-                const { data: subpuestos } = await supabase
-                    .from('subpuestos_trabajo')
-                    .select('guardas_activos')
-                    .eq('puesto_id', p.id)
-                    .eq('activo', true);
+        if (!data || data.length === 0) return [];
 
-                const numeroGuardas = subpuestos?.reduce((sum, s) => sum + (s.guardas_activos || 0), 0) || 0;
+        const puestoIds = data.map(p => p.id);
 
-                const { count } = await supabase
-                    .from('asignacion_guardas_puesto')
-                    .select('*', { count: 'exact', head: true })
-                    .eq('puesto_id', p.id)
-                    .eq('activo', true);
+        // Consultas masivas consolidadas en lote para evitar llamadas en bucle
+        const [subpuestosResult, asignacionesResult] = await Promise.all([
+            supabase
+                .from('subpuestos_trabajo')
+                .select('puesto_id, guardas_activos')
+                .in('puesto_id', puestoIds)
+                .eq('activo', true),
+            supabase
+                .from('asignacion_guardas_puesto')
+                .select('puesto_id')
+                .in('puesto_id', puestoIds)
+                .eq('activo', true)
+        ]);
 
-                return {
-                    id: p.id,
-                    nombre: p.nombre,
-                    ciudad: p.ciudad,
-                    numeroGuardas,
-                    guardasAsignados: count || 0,
-                    activo: p.activo,
-                };
-            })
-        );
+        const subpuestosMap = new Map<number, number>();
+        subpuestosResult.data?.forEach(s => {
+            const count = subpuestosMap.get(s.puesto_id) || 0;
+            subpuestosMap.set(s.puesto_id, count + (s.guardas_activos || 0));
+        });
 
-        return puestosConAsignaciones;
+        const asignacionesMap = new Map<number, number>();
+        asignacionesResult.data?.forEach(a => {
+            const count = asignacionesMap.get(a.puesto_id) || 0;
+            asignacionesMap.set(a.puesto_id, count + 1);
+        });
+
+        return data.map(p => ({
+            id: p.id,
+            nombre: p.nombre,
+            ciudad: p.ciudad,
+            numeroGuardas: subpuestosMap.get(p.id) || 0,
+            guardasAsignados: asignacionesMap.get(p.id) || 0,
+            activo: p.activo,
+        }));
     }
 
     private async getCumplimientoTurnosCliente(rlsContext: RlsContext): Promise<Record<string, number>> {
@@ -1180,35 +1188,44 @@ export class DashboardService {
             .eq('activo', true)
             .limit(20);
 
-        const puestosConAsignaciones = await Promise.all(
-            (data || []).map(async (p) => {
-                // Calcular guardas desde subpuestos
-                const { data: subpuestos } = await supabase
-                    .from('subpuestos_trabajo')
-                    .select('guardas_activos')
-                    .eq('puesto_id', p.id)
-                    .eq('activo', true);
+        if (!data || data.length === 0) return [];
 
-                const numeroGuardas = subpuestos?.reduce((sum, s) => sum + (s.guardas_activos || 0), 0) || 0;
+        const puestoIds = data.map(p => p.id);
 
-                const { count } = await supabase
-                    .from('asignacion_guardas_puesto')
-                    .select('*', { count: 'exact', head: true })
-                    .eq('puesto_id', p.id)
-                    .eq('activo', true);
+        // Consultas masivas consolidadas en lote para evitar llamadas en bucle
+        const [subpuestosResult, asignacionesResult] = await Promise.all([
+            supabase
+                .from('subpuestos_trabajo')
+                .select('puesto_id, guardas_activos')
+                .in('puesto_id', puestoIds)
+                .eq('activo', true),
+            supabase
+                .from('asignacion_guardas_puesto')
+                .select('puesto_id')
+                .in('puesto_id', puestoIds)
+                .eq('activo', true)
+        ]);
 
-                return {
-                    id: p.id,
-                    nombre: p.nombre,
-                    ciudad: p.ciudad,
-                    numeroGuardas,
-                    guardasAsignados: count || 0,
-                    activo: p.activo,
-                };
-            })
-        );
+        const subpuestosMap = new Map<number, number>();
+        subpuestosResult.data?.forEach(s => {
+            const count = subpuestosMap.get(s.puesto_id) || 0;
+            subpuestosMap.set(s.puesto_id, count + (s.guardas_activos || 0));
+        });
 
-        return puestosConAsignaciones;
+        const asignacionesMap = new Map<number, number>();
+        asignacionesResult.data?.forEach(a => {
+            const count = asignacionesMap.get(a.puesto_id) || 0;
+            asignacionesMap.set(a.puesto_id, count + 1);
+        });
+
+        return data.map(p => ({
+            id: p.id,
+            nombre: p.nombre,
+            ciudad: p.ciudad,
+            numeroGuardas: subpuestosMap.get(p.id) || 0,
+            guardasAsignados: asignacionesMap.get(p.id) || 0,
+            activo: p.activo,
+        }));
     }
 
     private async getCumplimientoTurnosSupervisor(rlsContext: RlsContext): Promise<Record<string, number>> {
@@ -1420,17 +1437,21 @@ export class DashboardService {
     private async getFinanzasResumen(): Promise<FinancialSummaryDto> {
         const supabase = this.supabaseService.getClient();
 
-        const { data: contratos } = await supabase
-            .from('contratos')
-            .select('valor')
-            .eq('estado', true);
+        const [contratosResult, empleadosResult] = await Promise.all([
+            supabase
+                .from('contratos')
+                .select('valor')
+                .eq('estado', true),
+            supabase
+                .from('empleados')
+                .select('salario_id, salarios(valor)')
+                .eq('activo', true)
+        ]);
+
+        const contratos = contratosResult.data;
+        const empleados = empleadosResult.data;
 
         const ingresosTotales = contratos?.reduce((sum, c) => sum + (parseFloat(c.valor) || 0), 0) || 0;
-
-        const { data: empleados } = await supabase
-            .from('empleados')
-            .select('salario_id, salarios(valor)')
-            .eq('activo', true);
 
         const costosNomina = empleados?.reduce((sum, e) => {
             const salario = (e.salarios as any)?.valor || 0;
