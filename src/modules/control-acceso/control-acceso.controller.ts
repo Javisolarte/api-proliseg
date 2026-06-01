@@ -47,8 +47,14 @@ export class ControlAccesoController {
 
   @Get('scan')
   @ApiOperation({ summary: 'Escanea la red en busca de dispositivos Hikvision/VMS' })
-  async scanNetwork(@Query('range') range: string) {
-    return this.controlAccesoService.scanNetwork(range);
+  async scanNetwork(
+    @Query('range') range: string,
+    @Query('mikrotikIp') mikrotikIp?: string,
+    @Query('mikrotikUser') mikrotikUser?: string,
+    @Query('mikrotikPass') mikrotikPass?: string,
+    @Query('mikrotikPort') mikrotikPort?: string
+  ) {
+    return this.controlAccesoService.scanNetwork(range, { mikrotikIp, mikrotikUser, mikrotikPass, mikrotikPort });
   }
 
   @Post('validar-credenciales')

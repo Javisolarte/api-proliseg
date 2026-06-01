@@ -27,11 +27,54 @@ export class ControlAccesoService {
     return data;
   }
 
-  async createDispositivo(dto: CreateDispositivoDto) {
+  async createDispositivo(dto: any) {
+    const { mikrotik_ip, mikrotik_usuario, mikrotik_password, mikrotik_puerto, ...insertData } = dto;
+    
+    let finalIp = insertData.ip_direccion;
+    let finalPort = insertData.puerto_servicio || 80;
+    
+    if (mikrotik_ip && insertData.ip_direccion) {
+      // Se escaneó vía MikroTik, mapear el reenvío de puertos NAT
+      try {
+        const lastOctet = insertData.ip_direccion.split('.').pop();
+        const mappedPort = 10000 + Number(lastOctet || '80');
+        
+        this.logger.log(`🔧 [NAT MAPPING] Creando regla NAT en MikroTik ${mikrotik_ip} para ${insertData.ip_direccion} al puerto público ${mappedPort}...`);
+        
+        await this.addMikrotikNatRule(
+          mikrotik_ip,
+          insertData.ip_direccion,
+          mappedPort,
+          mikrotik_usuario,
+          mikrotik_password,
+          mikrotik_puerto
+        );
+        
+        // Actualizar detalles del dispositivo con la IP pública del MikroTik y puerto mapeado
+        finalIp = mikrotik_ip;
+        finalPort = mappedPort;
+      } catch (err) {
+        this.logger.error(`❌ [NAT MAPPING ERROR] Falló la creación de regla NAT: ${err.message}`);
+      }
+    }
+    
+    const payload = {
+      nombre_identificador: insertData.nombre_identificador || insertData.nombre || 'Nuevo Dispositivo',
+      puesto_id: insertData.puesto_id || null,
+      ip_direccion: finalIp,
+      puerto_servicio: finalPort,
+      dispositivo_usuario: insertData.dispositivo_usuario || 'admin',
+      dispositivo_password: insertData.dispositivo_password || '',
+      tipo: insertData.tipo || 'control_acceso',
+      esta_online: true,
+      sn_serie: insertData.sn_serie || insertData.sn_serial || 'UNKNOWN',
+      estado: insertData.estado || 'operativo'
+    };
+
     const { data, error } = await this.supabase
       .getClient()
       .from('dispositivos_iot')
-      .insert([dto])
+      .insert([payload])
       .select();
     if (error) throw error;
     return data[0];
@@ -106,7 +149,20 @@ export class ControlAccesoService {
     return this.proxyRequestDynamic(ip, 'get', '/usuarios');
   }
 
-  async scanNetwork(range: string): Promise<any[]> {
+  async scanNetwork(
+    range: string, 
+    mikrotikOpts?: { mikrotikIp?: string, mikrotikUser?: string, mikrotikPass?: string, mikrotikPort?: string }
+  ): Promise<any[]> {
+    if (mikrotikOpts?.mikrotikIp) {
+      this.logger.log(`🔍 [SCAN NETWORK] Iniciando escaneo de red vía MikroTik REST API en IP: ${mikrotikOpts.mikrotikIp}`);
+      return this.scanViaMikrotik(
+        mikrotikOpts.mikrotikIp, 
+        mikrotikOpts.mikrotikUser, 
+        mikrotikOpts.mikrotikPass, 
+        mikrotikOpts.mikrotikPort
+      );
+    }
+
     const url = `${this.proxyUrl}/scan?range=${range}`;
     try {
       const response = await axios.get(url, {
@@ -118,6 +174,177 @@ export class ControlAccesoService {
       this.logger.error(`❌ [SCAN ERROR]: ${error.message}`);
       return [];
     }
+  }
+
+  async scanViaMikrotik(ip: string, user?: string, pass?: string, port?: string): Promise<any[]> {
+    const username = user || 'admin';
+    const password = pass || '';
+    const portNum = port || '80';
+    
+    const protocols = ['https', 'http'];
+    let errorMsg = '';
+    
+    const httpsAgent = new (require('https').Agent)({ rejectUnauthorized: false });
+    
+    for (const protocol of protocols) {
+      const url = `${protocol}://${ip}:${portNum}/rest/ip/dhcp-server/lease`;
+      this.logger.log(`🔍 [MIKROTIK REST API] Conectando a ${url}...`);
+      
+      try {
+        const response = await axios.get(url, {
+          auth: { username, password },
+          httpsAgent,
+          timeout: 10000
+        });
+        
+        const leases = response.data || [];
+        this.logger.log(`✅ [MIKROTIK REST API] Se obtuvieron ${leases.length} registros DHCP.`);
+        
+        let arpEntries = [];
+        try {
+          const arpUrl = `${protocol}://${ip}:${portNum}/rest/ip/arp`;
+          const arpResponse = await axios.get(arpUrl, {
+            auth: { username, password },
+            httpsAgent,
+            timeout: 5000
+          });
+          arpEntries = arpResponse.data || [];
+        } catch (arpErr) {
+          this.logger.warn(`⚠️ [MIKROTIK REST API] No se pudo obtener la tabla ARP: ${arpErr.message}`);
+        }
+        
+        const deviceMap = new Map<string, any>();
+        
+        leases.forEach((lease: any) => {
+          const address = lease.address;
+          const mac = lease['mac-address'] || '';
+          const hostname = lease['host-name'] || lease['active-hostname'] || '';
+          const status = lease.status || '';
+          const comment = lease.comment || '';
+          
+          if (address) {
+            const isHikvision = mac.toLowerCase().startsWith('a4:14:37') || 
+                                mac.toLowerCase().startsWith('bc:ad:28') || 
+                                mac.toLowerCase().startsWith('44:55:c4') || 
+                                mac.toLowerCase().startsWith('fc:3f:db') ||
+                                mac.toLowerCase().startsWith('00:40:3d') ||
+                                mac.toLowerCase().startsWith('84:25:3f') ||
+                                mac.toLowerCase().startsWith('e0:50:8b') ||
+                                hostname.toLowerCase().includes('hik') ||
+                                hostname.toLowerCase().includes('camera') ||
+                                hostname.toLowerCase().includes('vms') ||
+                                hostname.toLowerCase().includes('acceso') ||
+                                hostname.toLowerCase().includes('face') ||
+                                hostname.toLowerCase().includes('terminal');
+                                
+            deviceMap.set(address, {
+              ip: address,
+              mac: mac,
+              hostname: hostname || comment || 'Dispositivo en MikroTik',
+              status: status === 'bound' ? 'Online' : 'Offline',
+              hasAccessControl: isHikvision,
+              vendor: isHikvision ? 'Hikvision' : 'Genérico'
+            });
+          }
+        });
+        
+        arpEntries.forEach((arp: any) => {
+          const address = arp.address;
+          const mac = arp['mac-address'] || '';
+          if (address && !deviceMap.has(address)) {
+            const isHikvision = mac.toLowerCase().startsWith('a4:14:37') || 
+                                mac.toLowerCase().startsWith('bc:ad:28') || 
+                                mac.toLowerCase().startsWith('44:55:c4') || 
+                                mac.toLowerCase().startsWith('fc:3f:db') ||
+                                mac.toLowerCase().startsWith('00:40:3d') ||
+                                mac.toLowerCase().startsWith('84:25:3f') ||
+                                mac.toLowerCase().startsWith('e0:50:8b');
+            deviceMap.set(address, {
+              ip: address,
+              mac: mac,
+              hostname: isHikvision ? 'Terminal de Acceso Hikvision (ARP)' : 'Dispositivo Activo (ARP)',
+              status: 'Online',
+              hasAccessControl: isHikvision,
+              vendor: isHikvision ? 'Hikvision' : 'Genérico'
+            });
+          }
+        });
+        
+        return Array.from(deviceMap.values());
+        
+      } catch (err) {
+        errorMsg = err.message;
+        this.logger.error(`❌ [MIKROTIK REST ERROR] (${protocol}): ${err.message}`);
+      }
+    }
+    
+    throw new Error(`Error al conectar con la REST API de MikroTik: ${errorMsg}`);
+  }
+
+  async addMikrotikNatRule(
+    mikrotikIp: string,
+    deviceLocalIp: string,
+    publicPort: number,
+    user?: string,
+    pass?: string,
+    port?: string
+  ): Promise<boolean> {
+    const username = user || 'admin';
+    const password = pass || '';
+    const portNum = port || '80';
+    
+    const protocols = ['https', 'http'];
+    let errorMsg = '';
+    
+    const httpsAgent = new (require('https').Agent)({ rejectUnauthorized: false });
+    
+    for (const protocol of protocols) {
+      const url = `${protocol}://${mikrotikIp}:${portNum}/rest/ip/firewall/nat`;
+      
+      try {
+        const checkResponse = await axios.get(url, {
+          auth: { username, password },
+          httpsAgent,
+          timeout: 5000
+        });
+        
+        const existingRules = checkResponse.data || [];
+        const ruleExists = existingRules.some((rule: any) => 
+          rule['to-addresses'] === deviceLocalIp && 
+          String(rule['dst-port']) === String(publicPort)
+        );
+        
+        if (ruleExists) {
+          this.logger.log(`ℹ️ [NAT RULE] Regla NAT ya existente en MikroTik para ${deviceLocalIp} -> puerto ${publicPort}`);
+          return true;
+        }
+        
+        const payload = {
+          chain: 'dstnat',
+          action: 'dst-nat',
+          protocol: 'tcp',
+          'dst-port': String(publicPort),
+          'to-addresses': deviceLocalIp,
+          'to-ports': '80',
+          comment: `Proliseg IoT NAT: ${deviceLocalIp}`
+        };
+        
+        await axios.post(url, payload, {
+          auth: { username, password },
+          httpsAgent,
+          timeout: 10000
+        });
+        
+        this.logger.log(`✅ [NAT MAPPING] Regla NAT agregada con éxito para ${deviceLocalIp} -> puerto ${publicPort}`);
+        return true;
+        
+      } catch (err) {
+        errorMsg = err.message;
+        this.logger.error(`❌ [NAT MAPPING ERROR] (${protocol}): ${err.message}`);
+      }
+    }
+    
+    throw new Error(`No se pudo crear la regla NAT en el MikroTik: ${errorMsg}`);
   }
 
   async validateCredentials(ip: string, user: string, pass: string): Promise<any> {
