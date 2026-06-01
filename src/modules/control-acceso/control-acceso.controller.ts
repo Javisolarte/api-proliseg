@@ -131,4 +131,42 @@ export class ControlAccesoController {
   ) {
     return this.controlAccesoService.registrarPublico(token, body, req);
   }
+
+  // --- ENDPOINTS DE CONFIGURACIÓN (SERVIDORES MIKROTIK & MODELOS DISPOSITIVOS) ---
+
+  @Get('config/servidores')
+  @ApiOperation({ summary: 'Obtiene lista de servidores MikroTik registrados' })
+  async getServidoresMikrotik() {
+    return this.controlAccesoService.findServidoresMikrotik();
+  }
+
+  @Post('config/servidores')
+  @ApiOperation({ summary: 'Crea/registra un servidor MikroTik' })
+  async createServidorMikrotik(@Body() body: any) {
+    return this.controlAccesoService.createServidorMikrotik(body);
+  }
+
+  @Post('config/servidores/:id/delete')
+  @ApiOperation({ summary: 'Elimina un servidor MikroTik' })
+  async deleteServidorMikrotik(@Param('id') id: string) {
+    return this.controlAccesoService.deleteServidorMikrotik(Number(id));
+  }
+
+  @Get('config/modelos')
+  @ApiOperation({ summary: 'Obtiene lista de modelos de dispositivos' })
+  async getModelosDispositivos() {
+    return this.controlAccesoService.findModelosDispositivos();
+  }
+
+  @Post('config/modelos')
+  @ApiOperation({ summary: 'Crea/registra un modelo de dispositivo' })
+  async createModeloDispositivo(@Body() body: any) {
+    return this.controlAccesoService.createModeloDispositivo(body);
+  }
+
+  @Post('config/modelos/:id/delete')
+  @ApiOperation({ summary: 'Elimina un modelo de dispositivo' })
+  async deleteModeloDispositivo(@Param('id') id: string) {
+    return this.controlAccesoService.deleteModeloDispositivo(Number(id));
+  }
 }

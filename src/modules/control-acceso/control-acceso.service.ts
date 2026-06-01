@@ -545,4 +545,70 @@ export class ControlAccesoService {
     if (error) throw error;
     return data;
   }
+
+  // --- MÉTODOS DE CONFIGURACIÓN (MIKROTIK & MODELOS) ---
+
+  async findServidoresMikrotik() {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('control_acceso_servidores_mikrotik')
+      .select('*')
+      .order('nombre', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  }
+
+  async createServidorMikrotik(payload: any) {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('control_acceso_servidores_mikrotik')
+      .insert([payload])
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  async deleteServidorMikrotik(id: number) {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('control_acceso_servidores_mikrotik')
+      .delete()
+      .eq('id', id)
+      .select();
+    if (error) throw error;
+    return data[0];
+  }
+
+  async findModelosDispositivos() {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('control_acceso_modelos_dispositivos')
+      .select('*')
+      .order('nombre', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  }
+
+  async createModeloDispositivo(payload: any) {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('control_acceso_modelos_dispositivos')
+      .insert([payload])
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  async deleteModeloDispositivo(id: number) {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('control_acceso_modelos_dispositivos')
+      .delete()
+      .eq('id', id)
+      .select();
+    if (error) throw error;
+    return data[0];
+  }
 }
