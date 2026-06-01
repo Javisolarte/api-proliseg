@@ -62,17 +62,16 @@ export class ControlAccesoService {
       nombre_identificador: insertData.nombre_identificador || insertData.nombre || 'Nuevo Dispositivo',
       puesto_id: insertData.puesto_id || null,
       ip_direccion: finalIp,
-      puerto_servicio: finalPort,
-      dispositivo_usuario: insertData.dispositivo_usuario || 'admin',
-      dispositivo_password: insertData.dispositivo_password || '',
-      tipo: insertData.tipo || 'control_acceso',
-      esta_online: true,
       sn_serie: insertData.sn_serie || insertData.sn_serial || 'UNKNOWN',
+      credencial_usuario: insertData.dispositivo_usuario || 'admin',
+      credencial_password: insertData.dispositivo_password || '',
       estado: insertData.estado || 'operativo',
-      configuracion_tecnica: insertData.configuracion_tecnica || {
-        marca: insertData.marca || 'Hikvision',
-        modelo: insertData.modelo || '',
-        puerto: insertData.puerto_servicio || 80
+      configuracion_tecnica: {
+        marca: insertData.configuracion_tecnica?.marca || insertData.marca || 'Hikvision',
+        modelo: insertData.configuracion_tecnica?.modelo || insertData.modelo || '',
+        puerto: finalPort,
+        tipo: insertData.tipo || 'control_acceso',
+        esta_online: true
       }
     };
 
