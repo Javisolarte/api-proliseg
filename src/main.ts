@@ -32,7 +32,7 @@ async function bootstrap() {
   app.use(require('body-parser').json({ limit: '10mb' }));
   app.use(require('body-parser').urlencoded({ limit: '10mb', extended: true }));
 
-  app.setGlobalPrefix("api");
+  app.setGlobalPrefix("api", { exclude: ["/"] });
 
   app.useGlobalPipes(
     new ValidationPipe({
