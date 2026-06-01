@@ -68,7 +68,12 @@ export class ControlAccesoService {
       tipo: insertData.tipo || 'control_acceso',
       esta_online: true,
       sn_serie: insertData.sn_serie || insertData.sn_serial || 'UNKNOWN',
-      estado: insertData.estado || 'operativo'
+      estado: insertData.estado || 'operativo',
+      configuracion_tecnica: insertData.configuracion_tecnica || {
+        marca: insertData.marca || 'Hikvision',
+        modelo: insertData.modelo || '',
+        puerto: insertData.puerto_servicio || 80
+      }
     };
 
     const { data, error } = await this.supabase

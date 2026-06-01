@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Param, Res, Logger, Req, Body, Query } from '@nestjs/common';
+import { Controller, Post, Get, Param, Res, Logger, Req, Body, Query, BadRequestException } from '@nestjs/common';
 import { ControlAccesoService } from './control-acceso.service';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import type { Response } from 'express';
@@ -23,6 +23,12 @@ export class ControlAccesoController {
   @ApiOperation({ summary: 'Obtener lista de dispositivos IoT registrados' })
   async getDispositivos() {
     return this.controlAccesoService.findAllDispositivos();
+  }
+
+  @Post('dispositivos')
+  @ApiOperation({ summary: 'Registrar un nuevo dispositivo IoT' })
+  async createDispositivo(@Body() body: any) {
+    return this.controlAccesoService.createDispositivo(body);
   }
 
   @Get('personas')
@@ -54,7 +60,12 @@ export class ControlAccesoController {
     @Query('mikrotikPass') mikrotikPass?: string,
     @Query('mikrotikPort') mikrotikPort?: string
   ) {
-    return this.controlAccesoService.scanNetwork(range, { mikrotikIp, mikrotikUser, mikrotikPass, mikrotikPort });
+    try {
+      return await this.controlAccesoService.scanNetwork(range, { mikrotikIp, mikrotikUser, mikrotikPass, mikrotikPort });
+    } catch (error) {
+      this.logger.error(`❌ [SCAN ERROR CONTROLLER]: ${error.message}`);
+      throw new BadRequestException(error.message || 'Error al conectar con la API de MikroTik');
+    }
   }
 
   @Post('validar-credenciales')
