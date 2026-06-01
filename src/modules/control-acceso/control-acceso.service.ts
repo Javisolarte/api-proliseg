@@ -213,6 +213,20 @@ export class ControlAccesoService {
           this.logger.warn(`⚠️ [MIKROTIK REST API] No se pudo obtener la tabla ARP: ${arpErr.message}`);
         }
         
+        let pppActive = [];
+        try {
+          const pppUrl = `${protocol}://${ip}:${portNum}/rest/ppp/active`;
+          const pppResponse = await axios.get(pppUrl, {
+            auth: { username, password },
+            httpsAgent,
+            timeout: 5000
+          });
+          pppActive = pppResponse.data || [];
+          this.logger.log(`✅ [MIKROTIK REST API] Se obtuvieron ${pppActive.length} túneles PPP activos.`);
+        } catch (pppErr) {
+          this.logger.warn(`⚠️ [MIKROTIK REST API] No se pudo obtener la tabla PPP activa: ${pppErr.message}`);
+        }
+        
         const deviceMap = new Map<string, any>();
         
         leases.forEach((lease: any) => {
@@ -266,6 +280,24 @@ export class ControlAccesoService {
               status: 'Online',
               hasAccessControl: isHikvision,
               vendor: isHikvision ? 'Hikvision' : 'Genérico'
+            });
+          }
+        });
+        
+        pppActive.forEach((ppp: any) => {
+          const address = ppp.address;
+          const callerId = ppp['caller-id'] || '';
+          const name = ppp.name || '';
+          const service = ppp.service || 'VPN';
+          
+          if (address && !deviceMap.has(address)) {
+            deviceMap.set(address, {
+              ip: address,
+              mac: `TÚNEL (${service})`,
+              hostname: `Túnel VPN: ${name} (${callerId})`,
+              status: 'Online',
+              hasAccessControl: true, // Permitir escaneo y vinculación directa
+              vendor: 'MikroTik Túnel'
             });
           }
         });
