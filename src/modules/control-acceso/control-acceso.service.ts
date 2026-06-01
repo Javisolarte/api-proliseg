@@ -199,7 +199,11 @@ export class ControlAccesoService {
         const response = await axios.get(url, {
           auth: { username, password },
           httpsAgent,
-          timeout: 10000
+          timeout: 12000,
+          headers: {
+            'User-Agent': 'curl/7.74.0',
+            'Accept': '*/*'
+          }
         });
         
         const leases = response.data || [];
@@ -342,7 +346,11 @@ export class ControlAccesoService {
         const checkResponse = await axios.get(url, {
           auth: { username, password },
           httpsAgent,
-          timeout: 5000
+          timeout: 6000,
+          headers: {
+            'User-Agent': 'curl/7.74.0',
+            'Accept': '*/*'
+          }
         });
         
         const existingRules = checkResponse.data || [];
@@ -369,7 +377,11 @@ export class ControlAccesoService {
         await axios.post(url, payload, {
           auth: { username, password },
           httpsAgent,
-          timeout: 10000
+          timeout: 10000,
+          headers: {
+            'User-Agent': 'curl/7.74.0',
+            'Accept': '*/*'
+          }
         });
         
         this.logger.log(`✅ [NAT MAPPING] Regla NAT agregada con éxito para ${deviceLocalIp} -> puerto ${publicPort}`);
