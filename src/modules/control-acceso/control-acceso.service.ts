@@ -215,7 +215,11 @@ export class ControlAccesoService {
           const arpResponse = await axios.get(arpUrl, {
             auth: { username, password },
             httpsAgent,
-            timeout: 5000
+            timeout: 5000,
+            headers: {
+              'User-Agent': 'curl/7.74.0',
+              'Accept': '*/*'
+            }
           });
           arpEntries = arpResponse.data || [];
         } catch (arpErr) {
@@ -228,12 +232,34 @@ export class ControlAccesoService {
           const pppResponse = await axios.get(pppUrl, {
             auth: { username, password },
             httpsAgent,
-            timeout: 5000
+            timeout: 5000,
+            headers: {
+              'User-Agent': 'curl/7.74.0',
+              'Accept': '*/*'
+            }
           });
           pppActive = pppResponse.data || [];
           this.logger.log(`✅ [MIKROTIK REST API] Se obtuvieron ${pppActive.length} túneles PPP activos.`);
         } catch (pppErr) {
           this.logger.warn(`⚠️ [MIKROTIK REST API] No se pudo obtener la tabla PPP activa: ${pppErr.message}`);
+        }
+
+        let neighbors = [];
+        try {
+          const neighborsUrl = `${protocol}://${ip}:${portNum}/rest/ip/neighbor`;
+          const neighborsResponse = await axios.get(neighborsUrl, {
+            auth: { username, password },
+            httpsAgent,
+            timeout: 5000,
+            headers: {
+              'User-Agent': 'curl/7.74.0',
+              'Accept': '*/*'
+            }
+          });
+          neighbors = neighborsResponse.data || [];
+          this.logger.log(`✅ [MIKROTIK REST API] Se obtuvieron ${neighbors.length} vecinos de red (neighbors).`);
+        } catch (neighErr) {
+          this.logger.warn(`⚠️ [MIKROTIK REST API] No se pudo obtener la tabla de vecinos: ${neighErr.message}`);
         }
         
         const deviceMap = new Map<string, any>();
@@ -307,6 +333,38 @@ export class ControlAccesoService {
               status: 'Online',
               hasAccessControl: true, // Permitir escaneo y vinculación directa
               vendor: 'MikroTik Túnel'
+            });
+          }
+        });
+
+        neighbors.forEach((neigh: any) => {
+          const address = neigh.address;
+          const mac = neigh['mac-address'] || '';
+          const identity = neigh.identity || neigh.board || 'Dispositivo Vecino';
+          const iface = neigh.interface || '';
+          
+          if (address && !deviceMap.has(address)) {
+            const isHikvision = mac.toLowerCase().startsWith('a4:14:37') || 
+                                mac.toLowerCase().startsWith('bc:ad:28') || 
+                                mac.toLowerCase().startsWith('44:55:c4') || 
+                                mac.toLowerCase().startsWith('fc:3f:db') ||
+                                mac.toLowerCase().startsWith('00:40:3d') ||
+                                mac.toLowerCase().startsWith('84:25:3f') ||
+                                mac.toLowerCase().startsWith('e0:50:8b') ||
+                                identity.toLowerCase().includes('hik') ||
+                                identity.toLowerCase().includes('camera') ||
+                                identity.toLowerCase().includes('vms') ||
+                                identity.toLowerCase().includes('acceso') ||
+                                identity.toLowerCase().includes('face') ||
+                                identity.toLowerCase().includes('terminal');
+                                
+            deviceMap.set(address, {
+              ip: address,
+              mac: mac || `TÚNEL (${iface})`,
+              hostname: `Vecino: ${identity} [Int: ${iface}]`,
+              status: 'Online',
+              hasAccessControl: isHikvision,
+              vendor: isHikvision ? 'Hikvision' : (neigh.board || 'Genérico')
             });
           }
         });
