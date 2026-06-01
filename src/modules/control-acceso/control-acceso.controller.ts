@@ -31,6 +31,18 @@ export class ControlAccesoController {
     return this.controlAccesoService.createDispositivo(body);
   }
 
+  @Post('dispositivos/:id')
+  @ApiOperation({ summary: 'Actualizar un dispositivo IoT' })
+  async updateDispositivo(@Param('id') id: string, @Body() body: any) {
+    return this.controlAccesoService.updateDispositivo(Number(id), body);
+  }
+
+  @Post('dispositivos/:id/delete')
+  @ApiOperation({ summary: 'Eliminar un dispositivo IoT' })
+  async deleteDispositivo(@Param('id') id: string) {
+    return this.controlAccesoService.deleteDispositivo(Number(id));
+  }
+
   @Get('personas')
   @ApiOperation({ summary: 'Obtener lista de personas en el sistema' })
   async getPersonas() {

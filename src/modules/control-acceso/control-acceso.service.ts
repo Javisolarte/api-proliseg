@@ -84,6 +84,45 @@ export class ControlAccesoService {
     return data[0];
   }
 
+  async updateDispositivo(id: number, dto: any) {
+    const payload = {
+      nombre_identificador: dto.nombre_identificador || dto.nombre,
+      puesto_id: dto.puesto_id || null,
+      ip_direccion: dto.ip_direccion || dto.ip,
+      sn_serie: dto.sn_serie || dto.sn_serial,
+      credencial_usuario: dto.dispositivo_usuario || dto.credencial_usuario || 'admin',
+      credencial_password: dto.dispositivo_password || dto.credencial_password || '',
+      estado: dto.estado || 'operativo',
+      configuracion_tecnica: {
+        marca: dto.configuracion_tecnica?.marca || dto.marca || 'Hikvision',
+        modelo: dto.configuracion_tecnica?.modelo || dto.modelo || '',
+        puerto: dto.configuracion_tecnica?.puerto || dto.puerto_servicio || dto.puerto || 80,
+        tipo: dto.tipo || dto.configuracion_tecnica?.tipo || 'control_acceso',
+        esta_online: dto.esta_online ?? true
+      }
+    };
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('dispositivos_iot')
+      .update(payload)
+      .eq('id', id)
+      .select();
+    if (error) throw error;
+    return data[0];
+  }
+
+  async deleteDispositivo(id: number) {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('dispositivos_iot')
+      .delete()
+      .eq('id', id)
+      .select();
+    if (error) throw error;
+    return data[0];
+  }
+
   async findAllPersonas() {
     const { data, error } = await this.supabase
       .getClient()
