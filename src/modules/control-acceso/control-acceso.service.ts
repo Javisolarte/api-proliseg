@@ -170,20 +170,50 @@ export class ControlAccesoService {
     return this.proxyRequestDynamic(ip, 'post', endpointMap[command]);
   }
 
-  async getSnapshot(ip: string): Promise<Buffer> {
-    const url = `${this.proxyUrl}/snapshot`;
+  async getSnapshot(ip: string, id?: number): Promise<Buffer> {
+    let user = 'admin';
+    let pass = 'proliseg#123';
+    let port = 80;
+    
     try {
+      // 1. Consultar base de datos Supabase para recuperar credenciales y puerto real del biométrico
+      let query = this.supabase.getClient().from('dispositivos_iot').select('*');
+      if (id) {
+        query = query.eq('id', id);
+      } else {
+        query = query.eq('ip_direccion', ip);
+      }
+      
+      const { data: devices, error: dbErr } = await query;
+      if (!dbErr && devices && devices.length > 0) {
+        const dev = devices[0];
+        user = dev.credencial_usuario || 'admin';
+        pass = dev.credencial_password || '';
+        port = dev.configuracion_tecnica?.puerto || dev.puerto_servicio || 80;
+      }
+    } catch (dbErr) {
+      this.logger.warn(`⚠️ [SNAPSHOT DB WARN] No se pudo obtener credenciales: ${dbErr.message}. Usando fallbacks.`);
+    }
+    
+    // Si hay puerto NAT/MikroTik especial, mapearlo al target del proxy
+    const targetIpWithPort = port && port !== 80 ? `${ip}:${port}` : ip;
+    const url = `${this.proxyUrl}/snapshot`;
+    
+    try {
+      // 2. Ejecutar petición al Proxy VPS incluyendo credenciales de autenticación del dispositivo para evitar código 530 (Unauthorized)
       const response = await axios.get(url, {
         headers: { 
           'X-API-Key': this.apiKey,
-          'X-Target-IP': ip 
+          'X-Target-IP': targetIpWithPort,
+          'X-Target-User': user,
+          'X-Target-Pass': pass
         },
         responseType: 'arraybuffer',
         timeout: 10000,
       });
       return response.data;
     } catch (error) {
-      this.logger.error(`❌ [SNAPSHOT] Error: ${error.message}`);
+      this.logger.error(`❌ [SNAPSHOT] Error: ${error.message} - Dest: ${targetIpWithPort}`);
       throw error;
     }
   }

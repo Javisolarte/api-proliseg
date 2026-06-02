@@ -90,9 +90,9 @@ export class ControlAccesoController {
   @Public()
   @Get('snapshot')
   @ApiOperation({ summary: 'Obtiene captura en vivo del dispositivo' })
-  async getSnapshot(@Query('ip') ip: string, @Res() res: Response) {
+  async getSnapshot(@Query('ip') ip: string, @Query('id') id: string, @Res() res: Response) {
     try {
-      const buffer = await this.controlAccesoService.getSnapshot(ip || '192.168.1.117');
+      const buffer = await this.controlAccesoService.getSnapshot(ip || '192.168.1.117', id ? Number(id) : undefined);
       res.set({
         'Content-Type': 'image/jpeg',
         'Content-Length': buffer.length,
