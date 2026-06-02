@@ -41,7 +41,7 @@ export class ControlAccesoService {
         
         this.logger.log(`🔧 [NAT MAPPING] Creando regla NAT en MikroTik ${mikrotik_ip} para ${insertData.ip_direccion} al puerto público ${mappedPort}...`);
         
-        await this.addMikrotikNatRule(
+        const finalActivePort = await this.addMikrotikNatRule(
           mikrotik_ip,
           insertData.ip_direccion,
           mappedPort,
@@ -52,7 +52,7 @@ export class ControlAccesoService {
         
         // Actualizar detalles del dispositivo con la IP pública del MikroTik y puerto mapeado
         finalIp = mikrotik_ip;
-        finalPort = mappedPort;
+        finalPort = finalActivePort;
       } catch (err) {
         this.logger.error(`❌ [NAT MAPPING ERROR] Falló la creación de regla NAT: ${err.message}`);
       }
@@ -495,7 +495,7 @@ export class ControlAccesoService {
     user?: string,
     pass?: string,
     port?: string
-  ): Promise<boolean> {
+  ): Promise<number> {
     const username = user || 'admin';
     const password = pass || '';
     const portNum = port || '80';
@@ -521,16 +521,44 @@ export class ControlAccesoService {
         });
         
         const existingRules = checkResponse.data || [];
-        const ruleExists = existingRules.some((rule: any) => 
-          rule['to-addresses'] === deviceLocalIp && 
-          String(rule['dst-port']) === String(publicPort)
+        
+        // 1. REUTILIZACIÓN DE REGLAS: Si ya existe una regla para esta IP, reutilizar el puerto existente sin duplicar
+        const existingRule = existingRules.find((rule: any) => 
+          rule['to-addresses'] === deviceLocalIp
         );
         
-        if (ruleExists) {
-          this.logger.log(`ℹ️ [NAT RULE] Regla NAT ya existente en MikroTik para ${deviceLocalIp} -> puerto ${publicPort}`);
-          return true;
+        if (existingRule) {
+          const activePort = Number(existingRule['dst-port'] || publicPort);
+          this.logger.log(`ℹ️ [NAT RULE REUSE] Reutilizando regla NAT existente en MikroTik para ${deviceLocalIp} -> puerto ${activePort}`);
+          return activePort;
         }
         
+        // 2. RESOLUCIÓN DE CONFLICTOS: Si el puerto objetivo está ocupado por otra IP, eliminar la regla conflictiva vieja
+        const conflictingRule = existingRules.find((rule: any) => 
+          String(rule['dst-port']) === String(publicPort) &&
+          rule['to-addresses'] !== deviceLocalIp
+        );
+        
+        if (conflictingRule) {
+          this.logger.warn(`⚠️ [NAT CONFLICT] Puerto ${publicPort} ya está en uso por ${conflictingRule['to-addresses']}. Eliminando regla obsoleta vieja...`);
+          try {
+            const deleteUrl = `${url}/${conflictingRule['.id']}`;
+            await axios.delete(deleteUrl, {
+              auth: { username, password },
+              httpsAgent,
+              timeout: 5000,
+              headers: { 
+                'User-Agent': 'curl/7.74.0',
+                'Content-Type': 'application/json' 
+              }
+            });
+            this.logger.log(`✅ [NAT CONFLICT SOLVED] Regla conflictiva vieja eliminada exitosamente.`);
+          } catch (delErr) {
+            this.logger.error(`❌ [NAT DELETE ERROR] No se pudo eliminar la regla conflictiva: ${delErr.message}`);
+          }
+        }
+        
+        // 3. CREAR REGLA NUEVA SI NO EXISTE
         const payload = {
           chain: 'dstnat',
           action: 'dst-nat',
@@ -568,7 +596,7 @@ export class ControlAccesoService {
         }
         
         this.logger.log(`✅ [NAT MAPPING] Regla NAT agregada con éxito para ${deviceLocalIp} -> puerto ${publicPort}`);
-        return true;
+        return publicPort;
         
       } catch (err) {
         errorMsg = err.message;
