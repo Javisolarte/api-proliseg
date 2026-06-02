@@ -1,12 +1,17 @@
 FROM node:20-slim
 
-# Instalar ffmpeg y curl (requerido para el healthcheck de Coolify)
-RUN apt-get update && apt-get install -y ffmpeg curl && rm -rf /var/lib/apt/lists/*
+# Habilitar caché para apt-get en Docker
+RUN rm -f /etc/apt/apt.conf.d/docker-clean; echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
+
+# Instalar ffmpeg y curl usando el caché de apt para evitar descargas repetidas
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y ffmpeg curl
 
 # Crear directorio de trabajo
 WORKDIR /app
 
-# Copiar package files
+# Copiar package files primero para aprovechar la caché de capas de Docker
 COPY package*.json ./
 
 # Configurar reintentos de npm para conexiones de red inestables o lentas en la VPS
@@ -14,10 +19,11 @@ RUN npm config set fetch-retries 5 && \
     npm config set fetch-retry-mintimeout 15000 && \
     npm config set fetch-retry-maxtimeout 90000
 
-# Instalar dependencias
-RUN npm install
+# Instalar dependencias utilizando la súper caché de BuildKit para npm
+RUN --mount=type=cache,target=/root/.npm,sharing=shared \
+    npm install
 
-# Copiar el código
+# Copiar el resto del código
 COPY . .
 
 # Compilar TypeScript
