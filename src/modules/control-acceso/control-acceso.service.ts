@@ -527,6 +527,9 @@ export class ControlAccesoService {
           rule['to-addresses'] === deviceLocalIp
         );
         
+        // Asegurar automáticamente que exista la regla de retorno (masquerade) para evitar problemas de túnel y rutas asimétricas
+        await this.ensureMasqueradeRule(url, deviceLocalIp, username, password, httpsAgent, existingRules);
+        
         if (existingRule) {
           const activePort = Number(existingRule['dst-port'] || publicPort);
           this.logger.log(`ℹ️ [NAT RULE REUSE] Reutilizando regla NAT existente en MikroTik para ${deviceLocalIp} -> puerto ${activePort}`);
@@ -605,6 +608,65 @@ export class ControlAccesoService {
     }
     
     throw new Error(`No se pudo crear la regla NAT en el MikroTik: ${errorMsg}`);
+  }
+
+  private async ensureMasqueradeRule(
+    url: string,
+    deviceLocalIp: string,
+    username: string,
+    password: string,
+    httpsAgent: any,
+    existingRules: any[]
+  ): Promise<void> {
+    const existingMasq = existingRules.find((rule: any) => 
+      rule.chain === 'srcnat' &&
+      rule.action === 'masquerade' &&
+      rule['dst-address'] === deviceLocalIp
+    );
+
+    if (existingMasq) {
+      this.logger.log(`ℹ️ [NAT MASQUERADE] Ya existe regla de retorno masquerade para ${deviceLocalIp}`);
+      return;
+    }
+
+    const payload = {
+      chain: 'srcnat',
+      action: 'masquerade',
+      protocol: 'tcp',
+      'dst-address': deviceLocalIp,
+      'dst-port': '80',
+      comment: `Masquerade retorno Proliseg: ${deviceLocalIp}`
+    };
+
+    try {
+      this.logger.log(`🔧 [NAT MASQUERADE] Creando regla de retorno (masquerade) para ${deviceLocalIp}...`);
+      await axios.post(url, payload, {
+        auth: { username, password },
+        httpsAgent,
+        timeout: 8000,
+        headers: {
+          'User-Agent': 'curl/7.74.0',
+          'Accept': '*/*',
+          'Content-Type': 'application/json'
+        }
+      });
+    } catch (err) {
+      try {
+        this.logger.warn(`⚠️ [NAT MASQUERADE] Falló POST para masquerade, reintentando con PUT...`);
+        await axios.put(url, payload, {
+          auth: { username, password },
+          httpsAgent,
+          timeout: 8000,
+          headers: {
+            'User-Agent': 'curl/7.74.0',
+            'Accept': '*/*',
+            'Content-Type': 'application/json'
+          }
+        });
+      } catch (putErr) {
+        this.logger.error(`❌ [NAT MASQUERADE ERROR] No se pudo crear la regla de retorno masquerade: ${putErr.message}`);
+      }
+    }
   }
 
   async validateCredentials(ip: string, user: string, pass: string): Promise<any> {
