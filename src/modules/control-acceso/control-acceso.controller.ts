@@ -34,13 +34,13 @@ export class ControlAccesoController {
   @Post('dispositivos/:id')
   @ApiOperation({ summary: 'Actualizar un dispositivo IoT' })
   async updateDispositivo(@Param('id') id: string, @Body() body: any) {
-    return this.controlAccesoService.updateDispositivo(Number(id), body);
+    return this.controlAccesoService.updateDispositivo(id, body);
   }
 
   @Post('dispositivos/:id/delete')
   @ApiOperation({ summary: 'Eliminar un dispositivo IoT' })
   async deleteDispositivo(@Param('id') id: string) {
-    return this.controlAccesoService.deleteDispositivo(Number(id));
+    return this.controlAccesoService.deleteDispositivo(id);
   }
 
   @Get('personas')
@@ -92,7 +92,7 @@ export class ControlAccesoController {
   @ApiOperation({ summary: 'Obtiene captura en vivo del dispositivo' })
   async getSnapshot(@Query('ip') ip: string, @Query('id') id: string, @Res() res: Response) {
     try {
-      const buffer = await this.controlAccesoService.getSnapshot(ip || '192.168.1.117', id ? Number(id) : undefined);
+      const buffer = await this.controlAccesoService.getSnapshot(ip || '192.168.1.117', id || undefined);
       res.set({
         'Content-Type': 'image/jpeg',
         'Content-Length': buffer.length,

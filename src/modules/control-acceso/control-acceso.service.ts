@@ -84,7 +84,7 @@ export class ControlAccesoService {
     return data[0];
   }
 
-  async updateDispositivo(id: number, dto: any) {
+  async updateDispositivo(id: string, dto: any) {
     const payload = {
       nombre_identificador: dto.nombre_identificador || dto.nombre,
       puesto_id: dto.puesto_id || null,
@@ -112,7 +112,7 @@ export class ControlAccesoService {
     return data[0];
   }
 
-  async deleteDispositivo(id: number) {
+  async deleteDispositivo(id: string) {
     const { data, error } = await this.supabase
       .getClient()
       .from('dispositivos_iot')
@@ -170,7 +170,7 @@ export class ControlAccesoService {
     return this.proxyRequestDynamic(ip, 'post', endpointMap[command]);
   }
 
-  async getSnapshot(ip: string, id?: number): Promise<Buffer> {
+  async getSnapshot(ip: string, id?: string): Promise<Buffer> {
     let user = 'admin';
     let pass = 'proliseg#123';
     let port = 80;
