@@ -78,9 +78,13 @@ export class ControlAccesoService {
     const { data, error } = await this.supabase
       .getClient()
       .from('dispositivos_iot')
-      .insert([payload])
+      .upsert([payload], { onConflict: 'sn_serie' })
       .select();
-    if (error) throw error;
+      
+    if (error) {
+      this.logger.error(`❌ [CREATE DISPOSITIVO ERROR] Error de base de datos al registrar: ${error.message} - Code: ${error.code}`);
+      throw error;
+    }
     return data[0];
   }
 
