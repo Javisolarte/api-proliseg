@@ -9,6 +9,11 @@ WORKDIR /app
 # Copiar package files
 COPY package*.json ./
 
+# Configurar reintentos de npm para conexiones de red inestables o lentas en la VPS
+RUN npm config set fetch-retries 5 && \
+    npm config set fetch-retry-mintimeout 15000 && \
+    npm config set fetch-retry-maxtimeout 90000
+
 # Instalar dependencias
 RUN npm install
 

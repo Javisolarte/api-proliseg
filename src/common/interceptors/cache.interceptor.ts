@@ -19,7 +19,9 @@ export class HttpCacheInterceptor extends CacheInterceptor {
       url.includes('/boton-panico') ||
       url.includes('/ubicaciones') ||
       url.includes('/eventos') ||
-      url.includes('/webhooks')
+      url.includes('/webhooks') ||
+      url.includes('/snapshot') ||
+      url.includes('/control-acceso')
     ) {
       return undefined;
     }
