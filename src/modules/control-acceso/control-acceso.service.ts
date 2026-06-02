@@ -196,15 +196,15 @@ export class ControlAccesoService {
     }
     
     // Si hay puerto NAT/MikroTik especial, mapearlo al target del proxy
-    const targetIpWithPort = port && port !== 80 ? `${ip}:${port}` : ip;
     const url = `${this.proxyUrl}/snapshot`;
     
     try {
-      // 2. Ejecutar petición al Proxy VPS incluyendo credenciales de autenticación del dispositivo para evitar código 530 (Unauthorized)
+      // 2. Ejecutar petición al Proxy VPS incluyendo credenciales y puerto mapeado para evitar error 530
       const response = await axios.get(url, {
         headers: { 
           'X-API-Key': this.apiKey,
-          'X-Target-IP': targetIpWithPort,
+          'X-Target-IP': ip,
+          'X-Target-Port': String(port),
           'X-Target-User': user,
           'X-Target-Pass': pass
         },
@@ -213,7 +213,7 @@ export class ControlAccesoService {
       });
       return response.data;
     } catch (error) {
-      this.logger.error(`❌ [SNAPSHOT] Error: ${error.message} - Dest: ${targetIpWithPort}`);
+      this.logger.error(`❌ [SNAPSHOT] Error: ${error.message} - Dest: ${ip}:${port}`);
       throw error;
     }
   }
