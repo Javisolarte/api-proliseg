@@ -515,7 +515,8 @@ export class ControlAccesoService {
           timeout: 6000,
           headers: {
             'User-Agent': 'curl/7.74.0',
-            'Accept': '*/*'
+            'Accept': '*/*',
+            'Content-Type': 'application/json'
           }
         });
         
@@ -540,15 +541,31 @@ export class ControlAccesoService {
           comment: `Proliseg IoT NAT: ${deviceLocalIp}`
         };
         
-        await axios.post(url, payload, {
-          auth: { username, password },
-          httpsAgent,
-          timeout: 10000,
-          headers: {
-            'User-Agent': 'curl/7.74.0',
-            'Accept': '*/*'
-          }
-        });
+        try {
+          this.logger.log(`🔧 [NAT MAPPING] Enviando POST a MikroTik para crear regla NAT...`);
+          await axios.post(url, payload, {
+            auth: { username, password },
+            httpsAgent,
+            timeout: 10000,
+            headers: {
+              'User-Agent': 'curl/7.74.0',
+              'Accept': '*/*',
+              'Content-Type': 'application/json'
+            }
+          });
+        } catch (postErr) {
+          this.logger.warn(`⚠️ [NAT MAPPING] Falló POST a MikroTik (${postErr.message}). Reintentando con PUT (Requerido en RouterOS v7)...`);
+          await axios.put(url, payload, {
+            auth: { username, password },
+            httpsAgent,
+            timeout: 10000,
+            headers: {
+              'User-Agent': 'curl/7.74.0',
+              'Accept': '*/*',
+              'Content-Type': 'application/json'
+            }
+          });
+        }
         
         this.logger.log(`✅ [NAT MAPPING] Regla NAT agregada con éxito para ${deviceLocalIp} -> puerto ${publicPort}`);
         return true;
