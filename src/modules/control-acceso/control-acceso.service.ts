@@ -174,6 +174,7 @@ export class ControlAccesoService {
     let user = 'admin';
     let pass = 'proliseg#123';
     let port = 80;
+    let targetIp = ip;
     
     try {
       // 1. Consultar base de datos Supabase para recuperar credenciales y puerto real del biométrico
@@ -190,9 +191,44 @@ export class ControlAccesoService {
         user = dev.credencial_usuario || 'admin';
         pass = dev.credencial_password || '';
         port = dev.configuracion_tecnica?.puerto || dev.puerto_servicio || 80;
+        targetIp = dev.ip_direccion || ip;
       }
     } catch (dbErr) {
       this.logger.warn(`⚠️ [SNAPSHOT DB WARN] No se pudo obtener credenciales: ${dbErr.message}. Usando fallbacks.`);
+    }
+    
+    // Auto-resolución de IPs privadas localizadas detrás del MikroTik
+    const isPrivate = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(targetIp);
+    if (isPrivate) {
+      try {
+        const { data: servers } = await this.supabase
+          .getClient()
+          .from('control_acceso_servidores_mikrotik')
+          .select('*')
+          .limit(1);
+          
+        if (servers && servers.length > 0) {
+          const srv = servers[0];
+          const lastOctet = targetIp.split('.').pop();
+          const mappedPort = 10000 + Number(lastOctet || '80');
+          
+          this.logger.log(`🔧 [AUTO-NAT] Creando/Verificando regla NAT en MikroTik ${srv.ip_publica} para snapshot de ${targetIp} al puerto ${mappedPort}...`);
+          
+          await this.addMikrotikNatRule(
+            srv.ip_publica,
+            targetIp,
+            mappedPort,
+            srv.usuario,
+            srv.password,
+            String(srv.puerto_rest || 4433)
+          );
+          
+          targetIp = srv.ip_publica;
+          port = mappedPort;
+        }
+      } catch (err) {
+        this.logger.error(`❌ [AUTO-NAT ERROR] No se pudo auto-mapear NAT para snapshot: ${err.message}`);
+      }
     }
     
     // Si hay puerto NAT/MikroTik especial, mapearlo al target del proxy
@@ -203,7 +239,7 @@ export class ControlAccesoService {
       const response = await axios.get(url, {
         headers: { 
           'X-API-Key': this.apiKey,
-          'X-Target-IP': ip,
+          'X-Target-IP': targetIp,
           'X-Target-Port': String(port),
           'X-Target-User': user,
           'X-Target-Pass': pass
@@ -213,7 +249,7 @@ export class ControlAccesoService {
       });
       return response.data;
     } catch (error) {
-      this.logger.error(`❌ [SNAPSHOT] Error: ${error.message} - Dest: ${ip}:${port}`);
+      this.logger.error(`❌ [SNAPSHOT] Error: ${error.message} - Dest: ${targetIp}:${port}`);
       throw error;
     }
   }
@@ -523,16 +559,54 @@ export class ControlAccesoService {
   }
 
   async validateCredentials(ip: string, user: string, pass: string): Promise<any> {
+    let targetIp = ip;
+    let targetPort = 80;
+    
+    // Auto-resolución de IPs privadas vía MikroTik
+    const isPrivate = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(ip);
+    if (isPrivate) {
+      try {
+        const { data: servers } = await this.supabase
+          .getClient()
+          .from('control_acceso_servidores_mikrotik')
+          .select('*')
+          .limit(1);
+          
+        if (servers && servers.length > 0) {
+          const srv = servers[0];
+          const lastOctet = ip.split('.').pop();
+          const mappedPort = 10000 + Number(lastOctet || '80');
+          
+          this.logger.log(`🔧 [AUTO-NAT] Creando/Verificando regla NAT en MikroTik ${srv.ip_publica} para validación de ${ip} al puerto ${mappedPort}...`);
+          
+          await this.addMikrotikNatRule(
+            srv.ip_publica,
+            ip,
+            mappedPort,
+            srv.usuario,
+            srv.password,
+            String(srv.puerto_rest || 4433)
+          );
+          
+          targetIp = srv.ip_publica;
+          targetPort = mappedPort;
+        }
+      } catch (err) {
+        this.logger.error(`❌ [AUTO-NAT ERROR] No se pudo auto-mapear NAT para validación: ${err.message}`);
+      }
+    }
+
     const url = `${this.proxyUrl}/validate`;
     try {
       const response = await axios.post(url, {}, {
         headers: { 
           'X-API-Key': this.apiKey,
-          'X-Target-IP': ip,
+          'X-Target-IP': targetIp,
+          'X-Target-Port': String(targetPort),
           'X-Target-User': user,
           'X-Target-Pass': pass
         },
-        timeout: 10000
+        timeout: 15000
       });
       return response.data;
     } catch (error) {
@@ -561,13 +635,51 @@ export class ControlAccesoService {
     const query = new URLSearchParams(params).toString();
     const url = `${this.proxyUrl}${path}${query ? '?' + query : ''}`;
     
+    let resolvedIp = targetIp;
+    let targetPort = 80;
+    
+    // Auto-resolución de IPs privadas vía MikroTik
+    const isPrivate = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(targetIp);
+    if (isPrivate) {
+      try {
+        const { data: servers } = await this.supabase
+          .getClient()
+          .from('control_acceso_servidores_mikrotik')
+          .select('*')
+          .limit(1);
+          
+        if (servers && servers.length > 0) {
+          const srv = servers[0];
+          const lastOctet = targetIp.split('.').pop();
+          const mappedPort = 10000 + Number(lastOctet || '80');
+          
+          this.logger.log(`🔧 [AUTO-NAT] Creando/Verificando regla NAT en MikroTik ${srv.ip_publica} para proxy dinámico de ${targetIp} al puerto ${mappedPort}...`);
+          
+          await this.addMikrotikNatRule(
+            srv.ip_publica,
+            targetIp,
+            mappedPort,
+            srv.usuario,
+            srv.password,
+            String(srv.puerto_rest || 4433)
+          );
+          
+          resolvedIp = srv.ip_publica;
+          targetPort = mappedPort;
+        }
+      } catch (err) {
+        this.logger.error(`❌ [AUTO-NAT ERROR] No se pudo auto-mapear NAT para proxy dinámico: ${err.message}`);
+      }
+    }
+    
     try {
       const config: any = { 
         method, 
         url, 
         headers: { 
           'X-API-Key': this.apiKey,
-          'X-Target-IP': targetIp
+          'X-Target-IP': resolvedIp,
+          'X-Target-Port': String(targetPort)
         }, 
         timeout: 20000 
       };
