@@ -1,7 +1,7 @@
-FROM node:18-slim
+FROM node:20-slim
 
-# Instalar ffmpeg
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+# Instalar ffmpeg y curl (requerido para el healthcheck de Coolify)
+RUN apt-get update && apt-get install -y ffmpeg curl && rm -rf /var/lib/apt/lists/*
 
 # Crear directorio de trabajo
 WORKDIR /app
