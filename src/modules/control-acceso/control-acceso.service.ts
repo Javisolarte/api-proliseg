@@ -235,10 +235,10 @@ export class ControlAccesoService {
       // Nombre simple de la cámara sin slashes para evitar errores 404 en la API
       const streamName = `cam_${deviceId.substring(0, 8)}`;
 
-      // 2. Registrar la ruta en la API de MediaMTX DIRECTO a la IP interna del servidor
-      const vpsIp = '10.0.1.1';
+      // 2. Registrar la ruta en la API de MediaMTX mediante el proxy seguro de Traefik
+      const domain = 'servidor.proliseg.com';
       try {
-        await axios.post(`http://${vpsIp}:9997/v3/config/paths/add/${streamName}`, {
+        await axios.post(`https://${domain}/webrtc-api/v3/config/paths/add/${streamName}`, {
           source: sourceUrl,
           sourceOnDemand: true, // TRUE: Evita que el API de MediaMTX colapse al validar la cámara
           rtspTransport: 'tcp'  // Forzar TCP para evitar bloqueos del MikroTik en UDP
@@ -247,8 +247,8 @@ export class ControlAccesoService {
         // Si la ruta ya existe (error 400), la eliminamos y la volvemos a crear para forzar la actualización
         if (err.response?.status === 400) {
           try {
-            await axios.delete(`http://${vpsIp}:9997/v3/config/paths/delete/${streamName}`);
-            await axios.post(`http://${vpsIp}:9997/v3/config/paths/add/${streamName}`, {
+            await axios.delete(`https://${domain}/webrtc-api/v3/config/paths/delete/${streamName}`);
+            await axios.post(`https://${domain}/webrtc-api/v3/config/paths/add/${streamName}`, {
               source: sourceUrl,
               sourceOnDemand: true, // TRUE: Evita que el API de MediaMTX colapse al validar la cámara
               rtspTransport: 'tcp'
@@ -263,7 +263,6 @@ export class ControlAccesoService {
       }
 
       // Retornar las rutas con el prefijo /webrtc/ que maneja el frontend y el iframe
-      const domain = 'servidor.proliseg.com';
       return {
         streamName,
         webrtcUrl: `https://${domain}/webrtc/${streamName}`,
