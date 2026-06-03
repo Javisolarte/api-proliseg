@@ -234,11 +234,10 @@ export class ControlAccesoService {
       const sourceUrl = `rtsp://${user}:${pass}@${targetIp}:${rtspPort}/Streaming/Channels/101`;
       const streamName = `cam_${deviceId.substring(0,8)}`;
       
-      // 2. Registrar la ruta en la API de MediaMTX (La IP de la VPS)
-      // Como estás probando localmente, apuntamos a la IP de la VPS. En producción podría ser localhost.
-      const publicVpsIp = '173.249.50.54';
+      // 2. Registrar la ruta en la API de MediaMTX mediante el proxy seguro de Traefik
+      const domain = 'servidor.proliseg.com';
       try {
-        await axios.post(`http://${publicVpsIp}:9997/v3/config/paths/add/${streamName}`, {
+        await axios.post(`https://${domain}/webrtc-api/v3/config/paths/add/${streamName}`, {
           source: sourceUrl,
           sourceOnDemand: true // Para que no consuma ancho de banda cuando nadie ve
         });
@@ -250,7 +249,6 @@ export class ControlAccesoService {
       }
       
       // Ya con Traefik/Coolify configurado, volvemos a usar HTTPS seguro:
-      const domain = 'servidor.proliseg.com';
       return {
         streamName,
         webrtcUrl: `https://${domain}/webrtc/${streamName}`,
@@ -289,8 +287,12 @@ export class ControlAccesoService {
       this.logger.warn(`⚠️ [SNAPSHOT DB WARN] No se pudo obtener credenciales: ${dbErr.message}. Usando fallbacks.`);
     }
     
-    // Auto-resolución de IPs privadas localizadas detrás del MikroTik
-    const isPrivate = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(targetIp);
+    // Si la IP es de WireGuard (ej. 10.8.0.x), conectamos DIRECTO por el túnel sin hacer NAT.
+    const isWireguardIp = targetIp.startsWith('10.8.');
+    
+    // Auto-resolución de IPs privadas locales (solo si no es WireGuard)
+    const isPrivate = /^(192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(targetIp) || (targetIp.startsWith('10.') && !isWireguardIp);
+    
     if (isPrivate) {
       try {
         const { data: servers } = await this.supabase
