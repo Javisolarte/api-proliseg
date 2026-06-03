@@ -1,18 +1,51 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import axios from 'axios';
 import { SupabaseService } from '../supabase/supabase.service';
 import { CreateDispositivoDto, CreatePersonaAccesoDto } from './dto/control-acceso.dto';
 import { randomBytes, createHash } from 'crypto';
 
 @Injectable()
-export class ControlAccesoService {
+export class ControlAccesoService implements OnModuleInit {
   private readonly logger = new Logger(ControlAccesoService.name);
-
 
   private readonly proxyUrl = 'https://servidor.proliseg.com/dispositivos';
   private readonly apiKey = 'proliseg-acceso-2026';
 
   constructor(private readonly supabase: SupabaseService) { }
+
+  async onModuleInit() {
+    this.logger.log('🚀 [MediaMTX] Iniciando sincronización de cámaras en 5 segundos...');
+    // Ejecutar en segundo plano para no bloquear el arranque
+    setTimeout(() => {
+      this.syncMediaMtxPaths().catch(err => this.logger.error(err));
+    }, 5000);
+  }
+
+  async syncMediaMtxPaths() {
+    try {
+      const { data: devices, error } = await this.supabase
+        .getClient()
+        .from('dispositivos_iot')
+        .select('id')
+        .in('estado', ['operativo', 'mantenimiento']);
+
+      if (error) throw error;
+
+      if (devices && devices.length > 0) {
+        this.logger.log(`🔄 [MediaMTX] Sincronizando ${devices.length} dispositivos de video...`);
+        for (const dev of devices) {
+          try {
+            await this.startVideoStream(dev.id);
+          } catch (e) {
+            this.logger.warn(`⚠️ [MediaMTX] Error al sincronizar cámara ${dev.id}: ${e.message}`);
+          }
+        }
+        this.logger.log('✅ [MediaMTX] Sincronización de cámaras completada con éxito.');
+      }
+    } catch (error) {
+      this.logger.error(`❌ [MediaMTX] Error crítico en sincronización inicial: ${error.message}`);
+    }
+  }
 
   /**
    * DATABASE METHODS (SUPABASE)
