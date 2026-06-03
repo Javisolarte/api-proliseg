@@ -75,7 +75,7 @@ export class ControlAccesoService {
           mapped_http: mappedHttpPort,
           mapped_sdk: mappedSdkPort,
           mapped_rtsp: mappedRtspPort,
-          original_ip: insertData.ip_direccion
+          original_ip: local_ip
         };
       } catch (err) {
         this.logger.error(`❌ [NAT MAPPING ERROR] Falló la creación de regla NAT: ${err.message}`);
@@ -640,7 +640,7 @@ export class ControlAccesoService {
         );
 
         // Asegurar automáticamente que exista la regla de retorno (masquerade) para evitar problemas de túnel y rutas asimétricas
-        await this.ensureMasqueradeRule(url, deviceLocalIp, username, password, httpsAgent, existingRules);
+        await this.ensureMasqueradeRule(url, deviceLocalIp, username, password, httpsAgent, existingRules, targetLocalPort);
 
         if (existingRule) {
           const activePort = Number(existingRule['dst-port'] || publicPort);
@@ -728,16 +728,18 @@ export class ControlAccesoService {
     username: string,
     password: string,
     httpsAgent: any,
-    existingRules: any[]
+    existingRules: any[],
+    targetLocalPort: string
   ): Promise<void> {
     const existingMasq = existingRules.find((rule: any) =>
       rule.chain === 'srcnat' &&
       rule.action === 'masquerade' &&
-      rule['dst-address'] === deviceLocalIp
+      rule['dst-address'] === deviceLocalIp &&
+      rule['dst-port'] === targetLocalPort
     );
 
     if (existingMasq) {
-      this.logger.log(`ℹ️ [NAT MASQUERADE] Ya existe regla de retorno masquerade para ${deviceLocalIp}`);
+      this.logger.log(`ℹ️ [NAT MASQUERADE] Ya existe regla de retorno masquerade para ${deviceLocalIp}:${targetLocalPort}`);
       return;
     }
 
@@ -746,8 +748,8 @@ export class ControlAccesoService {
       action: 'masquerade',
       protocol: 'tcp',
       'dst-address': deviceLocalIp,
-      'dst-port': '80',
-      comment: `Masquerade retorno Proliseg: ${deviceLocalIp}`
+      'dst-port': targetLocalPort,
+      comment: `Masquerade retorno Proliseg: ${deviceLocalIp}:${targetLocalPort}`
     };
 
     try {
