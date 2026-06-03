@@ -234,9 +234,11 @@ export class ControlAccesoService {
       const sourceUrl = `rtsp://${user}:${pass}@${targetIp}:${rtspPort}/Streaming/Channels/101`;
       const streamName = `cam_${deviceId.substring(0,8)}`;
       
-      // 2. Registrar la ruta en la API de MediaMTX (localhost:9997)
+      // 2. Registrar la ruta en la API de MediaMTX (La IP de la VPS)
+      // Como estás probando localmente, apuntamos a la IP de la VPS. En producción podría ser localhost.
+      const publicVpsIp = '173.249.50.54';
       try {
-        await axios.post(`http://localhost:9997/v3/config/paths/add/${streamName}`, {
+        await axios.post(`http://${publicVpsIp}:9997/v3/config/paths/add/${streamName}`, {
           source: sourceUrl,
           sourceOnDemand: true // Para que no consuma ancho de banda cuando nadie ve
         });
@@ -247,12 +249,12 @@ export class ControlAccesoService {
         }
       }
       
-      // La IP de la VPS es 173.249.50.54, el WebRTC HTTP por defecto de MediaMTX es 8889
-      const publicVpsIp = '173.249.50.54';
+      // Ya con Traefik/Coolify configurado, volvemos a usar HTTPS seguro:
+      const domain = 'servidor.proliseg.com';
       return {
         streamName,
-        webrtcUrl: `http://${publicVpsIp}:8889/${streamName}`,
-        iframeUrl: `http://${publicVpsIp}:8889/${streamName}/` // MediaMTX provee un reproductor web por defecto
+        webrtcUrl: `https://${domain}/webrtc/${streamName}`,
+        iframeUrl: `https://${domain}/webrtc/${streamName}/` // El slash final es vital
       };
     } catch (error) {
       this.logger.error(`❌ [WEBRTC STREAM] Error: ${error.message}`);
