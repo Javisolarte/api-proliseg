@@ -36,31 +36,34 @@ export class ControlAccesoService {
     // Usar puertos_mapeados del frontend si existen, sino usar un objeto vacío
     let mappedPortsInfo = insertData.configuracion_tecnica?.puertos_mapeados || {};
 
-    if (mikrotik_ip && insertData.ip_direccion) {
+    // IP local de la cámara para la regla NAT en MikroTik (ej. 192.168.1.150)
+    const local_ip = insertData.ip_local || insertData.ip_direccion;
+
+    if (mikrotik_ip && local_ip) {
       // Se escaneó vía MikroTik, mapear el reenvío de puertos NAT
       try {
-        const lastOctet = insertData.ip_direccion.split('.').pop();
+        const lastOctet = local_ip.split('.').pop();
         const baseOffset = Number(lastOctet || '80');
 
         const mappedHttpPort = 10000 + baseOffset;
         const mappedSdkPort = 20000 + baseOffset;
         const mappedRtspPort = 30000 + baseOffset;
 
-        this.logger.log(`🔧 [NAT MAPPING] Creando reglas NAT en MikroTik ${mikrotik_ip} para ${insertData.ip_direccion}...`);
+        this.logger.log(`🔧 [NAT MAPPING] Creando reglas NAT en MikroTik ${mikrotik_ip} hacia ${local_ip}...`);
 
         // Mapear HTTP (80)
         const finalActivePort = await this.addMikrotikNatRule(
-          mikrotik_ip, insertData.ip_direccion, mappedHttpPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '80'
+          mikrotik_ip, local_ip, mappedHttpPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '80'
         );
 
         // Mapear SDK (8000)
         await this.addMikrotikNatRule(
-          mikrotik_ip, insertData.ip_direccion, mappedSdkPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '8000'
+          mikrotik_ip, local_ip, mappedSdkPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '8000'
         );
 
         // Mapear RTSP (554)
         await this.addMikrotikNatRule(
-          mikrotik_ip, insertData.ip_direccion, mappedRtspPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '554'
+          mikrotik_ip, local_ip, mappedRtspPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '554'
         );
 
         // Actualizar detalles del dispositivo con el puerto mapeado HTTP principal
