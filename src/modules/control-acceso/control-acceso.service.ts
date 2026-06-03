@@ -230,8 +230,8 @@ export class ControlAccesoService {
         rtspPort = dev.puertos_mapeados.mapped_rtsp;
       }
 
-      // Armar la URL de la fuente RTSP (Usamos el canal 102 que es el Sub-Stream, mucho más ligero y sin latencia)
-      const sourceUrl = `rtsp://${user}:${pass}@${targetIp}:${rtspPort}/Streaming/Channels/102`;
+      // Armar la URL de la fuente RTSP (Volvemos al 101, los biométricos de acceso a veces no tienen 102)
+      const sourceUrl = `rtsp://${user}:${pass}@${targetIp}:${rtspPort}/Streaming/Channels/101`;
       // Nombre simple de la cámara sin slashes para evitar errores 404 en la API
       const streamName = `cam_${deviceId.substring(0, 8)}`;
 
@@ -244,16 +244,18 @@ export class ControlAccesoService {
           rtspTransport: 'tcp'  // Forzar TCP para evitar bloqueos del MikroTik en UDP
         });
       } catch (err) {
-        // Si la ruta ya existe (error 400), actualizamos su configuración
+        // Si la ruta ya existe (error 400), la eliminamos y la volvemos a crear para forzar la actualización
         if (err.response?.status === 400) {
           try {
-            await axios.patch(`http://${vpsIp}:9997/v3/config/paths/patch/${streamName}`, {
+            await axios.delete(`http://${vpsIp}:9997/v3/config/paths/delete/${streamName}`);
+            await axios.post(`http://${vpsIp}:9997/v3/config/paths/add/${streamName}`, {
               source: sourceUrl,
-              sourceOnDemand: false,
+              sourceOnDemand: false, // 24/7 para velocidad extrema
               rtspTransport: 'tcp'
             });
-          } catch (patchErr) {
-            this.logger.warn(`⚠️ [WEBRTC] Error actualizando ruta en MediaMTX: ${patchErr.message}`);
+            this.logger.log(`🔄 [WEBRTC] Ruta ${streamName} actualizada automáticamente.`);
+          } catch (updateErr) {
+            this.logger.warn(`⚠️ [WEBRTC] Error actualizando ruta en MediaMTX: ${updateErr.message}`);
           }
         } else {
           this.logger.warn(`⚠️ [WEBRTC] Error registrando ruta en MediaMTX: ${err.message}`);
