@@ -207,6 +207,59 @@ export class ControlAccesoService {
     return this.proxyRequestDynamic(ip, 'put', `/ISAPI/AccessControl/RemoteControl/door/${doorId}`, body);
   }
 
+  async startVideoStream(deviceId: string): Promise<any> {
+    try {
+      // 1. Obtener datos del dispositivo
+      const { data: devices, error: dbErr } = await this.supabase
+        .getClient()
+        .from('dispositivos_iot')
+        .select('*')
+        .eq('id', deviceId);
+        
+      if (dbErr || !devices || devices.length === 0) {
+        throw new Error('Dispositivo no encontrado');
+      }
+      
+      const dev = devices[0];
+      const user = dev.credencial_usuario || 'admin';
+      const pass = dev.credencial_password || '';
+      const targetIp = dev.ip_direccion; // Debe ser la IP VPN, ej. 10.8.0.2
+      
+      let rtspPort = 554;
+      if (dev.puertos_mapeados && dev.puertos_mapeados.mapped_rtsp) {
+        rtspPort = dev.puertos_mapeados.mapped_rtsp;
+      }
+      
+      // Armar la URL de la fuente RTSP
+      const sourceUrl = `rtsp://${user}:${pass}@${targetIp}:${rtspPort}/Streaming/Channels/101`;
+      const streamName = `cam_${deviceId.substring(0,8)}`;
+      
+      // 2. Registrar la ruta en la API de MediaMTX (localhost:9997)
+      try {
+        await axios.post(`http://localhost:9997/v3/config/paths/add/${streamName}`, {
+          source: sourceUrl,
+          sourceOnDemand: true // Para que no consuma ancho de banda cuando nadie ve
+        });
+      } catch (err) {
+        // Ignorar si la ruta ya existe o hay un error de conflicto (400)
+        if (err.response?.status !== 400) {
+          this.logger.warn(`⚠️ [WEBRTC] Error registrando ruta en MediaMTX: ${err.message}`);
+        }
+      }
+      
+      // La IP de la VPS es 173.249.50.54, el WebRTC HTTP por defecto de MediaMTX es 8889
+      const publicVpsIp = '173.249.50.54';
+      return {
+        streamName,
+        webrtcUrl: `http://${publicVpsIp}:8889/${streamName}`,
+        iframeUrl: `http://${publicVpsIp}:8889/${streamName}/` // MediaMTX provee un reproductor web por defecto
+      };
+    } catch (error) {
+      this.logger.error(`❌ [WEBRTC STREAM] Error: ${error.message}`);
+      throw error;
+    }
+  }
+
   async getSnapshot(ip: string, id?: string): Promise<Buffer> {
     let user = 'admin';
     let pass = 'proliseg#123';

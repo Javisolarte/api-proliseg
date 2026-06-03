@@ -104,6 +104,13 @@ export class ControlAccesoController {
     }
   }
 
+  @Get('webrtc-stream/:id')
+  @ApiOperation({ summary: 'Inicia el streaming WebRTC (MediaMTX) para un dispositivo IoT' })
+  async startWebRTCStream(@Param('id') id: string) {
+    this.logger.log(`🎥 [WEBRTC] Solicitando stream WebRTC para dispositivo: ${id}`);
+    return this.controlAccesoService.startVideoStream(id);
+  }
+
   @Get('recopilacion/lugares')
   @ApiOperation({ summary: 'Lista lugares de recopilacion de datos' })
   async getLugaresRecopilacion() {
