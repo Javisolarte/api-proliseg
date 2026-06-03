@@ -240,12 +240,22 @@ export class ControlAccesoService {
       try {
         await axios.post(`http://${vpsIp}:9997/v3/config/paths/add/${streamName}`, {
           source: sourceUrl,
-          sourceOnDemand: true, // Para que no consuma ancho de banda cuando nadie ve
+          sourceOnDemand: false, // APAGADO: Mantiene el video fluyendo 24/7 para que cargue instantáneamente
           rtspTransport: 'tcp'  // Forzar TCP para evitar bloqueos del MikroTik en UDP
         });
       } catch (err) {
-        // Ignorar si la ruta ya existe o hay un error de conflicto (400)
-        if (err.response?.status !== 400) {
+        // Si la ruta ya existe (error 400), actualizamos su configuración
+        if (err.response?.status === 400) {
+          try {
+            await axios.patch(`http://${vpsIp}:9997/v3/config/paths/patch/${streamName}`, {
+              source: sourceUrl,
+              sourceOnDemand: false,
+              rtspTransport: 'tcp'
+            });
+          } catch (patchErr) {
+            this.logger.warn(`⚠️ [WEBRTC] Error actualizando ruta en MediaMTX: ${patchErr.message}`);
+          }
+        } else {
           this.logger.warn(`⚠️ [WEBRTC] Error registrando ruta en MediaMTX: ${err.message}`);
         }
       }
