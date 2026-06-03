@@ -232,9 +232,8 @@ export class ControlAccesoService {
 
       // Armar la URL de la fuente RTSP
       const sourceUrl = `rtsp://${user}:${pass}@${targetIp}:${rtspPort}/Streaming/Channels/101`;
-      // Para evitar problemas con el proxy inverso (Traefik) y los headers Location,
-      // la ruta en MediaMTX DEBE llamarse 'webrtc/cam_...'
-      const streamName = `webrtc/cam_${deviceId.substring(0, 8)}`;
+      // Nombre simple de la cámara sin slashes para evitar errores 404 en la API
+      const streamName = `cam_${deviceId.substring(0, 8)}`;
 
       // 2. Registrar la ruta en la API de MediaMTX DIRECTO a la IP interna del servidor
       const vpsIp = '10.0.1.1';
@@ -251,12 +250,12 @@ export class ControlAccesoService {
         }
       }
 
-      // Ya con Traefik/Coolify configurado, volvemos a usar HTTPS seguro:
+      // Retornar las rutas con el prefijo /webrtc/ que maneja el frontend y el iframe
       const domain = 'servidor.proliseg.com';
       return {
         streamName,
-        webrtcUrl: `https://${domain}/${streamName}`,
-        iframeUrl: `https://${domain}/${streamName}/` // El slash final es vital
+        webrtcUrl: `https://${domain}/webrtc/${streamName}`,
+        iframeUrl: `https://${domain}/webrtc/${streamName}/` // El slash final es vital
       };
     } catch (error) {
       this.logger.error(`❌ [WEBRTC STREAM] Error: ${error.message}`);
