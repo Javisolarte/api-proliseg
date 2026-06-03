@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { SupabaseService } from '../supabase/supabase.service';
 import { CreateDispositivoDto, CreatePersonaAccesoDto } from './dto/control-acceso.dto';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 
 @Injectable()
 export class ControlAccesoService {
@@ -33,26 +33,46 @@ export class ControlAccesoService {
     let finalIp = insertData.ip_direccion;
     let finalPort = insertData.puerto_servicio || 80;
     
+    // Almacenamos mapeos adicionales para usarlos después
+    let mappedPortsInfo = {};
+    
     if (mikrotik_ip && insertData.ip_direccion) {
       // Se escaneó vía MikroTik, mapear el reenvío de puertos NAT
       try {
         const lastOctet = insertData.ip_direccion.split('.').pop();
-        const mappedPort = 10000 + Number(lastOctet || '80');
+        const baseOffset = Number(lastOctet || '80');
         
-        this.logger.log(`🔧 [NAT MAPPING] Creando regla NAT en MikroTik ${mikrotik_ip} para ${insertData.ip_direccion} al puerto público ${mappedPort}...`);
+        const mappedHttpPort = 10000 + baseOffset;
+        const mappedSdkPort = 20000 + baseOffset;
+        const mappedRtspPort = 30000 + baseOffset;
         
+        this.logger.log(`🔧 [NAT MAPPING] Creando reglas NAT en MikroTik ${mikrotik_ip} para ${insertData.ip_direccion}...`);
+        
+        // Mapear HTTP (80)
         const finalActivePort = await this.addMikrotikNatRule(
-          mikrotik_ip,
-          insertData.ip_direccion,
-          mappedPort,
-          mikrotik_usuario,
-          mikrotik_password,
-          mikrotik_puerto
+          mikrotik_ip, insertData.ip_direccion, mappedHttpPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '80'
         );
         
-        // Actualizar detalles del dispositivo con la IP pública del MikroTik y puerto mapeado
+        // Mapear SDK (8000)
+        await this.addMikrotikNatRule(
+          mikrotik_ip, insertData.ip_direccion, mappedSdkPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '8000'
+        );
+        
+        // Mapear RTSP (554)
+        await this.addMikrotikNatRule(
+          mikrotik_ip, insertData.ip_direccion, mappedRtspPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '554'
+        );
+        
+        // Actualizar detalles del dispositivo con la IP de la VPN del MikroTik y puerto mapeado HTTP principal
         finalIp = mikrotik_ip;
         finalPort = finalActivePort;
+        
+        mappedPortsInfo = {
+          mapped_http: mappedHttpPort,
+          mapped_sdk: mappedSdkPort,
+          mapped_rtsp: mappedRtspPort,
+          original_ip: insertData.ip_direccion
+        };
       } catch (err) {
         this.logger.error(`❌ [NAT MAPPING ERROR] Falló la creación de regla NAT: ${err.message}`);
       }
@@ -71,7 +91,8 @@ export class ControlAccesoService {
         modelo: insertData.configuracion_tecnica?.modelo || insertData.modelo || '',
         puerto: finalPort,
         tipo: insertData.tipo || 'control_acceso',
-        esta_online: true
+        esta_online: true,
+        puertos_mapeados: mappedPortsInfo
       }
     };
 
@@ -164,14 +185,26 @@ export class ControlAccesoService {
    * PROXY METHODS (HARDWARE ADVANCED)
    */
 
+  /**
+   * Verificar estado en línea (ping ISAPI rápido)
+   */
+  async checkDeviceOnlineStatus(ip: string): Promise<boolean> {
+    try {
+      await this.proxyRequestDynamic(ip, 'get', '/ISAPI/System/deviceInfo', null, { customTimeout: 3000 });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   async controlPuerta(ip: string, doorId: number = 1, command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada'): Promise<any> {
-    const endpointMap = {
-      'abrir': `/puerta/${doorId}`,
-      'cerrar': `/puerta/${doorId}/cerrar`,
-      'siempre-abierta': `/puerta/${doorId}/siempre-abierta`,
-      'siempre-cerrada': `/puerta/${doorId}/siempre-cerrada`
-    };
-    return this.proxyRequestDynamic(ip, 'post', endpointMap[command]);
+    let xmlCommand = 'open';
+    if (command === 'cerrar') xmlCommand = 'close';
+    if (command === 'siempre-abierta') xmlCommand = 'alwaysOpen';
+    if (command === 'siempre-cerrada') xmlCommand = 'alwaysClose';
+    
+    const body = `<RemoteControlDoor><cmd>${xmlCommand}</cmd></RemoteControlDoor>`;
+    return this.proxyRequestDynamic(ip, 'put', `/ISAPI/AccessControl/RemoteControl/door/${doorId}`, body);
   }
 
   async getSnapshot(ip: string, id?: string): Promise<Buffer> {
@@ -235,23 +268,11 @@ export class ControlAccesoService {
       }
     }
     
-    // Si hay puerto NAT/MikroTik especial, mapearlo al target del proxy
-    const url = `${this.proxyUrl}/snapshot`;
-    
+    const path = `/ISAPI/Streaming/channels/1/picture`;
     try {
-      // 2. Ejecutar petición al Proxy VPS incluyendo credenciales y puerto mapeado para evitar error 530
-      const response = await axios.get(url, {
-        headers: { 
-          'X-API-Key': this.apiKey,
-          'X-Target-IP': targetIp,
-          'X-Target-Port': String(port),
-          'X-Target-User': user,
-          'X-Target-Pass': pass
-        },
-        responseType: 'arraybuffer',
-        timeout: 10000,
-      });
-      return response.data;
+      // 2. Ejecutar petición directa ISAPI usando Digest Auth en la IP resuelta
+      const response = await this.executeDigestAuth('GET', `http://${targetIp}:${port}${path}`, user, pass, null, 'arraybuffer');
+      return response;
     } catch (error) {
       this.logger.error(`❌ [SNAPSHOT] Error: ${error.message} - Dest: ${targetIp}:${port}`);
       throw error;
@@ -259,7 +280,8 @@ export class ControlAccesoService {
   }
 
   async syncUsuariosHardware(ip: string): Promise<any> {
-    return this.proxyRequestDynamic(ip, 'get', '/usuarios');
+    // Para simplificar, obtenemos los datos por ISAPI básico
+    return this.proxyRequestDynamic(ip, 'get', '/ISAPI/AccessControl/UserInfo/Search?format=json');
   }
 
   async scanNetwork(
@@ -494,7 +516,8 @@ export class ControlAccesoService {
     publicPort: number,
     user?: string,
     pass?: string,
-    port?: string
+    port?: string,
+    targetLocalPort: string = '80'
   ): Promise<number> {
     const username = user || 'admin';
     const password = pass || '';
@@ -524,7 +547,7 @@ export class ControlAccesoService {
         
         // 1. REUTILIZACIÓN DE REGLAS: Si ya existe una regla para esta IP, reutilizar el puerto existente sin duplicar
         const existingRule = existingRules.find((rule: any) => 
-          rule['to-addresses'] === deviceLocalIp
+          rule['to-addresses'] === deviceLocalIp && rule['to-ports'] === targetLocalPort
         );
         
         // Asegurar automáticamente que exista la regla de retorno (masquerade) para evitar problemas de túnel y rutas asimétricas
@@ -568,8 +591,8 @@ export class ControlAccesoService {
           protocol: 'tcp',
           'dst-port': String(publicPort),
           'to-addresses': deviceLocalIp,
-          'to-ports': '80',
-          comment: `Proliseg IoT NAT: ${deviceLocalIp}`
+          'to-ports': targetLocalPort,
+          comment: `Proliseg IoT NAT: ${deviceLocalIp}:${targetLocalPort}`
         };
         
         try {
@@ -733,7 +756,7 @@ export class ControlAccesoService {
       FPID: userId,
       faceData: faceData
     };
-    return this.proxyRequestDynamic(ip, 'post', '/isapi', body, { path: isapiPath });
+    return this.proxyRequestDynamic(ip, 'post', isapiPath, body);
   }
 
   private async proxyRequestDynamic(
@@ -744,14 +767,35 @@ export class ControlAccesoService {
     params: any = {}
   ): Promise<any> {
     const query = new URLSearchParams(params).toString();
-    const url = `${this.proxyUrl}${path}${query ? '?' + query : ''}`;
+    const finalPath = `${path}${query ? '?' + query : ''}`;
     
     let resolvedIp = targetIp;
     let targetPort = 80;
+    let user = 'admin';
+    let pass = 'proliseg#123';
     
-    // Auto-resolución de IPs privadas vía MikroTik
+    try {
+      // 1. Consultar base de datos para recuperar credenciales y puerto
+      let dbQuery = this.supabase.getClient().from('dispositivos_iot').select('*');
+      dbQuery = dbQuery.eq('ip_direccion', targetIp);
+      
+      const { data: devices } = await dbQuery;
+      if (devices && devices.length > 0) {
+        const dev = devices[0];
+        user = dev.credencial_usuario || 'admin';
+        pass = dev.credencial_password || '';
+        // Si el dispositivo tiene puertos mapeados por VPN, usamos el mapeado
+        if (dev.puertos_mapeados && dev.puertos_mapeados.mapped_http) {
+           targetPort = dev.puertos_mapeados.mapped_http;
+        } else {
+           targetPort = dev.configuracion_tecnica?.puerto || dev.puerto_servicio || 80;
+        }
+      }
+    } catch (dbErr) {}
+    
+    // Auto-resolución de IPs privadas
     const isPrivate = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(targetIp);
-    if (isPrivate) {
+    if (isPrivate && !targetIp.startsWith('10.8.')) {
       try {
         const { data: servers } = await this.supabase
           .getClient()
@@ -763,43 +807,73 @@ export class ControlAccesoService {
           const srv = servers[0];
           const lastOctet = targetIp.split('.').pop();
           const mappedPort = 10000 + Number(lastOctet || '80');
-          
-          this.logger.log(`🔧 [AUTO-NAT] Creando/Verificando regla NAT en MikroTik ${srv.ip_publica} para proxy dinámico de ${targetIp} al puerto ${mappedPort}...`);
-          
-          await this.addMikrotikNatRule(
-            srv.ip_publica,
-            targetIp,
-            mappedPort,
-            srv.usuario,
-            srv.password,
-            String(srv.puerto_rest || 4433)
-          );
-          
           resolvedIp = srv.ip_publica;
           targetPort = mappedPort;
         }
-      } catch (err) {
-        this.logger.error(`❌ [AUTO-NAT ERROR] No se pudo auto-mapear NAT para proxy dinámico: ${err.message}`);
-      }
+      } catch (err) {}
     }
     
     try {
-      const config: any = { 
-        method, 
-        url, 
-        headers: { 
-          'X-API-Key': this.apiKey,
-          'X-Target-IP': resolvedIp,
-          'X-Target-Port': String(targetPort)
-        }, 
-        timeout: 20000 
-      };
+      const url = `http://${resolvedIp}:${targetPort}${finalPath}`;
+      const timeout = params.customTimeout || 15000;
+      return await this.executeDigestAuth(method.toUpperCase(), url, user, pass, data, 'json', timeout);
+    } catch (error) {
+      this.logger.error(`❌ [DIRECT ISAPI ERROR] ${resolvedIp}:${targetPort}${path}: ${error.message}`);
+      throw error;
+    }
+  }
+
+  private async executeDigestAuth(method: string, url: string, user: string, pass: string, data?: any, responseType: string = 'json', timeout: number = 15000): Promise<any> {
+    try {
+      const config: any = { method, url, timeout, responseType };
       if (data) config.data = data;
-      
       const response = await axios(config);
       return response.data;
     } catch (error) {
-      this.logger.error(`❌ [DYNAMIC PROXY ERROR] ${targetIp} -> ${path}: ${error.message}`);
+      if (error.response && error.response.status === 401 && error.response.headers['www-authenticate']) {
+        const authHeader = error.response.headers['www-authenticate'];
+        if (authHeader.includes('Digest')) {
+          const matchRealm = authHeader.match(/realm="([^"]+)"/);
+          const matchNonce = authHeader.match(/nonce="([^"]+)"/);
+          const matchQop = authHeader.match(/qop="([^"]+)"/);
+          
+          if (matchRealm && matchNonce) {
+            const realm = matchRealm[1];
+            const nonce = matchNonce[1];
+            const qop = matchQop ? matchQop[1] : '';
+            const nc = '00000001';
+            const cnonce = randomBytes(4).toString('hex');
+            const uri = new URL(url).pathname + (new URL(url).search || '');
+            
+            const ha1 = createHash('md5').update(`${user}:${realm}:${pass}`).digest('hex');
+            const ha2 = createHash('md5').update(`${method}:${uri}`).digest('hex');
+            let responseHash = '';
+            
+            if (qop === 'auth') {
+              responseHash = createHash('md5').update(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`).digest('hex');
+            } else {
+              responseHash = createHash('md5').update(`${ha1}:${nonce}:${ha2}`).digest('hex');
+            }
+            
+            let authStr = `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${responseHash}"`;
+            if (qop === 'auth') {
+              authStr += `, qop="${qop}", nc=${nc}, cnonce="${cnonce}"`;
+            }
+            
+            const config2: any = {
+              method,
+              url,
+              headers: { 'Authorization': authStr },
+              timeout,
+              responseType
+            };
+            if (data) config2.data = data;
+            
+            const secondResponse = await axios(config2);
+            return secondResponse.data;
+          }
+        }
+      }
       throw error;
     }
   }
