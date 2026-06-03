@@ -3,10 +3,10 @@ FROM node:20-slim
 # Habilitar caché para apt-get en Docker
 RUN rm -f /etc/apt/apt.conf.d/docker-clean; echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
 
-# Instalar ffmpeg y curl usando el caché de apt para evitar descargas repetidas
+# Instalar ffmpeg y herramientas de healthcheck usando el caché de apt para evitar descargas repetidas
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y ffmpeg curl
+    apt-get update && apt-get install -y ffmpeg curl wget
 
 # Crear directorio de trabajo
 WORKDIR /app

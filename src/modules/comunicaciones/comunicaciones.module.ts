@@ -7,12 +7,14 @@ import { ComunicacionesGateway } from './comunicaciones.gateway';
 import { LiveKitService } from './livekit.service';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { AuthModule } from '../auth/auth.module';
+import { ControlAccesoModule } from '../control-acceso/control-acceso.module';
 
 @Module({
     imports: [
         SupabaseModule, 
         AuthModule, 
-        ConfigModule
+        ConfigModule,
+        ControlAccesoModule
     ],
     controllers: [
         ComunicacionesController, 
