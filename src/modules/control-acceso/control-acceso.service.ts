@@ -234,8 +234,8 @@ export class ControlAccesoService {
       const sourceUrl = `rtsp://${user}:${pass}@${targetIp}:${rtspPort}/Streaming/Channels/101`;
       const streamName = `cam_${deviceId.substring(0, 8)}`;
 
-      // 2. Registrar la ruta en la API de MediaMTX DIRECTO a la IP del servidor
-      const vpsIp = '173.249.50.54';
+      // 2. Registrar la ruta en la API de MediaMTX DIRECTO a la IP interna del servidor
+      const vpsIp = '10.0.1.1';
       try {
         await axios.post(`http://${vpsIp}:9997/v3/config/paths/add/${streamName}`, {
           source: sourceUrl,
