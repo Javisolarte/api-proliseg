@@ -1,5 +1,6 @@
 import { Controller, Post, Get, Param, Res, Logger, Req, Body, Query, BadRequestException } from '@nestjs/common';
 import { ControlAccesoService } from './control-acceso.service';
+import { DevicePollerService } from './device-poller.service';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { Public } from '../auth/decorators/public.decorator';
@@ -10,7 +11,10 @@ import { CreateDispositivoDto, CreatePersonaAccesoDto } from './dto/control-acce
 export class ControlAccesoController {
   private readonly logger = new Logger(ControlAccesoController.name);
 
-  constructor(private readonly controlAccesoService: ControlAccesoService) { }
+  constructor(
+    private readonly controlAccesoService: ControlAccesoService,
+    private readonly devicePoller: DevicePollerService,
+  ) { }
 
   @Post('comando')
   @ApiOperation({ summary: 'Envía un comando de puerta (abrir, cerrar, siempre-abierta, siempre-cerrada). Compatible con Hikvision y Dahua.' })
@@ -219,4 +223,46 @@ export class ControlAccesoController {
   async deleteModeloDispositivo(@Param('id') id: string) {
     return this.controlAccesoService.deleteModeloDispositivo(Number(id));
   }
+
+  // ─── WEBHOOKS — Las cámaras mandan aquí sus eventos automáticamente ───────
+
+  /**
+   * Hikvision manda un POST aquí cada vez que alguien pasa su tarjeta/cara.
+   * La cámara ya fue configurada para apuntar a esta URL al arrancar el backend.
+   */
+  @Public()
+  @Post('webhook/evento/hik/:dispositivoId')
+  @ApiOperation({ summary: '[WEBHOOK] Receptor de eventos push de cámaras Hikvision' })
+  async webhookHikvision(@Param('dispositivoId') dispositivoId: string, @Body() body: any) {
+    this.logger.log(`📥 [Webhook HIK] Evento recibido de dispositivo ${dispositivoId}`);
+    return this.devicePoller.procesarWebhookHikvision(body, dispositivoId);
+  }
+
+  /**
+   * Dahua manda un POST aquí cada vez que hay un evento de acceso.
+   */
+  @Public()
+  @Post('webhook/evento/dahua/:dispositivoId')
+  @ApiOperation({ summary: '[WEBHOOK] Receptor de eventos push de cámaras Dahua' })
+  async webhookDahua(@Param('dispositivoId') dispositivoId: string, @Body() body: any) {
+    this.logger.log(`📥 [Webhook DH] Evento recibido de dispositivo ${dispositivoId}`);
+    return this.devicePoller.procesarWebhookDahua(body, dispositivoId);
+  }
+
+  // ─── HISTORIAL DE EVENTOS ─────────────────────────────────────────────────
+
+  @Get('eventos/historial')
+  @ApiOperation({ summary: 'Obtiene el historial de eventos de acceso con filtros opcionales' })
+  async getEventosHistorial(
+    @Query('dispositivoId') dispositivoId?: string,
+    @Query('limit') limit?: string,
+    @Query('desde') desde?: string,
+  ) {
+    return this.controlAccesoService.getEventosHistorial({
+      dispositivoId,
+      limit: limit ? Number(limit) : 50,
+      desde,
+    });
+  }
 }
+

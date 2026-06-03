@@ -4,6 +4,7 @@ import {
     SubscribeMessage,
     OnGatewayConnection,
     OnGatewayDisconnect,
+    OnGatewayInit,
     MessageBody,
     ConnectedSocket,
 } from '@nestjs/websockets';
@@ -12,6 +13,7 @@ import { Logger } from '@nestjs/common';
 import { AuthService } from '../auth/auth.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import { IniciarComunicacionDto, FinalizarComunicacionDto, MensajeTextoDto, ResponderComunicacionDto, OrigenAudio, IniciarComunicacionDashboardDto, RegistrarDispositivoDto, WebRTCOfferDto, WebRTCAnswerDto, WebRTCCandidateDto, JoinRoomDto } from './dto/comunicacion.dto';
+import { DevicePollerService } from '../control-acceso/device-poller.service';
 
 // 🟢 Máquina de Estados (FSM)
 export enum SessionState {
@@ -57,7 +59,7 @@ export interface SesionActiva {
     },
     namespace: 'comunicaciones',
 })
-export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class ComunicacionesGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
     @WebSocketServer() server: Namespace;
     private logger: Logger = new Logger('ComunicacionesGateway');
 
@@ -70,11 +72,22 @@ export class ComunicacionesGateway implements OnGatewayConnection, OnGatewayDisc
     private readonly SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutos (aumentado para WebRTC)
 
     constructor(
-        // 🛡️ Inyección de Auth para validar tokens
         private readonly authService: AuthService,
         private readonly supabaseService: SupabaseService,
+        private readonly devicePoller: DevicePollerService,
     ) {
         this.cleanupInterval = setInterval(() => this.checkInactiveSessions(), 60 * 1000);
+    }
+
+    /** Hook: después de que el servidor WebSocket arranca, conectamos el poller */
+    afterInit() {
+        this.devicePoller.setEmitFn((evento) => {
+            // Emitir a todos los clientes suscritos al room de dispositivos
+            this.server.to('dispositivos_eventos').emit('evento_acceso', evento);
+            // También a todos los conectados sin filtro (para dashboards globales)
+            this.server.emit('evento_acceso_global', evento);
+        });
+        this.logger.log('📡 [DevicePoller] Emisor WebSocket conectado.');
     }
 
     /**

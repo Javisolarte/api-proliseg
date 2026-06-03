@@ -190,6 +190,22 @@ export class ControlAccesoService implements OnModuleInit {
     return data[0];
   }
 
+  async getEventosHistorial(opts: { dispositivoId?: string; limit?: number; desde?: string }) {
+    let query = this.supabase
+      .getClient()
+      .from('dispositivos_eventos_historico')
+      .select('*, dispositivo:dispositivos_iot(nombre_identificador, ip_direccion)')
+      .order('timestamp', { ascending: false })
+      .limit(opts.limit || 50);
+
+    if (opts.dispositivoId) query = query.eq('dispositivo_id', opts.dispositivoId);
+    if (opts.desde) query = query.gte('timestamp', opts.desde);
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return data;
+  }
+
   // ============================================================
   //  CONTROL DE PUERTAS — Motor multi-marca
   // ============================================================
