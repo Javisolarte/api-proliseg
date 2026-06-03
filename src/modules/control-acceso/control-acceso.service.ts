@@ -61,9 +61,14 @@ export class ControlAccesoService {
           mikrotik_ip, local_ip, mappedSdkPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '8000'
         );
 
-        // Mapear RTSP (554)
+        // Mapear RTSP (554) - TCP
         await this.addMikrotikNatRule(
-          mikrotik_ip, local_ip, mappedRtspPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '554'
+          mikrotik_ip, local_ip, mappedRtspPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '554', 'tcp'
+        );
+
+        // Mapear RTSP (554) - UDP (Requerido por algunas cámaras genéricas)
+        await this.addMikrotikNatRule(
+          mikrotik_ip, local_ip, mappedRtspPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '554', 'udp'
         );
 
         // Actualizar detalles del dispositivo con el puerto mapeado HTTP principal
@@ -259,7 +264,7 @@ export class ControlAccesoService {
         await axios.post(`https://${domain}/webrtc-api/v3/config/paths/add/${streamName}`, {
           source: sourceUrl,
           sourceOnDemand: true, // TRUE: Evita que el API de MediaMTX colapse al validar la cámara
-          rtspTransport: 'tcp'  // Forzar TCP para evitar bloqueos del MikroTik en UDP
+          rtspTransport: ''  // Dejar vacío para que MediaMTX negocie TCP o UDP automáticamente
         }, { auth: apiAuth });
       } catch (err) {
         // Si la ruta ya existe (error 400), la eliminamos y la volvemos a crear para forzar la actualización
@@ -269,7 +274,7 @@ export class ControlAccesoService {
             await axios.post(`https://${domain}/webrtc-api/v3/config/paths/add/${streamName}`, {
               source: sourceUrl,
               sourceOnDemand: true, // TRUE: Evita que el API de MediaMTX colapse al validar la cámara
-              rtspTransport: 'tcp'
+              rtspTransport: ''
             }, { auth: apiAuth });
             this.logger.log(`🔄 [WEBRTC] Ruta ${streamName} actualizada automáticamente.`);
           } catch (updateErr) {
@@ -606,7 +611,8 @@ export class ControlAccesoService {
     user?: string,
     pass?: string,
     port?: string,
-    targetLocalPort: string = '80'
+    targetLocalPort: string = '80',
+    protocolType: string = 'tcp'
   ): Promise<number> {
     const username = user || 'admin';
     const password = pass || '';
@@ -677,7 +683,7 @@ export class ControlAccesoService {
         const payload = {
           chain: 'dstnat',
           action: 'dst-nat',
-          protocol: 'tcp',
+          protocol: protocolType,
           'dst-port': String(publicPort),
           'to-addresses': deviceLocalIp,
           'to-ports': targetLocalPort,
@@ -729,24 +735,26 @@ export class ControlAccesoService {
     password: string,
     httpsAgent: any,
     existingRules: any[],
-    targetLocalPort: string
+    targetLocalPort: string,
+    protocolType: string = 'tcp'
   ): Promise<void> {
     const existingMasq = existingRules.find((rule: any) =>
       rule.chain === 'srcnat' &&
       rule.action === 'masquerade' &&
+      rule.protocol === protocolType &&
       rule['dst-address'] === deviceLocalIp &&
       rule['dst-port'] === targetLocalPort
     );
 
     if (existingMasq) {
-      this.logger.log(`ℹ️ [NAT MASQUERADE] Ya existe regla de retorno masquerade para ${deviceLocalIp}:${targetLocalPort}`);
+      this.logger.log(`ℹ️ [NAT MASQUERADE] Ya existe regla de retorno masquerade para ${deviceLocalIp}:${targetLocalPort} (${protocolType})`);
       return;
     }
 
     const payload = {
       chain: 'srcnat',
       action: 'masquerade',
-      protocol: 'tcp',
+      protocol: protocolType,
       'dst-address': deviceLocalIp,
       'dst-port': targetLocalPort,
       comment: `Masquerade retorno Proliseg: ${deviceLocalIp}:${targetLocalPort}`
