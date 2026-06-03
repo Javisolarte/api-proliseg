@@ -230,8 +230,8 @@ export class ControlAccesoService {
         rtspPort = dev.puertos_mapeados.mapped_rtsp;
       }
 
-      // Armar la URL de la fuente RTSP
-      const sourceUrl = `rtsp://${user}:${pass}@${targetIp}:${rtspPort}/Streaming/Channels/101`;
+      // Armar la URL de la fuente RTSP (Usamos el canal 102 que es el Sub-Stream, mucho más ligero y sin latencia)
+      const sourceUrl = `rtsp://${user}:${pass}@${targetIp}:${rtspPort}/Streaming/Channels/102`;
       // Nombre simple de la cámara sin slashes para evitar errores 404 en la API
       const streamName = `cam_${deviceId.substring(0, 8)}`;
 
