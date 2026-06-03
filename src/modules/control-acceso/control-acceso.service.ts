@@ -234,10 +234,10 @@ export class ControlAccesoService {
       const sourceUrl = `rtsp://${user}:${pass}@${targetIp}:${rtspPort}/Streaming/Channels/101`;
       const streamName = `cam_${deviceId.substring(0, 8)}`;
 
-      // 2. Registrar la ruta en la API de MediaMTX mediante el proxy seguro de Traefik
-      const domain = 'servidor.proliseg.com';
+      // 2. Registrar la ruta DIRECTAMENTE a la IP del VPS (evitando los bloqueos de Traefik)
+      const vpsIp = '173.249.50.54';
       try {
-        await axios.post(`https://${domain}/webrtc-api/v3/config/paths/add/${streamName}`, {
+        await axios.post(`http://${vpsIp}:9997/v3/config/paths/add/${streamName}`, {
           source: sourceUrl,
           sourceOnDemand: true // Para que no consuma ancho de banda cuando nadie ve
         });
@@ -249,6 +249,7 @@ export class ControlAccesoService {
       }
 
       // Ya con Traefik/Coolify configurado, volvemos a usar HTTPS seguro:
+      const domain = 'servidor.proliseg.com';
       return {
         streamName,
         webrtcUrl: `https://${domain}/webrtc/${streamName}`,
