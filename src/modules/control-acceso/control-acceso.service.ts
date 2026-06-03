@@ -295,27 +295,24 @@ export class ControlAccesoService implements OnModuleInit {
       const domain = 'servidor.proliseg.com';
       const apiAuth = { username: 'admin', password: 'proliseg1025' };
 
+      const pathPayload = {
+        source: sourceUrl,
+        sourceOnDemand: true, // TRUE: La cámara solo se conecta cuando alguien la está viendo
+        rtspTransport: 'tcp', // REQUERIDO: TCP atraviesa el NAT de MikroTik sin perder paquetes
+      };
+
       try {
-        await axios.post(`https://${domain}/webrtc-api/v3/config/paths/add/${streamName}`, {
-          source: sourceUrl,
-          sourceOnDemand: true, // TRUE: Evita que el API de MediaMTX colapse al validar la cámara
-          rtspTransport: 'tcp',  // REQUERIDO: TCP es vital para atravesar el NAT de MikroTik sin perder los paquetes de video
-          sourceDisableAudio: true // VITAL: Muchas cámaras genéricas envían audio corrupto que hace que WebRTC colapse con 400 Bad Request
-        }, { auth: apiAuth });
+        // Intentar crear la ruta nueva
+        await axios.post(`https://${domain}/webrtc-api/v3/config/paths/add/${streamName}`, pathPayload, { auth: apiAuth });
+        this.logger.log(`✅ [WEBRTC] Ruta ${streamName} creada en MediaMTX.`);
       } catch (err) {
-        // Si la ruta ya existe (error 400), la eliminamos y la volvemos a crear para forzar la actualización
         if (err.response?.status === 400) {
+          // La ruta YA EXISTE → usar PATCH para actualizarla sin borrarla
           try {
-            await axios.delete(`https://${domain}/webrtc-api/v3/config/paths/delete/${streamName}`, { auth: apiAuth });
-            await axios.post(`https://${domain}/webrtc-api/v3/config/paths/add/${streamName}`, {
-              source: sourceUrl,
-              sourceOnDemand: true, // TRUE: Evita que el API de MediaMTX colapse al validar la cámara
-              rtspTransport: 'tcp',
-              sourceDisableAudio: true // VITAL
-            }, { auth: apiAuth });
-            this.logger.log(`🔄 [WEBRTC] Ruta ${streamName} actualizada automáticamente.`);
-          } catch (updateErr) {
-            this.logger.warn(`⚠️ [WEBRTC] Error actualizando ruta en MediaMTX: ${updateErr.message}`);
+            await axios.patch(`https://${domain}/webrtc-api/v3/config/paths/patch/${streamName}`, pathPayload, { auth: apiAuth });
+            this.logger.log(`🔄 [WEBRTC] Ruta ${streamName} actualizada (PATCH) en MediaMTX.`);
+          } catch (patchErr) {
+            this.logger.warn(`⚠️ [WEBRTC] Error actualizando ruta en MediaMTX (PATCH): ${patchErr.message}`);
           }
         } else {
           this.logger.warn(`⚠️ [WEBRTC] Error registrando ruta en MediaMTX: ${err.message}`);
