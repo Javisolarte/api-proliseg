@@ -299,7 +299,8 @@ export class ControlAccesoService implements OnModuleInit {
         await axios.post(`https://${domain}/webrtc-api/v3/config/paths/add/${streamName}`, {
           source: sourceUrl,
           sourceOnDemand: true, // TRUE: Evita que el API de MediaMTX colapse al validar la cámara
-          rtspTransport: 'tcp'  // REQUERIDO: TCP es vital para atravesar el NAT de MikroTik sin perder los paquetes de video
+          rtspTransport: 'tcp',  // REQUERIDO: TCP es vital para atravesar el NAT de MikroTik sin perder los paquetes de video
+          sourceDisableAudio: true // VITAL: Muchas cámaras genéricas envían audio corrupto que hace que WebRTC colapse con 400 Bad Request
         }, { auth: apiAuth });
       } catch (err) {
         // Si la ruta ya existe (error 400), la eliminamos y la volvemos a crear para forzar la actualización
@@ -309,7 +310,8 @@ export class ControlAccesoService implements OnModuleInit {
             await axios.post(`https://${domain}/webrtc-api/v3/config/paths/add/${streamName}`, {
               source: sourceUrl,
               sourceOnDemand: true, // TRUE: Evita que el API de MediaMTX colapse al validar la cámara
-              rtspTransport: 'tcp'
+              rtspTransport: 'tcp',
+              sourceDisableAudio: true // VITAL
             }, { auth: apiAuth });
             this.logger.log(`🔄 [WEBRTC] Ruta ${streamName} actualizada automáticamente.`);
           } catch (updateErr) {
