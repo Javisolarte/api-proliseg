@@ -232,8 +232,18 @@ export class ControlAccesoService {
         rtspPort = dev.configuracion_tecnica.puerto_rtsp;
       }
 
-      // Armar la URL de la fuente RTSP (¡Confirmado! Usaremos el Canal 102 Sub-Stream)
-      const sourceUrl = `rtsp://${user}:${pass}@${targetIp}:${rtspPort}/Streaming/Channels/102`;
+      // Detectar la marca para armar la URL RTSP correcta (Sub-Stream)
+      const marca = dev.configuracion_tecnica?.marca?.toLowerCase() || 'hikvision';
+      let rtspPath = '/Streaming/Channels/102'; // Default: Hikvision Sub-Stream
+
+      if (marca === 'dahua') {
+        rtspPath = '/cam/realmonitor?channel=1&subtype=1'; // Dahua Sub-Stream
+      } else if (marca === 'zkteco' || marca === 'zk') {
+        rtspPath = '/live/ch01_1'; // ZKTeco Sub-Stream
+      }
+
+      // Armar la URL de la fuente RTSP
+      const sourceUrl = `rtsp://${user}:${pass}@${targetIp}:${rtspPort}${rtspPath}`;
       // Nombre simple de la cámara sin slashes para evitar errores 404 en la API
       const streamName = `cam_${deviceId.substring(0, 8)}`;
 
