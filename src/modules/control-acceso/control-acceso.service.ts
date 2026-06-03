@@ -232,14 +232,17 @@ export class ControlAccesoService {
 
       // Armar la URL de la fuente RTSP
       const sourceUrl = `rtsp://${user}:${pass}@${targetIp}:${rtspPort}/Streaming/Channels/101`;
-      const streamName = `cam_${deviceId.substring(0, 8)}`;
+      // Para evitar problemas con el proxy inverso (Traefik) y los headers Location,
+      // la ruta en MediaMTX DEBE llamarse 'webrtc/cam_...'
+      const streamName = `webrtc/cam_${deviceId.substring(0, 8)}`;
 
       // 2. Registrar la ruta en la API de MediaMTX DIRECTO a la IP interna del servidor
       const vpsIp = '10.0.1.1';
       try {
         await axios.post(`http://${vpsIp}:9997/v3/config/paths/add/${streamName}`, {
           source: sourceUrl,
-          sourceOnDemand: true // Para que no consuma ancho de banda cuando nadie ve
+          sourceOnDemand: true, // Para que no consuma ancho de banda cuando nadie ve
+          rtspTransport: 'tcp'  // Forzar TCP para evitar bloqueos del MikroTik en UDP
         });
       } catch (err) {
         // Ignorar si la ruta ya existe o hay un error de conflicto (400)
@@ -252,8 +255,8 @@ export class ControlAccesoService {
       const domain = 'servidor.proliseg.com';
       return {
         streamName,
-        webrtcUrl: `https://${domain}/webrtc/${streamName}`,
-        iframeUrl: `https://${domain}/webrtc/${streamName}/` // El slash final es vital
+        webrtcUrl: `https://${domain}/${streamName}`,
+        iframeUrl: `https://${domain}/${streamName}/` // El slash final es vital
       };
     } catch (error) {
       this.logger.error(`❌ [WEBRTC STREAM] Error: ${error.message}`);
