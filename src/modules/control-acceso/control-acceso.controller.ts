@@ -13,10 +13,30 @@ export class ControlAccesoController {
   constructor(private readonly controlAccesoService: ControlAccesoService) { }
 
   @Post('comando')
-  @ApiOperation({ summary: 'Envía un comando de puerta (abrir, cerrar, bloqueo, siempre-abierta)' })
-  async enviarComando(@Body() body: { ip: string, doorId?: number, command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada' }) {
-    this.logger.log(`🚪 [COMANDO] Enviando ${body.command} a la IP ${body.ip}`);
-    return this.controlAccesoService.controlPuerta(body.ip, body.doorId || 1, body.command);
+  @ApiOperation({ summary: 'Envía un comando de puerta (abrir, cerrar, siempre-abierta, siempre-cerrada). Compatible con Hikvision y Dahua.' })
+  async enviarComando(@Body() body: {
+    ip: string;
+    doorId?: number;
+    command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada';
+    deviceId?: string;   // Si se provee, el backend carga usuario/pass/marca automáticamente
+    user?: string;
+    pass?: string;
+    port?: number;
+    marca?: string;      // 'hikvision' | 'dahua' | '' (auto-detect)
+  }) {
+    this.logger.log(`🚪 [COMANDO] Enviando "${body.command}" a la IP ${body.ip} | Puerta ${body.doorId || 1}`);
+    return this.controlAccesoService.controlPuerta(
+      body.ip,
+      body.doorId || 1,
+      body.command,
+      {
+        deviceId: body.deviceId,
+        user: body.user,
+        pass: body.pass,
+        port: body.port,
+        marca: body.marca,
+      }
+    );
   }
 
   @Get('dispositivos')

@@ -190,6 +190,176 @@ export class ControlAccesoService implements OnModuleInit {
     return data[0];
   }
 
+  // ============================================================
+  //  CONTROL DE PUERTAS — Motor multi-marca
+  // ============================================================
+
+  /**
+   * Detecta la marca del dispositivo y ejecuta el comando adecuado.
+   * @param ip       IP pública del dispositivo (ej: 10.8.0.2)
+   * @param doorId   Número de puerta (1 = primera puerta, default)
+   * @param command  abrir | cerrar | siempre-abierta | siempre-cerrada
+   * @param options  usuario, contraseña y puerto mapeado opcionales
+   */
+  async controlPuerta(
+    ip: string,
+    doorId: number = 1,
+    command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada',
+    options?: { user?: string; pass?: string; port?: number; marca?: string; deviceId?: string }
+  ): Promise<{ ok: boolean; mensaje: string; marca?: string; detalle?: any }> {
+    this.logger.log(`🚪 [PUERTA] Comando "${command}" → IP ${ip} | Puerta ${doorId}`);
+
+    // Detectar marca desde la base de datos si se provee deviceId
+    let marca = options?.marca?.toLowerCase() || 'hikvision';
+    let user = options?.user || 'admin';
+    let pass = options?.pass || 'proliseg1025';
+    let port = options?.port || 80;
+
+    if (options?.deviceId) {
+      const { data: dev } = await this.supabase
+        .getClient()
+        .from('dispositivos_iot')
+        .select('credencial_usuario, credencial_password, configuracion_tecnica')
+        .eq('id', options.deviceId)
+        .single();
+
+      if (dev) {
+        user = dev.credencial_usuario || user;
+        pass = dev.credencial_password || pass;
+        marca = dev.configuracion_tecnica?.marca?.toLowerCase() || marca;
+        port = dev.configuracion_tecnica?.puertos_mapeados?.mapped_http
+          || dev.configuracion_tecnica?.puerto
+          || port;
+      }
+    }
+
+    try {
+      if (marca.includes('hikvision') || marca.includes('hik')) {
+        return await this.controlPuertaHikvision(ip, port, doorId, command, user, pass);
+      } else if (marca.includes('dahua') || marca.includes('dh')) {
+        return await this.controlPuertaDahua(ip, port, doorId, command, user, pass);
+      } else {
+        // Intento genérico: probamos Hikvision primero, luego Dahua
+        try {
+          const resultado = await this.controlPuertaHikvision(ip, port, doorId, command, user, pass);
+          return { ...resultado, marca: 'Hikvision (auto-detectado)' };
+        } catch {
+          const resultado = await this.controlPuertaDahua(ip, port, doorId, command, user, pass);
+          return { ...resultado, marca: 'Dahua (auto-detectado)' };
+        }
+      }
+    } catch (err) {
+      this.logger.error(`❌ [PUERTA ERROR] ${err.message}`);
+      return { ok: false, mensaje: `Error al ejecutar comando: ${err.message}` };
+    }
+  }
+
+  // ─── HIKVISION ────────────────────────────────────────────────────────────
+
+  private async controlPuertaHikvision(
+    ip: string, port: number, doorId: number,
+    command: string, user: string, pass: string
+  ): Promise<{ ok: boolean; mensaje: string; marca: string; detalle?: any }> {
+    const base = `http://${ip}:${port}`;
+    const auth = { username: user, password: pass };
+    const cfg = { auth, timeout: 8000 };
+
+    let url: string;
+    let body: string;
+
+    switch (command) {
+      case 'abrir':
+        // Pulso de apertura: abre la puerta por el tiempo configurado en la cámara
+        url = `${base}/ISAPI/AccessControl/door/capabilities`;
+        body = `<?xml version="1.0" encoding="UTF-8"?>
+<RemoteControlDoor>
+  <doorIndex>${doorId}</doorIndex>
+  <controlType>open</controlType>
+</RemoteControlDoor>`;
+        await axios.put(`${base}/ISAPI/AccessControl/RemoteControl/door/${doorId}`, body, {
+          ...cfg,
+          headers: { 'Content-Type': 'application/xml' }
+        });
+        this.logger.log(`✅ [HIKVISION] Puerta ${doorId} ABIERTA en ${ip}:${port}`);
+        return { ok: true, mensaje: `Puerta ${doorId} abierta correctamente (Hikvision)`, marca: 'Hikvision' };
+
+      case 'cerrar':
+        // Forzar cierre (normalState)
+        await axios.put(`${base}/ISAPI/AccessControl/RemoteControl/door/${doorId}`,
+          `<?xml version="1.0" encoding="UTF-8"?>
+<RemoteControlDoor>
+  <doorIndex>${doorId}</doorIndex>
+  <controlType>close</controlType>
+</RemoteControlDoor>`,
+          { ...cfg, headers: { 'Content-Type': 'application/xml' } }
+        );
+        this.logger.log(`✅ [HIKVISION] Puerta ${doorId} CERRADA en ${ip}:${port}`);
+        return { ok: true, mensaje: `Puerta ${doorId} cerrada correctamente (Hikvision)`, marca: 'Hikvision' };
+
+      case 'siempre-abierta':
+        // Modo Always Open: la puerta permanece abierta hasta nuevo comando
+        await axios.put(`${base}/ISAPI/AccessControl/RemoteControl/door/${doorId}`,
+          `<?xml version="1.0" encoding="UTF-8"?>
+<RemoteControlDoor>
+  <doorIndex>${doorId}</doorIndex>
+  <controlType>alwaysOpen</controlType>
+</RemoteControlDoor>`,
+          { ...cfg, headers: { 'Content-Type': 'application/xml' } }
+        );
+        this.logger.log(`✅ [HIKVISION] Puerta ${doorId} SIEMPRE ABIERTA en ${ip}:${port}`);
+        return { ok: true, mensaje: `Puerta ${doorId} en modo SIEMPRE ABIERTA (Hikvision)`, marca: 'Hikvision' };
+
+      case 'siempre-cerrada':
+        // Modo Always Closed: bloqueo total, ninguna credencial la abre
+        await axios.put(`${base}/ISAPI/AccessControl/RemoteControl/door/${doorId}`,
+          `<?xml version="1.0" encoding="UTF-8"?>
+<RemoteControlDoor>
+  <doorIndex>${doorId}</doorIndex>
+  <controlType>alwaysClose</controlType>
+</RemoteControlDoor>`,
+          { ...cfg, headers: { 'Content-Type': 'application/xml' } }
+        );
+        this.logger.log(`✅ [HIKVISION] Puerta ${doorId} SIEMPRE CERRADA en ${ip}:${port}`);
+        return { ok: true, mensaje: `Puerta ${doorId} en modo SIEMPRE CERRADA (Hikvision)`, marca: 'Hikvision' };
+
+      default:
+        throw new Error(`Comando desconocido: ${command}`);
+    }
+  }
+
+  // ─── DAHUA ────────────────────────────────────────────────────────────────
+
+  private async controlPuertaDahua(
+    ip: string, port: number, doorId: number,
+    command: string, user: string, pass: string
+  ): Promise<{ ok: boolean; mensaje: string; marca: string; detalle?: any }> {
+    const base = `http://${ip}:${port}`;
+    const auth = { username: user, password: pass };
+    const cfg = { auth, timeout: 8000 };
+
+    // Dahua usa la API CGI  /cgi-bin/accessControl.cgi
+    let action: string;
+    switch (command) {
+      case 'abrir':           action = 'openDoor';       break;
+      case 'cerrar':          action = 'closeDoor';      break;
+      case 'siempre-abierta': action = 'alwaysOpenDoor'; break;
+      case 'siempre-cerrada': action = 'alwaysCloseDoor'; break;
+      default: throw new Error(`Comando desconocido: ${command}`);
+    }
+
+    const url = `${base}/cgi-bin/accessControl.cgi?action=${action}&channel=${doorId}`;
+    const resp = await axios.get(url, cfg);
+
+    if (String(resp.data).includes('OK') || resp.status === 200) {
+      this.logger.log(`✅ [DAHUA] Puerta ${doorId} → ${command} en ${ip}:${port}`);
+      return { ok: true, mensaje: `Puerta ${doorId} ejecutó "${command}" correctamente (Dahua)`, marca: 'Dahua' };
+    }
+
+    throw new Error(`Respuesta inesperada de Dahua: ${resp.data}`);
+  }
+
+
+
   async findAllPersonas() {
     const { data, error } = await this.supabase
       .getClient()
@@ -239,15 +409,8 @@ export class ControlAccesoService implements OnModuleInit {
     }
   }
 
-  async controlPuerta(ip: string, doorId: number = 1, command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada'): Promise<any> {
-    let xmlCommand = 'open';
-    if (command === 'cerrar') xmlCommand = 'close';
-    if (command === 'siempre-abierta') xmlCommand = 'alwaysOpen';
-    if (command === 'siempre-cerrada') xmlCommand = 'alwaysClose';
 
-    const body = `<RemoteControlDoor><cmd>${xmlCommand}</cmd></RemoteControlDoor>`;
-    return this.proxyRequestDynamic(ip, 'put', `/ISAPI/AccessControl/RemoteControl/door/${doorId}`, body);
-  }
+
 
   async startVideoStream(deviceId: string): Promise<any> {
     try {
