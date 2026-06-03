@@ -230,8 +230,8 @@ export class ControlAccesoService {
         rtspPort = dev.puertos_mapeados.mapped_rtsp;
       }
 
-      // Armar la URL de la fuente RTSP (Volvemos al 101, los biométricos de acceso a veces no tienen 102)
-      const sourceUrl = `rtsp://${user}:${pass}@${targetIp}:${rtspPort}/Streaming/Channels/101`;
+      // Armar la URL de la fuente RTSP (¡Confirmado! Usaremos el Canal 102 Sub-Stream)
+      const sourceUrl = `rtsp://${user}:${pass}@${targetIp}:${rtspPort}/Streaming/Channels/102`;
       // Nombre simple de la cámara sin slashes para evitar errores 404 en la API
       const streamName = `cam_${deviceId.substring(0, 8)}`;
 
@@ -240,7 +240,7 @@ export class ControlAccesoService {
       try {
         await axios.post(`http://${vpsIp}:9997/v3/config/paths/add/${streamName}`, {
           source: sourceUrl,
-          sourceOnDemand: false, // APAGADO: Mantiene el video fluyendo 24/7 para que cargue instantáneamente
+          sourceOnDemand: true, // TRUE: Evita que el API de MediaMTX colapse al validar la cámara
           rtspTransport: 'tcp'  // Forzar TCP para evitar bloqueos del MikroTik en UDP
         });
       } catch (err) {
@@ -250,7 +250,7 @@ export class ControlAccesoService {
             await axios.delete(`http://${vpsIp}:9997/v3/config/paths/delete/${streamName}`);
             await axios.post(`http://${vpsIp}:9997/v3/config/paths/add/${streamName}`, {
               source: sourceUrl,
-              sourceOnDemand: false, // 24/7 para velocidad extrema
+              sourceOnDemand: true, // TRUE: Evita que el API de MediaMTX colapse al validar la cámara
               rtspTransport: 'tcp'
             });
             this.logger.log(`🔄 [WEBRTC] Ruta ${streamName} actualizada automáticamente.`);
