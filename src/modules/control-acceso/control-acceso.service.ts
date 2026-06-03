@@ -251,8 +251,10 @@ export class ControlAccesoService {
         rtspPath = '/live/ch01_1'; // ZKTeco Sub-Stream
       }
 
-      // Armar la URL de la fuente RTSP
-      const sourceUrl = `rtsp://${user}:${pass}@${targetIp}:${rtspPort}${rtspPath}`;
+      // Armar la URL de la fuente RTSP (EncodeURIComponent para contraseñas con caracteres especiales como #)
+      const encodedPass = encodeURIComponent(pass);
+      const sourceUrl = `rtsp://${user}:${encodedPass}@${targetIp}:${rtspPort}${rtspPath}`;
+
       // Nombre simple de la cámara sin slashes para evitar errores 404 en la API
       const streamName = `cam_${deviceId.substring(0, 8)}`;
 
@@ -264,7 +266,7 @@ export class ControlAccesoService {
         await axios.post(`https://${domain}/webrtc-api/v3/config/paths/add/${streamName}`, {
           source: sourceUrl,
           sourceOnDemand: true, // TRUE: Evita que el API de MediaMTX colapse al validar la cámara
-          rtspTransport: ''  // Dejar vacío para que MediaMTX negocie TCP o UDP automáticamente
+          rtspTransport: 'tcp'  // REQUERIDO: TCP es vital para atravesar el NAT de MikroTik sin perder los paquetes de video
         }, { auth: apiAuth });
       } catch (err) {
         // Si la ruta ya existe (error 400), la eliminamos y la volvemos a crear para forzar la actualización
@@ -274,7 +276,7 @@ export class ControlAccesoService {
             await axios.post(`https://${domain}/webrtc-api/v3/config/paths/add/${streamName}`, {
               source: sourceUrl,
               sourceOnDemand: true, // TRUE: Evita que el API de MediaMTX colapse al validar la cámara
-              rtspTransport: ''
+              rtspTransport: 'tcp'
             }, { auth: apiAuth });
             this.logger.log(`🔄 [WEBRTC] Ruta ${streamName} actualizada automáticamente.`);
           } catch (updateErr) {
