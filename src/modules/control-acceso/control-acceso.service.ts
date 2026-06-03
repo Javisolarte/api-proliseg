@@ -225,9 +225,11 @@ export class ControlAccesoService {
       const pass = dev.credencial_password || 'proliseg#123';
       const targetIp = dev.ip_direccion; // Debe ser la IP VPN, ej. 10.8.0.2
 
-      let rtspPort = 554;
-      if (dev.puertos_mapeados && dev.puertos_mapeados.mapped_rtsp) {
-        rtspPort = dev.puertos_mapeados.mapped_rtsp;
+      let rtspPort = 554; // Puerto por defecto
+      if (dev.configuracion_tecnica?.puertos_mapeados?.mapped_rtsp) {
+        rtspPort = dev.configuracion_tecnica.puertos_mapeados.mapped_rtsp;
+      } else if (dev.configuracion_tecnica?.puerto_rtsp) {
+        rtspPort = dev.configuracion_tecnica.puerto_rtsp;
       }
 
       // Armar la URL de la fuente RTSP (¡Confirmado! Usaremos el Canal 102 Sub-Stream)
