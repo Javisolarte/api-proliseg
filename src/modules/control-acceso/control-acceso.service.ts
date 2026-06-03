@@ -237,22 +237,24 @@ export class ControlAccesoService {
 
       // 2. Registrar la ruta en la API de MediaMTX mediante el proxy seguro de Traefik
       const domain = 'servidor.proliseg.com';
+      const apiAuth = { username: 'admin', password: 'proliseg1025' };
+
       try {
         await axios.post(`https://${domain}/webrtc-api/v3/config/paths/add/${streamName}`, {
           source: sourceUrl,
           sourceOnDemand: true, // TRUE: Evita que el API de MediaMTX colapse al validar la cámara
           rtspTransport: 'tcp'  // Forzar TCP para evitar bloqueos del MikroTik en UDP
-        });
+        }, { auth: apiAuth });
       } catch (err) {
         // Si la ruta ya existe (error 400), la eliminamos y la volvemos a crear para forzar la actualización
         if (err.response?.status === 400) {
           try {
-            await axios.delete(`https://${domain}/webrtc-api/v3/config/paths/delete/${streamName}`);
+            await axios.delete(`https://${domain}/webrtc-api/v3/config/paths/delete/${streamName}`, { auth: apiAuth });
             await axios.post(`https://${domain}/webrtc-api/v3/config/paths/add/${streamName}`, {
               source: sourceUrl,
               sourceOnDemand: true, // TRUE: Evita que el API de MediaMTX colapse al validar la cámara
               rtspTransport: 'tcp'
-            });
+            }, { auth: apiAuth });
             this.logger.log(`🔄 [WEBRTC] Ruta ${streamName} actualizada automáticamente.`);
           } catch (updateErr) {
             this.logger.warn(`⚠️ [WEBRTC] Error actualizando ruta en MediaMTX: ${updateErr.message}`);
