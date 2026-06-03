@@ -8,11 +8,11 @@ import { randomBytes, createHash } from 'crypto';
 export class ControlAccesoService {
   private readonly logger = new Logger(ControlAccesoService.name);
 
-  // Proxy de Hikvision corriendo en el PowerEdge bajo servidor.proliseg.com
+
   private readonly proxyUrl = 'https://servidor.proliseg.com/dispositivos';
   private readonly apiKey = 'proliseg-acceso-2026';
 
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(private readonly supabase: SupabaseService) { }
 
   /**
    * DATABASE METHODS (SUPABASE)
@@ -29,44 +29,44 @@ export class ControlAccesoService {
 
   async createDispositivo(dto: any) {
     const { mikrotik_ip, mikrotik_usuario, mikrotik_password, mikrotik_puerto, ...insertData } = dto;
-    
+
     let finalIp = insertData.ip_direccion;
     let finalPort = insertData.puerto_servicio || 80;
-    
+
     // Almacenamos mapeos adicionales para usarlos después
     let mappedPortsInfo = {};
-    
+
     if (mikrotik_ip && insertData.ip_direccion) {
       // Se escaneó vía MikroTik, mapear el reenvío de puertos NAT
       try {
         const lastOctet = insertData.ip_direccion.split('.').pop();
         const baseOffset = Number(lastOctet || '80');
-        
+
         const mappedHttpPort = 10000 + baseOffset;
         const mappedSdkPort = 20000 + baseOffset;
         const mappedRtspPort = 30000 + baseOffset;
-        
+
         this.logger.log(`🔧 [NAT MAPPING] Creando reglas NAT en MikroTik ${mikrotik_ip} para ${insertData.ip_direccion}...`);
-        
+
         // Mapear HTTP (80)
         const finalActivePort = await this.addMikrotikNatRule(
           mikrotik_ip, insertData.ip_direccion, mappedHttpPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '80'
         );
-        
+
         // Mapear SDK (8000)
         await this.addMikrotikNatRule(
           mikrotik_ip, insertData.ip_direccion, mappedSdkPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '8000'
         );
-        
+
         // Mapear RTSP (554)
         await this.addMikrotikNatRule(
           mikrotik_ip, insertData.ip_direccion, mappedRtspPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '554'
         );
-        
+
         // Actualizar detalles del dispositivo con la IP de la VPN del MikroTik y puerto mapeado HTTP principal
         finalIp = mikrotik_ip;
         finalPort = finalActivePort;
-        
+
         mappedPortsInfo = {
           mapped_http: mappedHttpPort,
           mapped_sdk: mappedSdkPort,
@@ -77,7 +77,7 @@ export class ControlAccesoService {
         this.logger.error(`❌ [NAT MAPPING ERROR] Falló la creación de regla NAT: ${err.message}`);
       }
     }
-    
+
     const payload = {
       nombre_identificador: insertData.nombre_identificador || insertData.nombre || 'Nuevo Dispositivo',
       puesto_id: insertData.puesto_id || null,
@@ -101,7 +101,7 @@ export class ControlAccesoService {
       .from('dispositivos_iot')
       .upsert([payload], { onConflict: 'sn_serie' })
       .select();
-      
+
     if (error) {
       this.logger.error(`❌ [CREATE DISPOSITIVO ERROR] Error de base de datos al registrar: ${error.message} - Code: ${error.code}`);
       throw error;
@@ -159,14 +159,14 @@ export class ControlAccesoService {
 
   async createPersona(dto: CreatePersonaAccesoDto) {
     const { dispositivos_ids, ...personaData } = dto;
-    
+
     // 1. Crear persona
     const { data: persona, error: pError } = await this.supabase
       .getClient()
       .from('personas_gestion_acceso')
       .insert([personaData])
       .select();
-    
+
     if (pError) throw pError;
 
     // 2. Vincular con dispositivos si existen
@@ -177,7 +177,7 @@ export class ControlAccesoService {
       }));
       await this.supabase.getClient().from('acceso_permisos_dispositivos').insert(permisos);
     }
-    
+
     return persona[0];
   }
 
@@ -202,7 +202,7 @@ export class ControlAccesoService {
     if (command === 'cerrar') xmlCommand = 'close';
     if (command === 'siempre-abierta') xmlCommand = 'alwaysOpen';
     if (command === 'siempre-cerrada') xmlCommand = 'alwaysClose';
-    
+
     const body = `<RemoteControlDoor><cmd>${xmlCommand}</cmd></RemoteControlDoor>`;
     return this.proxyRequestDynamic(ip, 'put', `/ISAPI/AccessControl/RemoteControl/door/${doorId}`, body);
   }
@@ -215,25 +215,25 @@ export class ControlAccesoService {
         .from('dispositivos_iot')
         .select('*')
         .eq('id', deviceId);
-        
+
       if (dbErr || !devices || devices.length === 0) {
         throw new Error('Dispositivo no encontrado');
       }
-      
+
       const dev = devices[0];
       const user = dev.credencial_usuario || 'admin';
       const pass = dev.credencial_password || '';
       const targetIp = dev.ip_direccion; // Debe ser la IP VPN, ej. 10.8.0.2
-      
+
       let rtspPort = 554;
       if (dev.puertos_mapeados && dev.puertos_mapeados.mapped_rtsp) {
         rtspPort = dev.puertos_mapeados.mapped_rtsp;
       }
-      
+
       // Armar la URL de la fuente RTSP
       const sourceUrl = `rtsp://${user}:${pass}@${targetIp}:${rtspPort}/Streaming/Channels/101`;
-      const streamName = `cam_${deviceId.substring(0,8)}`;
-      
+      const streamName = `cam_${deviceId.substring(0, 8)}`;
+
       // 2. Registrar la ruta en la API de MediaMTX mediante el proxy seguro de Traefik
       const domain = 'servidor.proliseg.com';
       try {
@@ -247,7 +247,7 @@ export class ControlAccesoService {
           this.logger.warn(`⚠️ [WEBRTC] Error registrando ruta en MediaMTX: ${err.message}`);
         }
       }
-      
+
       // Ya con Traefik/Coolify configurado, volvemos a usar HTTPS seguro:
       return {
         streamName,
@@ -265,7 +265,7 @@ export class ControlAccesoService {
     let pass = 'proliseg#123';
     let port = 80;
     let targetIp = ip;
-    
+
     try {
       // 1. Consultar base de datos Supabase para recuperar credenciales y puerto real del biométrico
       let query = this.supabase.getClient().from('dispositivos_iot').select('*');
@@ -274,7 +274,7 @@ export class ControlAccesoService {
       } else {
         query = query.eq('ip_direccion', ip);
       }
-      
+
       const { data: devices, error: dbErr } = await query;
       if (!dbErr && devices && devices.length > 0) {
         const dev = devices[0];
@@ -286,13 +286,13 @@ export class ControlAccesoService {
     } catch (dbErr) {
       this.logger.warn(`⚠️ [SNAPSHOT DB WARN] No se pudo obtener credenciales: ${dbErr.message}. Usando fallbacks.`);
     }
-    
+
     // Si la IP es de WireGuard (ej. 10.8.0.x), conectamos DIRECTO por el túnel sin hacer NAT.
     const isWireguardIp = targetIp.startsWith('10.8.');
-    
+
     // Auto-resolución de IPs privadas locales (solo si no es WireGuard)
     const isPrivate = /^(192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(targetIp) || (targetIp.startsWith('10.') && !isWireguardIp);
-    
+
     if (isPrivate) {
       try {
         const { data: servers } = await this.supabase
@@ -300,14 +300,14 @@ export class ControlAccesoService {
           .from('control_acceso_servidores_mikrotik')
           .select('*')
           .limit(1);
-          
+
         if (servers && servers.length > 0) {
           const srv = servers[0];
           const lastOctet = targetIp.split('.').pop();
           const mappedPort = 10000 + Number(lastOctet || '80');
-          
+
           this.logger.log(`🔧 [AUTO-NAT] Creando/Verificando regla NAT en MikroTik ${srv.ip_publica} para snapshot de ${targetIp} al puerto ${mappedPort}...`);
-          
+
           await this.addMikrotikNatRule(
             srv.ip_publica,
             targetIp,
@@ -316,7 +316,7 @@ export class ControlAccesoService {
             srv.password,
             String(srv.puerto_rest || 4433)
           );
-          
+
           targetIp = srv.ip_publica;
           port = mappedPort;
         }
@@ -324,7 +324,7 @@ export class ControlAccesoService {
         this.logger.error(`❌ [AUTO-NAT ERROR] No se pudo auto-mapear NAT para snapshot: ${err.message}`);
       }
     }
-    
+
     const path = `/ISAPI/Streaming/channels/1/picture`;
     try {
       // 2. Ejecutar petición directa ISAPI usando Digest Auth en la IP resuelta
@@ -342,15 +342,15 @@ export class ControlAccesoService {
   }
 
   async scanNetwork(
-    range: string, 
+    range: string,
     mikrotikOpts?: { mikrotikIp?: string, mikrotikUser?: string, mikrotikPass?: string, mikrotikPort?: string }
   ): Promise<any[]> {
     if (mikrotikOpts?.mikrotikIp) {
       this.logger.log(`🔍 [SCAN NETWORK] Iniciando escaneo de red vía MikroTik REST API en IP: ${mikrotikOpts.mikrotikIp}`);
       return this.scanViaMikrotik(
-        mikrotikOpts.mikrotikIp, 
-        mikrotikOpts.mikrotikUser, 
-        mikrotikOpts.mikrotikPass, 
+        mikrotikOpts.mikrotikIp,
+        mikrotikOpts.mikrotikUser,
+        mikrotikOpts.mikrotikPass,
         mikrotikOpts.mikrotikPort
       );
     }
@@ -359,7 +359,7 @@ export class ControlAccesoService {
     try {
       const response = await axios.get(url, {
         headers: { 'X-API-Key': this.apiKey },
-        timeout: 60000 
+        timeout: 60000
       });
       return response.data;
     } catch (error) {
@@ -372,16 +372,16 @@ export class ControlAccesoService {
     const username = user || 'admin';
     const password = pass || '';
     const portNum = port || '80';
-    
+
     const protocols = ['https', 'http'];
     let errorMsg = '';
-    
+
     const httpsAgent = new (require('https').Agent)({ rejectUnauthorized: false });
-    
+
     for (const protocol of protocols) {
       const url = `${protocol}://${ip}:${portNum}/rest/ip/dhcp-server/lease`;
       this.logger.log(`🔍 [MIKROTIK REST API] Conectando a ${url}...`);
-      
+
       try {
         const response = await axios.get(url, {
           auth: { username, password },
@@ -392,10 +392,10 @@ export class ControlAccesoService {
             'Accept': '*/*'
           }
         });
-        
+
         const leases = response.data || [];
         this.logger.log(`✅ [MIKROTIK REST API] Se obtuvieron ${leases.length} registros DHCP.`);
-        
+
         let arpEntries = [];
         try {
           const arpUrl = `${protocol}://${ip}:${portNum}/rest/ip/arp`;
@@ -412,7 +412,7 @@ export class ControlAccesoService {
         } catch (arpErr) {
           this.logger.warn(`⚠️ [MIKROTIK REST API] No se pudo obtener la tabla ARP: ${arpErr.message}`);
         }
-        
+
         let pppActive = [];
         try {
           const pppUrl = `${protocol}://${ip}:${portNum}/rest/ppp/active`;
@@ -448,31 +448,31 @@ export class ControlAccesoService {
         } catch (neighErr) {
           this.logger.warn(`⚠️ [MIKROTIK REST API] No se pudo obtener la tabla de vecinos: ${neighErr.message}`);
         }
-        
+
         const deviceMap = new Map<string, any>();
-        
+
         leases.forEach((lease: any) => {
           const address = lease.address;
           const mac = lease['mac-address'] || '';
           const hostname = lease['host-name'] || lease['active-hostname'] || '';
           const status = lease.status || '';
           const comment = lease.comment || '';
-          
+
           if (address) {
-            const isHikvision = mac.toLowerCase().startsWith('a4:14:37') || 
-                                mac.toLowerCase().startsWith('bc:ad:28') || 
-                                mac.toLowerCase().startsWith('44:55:c4') || 
-                                mac.toLowerCase().startsWith('fc:3f:db') ||
-                                mac.toLowerCase().startsWith('00:40:3d') ||
-                                mac.toLowerCase().startsWith('84:25:3f') ||
-                                mac.toLowerCase().startsWith('e0:50:8b') ||
-                                hostname.toLowerCase().includes('hik') ||
-                                hostname.toLowerCase().includes('camera') ||
-                                hostname.toLowerCase().includes('vms') ||
-                                hostname.toLowerCase().includes('acceso') ||
-                                hostname.toLowerCase().includes('face') ||
-                                hostname.toLowerCase().includes('terminal');
-                                
+            const isHikvision = mac.toLowerCase().startsWith('a4:14:37') ||
+              mac.toLowerCase().startsWith('bc:ad:28') ||
+              mac.toLowerCase().startsWith('44:55:c4') ||
+              mac.toLowerCase().startsWith('fc:3f:db') ||
+              mac.toLowerCase().startsWith('00:40:3d') ||
+              mac.toLowerCase().startsWith('84:25:3f') ||
+              mac.toLowerCase().startsWith('e0:50:8b') ||
+              hostname.toLowerCase().includes('hik') ||
+              hostname.toLowerCase().includes('camera') ||
+              hostname.toLowerCase().includes('vms') ||
+              hostname.toLowerCase().includes('acceso') ||
+              hostname.toLowerCase().includes('face') ||
+              hostname.toLowerCase().includes('terminal');
+
             deviceMap.set(address, {
               ip: address,
               mac: mac,
@@ -483,18 +483,18 @@ export class ControlAccesoService {
             });
           }
         });
-        
+
         arpEntries.forEach((arp: any) => {
           const address = arp.address;
           const mac = arp['mac-address'] || '';
           if (address && !deviceMap.has(address)) {
-            const isHikvision = mac.toLowerCase().startsWith('a4:14:37') || 
-                                mac.toLowerCase().startsWith('bc:ad:28') || 
-                                mac.toLowerCase().startsWith('44:55:c4') || 
-                                mac.toLowerCase().startsWith('fc:3f:db') ||
-                                mac.toLowerCase().startsWith('00:40:3d') ||
-                                mac.toLowerCase().startsWith('84:25:3f') ||
-                                mac.toLowerCase().startsWith('e0:50:8b');
+            const isHikvision = mac.toLowerCase().startsWith('a4:14:37') ||
+              mac.toLowerCase().startsWith('bc:ad:28') ||
+              mac.toLowerCase().startsWith('44:55:c4') ||
+              mac.toLowerCase().startsWith('fc:3f:db') ||
+              mac.toLowerCase().startsWith('00:40:3d') ||
+              mac.toLowerCase().startsWith('84:25:3f') ||
+              mac.toLowerCase().startsWith('e0:50:8b');
             deviceMap.set(address, {
               ip: address,
               mac: mac,
@@ -505,13 +505,13 @@ export class ControlAccesoService {
             });
           }
         });
-        
+
         pppActive.forEach((ppp: any) => {
           const address = ppp.address;
           const callerId = ppp['caller-id'] || '';
           const name = ppp.name || '';
           const service = ppp.service || 'VPN';
-          
+
           if (address && !deviceMap.has(address)) {
             deviceMap.set(address, {
               ip: address,
@@ -529,22 +529,22 @@ export class ControlAccesoService {
           const mac = neigh['mac-address'] || '';
           const identity = neigh.identity || neigh.board || 'Dispositivo Vecino';
           const iface = neigh.interface || '';
-          
+
           if (address && !deviceMap.has(address)) {
-            const isHikvision = mac.toLowerCase().startsWith('a4:14:37') || 
-                                mac.toLowerCase().startsWith('bc:ad:28') || 
-                                mac.toLowerCase().startsWith('44:55:c4') || 
-                                mac.toLowerCase().startsWith('fc:3f:db') ||
-                                mac.toLowerCase().startsWith('00:40:3d') ||
-                                mac.toLowerCase().startsWith('84:25:3f') ||
-                                mac.toLowerCase().startsWith('e0:50:8b') ||
-                                identity.toLowerCase().includes('hik') ||
-                                identity.toLowerCase().includes('camera') ||
-                                identity.toLowerCase().includes('vms') ||
-                                identity.toLowerCase().includes('acceso') ||
-                                identity.toLowerCase().includes('face') ||
-                                identity.toLowerCase().includes('terminal');
-                                
+            const isHikvision = mac.toLowerCase().startsWith('a4:14:37') ||
+              mac.toLowerCase().startsWith('bc:ad:28') ||
+              mac.toLowerCase().startsWith('44:55:c4') ||
+              mac.toLowerCase().startsWith('fc:3f:db') ||
+              mac.toLowerCase().startsWith('00:40:3d') ||
+              mac.toLowerCase().startsWith('84:25:3f') ||
+              mac.toLowerCase().startsWith('e0:50:8b') ||
+              identity.toLowerCase().includes('hik') ||
+              identity.toLowerCase().includes('camera') ||
+              identity.toLowerCase().includes('vms') ||
+              identity.toLowerCase().includes('acceso') ||
+              identity.toLowerCase().includes('face') ||
+              identity.toLowerCase().includes('terminal');
+
             deviceMap.set(address, {
               ip: address,
               mac: mac || `TÚNEL (${iface})`,
@@ -555,15 +555,15 @@ export class ControlAccesoService {
             });
           }
         });
-        
+
         return Array.from(deviceMap.values());
-        
+
       } catch (err) {
         errorMsg = err.message;
         this.logger.error(`❌ [MIKROTIK REST ERROR] (${protocol}): ${err.message}`);
       }
     }
-    
+
     throw new Error(`Error al conectar con la REST API de MikroTik: ${errorMsg}`);
   }
 
@@ -579,15 +579,15 @@ export class ControlAccesoService {
     const username = user || 'admin';
     const password = pass || '';
     const portNum = port || '80';
-    
+
     const protocols = ['https', 'http'];
     let errorMsg = '';
-    
+
     const httpsAgent = new (require('https').Agent)({ rejectUnauthorized: false });
-    
+
     for (const protocol of protocols) {
       const url = `${protocol}://${mikrotikIp}:${portNum}/rest/ip/firewall/nat`;
-      
+
       try {
         const checkResponse = await axios.get(url, {
           auth: { username, password },
@@ -599,29 +599,29 @@ export class ControlAccesoService {
             'Content-Type': 'application/json'
           }
         });
-        
+
         const existingRules = checkResponse.data || [];
-        
+
         // 1. REUTILIZACIÓN DE REGLAS: Si ya existe una regla para esta IP, reutilizar el puerto existente sin duplicar
-        const existingRule = existingRules.find((rule: any) => 
+        const existingRule = existingRules.find((rule: any) =>
           rule['to-addresses'] === deviceLocalIp && rule['to-ports'] === targetLocalPort
         );
-        
+
         // Asegurar automáticamente que exista la regla de retorno (masquerade) para evitar problemas de túnel y rutas asimétricas
         await this.ensureMasqueradeRule(url, deviceLocalIp, username, password, httpsAgent, existingRules);
-        
+
         if (existingRule) {
           const activePort = Number(existingRule['dst-port'] || publicPort);
           this.logger.log(`ℹ️ [NAT RULE REUSE] Reutilizando regla NAT existente en MikroTik para ${deviceLocalIp} -> puerto ${activePort}`);
           return activePort;
         }
-        
+
         // 2. RESOLUCIÓN DE CONFLICTOS: Si el puerto objetivo está ocupado por otra IP, eliminar la regla conflictiva vieja
-        const conflictingRule = existingRules.find((rule: any) => 
+        const conflictingRule = existingRules.find((rule: any) =>
           String(rule['dst-port']) === String(publicPort) &&
           rule['to-addresses'] !== deviceLocalIp
         );
-        
+
         if (conflictingRule) {
           this.logger.warn(`⚠️ [NAT CONFLICT] Puerto ${publicPort} ya está en uso por ${conflictingRule['to-addresses']}. Eliminando regla obsoleta vieja...`);
           try {
@@ -630,9 +630,9 @@ export class ControlAccesoService {
               auth: { username, password },
               httpsAgent,
               timeout: 5000,
-              headers: { 
+              headers: {
                 'User-Agent': 'curl/7.74.0',
-                'Content-Type': 'application/json' 
+                'Content-Type': 'application/json'
               }
             });
             this.logger.log(`✅ [NAT CONFLICT SOLVED] Regla conflictiva vieja eliminada exitosamente.`);
@@ -640,7 +640,7 @@ export class ControlAccesoService {
             this.logger.error(`❌ [NAT DELETE ERROR] No se pudo eliminar la regla conflictiva: ${delErr.message}`);
           }
         }
-        
+
         // 3. CREAR REGLA NUEVA SI NO EXISTE
         const payload = {
           chain: 'dstnat',
@@ -651,7 +651,7 @@ export class ControlAccesoService {
           'to-ports': targetLocalPort,
           comment: `Proliseg IoT NAT: ${deviceLocalIp}:${targetLocalPort}`
         };
-        
+
         try {
           this.logger.log(`🔧 [NAT MAPPING] Enviando POST a MikroTik para crear regla NAT...`);
           await axios.post(url, payload, {
@@ -677,16 +677,16 @@ export class ControlAccesoService {
             }
           });
         }
-        
+
         this.logger.log(`✅ [NAT MAPPING] Regla NAT agregada con éxito para ${deviceLocalIp} -> puerto ${publicPort}`);
         return publicPort;
-        
+
       } catch (err) {
         errorMsg = err.message;
         this.logger.error(`❌ [NAT MAPPING ERROR] (${protocol}): ${err.message}`);
       }
     }
-    
+
     throw new Error(`No se pudo crear la regla NAT en el MikroTik: ${errorMsg}`);
   }
 
@@ -698,7 +698,7 @@ export class ControlAccesoService {
     httpsAgent: any,
     existingRules: any[]
   ): Promise<void> {
-    const existingMasq = existingRules.find((rule: any) => 
+    const existingMasq = existingRules.find((rule: any) =>
       rule.chain === 'srcnat' &&
       rule.action === 'masquerade' &&
       rule['dst-address'] === deviceLocalIp
@@ -752,7 +752,7 @@ export class ControlAccesoService {
   async validateCredentials(ip: string, user: string, pass: string): Promise<any> {
     let targetIp = ip;
     let targetPort = 80;
-    
+
     // Auto-resolución de IPs privadas vía MikroTik
     const isPrivate = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(ip);
     if (isPrivate) {
@@ -762,14 +762,14 @@ export class ControlAccesoService {
           .from('control_acceso_servidores_mikrotik')
           .select('*')
           .limit(1);
-          
+
         if (servers && servers.length > 0) {
           const srv = servers[0];
           const lastOctet = ip.split('.').pop();
           const mappedPort = 10000 + Number(lastOctet || '80');
-          
+
           this.logger.log(`🔧 [AUTO-NAT] Creando/Verificando regla NAT en MikroTik ${srv.ip_publica} para validación de ${ip} al puerto ${mappedPort}...`);
-          
+
           await this.addMikrotikNatRule(
             srv.ip_publica,
             ip,
@@ -778,7 +778,7 @@ export class ControlAccesoService {
             srv.password,
             String(srv.puerto_rest || 4433)
           );
-          
+
           targetIp = srv.ip_publica;
           targetPort = mappedPort;
         }
@@ -790,7 +790,7 @@ export class ControlAccesoService {
     const url = `${this.proxyUrl}/validate`;
     try {
       const response = await axios.post(url, {}, {
-        headers: { 
+        headers: {
           'X-API-Key': this.apiKey,
           'X-Target-IP': targetIp,
           'X-Target-Port': String(targetPort),
@@ -817,25 +817,25 @@ export class ControlAccesoService {
   }
 
   private async proxyRequestDynamic(
-    targetIp: string, 
-    method: string, 
-    path: string, 
+    targetIp: string,
+    method: string,
+    path: string,
     data: any = null,
     params: any = {}
   ): Promise<any> {
     const query = new URLSearchParams(params).toString();
     const finalPath = `${path}${query ? '?' + query : ''}`;
-    
+
     let resolvedIp = targetIp;
     let targetPort = 80;
     let user = 'admin';
     let pass = 'proliseg#123';
-    
+
     try {
       // 1. Consultar base de datos para recuperar credenciales y puerto
       let dbQuery = this.supabase.getClient().from('dispositivos_iot').select('*');
       dbQuery = dbQuery.eq('ip_direccion', targetIp);
-      
+
       const { data: devices } = await dbQuery;
       if (devices && devices.length > 0) {
         const dev = devices[0];
@@ -843,13 +843,13 @@ export class ControlAccesoService {
         pass = dev.credencial_password || '';
         // Si el dispositivo tiene puertos mapeados por VPN, usamos el mapeado
         if (dev.puertos_mapeados && dev.puertos_mapeados.mapped_http) {
-           targetPort = dev.puertos_mapeados.mapped_http;
+          targetPort = dev.puertos_mapeados.mapped_http;
         } else {
-           targetPort = dev.configuracion_tecnica?.puerto || dev.puerto_servicio || 80;
+          targetPort = dev.configuracion_tecnica?.puerto || dev.puerto_servicio || 80;
         }
       }
-    } catch (dbErr) {}
-    
+    } catch (dbErr) { }
+
     // Auto-resolución de IPs privadas
     const isPrivate = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(targetIp);
     if (isPrivate && !targetIp.startsWith('10.8.')) {
@@ -859,7 +859,7 @@ export class ControlAccesoService {
           .from('control_acceso_servidores_mikrotik')
           .select('*')
           .limit(1);
-          
+
         if (servers && servers.length > 0) {
           const srv = servers[0];
           const lastOctet = targetIp.split('.').pop();
@@ -867,9 +867,9 @@ export class ControlAccesoService {
           resolvedIp = srv.ip_publica;
           targetPort = mappedPort;
         }
-      } catch (err) {}
+      } catch (err) { }
     }
-    
+
     try {
       const url = `http://${resolvedIp}:${targetPort}${finalPath}`;
       const timeout = params.customTimeout || 15000;
@@ -893,7 +893,7 @@ export class ControlAccesoService {
           const matchRealm = authHeader.match(/realm="([^"]+)"/);
           const matchNonce = authHeader.match(/nonce="([^"]+)"/);
           const matchQop = authHeader.match(/qop="([^"]+)"/);
-          
+
           if (matchRealm && matchNonce) {
             const realm = matchRealm[1];
             const nonce = matchNonce[1];
@@ -901,22 +901,22 @@ export class ControlAccesoService {
             const nc = '00000001';
             const cnonce = randomBytes(4).toString('hex');
             const uri = new URL(url).pathname + (new URL(url).search || '');
-            
+
             const ha1 = createHash('md5').update(`${user}:${realm}:${pass}`).digest('hex');
             const ha2 = createHash('md5').update(`${method}:${uri}`).digest('hex');
             let responseHash = '';
-            
+
             if (qop === 'auth') {
               responseHash = createHash('md5').update(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`).digest('hex');
             } else {
               responseHash = createHash('md5').update(`${ha1}:${nonce}:${ha2}`).digest('hex');
             }
-            
+
             let authStr = `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${responseHash}"`;
             if (qop === 'auth') {
               authStr += `, qop="${qop}", nc=${nc}, cnonce="${cnonce}"`;
             }
-            
+
             const config2: any = {
               method,
               url,
@@ -925,7 +925,7 @@ export class ControlAccesoService {
               responseType
             };
             if (data) config2.data = data;
-            
+
             const secondResponse = await axios(config2);
             return secondResponse.data;
           }
