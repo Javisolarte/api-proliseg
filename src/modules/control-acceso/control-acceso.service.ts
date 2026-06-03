@@ -33,8 +33,8 @@ export class ControlAccesoService {
     let finalIp = insertData.ip_direccion;
     let finalPort = insertData.puerto_servicio || 80;
 
-    // Almacenamos mapeos adicionales para usarlos después
-    let mappedPortsInfo = {};
+    // Usar puertos_mapeados del frontend si existen, sino usar un objeto vacío
+    let mappedPortsInfo = insertData.configuracion_tecnica?.puertos_mapeados || {};
 
     if (mikrotik_ip && insertData.ip_direccion) {
       // Se escaneó vía MikroTik, mapear el reenvío de puertos NAT
@@ -63,10 +63,11 @@ export class ControlAccesoService {
           mikrotik_ip, insertData.ip_direccion, mappedRtspPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '554'
         );
 
-        // Actualizar detalles del dispositivo con la IP de la VPN del MikroTik y puerto mapeado HTTP principal
-        finalIp = mikrotik_ip;
+        // Actualizar detalles del dispositivo con el puerto mapeado HTTP principal
+        // NO sobrescribimos finalIp porque la VPN (10.8.0.2) es la mejor ruta para MediaMTX
         finalPort = finalActivePort;
 
+        // Actualizar mappedPortsInfo si el NAT fue exitoso
         mappedPortsInfo = {
           mapped_http: mappedHttpPort,
           mapped_sdk: mappedSdkPort,
