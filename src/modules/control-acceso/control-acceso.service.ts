@@ -257,48 +257,101 @@ export class ControlAccesoService implements OnModuleInit {
     let user = options?.user || 'admin';
     let pass = options?.pass || 'proliseg1025';
     let port = options?.port || 80;
+    let targetIp = ip;
+    let deviceConfig: any = null;
 
     if (options?.deviceId) {
       const { data: dev } = await this.supabase
         .getClient()
         .from('dispositivos_iot')
-        .select('credencial_usuario, credencial_password, configuracion_tecnica')
+        .select('ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica')
         .eq('id', options.deviceId)
-        .single();
+        .maybeSingle();
 
       if (dev) {
+        deviceConfig = dev.configuracion_tecnica || {};
+        targetIp = dev.ip_direccion || targetIp;
         user = dev.credencial_usuario || user;
         pass = dev.credencial_password || pass;
-        marca = dev.configuracion_tecnica?.marca?.toLowerCase() || marca;
-        port = dev.configuracion_tecnica?.puertos_mapeados?.mapped_http
-          || dev.configuracion_tecnica?.puerto
-          || port;
+        marca = deviceConfig?.marca?.toLowerCase() || marca;
+        port = Number(deviceConfig?.puerto || port);
       }
     }
+
+    if (!targetIp) {
+      return { ok: false, mensaje: 'No hay IP o dispositivo destino para ejecutar el comando de puerta' };
+    }
+
+    const target = await this.resolveDoorNetworkTarget(targetIp, port, deviceConfig);
 
     try {
       let resultado: { ok: boolean; mensaje: string; marca?: string; detalle?: any };
 
       if (marca.includes('hikvision') || marca.includes('hik')) {
-        resultado = await this.controlPuertaHikvision(ip, port, doorId, command, user, pass);
+        resultado = await this.controlPuertaHikvision(target.ip, target.port, doorId, command, user, pass);
       } else if (marca.includes('dahua') || marca.includes('dh')) {
-        resultado = await this.controlPuertaDahua(ip, port, doorId, command, user, pass);
+        resultado = await this.controlPuertaDahua(target.ip, target.port, doorId, command, user, pass);
       } else {
         // Intento genérico: probamos Hikvision primero, luego Dahua
         try {
-          const resultado = await this.controlPuertaHikvision(ip, port, doorId, command, user, pass);
-          return this.registrarResultadoPuerta(ip, doorId, command, options?.deviceId, { ...resultado, marca: 'Hikvision (auto-detectado)' });
+          const resultado = await this.controlPuertaHikvision(target.ip, target.port, doorId, command, user, pass);
+          return this.registrarResultadoPuerta(targetIp, doorId, command, options?.deviceId, { ...resultado, marca: 'Hikvision (auto-detectado)' });
         } catch {
-          const resultado = await this.controlPuertaDahua(ip, port, doorId, command, user, pass);
-          return this.registrarResultadoPuerta(ip, doorId, command, options?.deviceId, { ...resultado, marca: 'Dahua (auto-detectado)' });
+          const resultado = await this.controlPuertaDahua(target.ip, target.port, doorId, command, user, pass);
+          return this.registrarResultadoPuerta(targetIp, doorId, command, options?.deviceId, { ...resultado, marca: 'Dahua (auto-detectado)' });
         }
       }
 
-      return this.registrarResultadoPuerta(ip, doorId, command, options?.deviceId, resultado);
+      return this.registrarResultadoPuerta(targetIp, doorId, command, options?.deviceId, {
+        ...resultado,
+        detalle: {
+          ...(resultado.detalle || {}),
+          target: `${target.ip}:${target.port}`,
+          via: target.via,
+        },
+      });
     } catch (err) {
       this.logger.error(`❌ [PUERTA ERROR] ${err.message}`);
       return { ok: false, mensaje: `Error al ejecutar comando: ${err.message}` };
     }
+  }
+
+  private async resolveDoorNetworkTarget(ip: string, configuredPort: number, config: any = {}) {
+    const mappedHttp = Number(config?.puertos_mapeados?.mapped_http || 0);
+    const originalHttp = Number(
+      config?.puertos_mapeados?.original_http
+      || config?.puerto_http_original
+      || (configuredPort >= 10000 ? 80 : configuredPort)
+      || 80
+    );
+
+    if (this.isVpnIp(ip)) {
+      return { ip, port: originalHttp || 80, via: 'vpn' };
+    }
+
+    if (this.isPrivateIp(ip)) {
+      const { data: servers } = await this.supabase
+        .getClient()
+        .from('control_acceso_servidores_mikrotik')
+        .select('ip_publica')
+        .limit(1);
+
+      const publicIp = servers?.[0]?.ip_publica;
+      if (publicIp) {
+        const lastOctet = Number(ip.split('.').pop() || '80');
+        return { ip: publicIp, port: mappedHttp || 10000 + lastOctet, via: 'mikrotik-nat' };
+      }
+    }
+
+    return { ip, port: Number(configuredPort || 80), via: 'directo' };
+  }
+
+  private isVpnIp(ip: string): boolean {
+    return /^10\.8\./.test(ip);
+  }
+
+  private isPrivateIp(ip: string): boolean {
+    return /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(ip);
   }
 
   private async registrarResultadoPuerta(
@@ -368,6 +421,48 @@ export class ControlAccesoService implements OnModuleInit {
     command: string, user: string, pass: string
   ): Promise<{ ok: boolean; mensaje: string; marca: string; detalle?: any }> {
     const base = `http://${ip}:${port}`;
+    const endpoint = `${base}/ISAPI/AccessControl/RemoteControl/door/${doorId}`;
+    const cmd = this.mapHikvisionDoorCommand(command);
+    const body = `<?xml version="1.0" encoding="UTF-8"?>
+<RemoteControlDoor version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
+  <cmd>${cmd}</cmd>
+</RemoteControlDoor>`;
+
+    const response = await this.executeDigestAuthRequest(
+      'PUT',
+      endpoint,
+      user,
+      pass,
+      body,
+      'text',
+      10000,
+      {
+        'Content-Type': 'application/xml',
+        'Accept': 'application/xml,text/xml,*/*',
+        'If-Modified-Since': '0',
+      }
+    );
+
+    const parsed = this.parseHikvisionDoorResponse(response.data);
+    if (!parsed.ok) {
+      throw new Error(`Hikvision rechazo "${command}": ${parsed.message}`);
+    }
+
+    this.logger.log(`[HIKVISION] Puerta ${doorId} -> ${cmd} OK en ${ip}:${port}`);
+    return {
+      ok: true,
+      mensaje: `Puerta ${doorId} ejecuto "${command}" correctamente (Hikvision)`,
+      marca: 'Hikvision',
+      detalle: {
+        cmd,
+        statusCode: parsed.statusCode,
+        statusString: parsed.statusString,
+        subStatusCode: parsed.subStatusCode,
+        raw: parsed.raw,
+      },
+    };
+
+    /*
     const auth = { username: user, password: pass };
     const cfg = { auth, timeout: 8000 };
 
@@ -432,9 +527,47 @@ export class ControlAccesoService implements OnModuleInit {
       default:
         throw new Error(`Comando desconocido: ${command}`);
     }
+    */
   }
 
   // ─── DAHUA ────────────────────────────────────────────────────────────────
+
+  private mapHikvisionDoorCommand(command: string): string {
+    switch (command) {
+      case 'abrir': return 'open';
+      case 'cerrar': return 'close';
+      case 'siempre-abierta': return 'alwaysOpen';
+      case 'siempre-cerrada': return 'alwaysClose';
+      default: throw new Error(`Comando desconocido: ${command}`);
+    }
+  }
+
+  private parseHikvisionDoorResponse(data: any) {
+    const raw = typeof data === 'string' ? data : JSON.stringify(data || {});
+    const statusCode = this.extractXmlTag(raw, 'statusCode');
+    const statusString = this.extractXmlTag(raw, 'statusString');
+    const subStatusCode = this.extractXmlTag(raw, 'subStatusCode');
+    const errorMsg = this.extractXmlTag(raw, 'errorMsg');
+    const normalizedStatus = (statusString || '').toLowerCase();
+    const normalizedSubStatus = (subStatusCode || '').toLowerCase();
+    const statusOk = !statusCode || statusCode === '0' || statusCode === '1';
+    const textOk = normalizedStatus === 'ok' || normalizedSubStatus === 'ok';
+    const hasErrorText = /(invalid|error|busy|failed|denied|forbidden)/i.test(raw);
+
+    return {
+      ok: statusOk && (textOk || !raw.trim()) && !hasErrorText,
+      message: errorMsg || subStatusCode || statusString || raw || 'Respuesta vacia del dispositivo',
+      statusCode,
+      statusString,
+      subStatusCode,
+      raw,
+    };
+  }
+
+  private extractXmlTag(xml: string, tag: string): string | undefined {
+    const match = xml.match(new RegExp(`<${tag}[^>]*>([^<]*)</${tag}>`, 'i'));
+    return match?.[1]?.trim();
+  }
 
   private async controlPuertaDahua(
     ip: string, port: number, doorId: number,
@@ -1562,11 +1695,24 @@ export class ControlAccesoService implements OnModuleInit {
   }
 
   private async executeDigestAuth(method: string, url: string, user: string, pass: string, data?: any, responseType: string = 'json', timeout: number = 15000): Promise<any> {
+    const response = await this.executeDigestAuthRequest(method, url, user, pass, data, responseType, timeout);
+    return response.data;
+  }
+
+  private async executeDigestAuthRequest(
+    method: string,
+    url: string,
+    user: string,
+    pass: string,
+    data?: any,
+    responseType: string = 'json',
+    timeout: number = 15000,
+    headers: Record<string, string> = {},
+  ): Promise<any> {
     try {
-      const config: any = { method, url, timeout, responseType };
-      if (data) config.data = data;
-      const response = await axios(config);
-      return response.data;
+      const config: any = { method, url, timeout, responseType, headers };
+      if (data !== undefined && data !== null) config.data = data;
+      return await axios(config);
     } catch (error) {
       if (error.response && error.response.status === 401 && error.response.headers['www-authenticate']) {
         const authHeader = error.response.headers['www-authenticate'];
@@ -1578,7 +1724,9 @@ export class ControlAccesoService implements OnModuleInit {
           if (matchRealm && matchNonce) {
             const realm = matchRealm[1];
             const nonce = matchNonce[1];
-            const qop = matchQop ? matchQop[1] : '';
+            const qopRaw = matchQop ? matchQop[1] : '';
+            const qopOptions = qopRaw.split(',').map((item: string) => item.trim()).filter(Boolean);
+            const qop = qopOptions.includes('auth') ? 'auth' : (qopOptions[0] || '');
             const nc = '00000001';
             const cnonce = randomBytes(4).toString('hex');
             const uri = new URL(url).pathname + (new URL(url).search || '');
@@ -1601,14 +1749,13 @@ export class ControlAccesoService implements OnModuleInit {
             const config2: any = {
               method,
               url,
-              headers: { 'Authorization': authStr },
+              headers: { ...headers, 'Authorization': authStr },
               timeout,
               responseType
             };
-            if (data) config2.data = data;
+            if (data !== undefined && data !== null) config2.data = data;
 
-            const secondResponse = await axios(config2);
-            return secondResponse.data;
+            return await axios(config2);
           }
         }
       }

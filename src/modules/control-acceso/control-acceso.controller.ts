@@ -29,7 +29,7 @@ export class ControlAccesoController {
     marca?: string;      // 'hikvision' | 'dahua' | '' (auto-detect)
   }) {
     this.logger.log(`🚪 [COMANDO] Enviando "${body.command}" a la IP ${body.ip} | Puerta ${body.doorId || 1}`);
-    return this.controlAccesoService.controlPuerta(
+    const result = await this.controlAccesoService.controlPuerta(
       body.ip,
       body.doorId || 1,
       body.command,
@@ -41,6 +41,12 @@ export class ControlAccesoController {
         marca: body.marca,
       }
     );
+
+    if (!result.ok) {
+      throw new BadRequestException(result);
+    }
+
+    return result;
   }
 
   @Get('dispositivos')
