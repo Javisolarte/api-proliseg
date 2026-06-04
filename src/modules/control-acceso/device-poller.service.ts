@@ -41,6 +41,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
   /** IDs ya procesados para deduplicar — en memoria, bajo consumo */
   private readonly seenEventIds = new Set<string>();
+  private readonly latestDbTimestamp = new Map<string, string>();
 
   /**
    * FALLBACK: polling para dispositivos que NO soporten webhook push.
@@ -264,23 +265,53 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
   private async fallbackPoll(device: DeviceInfo, ip: string, port: number, user: string, pass: string, marca: string) {
     try {
-      const now = new Date();
-      const startTime = new Date(now.getTime() - this.FALLBACK_POLL_MS - 5_000).toISOString().replace('.000', '');
-      const endTime = now.toISOString().replace('.000', '');
+      if (!this.latestDbTimestamp.has(device.id)) {
+        const { data } = await this.supabase
+          .getClient()
+          .from('dispositivos_eventos_historico')
+          .select('timestamp')
+          .eq('dispositivo_id', device.id)
+          .order('timestamp', { ascending: false })
+          .limit(1);
+        
+        const lastTimestamp = data?.[0]?.timestamp || new Date(0).toISOString();
+        this.latestDbTimestamp.set(device.id, lastTimestamp);
+      }
+
       const base = `http://${ip}:${port}`;
       const auth = { username: user, password: pass };
 
       const resp = await axios.post(
         `${base}/ISAPI/AccessControl/AcsEvent?format=json`,
-        { AcsEventCond: { searchID: `fb_${Date.now()}`, searchResultPosition: 0, maxResults: 10, major: 0, minor: 0, startTime, endTime } },
+        { 
+          AcsEventCond: { 
+            searchID: `fb_${device.id}_${Date.now()}`, 
+            searchResultPosition: 0, 
+            maxResults: 20, 
+            major: 0, 
+            minor: 0 
+          } 
+        },
         { auth, timeout: 5_000, headers: { 'Content-Type': 'application/json' } }
       );
 
       const infos = resp.data?.AcsEvent?.InfoList || [];
+      const lastDbTimeStr = this.latestDbTimestamp.get(device.id) || new Date(0).toISOString();
+      const lastDbTime = new Date(lastDbTimeStr).getTime();
+
       for (const info of infos) {
+        const eventTimeStr = info.time || new Date().toISOString();
+        const eventTime = new Date(eventTimeStr).getTime();
+
+        if (eventTime <= lastDbTime) continue;
+
         const eventId = `fb_${device.id}_${info.serialNo || info.time}`;
         if (this.seenEventIds.has(eventId)) continue;
         this.seenEventIds.add(eventId);
+
+        if (eventTime > new Date(this.latestDbTimestamp.get(device.id) || 0).getTime()) {
+          this.latestDbTimestamp.set(device.id, eventTimeStr);
+        }
 
         this.saveAndEmit({
           dispositivo_id: device.id,
@@ -292,7 +323,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           codigo_tarjeta: this.firstText(info.cardNo, info.CardNo, info.cardNumber),
           face_id_ref: this.firstText(info.FPID, info.faceID, info.faceId),
           foto_evidencia_url: this.firstText(info.pictureURL, info.picUrl, info.faceURL),
-          timestamp: info.time || new Date().toISOString(),
+          timestamp: eventTimeStr,
           detalles_raw: info,
         });
       }
