@@ -43,6 +43,24 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   private readonly seenEventIds = new Set<string>();
   private readonly latestDbTimestamp = new Map<string, string>();
 
+  /** Cache in-memoria para evitar consultas repetitivas de dispositivos */
+  private readonly devicesMap = new Map<string, DeviceInfo>();
+
+  private markAsSeen(eventId: string) {
+    this.seenEventIds.add(eventId);
+    if (this.seenEventIds.size > 5000) {
+      const iterator = this.seenEventIds.values();
+      for (let i = 0; i < 2000; i++) {
+        const val = iterator.next().value;
+        if (val !== undefined) {
+          this.seenEventIds.delete(val);
+        } else {
+          break;
+        }
+      }
+    }
+  }
+
   /**
    * FALLBACK: polling para dispositivos que NO soporten webhook push.
    * Solo arranca si el dispositivo tiene configuracion_tecnica.push_disabled = true
@@ -88,7 +106,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
       const eventId = `hik_push_${device.id}_${info?.serialNo || info?.dateTime || Date.now()}`;
       if (this.seenEventIds.has(eventId)) return { ok: true, duplicado: true };
-      this.seenEventIds.add(eventId);
+      this.markAsSeen(eventId);
 
       const evento: EventoAcceso = {
         dispositivo_id: device.id,
@@ -121,7 +139,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
       const eventId = `dah_push_${device.id}_${payload?.LocaleTime || Date.now()}`;
       if (this.seenEventIds.has(eventId)) return { ok: true, duplicado: true };
-      this.seenEventIds.add(eventId);
+      this.markAsSeen(eventId);
 
       const evento: EventoAcceso = {
         dispositivo_id: device.id,
@@ -155,6 +173,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   async refreshDeviceList() {
     this.fallbackTimers.forEach(t => clearInterval(t));
     this.fallbackTimers.clear();
+    this.devicesMap.clear();
     await this.setupAllDevices();
   }
 
@@ -167,7 +186,15 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       .select('id, nombre_identificador, ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica')
       .in('estado', ['operativo', 'mantenimiento']);
 
+    this.devicesMap.clear();
     if (!devices?.length) return;
+
+    for (const device of devices as DeviceInfo[]) {
+      this.devicesMap.set(device.id, device);
+      if (device.ip_direccion) {
+        this.devicesMap.set(device.ip_direccion, device);
+      }
+    }
 
     // URL pública donde las cámaras deben mandar sus eventos
     const webhookBase = 'https://servidor.proliseg.com/api/control-acceso/webhook/evento';
@@ -326,7 +353,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
         const eventId = `fb_${device.id}_${info.serialNo || info.time}`;
         if (this.seenEventIds.has(eventId)) continue;
-        this.seenEventIds.add(eventId);
+        this.markAsSeen(eventId);
 
         if (eventTime > new Date(this.latestDbTimestamp.get(device.id) || 0).getTime()) {
           this.latestDbTimestamp.set(device.id, eventTimeStr);
@@ -352,12 +379,25 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
   private async getDeviceById(idOrIp: string): Promise<DeviceInfo | null> {
+    if (!idOrIp) return null;
+    const cached = this.devicesMap.get(idOrIp);
+    if (cached) return cached;
+
     const { data } = await this.supabase.getClient()
       .from('dispositivos_iot')
       .select('id, nombre_identificador, ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica')
       .or(`id.eq.${idOrIp},ip_direccion.eq.${idOrIp}`)
-      .single();
-    return data as DeviceInfo | null;
+      .maybeSingle();
+
+    if (data) {
+      const dev = data as DeviceInfo;
+      this.devicesMap.set(dev.id, dev);
+      if (dev.ip_direccion) {
+        this.devicesMap.set(dev.ip_direccion, dev);
+      }
+      return dev;
+    }
+    return null;
   }
 
   private mapHikvisionEventType(major: number, minor: number, eventType: string): string {
@@ -489,22 +529,22 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async findPersonaByIdentifiers(documento?: string, codigoTarjeta?: string, faceId?: string): Promise<any | null> {
-    const admin = this.supabase.getSupabaseAdminClient();
     const lookups = [
-      { field: 'documento_identidad', value: documento },
-      { field: 'codigo_tarjeta', value: codigoTarjeta },
-      { field: 'face_id_ref', value: faceId },
-    ].filter(item => !!item.value);
+      documento ? `documento_identidad.eq.${documento}` : null,
+      codigoTarjeta ? `codigo_tarjeta.eq.${codigoTarjeta}` : null,
+      faceId ? `face_id_ref.eq.${faceId}` : null,
+    ].filter(Boolean);
 
-    for (const lookup of lookups) {
-      const { data, error } = await admin
-        .from('personas_gestion_acceso')
-        .select('*')
-        .eq(lookup.field, lookup.value as string)
-        .maybeSingle();
-      if (!error && data) return data;
-    }
+    if (lookups.length === 0) return null;
 
+    const admin = this.supabase.getSupabaseAdminClient();
+    const { data, error } = await admin
+      .from('personas_gestion_acceso')
+      .select('*')
+      .or(lookups.join(','))
+      .limit(1);
+
+    if (!error && data && data.length > 0) return data[0];
     return null;
   }
 
