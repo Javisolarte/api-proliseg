@@ -88,6 +88,8 @@ export class ControlAccesoService implements OnModuleInit {
 
     let finalIp = insertData.ip_direccion;
     let finalPort = insertData.puerto_servicio || 80;
+    const originalHttpPort = insertData.puerto_servicio || insertData.configuracion_tecnica?.puerto || 80;
+    const originalRtspPort = insertData.configuracion_tecnica?.puerto_rtsp || insertData.puerto_rtsp || 554;
 
     // Usar puertos_mapeados del frontend si existen, sino usar un objeto vacío
     let mappedPortsInfo = insertData.configuracion_tecnica?.puertos_mapeados || {};
@@ -136,6 +138,8 @@ export class ControlAccesoService implements OnModuleInit {
           mapped_http: mappedHttpPort,
           mapped_sdk: mappedSdkPort,
           mapped_rtsp: mappedRtspPort,
+          original_http: originalHttpPort,
+          original_rtsp: originalRtspPort,
           original_ip: local_ip
         };
       } catch (err) {
@@ -155,9 +159,15 @@ export class ControlAccesoService implements OnModuleInit {
         marca: insertData.configuracion_tecnica?.marca || insertData.marca || 'Hikvision',
         modelo: insertData.configuracion_tecnica?.modelo || insertData.modelo || '',
         puerto: finalPort,
+        puerto_http_original: originalHttpPort,
+        puerto_rtsp: originalRtspPort,
         tipo: insertData.tipo || 'control_acceso',
         esta_online: true,
-        puertos_mapeados: mappedPortsInfo
+        puertos_mapeados: {
+          ...mappedPortsInfo,
+          original_http: mappedPortsInfo.original_http || originalHttpPort,
+          original_rtsp: mappedPortsInfo.original_rtsp || originalRtspPort,
+        }
       }
     };
 
@@ -175,6 +185,16 @@ export class ControlAccesoService implements OnModuleInit {
   }
 
   async updateDispositivo(id: string, dto: any) {
+    const { data: current } = await this.supabase
+      .getClient()
+      .from('dispositivos_iot')
+      .select('configuracion_tecnica')
+      .eq('id', id)
+      .maybeSingle();
+
+    const currentConfig = current?.configuracion_tecnica || {};
+    const incomingConfig = dto.configuracion_tecnica || {};
+
     const payload = {
       nombre_identificador: dto.nombre_identificador || dto.nombre,
       puesto_id: dto.puesto_id || null,
@@ -184,11 +204,31 @@ export class ControlAccesoService implements OnModuleInit {
       credencial_password: dto.dispositivo_password || dto.credencial_password || '',
       estado: dto.estado || 'operativo',
       configuracion_tecnica: {
-        marca: dto.configuracion_tecnica?.marca || dto.marca || 'Hikvision',
-        modelo: dto.configuracion_tecnica?.modelo || dto.modelo || '',
-        puerto: dto.configuracion_tecnica?.puerto || dto.puerto_servicio || dto.puerto || 80,
-        tipo: dto.tipo || dto.configuracion_tecnica?.tipo || 'control_acceso',
-        esta_online: dto.esta_online ?? true
+        ...currentConfig,
+        ...incomingConfig,
+        marca: incomingConfig?.marca || dto.marca || currentConfig?.marca || 'Hikvision',
+        modelo: incomingConfig?.modelo || dto.modelo || currentConfig?.modelo || '',
+        puerto: incomingConfig?.puerto || dto.puerto_servicio || dto.puerto || currentConfig?.puerto || 80,
+        puerto_http_original: incomingConfig?.puerto_http_original || currentConfig?.puerto_http_original || dto.puerto_servicio || dto.puerto || 80,
+        puerto_rtsp: incomingConfig?.puerto_rtsp || currentConfig?.puerto_rtsp || 554,
+        tipo: dto.tipo || incomingConfig?.tipo || currentConfig?.tipo || 'control_acceso',
+        esta_online: dto.esta_online ?? incomingConfig?.esta_online ?? currentConfig?.esta_online ?? true,
+        puertos_mapeados: {
+          ...(currentConfig?.puertos_mapeados || {}),
+          ...(incomingConfig?.puertos_mapeados || {}),
+          original_http: incomingConfig?.puertos_mapeados?.original_http
+            || currentConfig?.puertos_mapeados?.original_http
+            || incomingConfig?.puerto_http_original
+            || currentConfig?.puerto_http_original
+            || dto.puerto_servicio
+            || dto.puerto
+            || 80,
+          original_rtsp: incomingConfig?.puertos_mapeados?.original_rtsp
+            || currentConfig?.puertos_mapeados?.original_rtsp
+            || incomingConfig?.puerto_rtsp
+            || currentConfig?.puerto_rtsp
+            || 554,
+        }
       }
     };
 
@@ -321,7 +361,7 @@ export class ControlAccesoService implements OnModuleInit {
     const originalHttp = Number(
       config?.puertos_mapeados?.original_http
       || config?.puerto_http_original
-      || (configuredPort >= 10000 ? 80 : configuredPort)
+      || configuredPort
       || 80
     );
 
@@ -695,6 +735,54 @@ export class ControlAccesoService implements OnModuleInit {
 
 
 
+  private async resolveRtspNetworkTarget(dev: any): Promise<{ ip: string; port: number; via: string }> {
+    const config = dev?.configuracion_tecnica || {};
+    const mapped = config?.puertos_mapeados || {};
+    const ip = dev?.ip_direccion;
+    const mappedRtsp = Number(mapped?.mapped_rtsp || 0);
+    const configuredRtsp = Number(
+      config?.puerto_rtsp
+      || mapped?.original_rtsp
+      || config?.puerto_rtsp_original
+      || 554
+    );
+
+    if (mappedRtsp) {
+      const { data: servers } = await this.supabase
+        .getClient()
+        .from('control_acceso_servidores_mikrotik')
+        .select('ip_publica')
+        .limit(1);
+
+      const publicIp = servers?.[0]?.ip_publica;
+      if (publicIp) {
+        return { ip: publicIp, port: mappedRtsp, via: 'mikrotik-nat' };
+      }
+
+      return { ip, port: mappedRtsp, via: 'mapped-rtsp' };
+    }
+
+    if (this.isVpnIp(ip)) {
+      return { ip, port: configuredRtsp || 554, via: 'vpn' };
+    }
+
+    if (this.isPrivateIp(ip)) {
+      const { data: servers } = await this.supabase
+        .getClient()
+        .from('control_acceso_servidores_mikrotik')
+        .select('ip_publica')
+        .limit(1);
+
+      const publicIp = servers?.[0]?.ip_publica;
+      if (publicIp) {
+        const lastOctet = Number(ip.split('.').pop() || '554');
+        return { ip: publicIp, port: 30000 + lastOctet, via: 'mikrotik-nat' };
+      }
+    }
+
+    return { ip, port: Number(configuredRtsp || 554), via: 'directo' };
+  }
+
   async startVideoStream(deviceId: string): Promise<any> {
     try {
       // 1. Obtener datos del dispositivo
@@ -711,14 +799,9 @@ export class ControlAccesoService implements OnModuleInit {
       const dev = devices[0];
       const user = dev.credencial_usuario || 'admin';
       const pass = dev.credencial_password || 'proliseg#123';
-      const targetIp = dev.ip_direccion; // Debe ser la IP VPN, ej. 10.8.0.2
-
-      let rtspPort = 554; // Puerto por defecto
-      if (dev.configuracion_tecnica?.puertos_mapeados?.mapped_rtsp) {
-        rtspPort = dev.configuracion_tecnica.puertos_mapeados.mapped_rtsp;
-      } else if (dev.configuracion_tecnica?.puerto_rtsp) {
-        rtspPort = dev.configuracion_tecnica.puerto_rtsp;
-      }
+      const rtspTarget = await this.resolveRtspNetworkTarget(dev);
+      const targetIp = rtspTarget.ip;
+      const rtspPort = rtspTarget.port;
 
       // Detectar la marca para armar la URL RTSP correcta (Sub-Stream)
       const marca = dev.configuracion_tecnica?.marca?.toLowerCase() || 'hikvision';
@@ -733,6 +816,7 @@ export class ControlAccesoService implements OnModuleInit {
       // Armar la URL de la fuente RTSP (EncodeURIComponent para contraseñas con caracteres especiales como #)
       const encodedPass = encodeURIComponent(pass);
       const sourceUrl = `rtsp://${user}:${encodedPass}@${targetIp}:${rtspPort}${rtspPath}`;
+      this.logger.log(`[WEBRTC] Fuente RTSP ${deviceId}: ${targetIp}:${rtspPort}${rtspPath} via ${rtspTarget.via}`);
 
       // Nombre simple de la cámara sin slashes para evitar errores 404 en la API
       const streamName = `cam_${deviceId.substring(0, 8)}`;
