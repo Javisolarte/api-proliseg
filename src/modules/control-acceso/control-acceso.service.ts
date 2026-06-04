@@ -366,7 +366,7 @@ export class ControlAccesoService implements OnModuleInit {
     );
 
     if (this.isVpnIp(ip)) {
-      return { ip, port: originalHttp || 80, via: 'vpn' };
+      return { ip, port: mappedHttp || originalHttp || 80, via: 'vpn' };
     }
 
     if (this.isPrivateIp(ip)) {
@@ -747,6 +747,10 @@ export class ControlAccesoService implements OnModuleInit {
       || 554
     );
 
+    if (this.isVpnIp(ip)) {
+      return { ip, port: mappedRtsp || configuredRtsp || 554, via: 'vpn' };
+    }
+
     if (mappedRtsp) {
       const { data: servers } = await this.supabase
         .getClient()
@@ -760,10 +764,6 @@ export class ControlAccesoService implements OnModuleInit {
       }
 
       return { ip, port: mappedRtsp, via: 'mapped-rtsp' };
-    }
-
-    if (this.isVpnIp(ip)) {
-      return { ip, port: configuredRtsp || 554, via: 'vpn' };
     }
 
     if (this.isPrivateIp(ip)) {
