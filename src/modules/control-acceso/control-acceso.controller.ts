@@ -69,15 +69,28 @@ export class ControlAccesoController {
 
   @Get('personas')
   @ApiOperation({ summary: 'Obtener lista de personas en el sistema' })
-  async getPersonas() {
-    return this.controlAccesoService.findAllPersonas();
+  async getPersonas(@Query('dispositivoId') dispositivoId?: string) {
+    return this.controlAccesoService.findAllPersonas({ dispositivoId });
+  }
+
+  @Post('personas')
+  @ApiOperation({ summary: 'Crear o actualizar una persona de control de acceso' })
+  async createPersona(@Body() body: CreatePersonaAccesoDto) {
+    return this.controlAccesoService.createPersona(body);
   }
 
   @Post('sync-hardware')
   @ApiOperation({ summary: 'Extrae usuarios y rostros directamente del hardware' })
-  async syncHardware(@Body() body: { ip: string }) {
-    this.logger.log(`🔄 [SYNC] Extrayendo datos del hardware en ${body.ip}`);
-    return this.controlAccesoService.syncUsuariosHardware(body.ip);
+  async syncHardware(@Body() body: { ip?: string; deviceId?: string; includePhotos?: boolean }) {
+    this.logger.log(`[SYNC] Extrayendo datos del hardware ${body.deviceId || body.ip || 'sin destino'}`);
+    return this.controlAccesoService.syncUsuariosHardware(body);
+  }
+
+  @Post('dispositivos/:id/sincronizar-personas')
+  @ApiOperation({ summary: 'Sincroniza personas y rostros de un dispositivo registrado' })
+  async syncHardwareDevice(@Param('id') id: string, @Body() body: { includePhotos?: boolean }) {
+    this.logger.log(`🔄 [SYNC] Extrayendo personas del dispositivo ${id}`);
+    return this.controlAccesoService.syncUsuariosHardware({ deviceId: id, includePhotos: body?.includePhotos });
   }
 
   @Post('subir-rostro')
@@ -264,5 +277,18 @@ export class ControlAccesoController {
       desde,
     });
   }
-}
 
+  @Get('logs')
+  @ApiOperation({ summary: 'Alias del historial de eventos VMS' })
+  async getLogs(
+    @Query('dispositivoId') dispositivoId?: string,
+    @Query('limit') limit?: string,
+    @Query('desde') desde?: string,
+  ) {
+    return this.controlAccesoService.getEventosHistorial({
+      dispositivoId,
+      limit: limit ? Number(limit) : 50,
+      desde,
+    });
+  }
+}

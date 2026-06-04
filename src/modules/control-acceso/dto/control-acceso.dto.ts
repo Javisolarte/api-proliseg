@@ -34,7 +34,19 @@ export class CreatePersonaAccesoDto {
   lista_estado: string;
 
   @ApiProperty({ required: false })
+  entidad_id?: number;
+
+  @ApiProperty({ required: false })
+  face_id_ref?: string;
+
+  @ApiProperty({ required: false })
   codigo_tarjeta?: string;
+
+  @ApiProperty({ required: false })
+  pin_seguridad?: string;
+
+  @ApiProperty({ required: false, description: 'Foto en base64 o data URL para guardar en biometria_facial' })
+  foto_base64?: string;
 
   @ApiProperty({ required: false, description: 'IDs de dispositivos a los que tiene acceso' })
   dispositivos_ids?: string[];

@@ -9,6 +9,10 @@ export interface EventoAcceso {
   nombre_dispositivo: string;
   tipo_evento: string;       // 'entrada' | 'salida' | 'puerta_abierta' | 'puerta_cerrada' | 'alarma' | 'cmd_usuario'
   metodo_acceso?: string;    // 'facial' | 'tarjeta' | 'pin' | 'remoto' | 'boton'
+  persona_id?: string;
+  documento_persona?: string;
+  codigo_tarjeta?: string;
+  face_id_ref?: string;
   nombre_persona?: string;
   foto_evidencia_url?: string;
   timestamp: string;         // ISO
@@ -90,7 +94,11 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         nombre_dispositivo: device.nombre_identificador,
         tipo_evento: this.mapHikvisionEventType(info?.major, info?.minor, info?.eventType),
         metodo_acceso: this.mapHikvisionMethod(info?.cardReaderKind),
-        nombre_persona: info?.name || info?.employeeName,
+        nombre_persona: this.firstText(info?.name, info?.employeeName, info?.userName, info?.UserName),
+        documento_persona: this.firstText(info?.employeeNoString, info?.employeeNo, info?.userID, info?.UserID, info?.personId),
+        codigo_tarjeta: this.firstText(info?.cardNo, info?.CardNo, info?.cardNumber),
+        face_id_ref: this.firstText(info?.FPID, info?.faceID, info?.faceId),
+        foto_evidencia_url: this.firstText(info?.pictureURL, info?.picUrl, info?.faceURL),
         timestamp: info?.dateTime || new Date().toISOString(),
         detalles_raw: info,
       };
@@ -119,7 +127,11 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         nombre_dispositivo: device.nombre_identificador,
         tipo_evento: payload?.Action === 'Start' ? 'entrada' : 'salida',
         metodo_acceso: 'tarjeta',
-        nombre_persona: payload?.Name || payload?.UserName,
+        nombre_persona: this.firstText(payload?.Name, payload?.UserName, payload?.User),
+        documento_persona: this.firstText(payload?.UserID, payload?.UserId, payload?.UserNo, payload?.EmployeeNo),
+        codigo_tarjeta: this.firstText(payload?.CardNo, payload?.CardNumber),
+        face_id_ref: this.firstText(payload?.FaceID, payload?.FaceId),
+        foto_evidencia_url: this.firstText(payload?.PictureURL, payload?.PhotoURL, payload?.FaceURL),
         timestamp: payload?.LocaleTime || new Date().toISOString(),
         detalles_raw: payload,
       };
@@ -275,7 +287,11 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           nombre_dispositivo: device.nombre_identificador,
           tipo_evento: this.mapHikvisionEventType(info.major, info.minor, ''),
           metodo_acceso: this.mapHikvisionMethod(info.cardReaderKind),
-          nombre_persona: info.name || info.employeeName,
+          nombre_persona: this.firstText(info.name, info.employeeName, info.userName),
+          documento_persona: this.firstText(info.employeeNoString, info.employeeNo, info.userID, info.personId),
+          codigo_tarjeta: this.firstText(info.cardNo, info.CardNo, info.cardNumber),
+          face_id_ref: this.firstText(info.FPID, info.faceID, info.faceId),
+          foto_evidencia_url: this.firstText(info.pictureURL, info.picUrl, info.faceURL),
           timestamp: info.time || new Date().toISOString(),
           detalles_raw: info,
         });
@@ -313,25 +329,152 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   // ─── Guardar en BD y Emitir por WebSocket (fire & forget) ─────────────────
 
   saveAndEmit(evento: EventoAcceso) {
-    // Guardar en Supabase — async sin await para no bloquear nada
-    this.supabase.getClient()
-      .from('dispositivos_eventos_historico')
-      .insert({
+    const persistirEvento = async () => {
+      const persona = await this.resolvePersonaForEvento(evento);
+      const payloadBase = {
         dispositivo_id: evento.dispositivo_id,
+        persona_id: persona?.id || evento.persona_id || null,
         tipo_evento: evento.tipo_evento,
-        metodo_acceso: evento.metodo_acceso,
-        nombre_persona: evento.nombre_persona,
-        foto_evidencia_url: evento.foto_evidencia_url,
-        timestamp: evento.timestamp,
-        detalles_raw: evento.detalles_raw || {},
-      })
-      .then(({ error }) => {
-        if (error) this.logger.warn(`⚠️ [EventSystem] INSERT: ${error.message}`);
-      });
+        metodo_acceso: evento.metodo_acceso || null,
+        foto_evidencia_url: evento.foto_evidencia_url || null,
+        timestamp: evento.timestamp || new Date().toISOString(),
+      };
 
-    // Emitir por WebSocket — instantáneo
+      const payloadExtendido = {
+        ...payloadBase,
+        nombre_persona: evento.nombre_persona || persona?.nombre_completo || null,
+        documento_persona: evento.documento_persona || persona?.documento_identidad || null,
+        detalles_raw: evento.detalles_raw || {},
+      };
+
+      const { error } = await this.supabase
+        .getSupabaseAdminClient()
+        .from('dispositivos_eventos_historico')
+        .insert(payloadExtendido);
+
+      if (!error) return;
+
+      const missingExtendedColumn = /nombre_persona|documento_persona|detalles_raw/i.test(error.message || '');
+      if (missingExtendedColumn) {
+        const { error: fallbackError } = await this.supabase
+          .getSupabaseAdminClient()
+          .from('dispositivos_eventos_historico')
+          .insert(payloadBase);
+        if (fallbackError) this.logger.warn(`⚠️ [EventSystem] INSERT fallback: ${fallbackError.message}`);
+        return;
+      }
+
+      this.logger.warn(`⚠️ [EventSystem] INSERT: ${error.message}`);
+    };
+
+    persistirEvento().catch((error) => {
+      this.logger.warn(`⚠️ [EventSystem] No se pudo persistir evento: ${error.message}`);
+    });
+
+    // Emitir por WebSocket - instantáneo
     if (this.emitFn) {
       try { this.emitFn(evento); } catch {}
     }
+  }
+
+  private async resolvePersonaForEvento(evento: EventoAcceso): Promise<any | null> {
+    const documento = this.firstText(evento.documento_persona, evento.face_id_ref, evento.codigo_tarjeta);
+    const nombre = this.firstText(evento.nombre_persona);
+    const codigoTarjeta = this.firstText(evento.codigo_tarjeta);
+    const faceId = this.firstText(evento.face_id_ref);
+
+    if (!documento && !nombre && !codigoTarjeta && !faceId) return null;
+
+    const admin = this.supabase.getSupabaseAdminClient();
+    const existing = await this.findPersonaByIdentifiers(documento, codigoTarjeta, faceId);
+    const nombreFinal = nombre || existing?.nombre_completo || 'Persona sin nombre';
+    const documentoFinal = existing?.documento_identidad
+      || documento
+      || this.buildAutoDocumento(evento.dispositivo_id, nombreFinal);
+
+    const payload: any = {
+      nombre_completo: nombreFinal,
+      documento_identidad: documentoFinal,
+      entidad_tipo: existing?.entidad_tipo || 'otro',
+      lista_estado: existing?.lista_estado || 'blanca',
+      activo: true,
+    };
+
+    if (codigoTarjeta) payload.codigo_tarjeta = codigoTarjeta;
+    if (faceId) payload.face_id_ref = faceId;
+
+    if (existing?.id) {
+      const { data, error } = await admin
+        .from('personas_gestion_acceso')
+        .update(payload)
+        .eq('id', existing.id)
+        .select()
+        .single();
+      if (error) {
+        this.logger.warn(`⚠️ [EventSystem] Persona no actualizada: ${error.message}`);
+        return existing;
+      }
+      return data;
+    }
+
+    const { data, error } = await admin
+      .from('personas_gestion_acceso')
+      .insert(payload)
+      .select()
+      .single();
+
+    if (error) {
+      this.logger.warn(`⚠️ [EventSystem] Persona no creada: ${error.message}`);
+      return null;
+    }
+
+    await admin
+      .from('acceso_permisos_dispositivos')
+      .insert({ persona_id: data.id, dispositivo_id: evento.dispositivo_id, activo: true })
+      .then(({ error: permisoError }) => {
+        if (permisoError) this.logger.warn(`⚠️ [EventSystem] Permiso no creado: ${permisoError.message}`);
+      });
+
+    return data;
+  }
+
+  private async findPersonaByIdentifiers(documento?: string, codigoTarjeta?: string, faceId?: string): Promise<any | null> {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const lookups = [
+      { field: 'documento_identidad', value: documento },
+      { field: 'codigo_tarjeta', value: codigoTarjeta },
+      { field: 'face_id_ref', value: faceId },
+    ].filter(item => !!item.value);
+
+    for (const lookup of lookups) {
+      const { data, error } = await admin
+        .from('personas_gestion_acceso')
+        .select('*')
+        .eq(lookup.field, lookup.value as string)
+        .maybeSingle();
+      if (!error && data) return data;
+    }
+
+    return null;
+  }
+
+  private firstText(...values: any[]): string | undefined {
+    for (const value of values) {
+      if (value === undefined || value === null) continue;
+      const text = String(value).trim();
+      if (text) return text;
+    }
+    return undefined;
+  }
+
+  private buildAutoDocumento(dispositivoId: string, nombre: string): string {
+    const normalized = nombre
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .toUpperCase()
+      .slice(0, 32) || 'SIN-ID';
+    return `AUTO-${dispositivoId.slice(0, 8)}-${normalized}`;
   }
 }
