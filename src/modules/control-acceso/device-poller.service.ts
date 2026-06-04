@@ -141,10 +141,13 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       if (this.seenEventIds.has(eventId)) return { ok: true, duplicado: true };
       this.markAsSeen(eventId);
 
+      const eventName = String(payload?.EventName || payload?.event || '').toLowerCase();
+      const isCall = eventName.includes('videotalk') || eventName.includes('call') || eventName.includes('bell') || eventName.includes('timbre');
+
       const evento: EventoAcceso = {
         dispositivo_id: device.id,
         nombre_dispositivo: device.nombre_identificador,
-        tipo_evento: payload?.Action === 'Start' ? 'entrada' : 'salida',
+        tipo_evento: isCall ? 'llamada' : (payload?.Action === 'Start' ? 'entrada' : 'salida'),
         metodo_acceso: 'tarjeta',
         nombre_persona: this.firstText(payload?.Name, payload?.UserName, payload?.User),
         documento_persona: this.firstText(payload?.UserID, payload?.UserId, payload?.UserNo, payload?.EmployeeNo),
@@ -401,6 +404,10 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private mapHikvisionEventType(major: number, minor: number, eventType: string): string {
+    // Intercomunicador / Timbre
+    if (major === 3 || minor === 44 || minor === 9 || minor === 22 || String(eventType).toLowerCase().includes('call') || String(eventType).toLowerCase().includes('ring')) {
+      return 'llamada';
+    }
     if (major === 5) {
       if (minor === 75) return 'entrada';
       if (minor === 76) return 'salida';
