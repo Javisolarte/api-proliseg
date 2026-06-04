@@ -207,19 +207,34 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   ) {
     const base = `http://${ip}:${port}`;
     const auth = { username: user, password: pass };
-    const webhookUrl = `${webhookBase}/hik/${device.id}`;
+    
+    const isVpn = this.isVpnIp(device.ip_direccion || ip);
+    
+    let ipAddressVal = '10.8.0.1';
+    let portNoVal = 80;
+    let protocolVal = 'HTTP';
+    let addressingTypeVal = 'ipaddress';
+    let webhookUrl = `http://10.8.0.1/api/control-acceso/webhook/evento/hik/${device.id}`;
+    
+    if (!isVpn) {
+      ipAddressVal = 'servidor.proliseg.com';
+      portNoVal = 443;
+      protocolVal = 'HTTPS';
+      addressingTypeVal = 'hostname';
+      webhookUrl = `${webhookBase}/hik/${device.id}`;
+    }
 
     const payload = `<?xml version="1.0" encoding="UTF-8"?>
 <HttpHostNotificationList>
   <HttpHostNotification version="2.0">
     <id>1</id>
     <url>${webhookUrl}</url>
-    <protocolType>HTTP</protocolType>
+    <protocolType>${protocolVal}</protocolType>
     <parameterFormatType>JSON</parameterFormatType>
-    <addressingFormatType>ipaddress</addressingFormatType>
-    <hostName>${webhookUrl}</hostName>
-    <ipAddress>servidor.proliseg.com</ipAddress>
-    <portNo>443</portNo>
+    <addressingFormatType>${addressingTypeVal}</addressingFormatType>
+    <hostName>${ipAddressVal}</hostName>
+    <ipAddress>${ipAddressVal}</ipAddress>
+    <portNo>${portNoVal}</portNo>
     <httpAuthenticationMethod>none</httpAuthenticationMethod>
   </HttpHostNotification>
 </HttpHostNotificationList>`;
@@ -230,7 +245,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       { auth, timeout: 5_000, headers: { 'Content-Type': 'application/xml' } }
     );
 
-    this.logger.log(`✅ [EventSystem] Webhook Hikvision registrado → ${device.nombre_identificador}`);
+    this.logger.log(`✅ [EventSystem] Webhook Hikvision registrado → ${device.nombre_identificador} via ${isVpn ? 'VPN (HTTP)' : 'Internet (HTTPS)'}`);
   }
 
   // ─── Registro de webhook en Dahua CGI ─────────────────────────────────────
@@ -240,14 +255,18 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   ) {
     const base = `http://${ip}:${port}`;
     const auth = { username: user, password: pass };
-    const webhookUrl = `${webhookBase}/dahua/${device.id}`;
+    
+    const isVpn = this.isVpnIp(device.ip_direccion || ip);
+    const webhookUrl = isVpn 
+      ? `http://10.8.0.1/api/control-acceso/webhook/evento/dahua/${device.id}`
+      : `${webhookBase}/dahua/${device.id}`;
 
     await axios.get(
       `${base}/cgi-bin/configManager.cgi?action=setConfig&VSP_IPAddress[0].Enable=true&VSP_IPAddress[0].Address=${encodeURIComponent(webhookUrl)}&VSP_IPAddress[0].Protocol=HTTP`,
       { auth, timeout: 5_000 }
     );
 
-    this.logger.log(`✅ [EventSystem] Webhook Dahua registrado → ${device.nombre_identificador}`);
+    this.logger.log(`✅ [EventSystem] Webhook Dahua registrado → ${device.nombre_identificador} via ${isVpn ? 'VPN (HTTP)' : 'Internet (HTTP)'}`);
   }
 
   // ─── Fallback Polling (solo si no soporta webhook) ────────────────────────
@@ -507,5 +526,9 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       .toUpperCase()
       .slice(0, 32) || 'SIN-ID';
     return `AUTO-${dispositivoId.slice(0, 8)}-${normalized}`;
+  }
+
+  private isVpnIp(ip: string): boolean {
+    return /^10\.8\./.test(ip);
   }
 }
