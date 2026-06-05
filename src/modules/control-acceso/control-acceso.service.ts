@@ -838,7 +838,7 @@ export class ControlAccesoService implements OnModuleInit {
 
       const pathPayload = {
         source: sourceUrl,
-        sourceOnDemand: false, // FALSE: La conexión RTSP se mantiene activa permanentemente para evitar caídas y reconexiones lentas
+        sourceOnDemand: true, // TRUE: La conexión RTSP solo se inicia cuando hay un visualizador activo para ahorrar datos y CPU
         rtspTransport: 'tcp', // REQUERIDO: TCP atraviesa el NAT de MikroTik sin perder paquetes
       };
 
