@@ -11,6 +11,7 @@ export class ControlAccesoService implements OnModuleInit {
 
   private readonly proxyUrl = 'https://servidor.proliseg.com/dispositivos';
   private readonly apiKey = 'proliseg-acceso-2026';
+  private digestChallengeCache = new Map<string, { realm: string; nonce: string; qop: string }>();
 
   constructor(
     private readonly supabase: SupabaseService,
@@ -797,6 +798,16 @@ export class ControlAccesoService implements OnModuleInit {
       }
 
       const dev = devices[0];
+      
+      // Si el equipo está marcado como "sin cámara" en su configuración técnica
+      if (dev.configuracion_tecnica?.sin_camara || dev.configuracion_tecnica?.sin_video || dev.configuracion_tecnica?.no_camera) {
+        this.logger.log(`ℹ️ [WEBRTC] Dispositivo ${deviceId} configurado sin cámara. Retornando bandera sin_camara.`);
+        return {
+          sinCamara: true,
+          nombrePuesto: dev.nombre_identificador || dev.nombre || 'Control de Acceso'
+        };
+      }
+
       const user = dev.credencial_usuario || 'admin';
       const pass = dev.credencial_password || 'proliseg#123';
       const rtspTarget = await this.resolveRtspNetworkTarget(dev);
@@ -1793,6 +1804,52 @@ export class ControlAccesoService implements OnModuleInit {
     timeout: number = 15000,
     headers: Record<string, string> = {},
   ): Promise<any> {
+    const host = new URL(url).host;
+    const cached = this.digestChallengeCache.get(host);
+
+    if (cached) {
+      const { realm, nonce, qop } = cached;
+      const nc = '00000001';
+      const cnonce = randomBytes(4).toString('hex');
+      const uri = new URL(url).pathname + (new URL(url).search || '');
+
+      const ha1 = createHash('md5').update(`${user}:${realm}:${pass}`).digest('hex');
+      const ha2 = createHash('md5').update(`${method}:${uri}`).digest('hex');
+      let responseHash = '';
+
+      if (qop === 'auth') {
+        responseHash = createHash('md5').update(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`).digest('hex');
+      } else {
+        responseHash = createHash('md5').update(`${ha1}:${nonce}:${ha2}`).digest('hex');
+      }
+
+      let authStr = `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${responseHash}"`;
+      if (qop === 'auth') {
+        authStr += `, qop="${qop}", nc=${nc}, cnonce="${cnonce}"`;
+      }
+
+      const config: any = {
+        method,
+        url,
+        headers: { ...headers, 'Authorization': authStr },
+        timeout,
+        responseType
+      };
+      if (data !== undefined && data !== null) config.data = data;
+
+      try {
+        this.logger.debug(`⚡ [DIGEST CACHE HIT] Sending pre-authenticated request to ${host}`);
+        return await axios(config);
+      } catch (error) {
+        if (error.response && error.response.status === 401) {
+          this.logger.debug(`⚠️ [DIGEST CACHE EXPIRED] Pre-authenticated request failed with 401. Clearing cache for ${host}`);
+          this.digestChallengeCache.delete(host);
+        } else {
+          throw error;
+        }
+      }
+    }
+
     try {
       const config: any = { method, url, timeout, responseType, headers };
       if (data !== undefined && data !== null) config.data = data;
@@ -1811,6 +1868,11 @@ export class ControlAccesoService implements OnModuleInit {
             const qopRaw = matchQop ? matchQop[1] : '';
             const qopOptions = qopRaw.split(',').map((item: string) => item.trim()).filter(Boolean);
             const qop = qopOptions.includes('auth') ? 'auth' : (qopOptions[0] || '');
+
+            // Guardar en la caché para evitar la doble petición en el siguiente comando
+            this.digestChallengeCache.set(host, { realm, nonce, qop });
+            this.logger.debug(`💾 [DIGEST CACHE SAVE] Cached challenge for ${host}`);
+
             const nc = '00000001';
             const cnonce = randomBytes(4).toString('hex');
             const uri = new URL(url).pathname + (new URL(url).search || '');

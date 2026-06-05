@@ -200,7 +200,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     }
 
     // URL pública donde las cámaras deben mandar sus eventos
-    const webhookBase = 'https://servidor.proliseg.com/api/control-acceso/webhook/evento';
+    const webhookBase = 'http://servidor.proliseg.com/api/control-acceso/webhook/evento';
 
     for (const device of devices as DeviceInfo[]) {
       const marca = (device.configuracion_tecnica?.marca || 'hikvision').toLowerCase();
