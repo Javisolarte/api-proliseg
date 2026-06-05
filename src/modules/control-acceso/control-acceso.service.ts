@@ -827,7 +827,7 @@ export class ControlAccesoService implements OnModuleInit {
 
       const pathPayload = {
         source: sourceUrl,
-        sourceOnDemand: true, // TRUE: La cámara solo se conecta cuando alguien la está viendo
+        sourceOnDemand: false, // FALSE: La conexión RTSP se mantiene activa permanentemente para evitar caídas y reconexiones lentas
         rtspTransport: 'tcp', // REQUERIDO: TCP atraviesa el NAT de MikroTik sin perder paquetes
       };
 
