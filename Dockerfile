@@ -1,14 +1,48 @@
-FROM node:20-slim
+# ==========================================
+# ETAPA 1: Compilación de la aplicación
+# ==========================================
+FROM node:20-slim AS builder
 
-# Evitar la descarga manual de Chromium por parte de Puppeteer durante el build
+# Configurar variables para evitar prompts interactivos durante el build
+ARG DEBIAN_FRONTEND=noninteractive
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+
+WORKDIR /app
+
+# Copiar archivos de dependencias primero para cachear la instalación de npm
+COPY package*.json ./
+
+# Configurar reintentos en npm por si la conexión del servidor es inestable
+RUN npm config set fetch-retries 5 && \
+    npm config set fetch-retry-mintimeout 15000 && \
+    npm config set fetch-retry-maxtimeout 90000
+
+# Instalar TODAS las dependencias (necesitamos devDependencies como typescript y nest-cli)
+RUN npm install --include=dev --ignore-scripts
+
+# Copiar el código fuente
+COPY . .
+
+# Compilar la aplicación NestJS a JavaScript
+RUN npm run build
+
+# Eliminar dependencias de desarrollo y limpiar la caché de npm para aligerar la imagen
+RUN npm prune --production && npm cache clean --force
+
+
+# ==========================================
+# ETAPA 2: Entorno de ejecución de producción
+# ==========================================
+FROM node:20-slim AS runner
+
+# Configurar variables de entorno requeridas por Puppeteer y Node
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-
-# Configurar variable para evitar prompts interactivos que congelan la instalación de paquetes
+ENV NODE_ENV=production
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Instalar ffmpeg, herramientas de healthcheck y Chromium (apt-get resolverá todas las dependencias requeridas automáticamente)
-RUN apt-get update && apt-get install -y \
+# Instalar ffmpeg, herramientas de healthcheck y Chromium en la etapa final
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
     wget \
@@ -16,31 +50,20 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Crear directorio de trabajo
 WORKDIR /app
 
-# Copiar package files primero para aprovechar la caché de capas de Docker
-COPY package*.json ./
+# Copiar solo el código compilado y los módulos de producción desde el builder
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
 
-# Configurar reintentos de npm para conexiones de red inestables o lentas
-RUN npm config set fetch-retries 5 && \
-    npm config set fetch-retry-mintimeout 15000 && \
-    npm config set fetch-retry-maxtimeout 90000
+# Copiar el archivo de Firebase si existe (usando truco de wildcard opcional con package.json)
+COPY --from=builder /app/package.json /app/*-firebase-adminsdk-*.json ./
 
-# Instalar todas las dependencias (incluyendo devDependencies como TypeScript para la fase de compilación)
-# Ignoramos los scripts para evitar la descarga de Chrome de Puppeteer en el postinstall
-RUN npm install --include=dev --ignore-scripts
-
-# Copiar el resto del código
-COPY . .
-
-# Compilar TypeScript
-RUN npm run build
-
-# Exponer puerto
+# Exponer el puerto
 EXPOSE 3000
 
-# Healthcheck para Coolify: soporta tanto el puerto de producción (10000) como el de desarrollo (3000)
+# Healthcheck optimizado para Coolify
 HEALTHCHECK --interval=10s --timeout=5s --start-period=180s --retries=12 CMD curl -f http://127.0.0.1:10000/ || curl -f http://127.0.0.1:3000/ || exit 1
 
 # Comando de inicio
