@@ -33,7 +33,8 @@ RUN npm run build
 EXPOSE 3000
 
 # Healthcheck para Coolify: la app puede tardar mas de 60s en mapear todos los modulos.
-HEALTHCHECK --interval=10s --timeout=5s --start-period=180s --retries=12 CMD wget -qO- "http://127.0.0.1:${PORT:-3000}/" || exit 1
+# Soporta tanto el puerto de producción (10000) como el de desarrollo (3000)
+HEALTHCHECK --interval=10s --timeout=5s --start-period=180s --retries=12 CMD curl -f http://127.0.0.1:10000/ || curl -f http://127.0.0.1:3000/ || exit 1
 
 # Comando de inicio
 CMD ["npm", "run", "start:prod"]
