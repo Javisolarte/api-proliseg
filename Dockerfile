@@ -1,7 +1,34 @@
 FROM node:20-slim
 
-# Instalar ffmpeg y herramientas de healthcheck
-RUN apt-get update && apt-get install -y ffmpeg curl wget
+# Evitar la descarga manual de Chromium por parte de Puppeteer durante el build
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+# Instalar ffmpeg, herramientas de healthcheck, Chromium y sus dependencias necesarias
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    curl \
+    wget \
+    chromium \
+    fonts-liberation \
+    libappindicator3-1 \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libcups2 \
+    libdbus-1-3 \
+    libdrm2 \
+    libgbm1 \
+    libgtk-3-0 \
+    libnspr4 \
+    libnss3 \
+    libx11-xcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    xdg-utils \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Crear directorio de trabajo
 WORKDIR /app
@@ -15,7 +42,8 @@ RUN npm config set fetch-retries 5 && \
     npm config set fetch-retry-maxtimeout 90000
 
 # Instalar todas las dependencias (incluyendo devDependencies como TypeScript para la fase de compilación)
-RUN npm install --include=dev
+# Ignoramos los scripts para evitar la descarga de Chrome de Puppeteer en el postinstall
+RUN npm install --include=dev --ignore-scripts
 
 # Copiar el resto del código
 COPY . .
