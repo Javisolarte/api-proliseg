@@ -3,7 +3,9 @@ FROM node:20-slim
 # Evitar la descarga manual de Chromium por parte de Puppeteer durante el build
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-ENV NODE_ENV=production
+
+# Configurar explícitamente NODE_ENV a desarrollo durante el build para evitar que npm u otras herramientas omitan cosas
+ENV NODE_ENV=development
 
 # Configurar variable para evitar prompts interactivos
 ARG DEBIAN_FRONTEND=noninteractive
@@ -44,6 +46,9 @@ RUN npm prune --production && npm cache clean --force
 
 # 9. Copiar el archivo de Firebase si existe (opcional con truco de wildcard)
 COPY package.json *-firebase-adminsdk-*.json ./
+
+# Configurar NODE_ENV a producción para el tiempo de ejecución
+ENV NODE_ENV=production
 
 # Exponer puerto
 EXPOSE 3000
