@@ -11,7 +11,7 @@ ENV NODE_ENV=development
 ARG DEBIAN_FRONTEND=noninteractive
 
 # 1. Instalar dependencias del sistema operativo (Paso pesado - Secuencial y Cacheado)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
     wget \
