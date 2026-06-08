@@ -836,10 +836,14 @@ export class ControlAccesoService implements OnModuleInit {
       const domain = 'servidor.proliseg.com';
       const apiAuth = { username: 'admin', password: 'proliseg1025' };
 
+      // Leer valores personalizados desde configuracion_tecnica (con fallbacks estables)
+      const sourceOnDemand = dev.configuracion_tecnica?.source_on_demand ?? true;
+      const rtspTransport = dev.configuracion_tecnica?.rtsp_transport || 'tcp';
+
       const pathPayload = {
         source: sourceUrl,
-        sourceOnDemand: true, // TRUE: La conexión RTSP solo se inicia cuando hay un visualizador activo para ahorrar datos y CPU
-        rtspTransport: 'tcp', // REQUERIDO: TCP atraviesa el NAT de MikroTik sin perder paquetes
+        sourceOnDemand: sourceOnDemand,
+        rtspTransport: rtspTransport,
       };
 
       try {
