@@ -371,7 +371,7 @@ export class ControlAccesoService implements OnModuleInit {
     );
 
     if (this.isVpnIp(ip)) {
-      return { ip, port: mappedHttp || originalHttp || 80, via: 'vpn' };
+      return { ip, port: originalHttp || 80, via: 'vpn' };
     }
 
     if (this.isPrivateIp(ip)) {
@@ -818,7 +818,7 @@ export class ControlAccesoService implements OnModuleInit {
     );
 
     if (this.isVpnIp(ip)) {
-      return { ip, port: mappedRtsp || configuredRtsp || 554, via: 'vpn' };
+      return { ip, port: configuredRtsp || 554, via: 'vpn' };
     }
 
     if (mappedRtsp) {
@@ -965,8 +965,14 @@ export class ControlAccesoService implements OnModuleInit {
         const dev = devices[0];
         user = dev.credencial_usuario || 'admin';
         pass = dev.credencial_password || '';
-        port = dev.configuracion_tecnica?.puerto || dev.puerto_servicio || 80;
         targetIp = dev.ip_direccion || ip;
+        if (this.isVpnIp(targetIp)) {
+          port = dev.configuracion_tecnica?.puertos_mapeados?.original_http
+            || dev.configuracion_tecnica?.puerto_http_original
+            || 80;
+        } else {
+          port = dev.configuracion_tecnica?.puerto || dev.puerto_servicio || 80;
+        }
       }
     } catch (dbErr) {
       this.logger.warn(`⚠️ [SNAPSHOT DB WARN] No se pudo obtener credenciales: ${dbErr.message}. Usando fallbacks.`);
@@ -2273,11 +2279,17 @@ export class ControlAccesoService implements OnModuleInit {
         const dev = devices[0];
         user = dev.credencial_usuario || 'admin';
         pass = dev.credencial_password || '';
-        // Si el dispositivo tiene puertos mapeados por VPN, usamos el mapeado
-        if (dev.puertos_mapeados && dev.puertos_mapeados.mapped_http) {
-          targetPort = dev.puertos_mapeados.mapped_http;
+        if (this.isVpnIp(targetIp)) {
+          targetPort = dev.configuracion_tecnica?.puertos_mapeados?.original_http
+            || dev.configuracion_tecnica?.puerto_http_original
+            || 80;
         } else {
-          targetPort = dev.configuracion_tecnica?.puerto || dev.puerto_servicio || 80;
+          // Si el dispositivo tiene puertos mapeados por VPN, usamos el mapeado
+          if (dev.puertos_mapeados && dev.puertos_mapeados.mapped_http) {
+            targetPort = dev.puertos_mapeados.mapped_http;
+          } else {
+            targetPort = dev.configuracion_tecnica?.puerto || dev.puerto_servicio || 80;
+          }
         }
       }
     } catch (dbErr) { }
