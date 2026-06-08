@@ -2279,8 +2279,9 @@ export class ControlAccesoService implements OnModuleInit {
         user = dev.credencial_usuario || 'admin';
         pass = dev.credencial_password || '';
         // Si el dispositivo tiene puertos mapeados por VPN, usamos el mapeado
-        if (dev.puertos_mapeados && dev.puertos_mapeados.mapped_http) {
-          targetPort = dev.puertos_mapeados.mapped_http;
+        const mappedHttp = dev.configuracion_tecnica?.puertos_mapeados?.mapped_http;
+        if (mappedHttp) {
+          targetPort = mappedHttp;
         } else {
           targetPort = dev.configuracion_tecnica?.puerto || dev.puerto_servicio || 80;
         }
