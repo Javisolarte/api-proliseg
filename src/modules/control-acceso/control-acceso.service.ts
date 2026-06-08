@@ -371,7 +371,7 @@ export class ControlAccesoService implements OnModuleInit {
     );
 
     if (this.isVpnIp(ip)) {
-      return { ip, port: originalHttp || 80, via: 'vpn' };
+      return { ip, port: mappedHttp || originalHttp || 80, via: 'vpn' };
     }
 
     if (this.isPrivateIp(ip)) {
@@ -818,7 +818,7 @@ export class ControlAccesoService implements OnModuleInit {
     );
 
     if (this.isVpnIp(ip)) {
-      return { ip, port: configuredRtsp || 554, via: 'vpn' };
+      return { ip, port: mappedRtsp || configuredRtsp || 554, via: 'vpn' };
     }
 
     if (mappedRtsp) {
@@ -906,7 +906,8 @@ export class ControlAccesoService implements OnModuleInit {
       const apiAuth = { username: 'admin', password: 'proliseg1025' };
 
       // Leer valores personalizados desde configuracion_tecnica (con fallbacks estables)
-      const sourceOnDemand = dev.configuracion_tecnica?.source_on_demand ?? true;
+      const isVpn = this.isVpnIp(targetIp);
+      const sourceOnDemand = dev.configuracion_tecnica?.source_on_demand ?? (isVpn ? false : true);
       const rtspTransport = dev.configuracion_tecnica?.rtsp_transport || 'tcp';
 
       const pathPayload = {
@@ -965,14 +966,8 @@ export class ControlAccesoService implements OnModuleInit {
         const dev = devices[0];
         user = dev.credencial_usuario || 'admin';
         pass = dev.credencial_password || '';
+        port = dev.configuracion_tecnica?.puerto || dev.puerto_servicio || 80;
         targetIp = dev.ip_direccion || ip;
-        if (this.isVpnIp(targetIp)) {
-          port = dev.configuracion_tecnica?.puertos_mapeados?.original_http
-            || dev.configuracion_tecnica?.puerto_http_original
-            || 80;
-        } else {
-          port = dev.configuracion_tecnica?.puerto || dev.puerto_servicio || 80;
-        }
       }
     } catch (dbErr) {
       this.logger.warn(`⚠️ [SNAPSHOT DB WARN] No se pudo obtener credenciales: ${dbErr.message}. Usando fallbacks.`);
@@ -1035,7 +1030,7 @@ export class ControlAccesoService implements OnModuleInit {
     }
 
     const ip = device.ip_direccion;
-    const raw = await this.buscarUsuariosHardware(ip);
+    const raw = await this.buscarUsuariosHardware(ip, device.id);
     const usuarios = this.extractHardwareUsers(raw);
     const resultados: any[] = [];
 
@@ -1105,7 +1100,7 @@ export class ControlAccesoService implements OnModuleInit {
     return null;
   }
 
-  private async buscarUsuariosHardware(ip: string): Promise<any> {
+  private async buscarUsuariosHardware(ip: string, deviceId?: string): Promise<any> {
     let allUsers: any[] = [];
     let position = 0;
     const maxResults = 100;
@@ -1127,7 +1122,7 @@ export class ControlAccesoService implements OnModuleInit {
           'post',
           '/ISAPI/AccessControl/UserInfo/Search?format=json',
           body,
-          { customTimeout: 30000 }
+          { customTimeout: 30000, deviceId }
         );
 
         const usersList = this.extractHardwareUsers(response);
@@ -1154,7 +1149,7 @@ export class ControlAccesoService implements OnModuleInit {
               'get',
               '/ISAPI/AccessControl/UserInfo/Search?format=json',
               null,
-              { customTimeout: 30000 }
+              { customTimeout: 30000, deviceId }
             );
             return response;
           } catch (getErr) {
@@ -2272,24 +2267,22 @@ export class ControlAccesoService implements OnModuleInit {
     try {
       // 1. Consultar base de datos para recuperar credenciales y puerto
       let dbQuery = this.supabase.getClient().from('dispositivos_iot').select('*');
-      dbQuery = dbQuery.eq('ip_direccion', targetIp);
+      if (params.deviceId) {
+        dbQuery = dbQuery.eq('id', params.deviceId);
+      } else {
+        dbQuery = dbQuery.eq('ip_direccion', targetIp);
+      }
 
       const { data: devices } = await dbQuery;
       if (devices && devices.length > 0) {
         const dev = devices[0];
         user = dev.credencial_usuario || 'admin';
         pass = dev.credencial_password || '';
-        if (this.isVpnIp(targetIp)) {
-          targetPort = dev.configuracion_tecnica?.puertos_mapeados?.original_http
-            || dev.configuracion_tecnica?.puerto_http_original
-            || 80;
+        // Si el dispositivo tiene puertos mapeados por VPN, usamos el mapeado
+        if (dev.puertos_mapeados && dev.puertos_mapeados.mapped_http) {
+          targetPort = dev.puertos_mapeados.mapped_http;
         } else {
-          // Si el dispositivo tiene puertos mapeados por VPN, usamos el mapeado
-          if (dev.puertos_mapeados && dev.puertos_mapeados.mapped_http) {
-            targetPort = dev.puertos_mapeados.mapped_http;
-          } else {
-            targetPort = dev.configuracion_tecnica?.puerto || dev.puerto_servicio || 80;
-          }
+          targetPort = dev.configuracion_tecnica?.puerto || dev.puerto_servicio || 80;
         }
       }
     } catch (dbErr) { }
