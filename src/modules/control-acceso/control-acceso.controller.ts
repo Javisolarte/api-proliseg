@@ -1,9 +1,10 @@
-import { Controller, Post, Get, Param, Res, Logger, Req, Body, Query, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Get, Param, Res, Logger, Req, Body, Query, BadRequestException, Delete } from '@nestjs/common';
 import { ControlAccesoService } from './control-acceso.service';
 import { DevicePollerService } from './device-poller.service';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { Public } from '../auth/decorators/public.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CreateDispositivoDto, CreatePersonaAccesoDto } from './dto/control-acceso.dto';
 
 @ApiTags('Control de Acceso')
@@ -18,16 +19,19 @@ export class ControlAccesoController {
 
   @Post('comando')
   @ApiOperation({ summary: 'Envía un comando de puerta (abrir, cerrar, siempre-abierta, siempre-cerrada). Compatible con Hikvision y Dahua.' })
-  async enviarComando(@Body() body: {
-    ip: string;
-    doorId?: number;
-    command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada';
-    deviceId?: string;   // Si se provee, el backend carga usuario/pass/marca automáticamente
-    user?: string;
-    pass?: string;
-    port?: number;
-    marca?: string;      // 'hikvision' | 'dahua' | '' (auto-detect)
-  }) {
+  async enviarComando(
+    @Body() body: {
+      ip: string;
+      doorId?: number;
+      command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada';
+      deviceId?: string;   // Si se provee, el backend carga usuario/pass/marca automáticamente
+      user?: string;
+      pass?: string;
+      port?: number;
+      marca?: string;      // 'hikvision' | 'dahua' | '' (auto-detect)
+    },
+    @CurrentUser() operator?: any
+  ) {
     this.logger.log(`🚪 [COMANDO] Enviando "${body.command}" a la IP ${body.ip} | Puerta ${body.doorId || 1}`);
     const result = await this.controlAccesoService.controlPuerta(
       body.ip,
@@ -39,6 +43,7 @@ export class ControlAccesoController {
         pass: body.pass,
         port: body.port,
         marca: body.marca,
+        operator: operator,
       }
     );
 
@@ -83,6 +88,12 @@ export class ControlAccesoController {
   @ApiOperation({ summary: 'Crear o actualizar una persona de control de acceso' })
   async createPersona(@Body() body: CreatePersonaAccesoDto) {
     return this.controlAccesoService.createPersona(body);
+  }
+
+  @Post('personas/:id')
+  @ApiOperation({ summary: 'Actualizar campos específicos de una persona (ej: activo)' })
+  async updatePersona(@Param('id') id: string, @Body() body: any) {
+    return this.controlAccesoService.updatePersona(id, body);
   }
 
   @Post('sync-hardware')
@@ -296,5 +307,25 @@ export class ControlAccesoController {
       limit: limit ? Number(limit) : 50,
       desde,
     });
+  }
+
+  @Post('recopilacion/sync-registro')
+  @ApiOperation({ summary: 'Sincronizar registro recopilado y crear cuenta de residente' })
+  async syncRecopilacion(
+    @Body() body: { registroId: number; dispositivoIds: string[] }
+  ) {
+    if (!body.registroId) {
+      throw new BadRequestException('registroId es obligatorio');
+    }
+    return this.controlAccesoService.syncRecopilacionRegistro(
+      body.registroId,
+      body.dispositivoIds || []
+    );
+  }
+
+  @Delete('personas/:id')
+  @ApiOperation({ summary: 'Eliminar una persona de la base de datos y de los dispositivos vinculados' })
+  async deletePersona(@Param('id') id: string) {
+    return this.controlAccesoService.deletePersona(id);
   }
 }

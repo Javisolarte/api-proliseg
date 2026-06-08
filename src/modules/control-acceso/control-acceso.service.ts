@@ -19,6 +19,10 @@ export class ControlAccesoService implements OnModuleInit {
   ) { }
 
   async onModuleInit() {
+    this.devicePoller.setControlPuertaFn((ip, doorId, command, options) =>
+      this.controlPuerta(ip, doorId, command, options),
+    );
+
     this.logger.log('🚀 [MediaMTX] Iniciando sincronización de cámaras en 5 segundos...');
     // Ejecutar en segundo plano para no bloquear el arranque
     setTimeout(() => {
@@ -289,10 +293,10 @@ export class ControlAccesoService implements OnModuleInit {
     ip: string,
     doorId: number = 1,
     command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada',
-    options?: { user?: string; pass?: string; port?: number; marca?: string; deviceId?: string }
+    options?: { user?: string; pass?: string; port?: number; marca?: string; deviceId?: string; operator?: any }
   ): Promise<{ ok: boolean; mensaje: string; marca?: string; detalle?: any }> {
     this.logger.log(`🚪 [PUERTA] Comando "${command}" → IP ${ip} | Puerta ${doorId}`);
-
+ 
     // Detectar marca desde la base de datos si se provee deviceId
     let marca = options?.marca?.toLowerCase() || 'hikvision';
     let user = options?.user || 'admin';
@@ -300,7 +304,7 @@ export class ControlAccesoService implements OnModuleInit {
     let port = options?.port || 80;
     let targetIp = ip;
     let deviceConfig: any = null;
-
+ 
     if (options?.deviceId) {
       const { data: dev } = await this.supabase
         .getClient()
@@ -308,7 +312,7 @@ export class ControlAccesoService implements OnModuleInit {
         .select('ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica')
         .eq('id', options.deviceId)
         .maybeSingle();
-
+ 
       if (dev) {
         deviceConfig = dev.configuracion_tecnica || {};
         targetIp = dev.ip_direccion || targetIp;
@@ -318,16 +322,16 @@ export class ControlAccesoService implements OnModuleInit {
         port = Number(deviceConfig?.puerto || port);
       }
     }
-
+ 
     if (!targetIp) {
       return { ok: false, mensaje: 'No hay IP o dispositivo destino para ejecutar el comando de puerta' };
     }
-
+ 
     const target = await this.resolveDoorNetworkTarget(targetIp, port, deviceConfig);
-
+ 
     try {
       let resultado: { ok: boolean; mensaje: string; marca?: string; detalle?: any };
-
+ 
       if (marca.includes('hikvision') || marca.includes('hik')) {
         resultado = await this.controlPuertaHikvision(target.ip, target.port, doorId, command, user, pass);
       } else if (marca.includes('dahua') || marca.includes('dh')) {
@@ -336,13 +340,13 @@ export class ControlAccesoService implements OnModuleInit {
         // Intento genérico: probamos Hikvision primero, luego Dahua
         try {
           const resultado = await this.controlPuertaHikvision(target.ip, target.port, doorId, command, user, pass);
-          return this.registrarResultadoPuerta(targetIp, doorId, command, options?.deviceId, { ...resultado, marca: 'Hikvision (auto-detectado)' });
+          return this.registrarResultadoPuerta(targetIp, doorId, command, options?.deviceId, { ...resultado, marca: 'Hikvision (auto-detectado)' }, options?.operator);
         } catch {
           const resultado = await this.controlPuertaDahua(target.ip, target.port, doorId, command, user, pass);
-          return this.registrarResultadoPuerta(targetIp, doorId, command, options?.deviceId, { ...resultado, marca: 'Dahua (auto-detectado)' });
+          return this.registrarResultadoPuerta(targetIp, doorId, command, options?.deviceId, { ...resultado, marca: 'Dahua (auto-detectado)' }, options?.operator);
         }
       }
-
+ 
       return this.registrarResultadoPuerta(targetIp, doorId, command, options?.deviceId, {
         ...resultado,
         detalle: {
@@ -350,7 +354,7 @@ export class ControlAccesoService implements OnModuleInit {
           target: `${target.ip}:${target.port}`,
           via: target.via,
         },
-      });
+      }, options?.operator);
     } catch (err) {
       this.logger.error(`❌ [PUERTA ERROR] ${err.message}`);
       return { ok: false, mensaje: `Error al ejecutar comando: ${err.message}` };
@@ -401,6 +405,7 @@ export class ControlAccesoService implements OnModuleInit {
     command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada',
     deviceId: string | undefined,
     resultado: { ok: boolean; mensaje: string; marca?: string; detalle?: any },
+    operator?: any,
   ) {
     if (!resultado.ok) return resultado;
 
@@ -427,11 +432,16 @@ export class ControlAccesoService implements OnModuleInit {
       }
 
       if (device?.id) {
+        const operatorName = operator?.nombre_completo || operator?.name || 'Operador Central';
+        const operatorDoc = operator?.cedula || 'CENTRAL';
+
         this.devicePoller.guardarEventoManual({
           dispositivo_id: device.id,
           nombre_dispositivo: device.nombre_identificador || ip,
           tipo_evento: this.mapDoorCommandToEvent(command),
           metodo_acceso: 'remoto',
+          nombre_persona: `Abierto por ${operatorName}`,
+          documento_persona: operatorDoc,
           timestamp: new Date().toISOString(),
           detalles_raw: {
             origen: 'comando_backend',
@@ -439,6 +449,11 @@ export class ControlAccesoService implements OnModuleInit {
             doorId,
             marca: resultado.marca,
             mensaje: resultado.mensaje,
+            operador: {
+              id: operator?.id || null,
+              nombre: operatorName,
+              cedula: operatorDoc,
+            }
           },
         });
       }
@@ -715,6 +730,60 @@ export class ControlAccesoService implements OnModuleInit {
 
     const [personaConFoto] = await this.attachFotosPersonas([persona]);
     return personaConFoto || persona;
+  }
+
+  async updatePersona(id: string, body: any) {
+    const admin = this.supabase.getSupabaseAdminClient();
+
+    // 1. Obtener la persona actual antes de la actualización
+    const { data: persona, error: pErr } = await admin
+      .from('personas_gestion_acceso')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (pErr || !persona) {
+      throw new Error(`Persona no encontrada: ${pErr?.message}`);
+    }
+
+    // 2. Actualizar en la base de datos
+    const { data: updatedPersona, error: uErr } = await admin
+      .from('personas_gestion_acceso')
+      .update(body)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (uErr) throw uErr;
+
+    // 3. Si se cambia el estado "activo", sincronizar con los dispositivos vinculados
+    if (body.activo !== undefined && body.activo !== persona.activo) {
+      const { data: permisos } = await admin
+        .from('acceso_permisos_dispositivos')
+        .select('*, dispositivo:dispositivos_iot(*)')
+        .eq('persona_id', id);
+
+      for (const p of permisos || []) {
+        const ip = p.dispositivo?.ip_direccion;
+        if (ip) {
+          try {
+            if (body.activo === false) {
+              // Si se desactiva, lo quitamos físicamente del chip del hardware
+              await this.eliminarUsuarioDeHardware(ip, persona.documento_identidad);
+              this.logger.log(`👤 [HARDWARE SYNC] Acceso DESACTIVADO: Eliminado usuario ${persona.documento_identidad} de dispositivo ${ip}`);
+            } else if (body.activo === true) {
+              // Si se activa, lo volvemos a empujar al chip del hardware
+              await this.pushPersonaToDevice(id, p.dispositivo_id);
+              this.logger.log(`👤 [HARDWARE SYNC] Acceso ACTIVADO: Empujado usuario ${persona.documento_identidad} a dispositivo ${ip}`);
+            }
+          } catch (err) {
+            this.logger.warn(`⚠️ [HARDWARE SYNC] Error al sincronizar estado activo de persona en ${ip}: ${err.message}`);
+          }
+        }
+      }
+    }
+
+    return updatedPersona;
   }
 
   /**
@@ -1031,20 +1100,75 @@ export class ControlAccesoService implements OnModuleInit {
   }
 
   private async buscarUsuariosHardware(ip: string): Promise<any> {
-    const body = {
-      UserInfoSearchCond: {
-        searchID: `sync_${Date.now()}`,
-        searchResultPosition: 0,
-        maxResults: 1000,
-      },
-    };
+    let allUsers: any[] = [];
+    let position = 0;
+    const maxResults = 100;
+    let totalMatches = 0;
+    const searchId = `sync_${Date.now()}`;
 
-    try {
-      return await this.proxyRequestDynamic(ip, 'post', '/ISAPI/AccessControl/UserInfo/Search?format=json', body, { customTimeout: 30000 });
-    } catch (error) {
-      this.logger.warn(`⚠️ [SYNC] POST UserInfo/Search falló, reintentando GET: ${error.message}`);
-      return this.proxyRequestDynamic(ip, 'get', '/ISAPI/AccessControl/UserInfo/Search?format=json', null, { customTimeout: 30000 });
-    }
+    do {
+      const body = {
+        UserInfoSearchCond: {
+          searchID: searchId,
+          searchResultPosition: position,
+          maxResults: maxResults,
+        },
+      };
+
+      try {
+        const response = await this.proxyRequestDynamic(
+          ip,
+          'post',
+          '/ISAPI/AccessControl/UserInfo/Search?format=json',
+          body,
+          { customTimeout: 30000 }
+        );
+
+        const usersList = this.extractHardwareUsers(response);
+        if (!usersList.length) {
+          break;
+        }
+        allUsers = allUsers.concat(usersList);
+
+        const currentMatches = response?.UserInfoSearch?.numOfMatches || response?.numOfMatches || usersList.length;
+        totalMatches = response?.UserInfoSearch?.totalMatches || response?.totalMatches || 0;
+
+        // Condición de parada robusta: última página o se alcanzó el total informado
+        if (usersList.length < maxResults || (totalMatches > 0 && allUsers.length >= totalMatches) || currentMatches === 0) {
+          break;
+        }
+
+        position += currentMatches;
+      } catch (error) {
+        this.logger.warn(`⚠️ [SYNC] POST UserInfo/Search falló en posición ${position}: ${error.message}`);
+        if (position === 0) {
+          try {
+            const response = await this.proxyRequestDynamic(
+              ip,
+              'get',
+              '/ISAPI/AccessControl/UserInfo/Search?format=json',
+              null,
+              { customTimeout: 30000 }
+            );
+            return response;
+          } catch (getErr) {
+            this.logger.error(`❌ [SYNC] GET UserInfo/Search falló también: ${getErr.message}`);
+            throw getErr;
+          }
+        }
+        break;
+      }
+    } while (allUsers.length < totalMatches);
+
+    return {
+      UserInfoSearch: {
+        searchID: searchId,
+        responseStatusStrg: 'OK',
+        numOfMatches: allUsers.length,
+        totalMatches: allUsers.length,
+        UserInfo: allUsers,
+      }
+    };
   }
 
   private extractHardwareUsers(raw: any): any[] {
@@ -1726,6 +1850,401 @@ export class ControlAccesoService implements OnModuleInit {
       faceData: faceData
     };
     return this.proxyRequestDynamic(ip, 'post', isapiPath, body);
+  }
+
+  async crearUsuarioEnHardware(ip: string, userId: string, nombre: string): Promise<any> {
+    const isapiPath = `/ISAPI/AccessControl/UserInfo/Record?format=json`;
+    const body = {
+      UserInfo: {
+        employeeNo: userId,
+        name: nombre.slice(0, 32),
+        userType: 'normal',
+        Valid: {
+          enable: true,
+          beginTime: '2026-01-01T00:00:00',
+          endTime: '2036-12-31T23:59:59',
+          timeType: 'local',
+        },
+        doorRight: '1',
+        RightPlan: [
+          {
+            doorNo: 1,
+            planTemplateNo: '1',
+          },
+        ],
+      },
+    };
+    try {
+      return await this.proxyRequestDynamic(ip, 'post', isapiPath, body);
+    } catch (error) {
+      this.logger.warn(`⚠️ [HARDWARE] POST UserInfo/Record falló, probando PUT: ${error.message}`);
+      return this.proxyRequestDynamic(ip, 'put', isapiPath, body);
+    }
+  }
+
+  async registrarTarjetaEnHardware(ip: string, userId: string, cardNo: string): Promise<any> {
+    if (!cardNo) return { ok: true, message: 'No card provided' };
+    const isapiPath = `/ISAPI/AccessControl/CardInfo/Record?format=json`;
+    const body = {
+      CardInfo: {
+        employeeNo: userId,
+        cardNo: cardNo,
+        cardType: 'normal',
+        leaderCard: false,
+      },
+    };
+    try {
+      return await this.proxyRequestDynamic(ip, 'post', isapiPath, body);
+    } catch (error) {
+      this.logger.warn(`⚠️ [HARDWARE] POST CardInfo/Record falló, probando PUT: ${error.message}`);
+      return this.proxyRequestDynamic(ip, 'put', isapiPath, body);
+    }
+  }
+
+  async eliminarUsuarioDeHardware(ip: string, userId: string): Promise<any> {
+    const isapiPath = `/ISAPI/AccessControl/UserInfo/Delete?format=json`;
+    const body = {
+      UserInfoDetail: {
+        mode: 'byEmployeeNo',
+        EmployeeNoList: [
+          {
+            employeeNo: userId,
+          },
+        ],
+      },
+    };
+    return this.proxyRequestDynamic(ip, 'put', isapiPath, body);
+  }
+
+  async pushPersonaToDevice(personaId: string, dispositivoId: string): Promise<any> {
+    const admin = this.supabase.getSupabaseAdminClient();
+
+    const { data: persona, error: pErr } = await admin
+      .from('personas_gestion_acceso')
+      .select('*')
+      .eq('id', personaId)
+      .single();
+
+    if (pErr || !persona) {
+      throw new Error(`Persona ${personaId} no encontrada: ${pErr?.message}`);
+    }
+
+    const { data: device, error: dErr } = await admin
+      .from('dispositivos_iot')
+      .select('*')
+      .eq('id', dispositivoId)
+      .single();
+
+    if (dErr || !device) {
+      throw new Error(`Dispositivo ${dispositivoId} no encontrado: ${dErr?.message}`);
+    }
+
+    const ip = device.ip_direccion;
+    if (!ip) {
+      throw new Error(`Dispositivo ${dispositivoId} no tiene IP asignada`);
+    }
+
+    await this.crearUsuarioEnHardware(ip, persona.documento_identidad, persona.nombre_completo);
+
+    if (persona.codigo_tarjeta) {
+      await this.registrarTarjetaEnHardware(ip, persona.documento_identidad, persona.codigo_tarjeta);
+    }
+
+    const { data: facial } = await admin
+      .from('biometria_facial')
+      .select('foto_url_storage')
+      .eq('persona_id', personaId)
+      .order('fecha_captura', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const fotoUrl = facial?.foto_url_storage || persona.foto_rostro_url;
+    if (fotoUrl) {
+      try {
+        let base64Photo = '';
+        if (fotoUrl.startsWith('data:image/')) {
+          base64Photo = fotoUrl.split(',')[1] || '';
+        } else {
+          const response = await axios.get(fotoUrl, { responseType: 'arraybuffer', timeout: 15000 });
+          base64Photo = Buffer.from(response.data).toString('base64');
+        }
+
+        if (base64Photo) {
+          await this.uploadRostro(ip, persona.documento_identidad, base64Photo);
+        }
+      } catch (err) {
+        this.logger.warn(`⚠️ [HARDWARE SYNC] No se pudo subir foto de rostro a ${ip}: ${err.message}`);
+      }
+    }
+
+    return { ok: true };
+  }
+
+  async syncRecopilacionRegistro(registroId: number, dispositivoIds: string[]): Promise<any> {
+    const admin = this.supabase.getSupabaseAdminClient();
+
+    const { data: rec, error: recErr } = await admin
+      .from('control_acceso_recoleccion_registros')
+      .select('*, lugar:control_acceso_recoleccion_lugares(*)')
+      .eq('id', registroId)
+      .single();
+
+    if (recErr || !rec) {
+      throw new Error(`Registro de recopilación ${registroId} no encontrado: ${recErr?.message}`);
+    }
+
+    const personaInput = {
+      nombre_completo: rec.nombre_completo,
+      documento_identidad: rec.cedula,
+      lista_estado: 'blanca',
+      entidad_tipo: 'residente',
+      activo: true,
+      foto_rostro_url: rec.foto_rostro_url,
+    };
+
+    const { data: persona, error: pErr } = await admin
+      .from('personas_gestion_acceso')
+      .upsert([personaInput], { onConflict: 'documento_identidad' })
+      .select()
+      .single();
+
+    if (pErr || !persona) {
+      throw new Error(`Error al upsertar persona: ${pErr?.message}`);
+    }
+
+    if (dispositivoIds && dispositivoIds.length > 0) {
+      await this.vincularPersonaDispositivos(persona.id, dispositivoIds);
+    }
+
+    if (rec.foto_rostro_url) {
+      const { data: existingFacial } = await admin
+        .from('biometria_facial')
+        .select('id')
+        .eq('persona_id', persona.id)
+        .eq('foto_url_storage', rec.foto_rostro_url)
+        .maybeSingle();
+
+      if (!existingFacial) {
+        await admin
+          .from('biometria_facial')
+          .insert({
+            persona_id: persona.id,
+            foto_url_storage: rec.foto_rostro_url,
+            sincronizado_en_biometrico: true,
+          });
+      }
+    }
+
+    let residentResult: any = null;
+    if (rec.correo_electronico && rec.cedula) {
+      try {
+        residentResult = await this.asegurarCuentaResidente({
+          cedula: rec.cedula,
+          nombre_completo: rec.nombre_completo,
+          correo: rec.correo_electronico,
+          telefono: rec.telefono,
+          torre: rec.torre,
+          apartamento: rec.apartamento,
+          puesto_id: rec.lugar?.creado_por || null,
+        });
+
+        if (residentResult?.residente?.id) {
+          await admin
+            .from('personas_gestion_acceso')
+            .update({ entidad_tipo: 'residente', entidad_id: residentResult.residente.id })
+            .eq('id', persona.id);
+        }
+      } catch (authErr) {
+        this.logger.warn(`⚠️ [RESIDENT AUTO-PROVISION] FAILED for ${rec.cedula}: ${authErr.message}`);
+      }
+    }
+
+    if (dispositivoIds && dispositivoIds.length > 0) {
+      for (const devId of dispositivoIds) {
+        try {
+          await this.pushPersonaToDevice(persona.id, devId);
+        } catch (syncErr) {
+          this.logger.error(`❌ [HARDWARE SYNC ERROR] No se pudo empujar persona ${persona.id} al dispositivo ${devId}: ${syncErr.message}`);
+        }
+      }
+    }
+
+    return {
+      ok: true,
+      persona_id: persona.id,
+      residente: residentResult,
+    };
+  }
+
+  async asegurarCuentaResidente(input: {
+    cedula: string;
+    nombre_completo: string;
+    correo: string;
+    telefono?: string;
+    torre?: string;
+    apartamento?: string;
+    cliente_id?: number;
+    puesto_id?: number;
+  }): Promise<any> {
+    const admin = this.supabase.getSupabaseAdminClient();
+
+    let { data: usuarioExt, error: uError } = await admin
+      .from('usuarios_externos')
+      .select('*')
+      .eq('cedula', input.cedula)
+      .maybeSingle();
+
+    if (uError) {
+      throw new Error(`Error al buscar usuario externo: ${uError.message}`);
+    }
+
+    if (!usuarioExt) {
+      const authResponse = await admin.auth.admin.createUser({
+        email: input.correo,
+        password: input.cedula,
+        email_confirm: true,
+        user_metadata: { nombre_completo: input.nombre_completo },
+      });
+
+      if (authResponse.error) {
+        throw new Error(`Error al crear usuario en Supabase Auth: ${authResponse.error.message}`);
+      }
+
+      const authUser = authResponse.data.user;
+
+      const { data: newUsuarioExt, error: insErr } = await admin
+        .from('usuarios_externos')
+        .insert({
+          user_id: authUser.id,
+          nombre_completo: input.nombre_completo,
+          cedula: input.cedula,
+          correo: input.correo,
+          telefono: input.telefono || null,
+          rol: 'residente',
+          estado: true,
+        })
+        .select()
+        .single();
+
+      if (insErr) {
+        throw new Error(`Error al crear usuarios_externos: ${insErr.message}`);
+      }
+
+      usuarioExt = newUsuarioExt;
+    }
+
+    let clienteId = input.cliente_id;
+    let puestoId = input.puesto_id;
+
+    if (!clienteId) {
+      const { data: firstClient } = await admin.from('clientes').select('id').limit(1).maybeSingle();
+      clienteId = firstClient?.id || 1;
+    }
+
+    if (!puestoId) {
+      const { data: firstPuesto } = await admin.from('puestos_trabajo').select('id').limit(1).maybeSingle();
+      puestoId = firstPuesto?.id || 1;
+    }
+
+    let { data: residente, error: rError } = await admin
+      .from('residentes')
+      .select('*')
+      .eq('documento', input.cedula)
+      .maybeSingle();
+
+    const residenteData = {
+      cliente_id: clienteId,
+      puesto_id: puestoId,
+      usuario_id: usuarioExt.id,
+      nombre_completo: input.nombre_completo,
+      documento: input.cedula,
+      torre_bloque: input.torre || null,
+      apto_casa: input.apartamento || null,
+      telefono: input.telefono || null,
+      correo: input.correo || null,
+      tipo_habitante: 'propietario',
+      activo: true,
+    };
+
+    if (!residente) {
+      const { data: newResidente, error: insResErr } = await admin
+        .from('residentes')
+        .insert(residenteData)
+        .select()
+        .single();
+
+      if (insResErr) {
+        throw new Error(`Error al crear residente: ${insResErr.message}`);
+      }
+      residente = newResidente;
+    } else {
+      const { data: updatedResidente, error: updResErr } = await admin
+        .from('residentes')
+        .update({
+          usuario_id: usuarioExt.id,
+          correo: input.correo,
+          telefono: input.telefono || residente.telefono,
+          torre_bloque: input.torre || residente.torre_bloque,
+          apto_casa: input.apartamento || residente.apto_casa,
+        })
+        .eq('id', residente.id)
+        .select()
+        .single();
+
+      if (updResErr) {
+        throw new Error(`Error al actualizar residente: ${updResErr.message}`);
+      }
+      residente = updatedResidente;
+    }
+
+    return {
+      usuario: usuarioExt,
+      residente: residente,
+    };
+  }
+
+  async deletePersona(personaId: string): Promise<any> {
+    const admin = this.supabase.getSupabaseAdminClient();
+
+    const { data: persona, error: pErr } = await admin
+      .from('personas_gestion_acceso')
+      .select('*')
+      .eq('id', personaId)
+      .single();
+
+    if (pErr || !persona) {
+      throw new Error(`Persona no encontrada: ${pErr?.message}`);
+    }
+
+    const { data: permisos } = await admin
+      .from('acceso_permisos_dispositivos')
+      .select('*, dispositivo:dispositivos_iot(*)')
+      .eq('persona_id', personaId);
+
+    for (const p of permisos || []) {
+      const ip = p.dispositivo?.ip_direccion;
+      if (ip) {
+        try {
+          await this.eliminarUsuarioDeHardware(ip, persona.documento_identidad);
+        } catch (err) {
+          this.logger.warn(`⚠️ [HARDWARE SYNC] No se pudo eliminar usuario ${persona.documento_identidad} de ${ip}: ${err.message}`);
+        }
+      }
+    }
+
+    await admin.from('biometria_facial').delete().eq('persona_id', personaId);
+    await admin.from('acceso_permisos_dispositivos').delete().eq('persona_id', personaId);
+
+    const { error: delErr } = await admin
+      .from('personas_gestion_acceso')
+      .delete()
+      .eq('id', personaId);
+
+    if (delErr) {
+      throw delErr;
+    }
+
+    return { ok: true };
   }
 
   private async proxyRequestDynamic(

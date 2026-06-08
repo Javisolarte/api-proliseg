@@ -39,6 +39,12 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   /** Función de emisión WebSocket — inyectada desde el Gateway */
   private emitFn: EmitEventoFn | null = null;
 
+  private controlPuertaFn: ((ip: string, doorId: number, command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada', options: any) => Promise<any>) | null = null;
+
+  setControlPuertaFn(fn: (ip: string, doorId: number, command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada', options: any) => Promise<any>) {
+    this.controlPuertaFn = fn;
+  }
+
   /** IDs ya procesados para deduplicar — en memoria, bajo consumo */
   private readonly seenEventIds = new Set<string>();
   private readonly latestDbTimestamp = new Map<string, string>();
@@ -238,14 +244,22 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     const base = `http://${ip}:${port}`;
     const auth = { username: user, password: pass };
     
-    // Por defecto, registrar con el dominio HTTPS público para pasar correctamente por Traefik
-    let ipAddressVal = 'servidor.proliseg.com';
-    let portNoVal = 443;
-    let protocolVal = 'HTTPS';
-    let addressingTypeVal = 'hostname';
+    const isVpn = this.isVpnIp(device.ip_direccion || ip);
     
-    const secureWebhookBase = webhookBase.replace(/^http:/i, 'https:');
-    let webhookUrl = `${secureWebhookBase}/hik/${device.id}`;
+    let ipAddressVal = '10.8.0.1';
+    let portNoVal = 80;
+    let protocolVal = 'HTTP';
+    let addressingTypeVal = 'ipaddress';
+    let webhookUrl = `http://10.8.0.1/api/control-acceso/webhook/evento/hik/${device.id}`;
+    
+    if (!isVpn) {
+      ipAddressVal = 'servidor.proliseg.com';
+      portNoVal = 443;
+      protocolVal = 'HTTPS';
+      addressingTypeVal = 'hostname';
+      const secureWebhookBase = webhookBase.replace(/^http:/i, 'https:');
+      webhookUrl = `${secureWebhookBase}/hik/${device.id}`;
+    }
 
     // Permitir personalizar el webhook desde configuracion_tecnica si es necesario
     const customWebhookBase = device.configuracion_tecnica?.webhook_base;
@@ -295,9 +309,10 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     const base = `http://${ip}:${port}`;
     const auth = { username: user, password: pass };
     
-    // Por defecto, usar HTTPS público
-    const secureWebhookBase = webhookBase.replace(/^http:/i, 'https:');
-    let webhookUrl = `${secureWebhookBase}/dahua/${device.id}`;
+    const isVpn = this.isVpnIp(device.ip_direccion || ip);
+    let webhookUrl = isVpn
+      ? `http://10.8.0.1/api/control-acceso/webhook/evento/dahua/${device.id}`
+      : `${webhookBase.replace(/^http:/i, 'https:')}/dahua/${device.id}`;
 
     // Permitir personalizar el webhook desde configuracion_tecnica
     const customWebhookBase = device.configuracion_tecnica?.webhook_base;
@@ -447,7 +462,14 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
   saveAndEmit(evento: EventoAcceso) {
     const persistirEvento = async () => {
-      const persona = await this.resolvePersonaForEvento(evento);
+      let persona: any = null;
+      if (evento.tipo_evento === 'llamada') {
+        evento.nombre_persona = 'Llamada a central/residente';
+        evento.documento_persona = 'LLAMADA';
+      } else {
+        persona = await this.resolvePersonaForEvento(evento);
+      }
+      
       const payloadBase = {
         dispositivo_id: evento.dispositivo_id,
         persona_id: persona?.id || evento.persona_id || null,
@@ -486,6 +508,10 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
     persistirEvento().catch((error) => {
       this.logger.warn(`⚠️ [EventSystem] No se pudo persistir evento: ${error.message}`);
+    });
+
+    this.checkQrAutoOpen(evento).catch((error) => {
+      this.logger.error(`❌ [QR AUTO-OPEN ERROR]: ${error.message}`);
     });
 
     // Emitir por WebSocket - instantáneo
@@ -597,5 +623,55 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
   private isVpnIp(ip: string): boolean {
     return /^10\.8\./.test(ip);
+  }
+
+  private async checkQrAutoOpen(evento: EventoAcceso) {
+    const scannedCode = this.firstText(evento.codigo_tarjeta, evento.documento_persona);
+    if (!scannedCode || scannedCode.length !== 8 || !/^\d+$/.test(scannedCode)) {
+      return;
+    }
+
+    const admin = this.supabase.getSupabaseAdminClient();
+    const { data: visita, error } = await admin
+      .from('visitas_registro')
+      .select('*')
+      .eq('token_qr', scannedCode)
+      .eq('estado', 'programada')
+      .maybeSingle();
+
+    if (error || !visita) return;
+
+    this.logger.log(`🔑 [QR AUTO-OPEN] Token QR válido detectado: ${scannedCode} para visitante ${visita.nombre_visitante_temporal || 'Invitado'}`);
+
+    const { error: updErr } = await admin
+      .from('visitas_registro')
+      .update({
+        estado: 'activo',
+        fecha_entrada: new Date().toISOString(),
+        observaciones: (visita.observaciones || '') + ' [Ingreso automático por código QR]',
+      })
+      .eq('id', visita.id);
+
+    if (updErr) {
+      this.logger.error(`❌ [QR AUTO-OPEN] No se pudo activar la visita ${visita.id}: ${updErr.message}`);
+      return;
+    }
+
+    if (this.controlPuertaFn) {
+      try {
+        const device = await this.getDeviceById(evento.dispositivo_id);
+        if (device?.ip_direccion) {
+          await this.controlPuertaFn(device.ip_direccion, 1, 'abrir', {
+            deviceId: device.id,
+            marca: device.configuracion_tecnica?.marca,
+          });
+          this.logger.log(`🚪 [QR AUTO-OPEN] Puerta abierta automáticamente para visita ${visita.id}`);
+        }
+      } catch (cmdErr) {
+        this.logger.error(`❌ [QR AUTO-OPEN] Error al enviar comando de puerta: ${cmdErr.message}`);
+      }
+    } else {
+      this.logger.warn(`⚠️ [QR AUTO-OPEN] controlPuertaFn no está registrado en el sistema`);
+    }
   }
 }
