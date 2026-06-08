@@ -186,6 +186,9 @@ export class ControlAccesoService implements OnModuleInit {
       this.logger.error(`❌ [CREATE DISPOSITIVO ERROR] Error de base de datos al registrar: ${error.message} - Code: ${error.code}`);
       throw error;
     }
+    await this.devicePoller.refreshDeviceList().catch(err => 
+      this.logger.warn(`⚠️ [CACHE WARN] No se pudo refrescar el poller de dispositivos: ${err.message}`)
+    );
     return data[0];
   }
 
@@ -244,6 +247,9 @@ export class ControlAccesoService implements OnModuleInit {
       .eq('id', id)
       .select();
     if (error) throw error;
+    await this.devicePoller.refreshDeviceList().catch(err => 
+      this.logger.warn(`⚠️ [CACHE WARN] No se pudo refrescar el poller de dispositivos: ${err.message}`)
+    );
     return data[0];
   }
 
@@ -255,6 +261,9 @@ export class ControlAccesoService implements OnModuleInit {
       .eq('id', id)
       .select();
     if (error) throw error;
+    await this.devicePoller.refreshDeviceList().catch(err => 
+      this.logger.warn(`⚠️ [CACHE WARN] No se pudo refrescar el poller de dispositivos: ${err.message}`)
+    );
     return data[0];
   }
 
