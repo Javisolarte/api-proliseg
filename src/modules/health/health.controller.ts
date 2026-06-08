@@ -6,7 +6,9 @@ import {
 } from '@nestjs/terminus';
 import { RedisHealthIndicator } from './indicators/redis.indicator';
 import { SupabaseHealthIndicator } from './indicators/supabase.indicator';
+import { Public } from '../auth/decorators/public.decorator';
 
+@Public()
 @Controller('health')
 export class HealthController {
     constructor(
