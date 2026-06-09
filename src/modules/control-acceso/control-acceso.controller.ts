@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Param, Res, Logger, Req, Body, Query, BadRequestException, Delete } from '@nestjs/common';
+import { Controller, Post, Put, Get, Param, Res, Logger, Req, Body, Query, BadRequestException, Delete } from '@nestjs/common';
 import { ControlAccesoService } from './control-acceso.service';
 import { DevicePollerService } from './device-poller.service';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
@@ -52,6 +52,22 @@ export class ControlAccesoController {
     }
 
     return result;
+  }
+
+  @Put('audio-in')
+  @ApiOperation({ summary: 'Recibe audio del micrófono y lo reenvía al dispositivo Hikvision' })
+  async audioIn(
+    @Req() req: any,
+    @CurrentUser() operator?: any
+  ) {
+    const targetIp = String(req.headers['x-target-ip'] || req.headers['x-target-ip'.toLowerCase()] || '').trim();
+    const deviceId = String(req.headers['x-target-device-id'] || '').trim() || undefined;
+
+    if (!targetIp && !deviceId) {
+      throw new BadRequestException('Falta X-Target-Ip o X-Target-Device-Id');
+    }
+
+    return this.controlAccesoService.relayAudioToDevice(req, targetIp, deviceId, operator);
   }
 
   @Get('dispositivos')

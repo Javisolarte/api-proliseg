@@ -4,6 +4,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { CreateDispositivoDto, CreatePersonaAccesoDto } from './dto/control-acceso.dto';
 import { randomBytes, createHash } from 'crypto';
 import { DevicePollerService } from './device-poller.service';
+import { spawn } from 'child_process';
 
 @Injectable()
 export class ControlAccesoService implements OnModuleInit {
@@ -12,6 +13,7 @@ export class ControlAccesoService implements OnModuleInit {
   private readonly proxyUrl = 'https://servidor.proliseg.com/dispositivos';
   private readonly apiKey = 'proliseg-acceso-2026';
   private digestChallengeCache = new Map<string, { realm: string; nonce: string; qop: string }>();
+  private readonly audioTalkChannelId = 1;
 
   constructor(
     private readonly supabase: SupabaseService,
@@ -398,6 +400,204 @@ export class ControlAccesoService implements OnModuleInit {
     }
 
     return { ip, port: Number(configuredPort || 80), via: 'directo' };
+  }
+
+  private async resolveAudioNetworkTarget(targetIp: string, deviceId?: string) {
+    const [rawHost, rawPort] = this.splitHostPort(targetIp);
+    let host = rawHost || targetIp;
+    let port = Number(rawPort || 0) || 80;
+    let user = 'admin';
+    let pass = '';
+    let config: any = {};
+
+    if (deviceId) {
+      const { data: dev } = await this.supabase
+        .getClient()
+        .from('dispositivos_iot')
+        .select('ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica, puerto_servicio')
+        .eq('id', deviceId)
+        .maybeSingle();
+
+      if (dev) {
+        host = dev.ip_direccion || host;
+        user = dev.credencial_usuario || user;
+        pass = dev.credencial_password || pass;
+        config = dev.configuracion_tecnica || {};
+        port = Number(config?.puerto || dev.puerto_servicio || port || 80);
+      }
+    } else if (host) {
+      const { data: dev } = await this.supabase
+        .getClient()
+        .from('dispositivos_iot')
+        .select('ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica, puerto_servicio')
+        .eq('ip_direccion', host)
+        .maybeSingle();
+
+      if (dev) {
+        user = dev.credencial_usuario || user;
+        pass = dev.credencial_password || pass;
+        config = dev.configuracion_tecnica || {};
+        port = Number(config?.puerto || dev.puerto_servicio || port || 80);
+      }
+    }
+
+    const resolved = await this.resolveDoorNetworkTarget(host, port, config);
+    return {
+      host: resolved.ip,
+      port: resolved.port,
+      via: resolved.via,
+      user,
+      pass,
+    };
+  }
+
+  private splitHostPort(value: string): [string, string | undefined] {
+    if (!value) return ['', undefined];
+    const normalized = value.trim();
+    const match = normalized.match(/^(.+):(\d+)$/);
+    if (match) {
+      return [match[1], match[2]];
+    }
+    return [normalized, undefined];
+  }
+
+  private async ensureDigestChallenge(url: string, user: string, pass: string): Promise<void> {
+    const host = new URL(url).host;
+    if (this.digestChallengeCache.has(host)) return;
+
+    try {
+      await this.executeDigestAuthRequest(
+        'GET',
+        `http://${host}/ISAPI/System/deviceInfo`,
+        user,
+        pass,
+        null,
+        'json',
+        5000,
+      );
+    } catch {
+      // El objetivo aquí es calentar el cache del digest; si falla,
+      // la llamada principal reportará el error real.
+    }
+  }
+
+  private buildDigestAuthHeader(method: string, url: string, user: string, pass: string): string | null {
+    const host = new URL(url).host;
+    const cached = this.digestChallengeCache.get(host);
+    if (!cached) return null;
+
+    const { realm, nonce, qop } = cached;
+    const nc = '00000001';
+    const cnonce = randomBytes(4).toString('hex');
+    const uri = new URL(url).pathname + (new URL(url).search || '');
+
+    const ha1 = createHash('md5').update(`${user}:${realm}:${pass}`).digest('hex');
+    const ha2 = createHash('md5').update(`${method}:${uri}`).digest('hex');
+    let responseHash = '';
+
+    if (qop === 'auth') {
+      responseHash = createHash('md5').update(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`).digest('hex');
+    } else {
+      responseHash = createHash('md5').update(`${ha1}:${nonce}:${ha2}`).digest('hex');
+    }
+
+    let authStr = `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${responseHash}"`;
+    if (qop === 'auth') {
+      authStr += `, qop="${qop}", nc=${nc}, cnonce="${cnonce}"`;
+    }
+    return authStr;
+  }
+
+  async relayAudioToDevice(
+    audioStream: NodeJS.ReadableStream,
+    targetIp: string,
+    deviceId?: string,
+    operator?: any,
+  ): Promise<any> {
+    const target = await this.resolveAudioNetworkTarget(targetIp, deviceId);
+    const deviceUrl = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}/audioData`;
+
+    this.logger.log(`[AUDIO-IN] Enviando audio a ${target.host}:${target.port} (${target.via})${deviceId ? ` device=${deviceId}` : ''}`);
+
+    await this.ensureDigestChallenge(deviceUrl, target.user, target.pass);
+    const authHeader = this.buildDigestAuthHeader('PUT', deviceUrl, target.user, target.pass);
+    if (!authHeader) {
+      throw new Error('No se pudo construir la autenticación Digest para audio bidireccional');
+    }
+
+    return new Promise((resolve, reject) => {
+      const ffmpeg = spawn('ffmpeg', [
+        '-hide_banner',
+        '-loglevel', 'error',
+        '-i', 'pipe:0',
+        '-ac', '1',
+        '-ar', '8000',
+        '-c:a', 'pcm_mulaw',
+        '-f', 'wav',
+        'pipe:1',
+      ]);
+
+      let settled = false;
+      const finalize = (fn: (value?: any) => void, value?: any) => {
+        if (settled) return;
+        settled = true;
+        try { (audioStream as any).destroy?.(); } catch {}
+        try { ffmpeg.stdin.destroy(); } catch {}
+        try { ffmpeg.stdout.destroy(); } catch {}
+        try { ffmpeg.kill('SIGKILL'); } catch {}
+        fn(value);
+      };
+
+      axios
+        .request({
+          method: 'PUT',
+          url: deviceUrl,
+          headers: {
+            Authorization: authHeader,
+            'Content-Type': 'application/octet-stream',
+            'User-Agent': 'PROLISEG-ControlAcceso/1.0',
+          },
+          data: ffmpeg.stdout,
+          timeout: 300000,
+          maxBodyLength: Infinity,
+          maxContentLength: Infinity,
+          responseType: 'arraybuffer',
+          validateStatus: () => true,
+        })
+        .then((response) => {
+          if (response.status >= 200 && response.status < 300) {
+            finalize(resolve, {
+              ok: true,
+              mensaje: 'Audio transmitido al dispositivo',
+              detalle: {
+                target: `${target.host}:${target.port}`,
+                via: target.via,
+                status: response.status,
+              },
+              operador: operator || null,
+            });
+            return;
+          }
+
+          finalize(reject, new Error(`El dispositivo respondió con estado ${response.status}`));
+        })
+        .catch((err) => finalize(reject, err));
+
+      const ffmpegErrors: Buffer[] = [];
+      ffmpeg.stderr.on('data', (chunk) => ffmpegErrors.push(Buffer.from(chunk)));
+      ffmpeg.on('error', (error) => {
+        finalize(reject, error);
+      });
+      ffmpeg.on('close', (code) => {
+        if (code !== 0 && !settled) {
+          const message = Buffer.concat(ffmpegErrors).toString('utf8') || `ffmpeg terminó con código ${code}`;
+          finalize(reject, new Error(message));
+        }
+      });
+
+      audioStream.on('error', (error) => finalize(reject, error));
+      audioStream.pipe(ffmpeg.stdin);
+    });
   }
 
   private isVpnIp(ip: string): boolean {
