@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import axios from 'axios';
 import { SupabaseService } from '../supabase/supabase.service';
 import { CreateDispositivoDto, CreatePersonaAccesoDto } from './dto/control-acceso.dto';
@@ -32,8 +33,54 @@ export class ControlAccesoService implements OnModuleInit {
     }, 5000);
   }
 
+  async cleanWebrtcIceServers() {
+    try {
+      const domain = 'servidor.proliseg.com';
+      const apiAuth = { username: 'admin', password: 'proliseg1025' };
+
+      this.logger.log('🔍 [MediaMTX] Verificando duplicados en webrtcICEServers2...');
+      const response = await axios.get(`https://${domain}/webrtc-api/v3/config/global/get`, { auth: apiAuth });
+      
+      const iceServers = response.data?.webrtcICEServers2;
+      if (Array.isArray(iceServers) && iceServers.length > 2) {
+        const seen = new Set<string>();
+        const uniqueServers = iceServers.filter(server => {
+          const key = `${server.url || ''}|${server.username || ''}|${server.password || ''}|${server.clientOnly}`;
+          if (seen.has(key)) {
+            return false;
+          }
+          seen.add(key);
+          return true;
+        });
+
+        if (uniqueServers.length < iceServers.length) {
+          this.logger.log(`🧹 [MediaMTX] Detectados ${iceServers.length} servidores ICE. Limpiando a ${uniqueServers.length} únicos...`);
+          await axios.patch(
+            `https://${domain}/webrtc-api/v3/config/global/patch`,
+            { webrtcICEServers2: uniqueServers },
+            { auth: apiAuth }
+          );
+          this.logger.log('✅ [MediaMTX] webrtcICEServers2 limpiado con éxito.');
+        } else {
+          this.logger.log('ℹ️ [MediaMTX] No se detectaron servidores ICE duplicados.');
+        }
+      }
+    } catch (error) {
+      this.logger.warn(`⚠️ [MediaMTX] Error al limpiar webrtcICEServers2: ${error.message}`);
+    }
+  }
+
+  @Cron(CronExpression.EVERY_6_HOURS)
+  async handleCleanIceServersCron() {
+    this.logger.log('⏰ [Cron] Iniciando limpieza de servidores ICE en MediaMTX...');
+    await this.cleanWebrtcIceServers();
+  }
+
   async syncMediaMtxPaths() {
     try {
+      // Limpiar automáticamente duplicados en servidores ICE de MediaMTX
+      await this.cleanWebrtcIceServers();
+
       const { data: devices, error } = await this.supabase
         .getClient()
         .from('dispositivos_iot')

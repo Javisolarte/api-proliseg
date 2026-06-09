@@ -35,21 +35,59 @@ export class EmpleadosService {
     return empleado;
   }
 
-  // 🔹 Obtener todos los empleados con joins
-  async findAll(filters?: { activo?: boolean; tipoEmpleadoId?: number }) {
-    const supabase = this.supabaseService.getClient();
-    this.logger.debug(`🟡 Ejecutando findAll con filtros: ${JSON.stringify(filters)}`);
+  private buildSelectClause(resumen = false): string {
+    if (!resumen) {
+      return `
+        SELECT e.*,
+               e.orden,
+               eps.nombre AS eps_nombre,
+               arl.nombre AS arl_nombre,
+               fp.nombre AS fondo_pension_nombre,
+               cp.tipo_contrato AS contrato_personal_nombre, 
+               u.nombre_completo AS creado_por_nombre,
+               tcv.nombre AS tipo_curso_vigilancia_nombre,
+               s.nombre AS sede_nombre
+        `;
+    }
 
-    let sql = `
-      SELECT e.*,
+    return `
+      SELECT e.id,
+             e.usuario_id,
+             e.nombre_completo,
+             e.cedula,
+             e.telefono,
+             e.rol,
+             e.activo,
+             e.foto_perfil_url,
+             e.cedula_pdfurl,
+             e.hoja_de_vida_url,
+             e.eps_id,
+             e.arl_id,
+             e.fondo_pension_id,
+             e.verificado_documentos,
+             e.asignado,
+             e.tiene_discapacidad,
+             e.tiene_curso_vigilancia,
+             e.fecha_vencimiento_curso,
+             e.fecha_ingreso,
+             e.puesto_id,
+             e.sede_id,
+             e.cargo_oficial,
              e.orden,
+             e.created_at,
+             e.updated_at,
              eps.nombre AS eps_nombre,
              arl.nombre AS arl_nombre,
              fp.nombre AS fondo_pension_nombre,
-             cp.tipo_contrato AS contrato_personal_nombre, 
+             cp.tipo_contrato AS contrato_personal_nombre,
              u.nombre_completo AS creado_por_nombre,
              tcv.nombre AS tipo_curso_vigilancia_nombre,
              s.nombre AS sede_nombre
+    `;
+  }
+
+  private buildFromClause(): string {
+    return `
       FROM empleados e
       LEFT JOIN eps ON e.eps_id = eps.id
       LEFT JOIN arl ON e.arl_id = arl.id
@@ -58,8 +96,15 @@ export class EmpleadosService {
       LEFT JOIN usuarios_externos u ON e.creado_por = u.id
       LEFT JOIN tipos_curso_vigilancia tcv ON e.tipo_curso_vigilancia_id = tcv.id
       LEFT JOIN sedes s ON e.sede_id = s.id
-      WHERE 1=1
     `;
+  }
+
+  // 🔹 Obtener todos los empleados con joins
+  async findAll(filters?: { activo?: boolean; tipoEmpleadoId?: number; resumen?: boolean }) {
+    const supabase = this.supabaseService.getClient();
+    this.logger.debug(`🟡 Ejecutando findAll con filtros: ${JSON.stringify(filters)}`);
+
+    let sql = `${this.buildSelectClause(!!filters?.resumen)} ${this.buildFromClause()} WHERE 1=1`;
 
     if (filters?.activo !== undefined) sql += ` AND e.activo = ${filters.activo}`;
     if (filters?.tipoEmpleadoId) sql += ` AND e.tipo_empleado_id = ${filters.tipoEmpleadoId}`;

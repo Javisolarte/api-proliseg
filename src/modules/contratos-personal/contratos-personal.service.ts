@@ -1,4 +1,4 @@
-import {
+﻿import {
     BadRequestException,
     Injectable,
     InternalServerErrorException,
@@ -11,9 +11,6 @@ import { TerminateContratoPersonalDto } from './dto/terminate-contrato-personal.
 import { RenovarContratoDto } from './dto/renovar-contrato.dto';
 import { UpdateContratoPersonalDto } from './dto/update-contrato-personal.dto';
 import { AuditoriaService } from '../auditoria/auditoria.service';
-import { DocumentosGeneradosService } from '../documentos-generados/documentos-generados.service';
-import { EntidadTipo } from '../documentos-generados/dto/documento-generado.dto';
-import { FirmasService } from '../firmas/firmas.service';
 
 @Injectable()
 export class ContratosPersonalService {
@@ -22,8 +19,6 @@ export class ContratosPersonalService {
     constructor(
         private readonly supabaseService: SupabaseService,
         private readonly auditoriaService: AuditoriaService,
-        private readonly documentosService: DocumentosGeneradosService,
-        private readonly firmasService: FirmasService,
     ) { }
 
     // 🔹 Crear contrato
@@ -31,7 +26,6 @@ export class ContratosPersonalService {
         const supabase = this.supabaseService.getClient();
         const userId = user.id;
 
-        // 1. Validar si el empleado ya tiene contrato activo
         const { data: activeContract } = await supabase
             .from('contratos_personal')
             .select('id')
@@ -43,124 +37,20 @@ export class ContratosPersonalService {
             throw new BadRequestException('El empleado ya tiene un contrato activo. Debe terminarlo o renovarlo.');
         }
 
-        let contratoPdfUrl: string | null = null;
-        let documentoGeneradoId: number | null = null;
-
-        // 2. Obtener datos del empleado para ruta de archivo o variables de plantilla
         const { data: empleado } = await supabase
             .from('empleados')
-            .select('*')
+            .select('id, cedula')
             .eq('id', createDto.empleado_id)
             .single();
 
         if (!empleado) throw new NotFoundException('Empleado no encontrado');
 
-        // 2.1 Obtener datos del salario por separado para la plantilla (si aplica)
-        let salarioValor = 0;
-        if (createDto.plantilla_id || createDto.salario_id) {
-            const { data: salario } = await supabase
-                .from('salarios')
-                .select('valor')
-                .eq('id', createDto.salario_id)
-                .single();
-            if (salario) salarioValor = salario.valor;
-        }
-
-        // 3. FLUJO A: Subida manual de PDF
+        let contratoPdfUrl: string | null = null;
         if (file) {
             const path = `contratos_empleados/${empleado.cedula}.pdf`;
             contratoPdfUrl = await this.uploadFile(file, 'empleados', path);
         }
 
-        // 4. FLUJO B: Generación automática por plantilla
-        if (createDto.plantilla_id) {
-            const today = new Date();
-            const meses = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
-
-            const datos = {
-                nombre_trabajador: empleado.nombre_completo.toUpperCase(),
-                cedula_trabajador: empleado.cedula,
-                direccion_trabajador: (empleado.direccion || 'Corregimiento la laguna PASTO-NARIÑO').toUpperCase(),
-                expedida_en: (empleado.lugar_expedicion_cedula || 'PASTO (N)').toUpperCase(),
-                lugar_nacimiento: (empleado.lugar_nacimiento || 'PASTO').toUpperCase(),
-                fecha_nacimiento: empleado.fecha_nacimiento || '29/08/1983',
-                nacionalidad: (empleado.nacionalidad || 'COLOMBIANO').toUpperCase(),
-                cargo: (empleado.cargo_oficial || 'GUARDA DE SEGURIDAD').toUpperCase(),
-                salario_texto: (createDto.salario_texto || `(01) SALARIO MÍNIMO MENSUAL LEGAL VIGENTE MAS AUXILIO DE TRANSPORTE MAS RECARGOS DE LEY`).toUpperCase(),
-                duracion_contrato: (createDto.duracion_texto || '').toUpperCase(),
-                periodos_pago: (createDto.periodos_pago || '5-10 DIAS DE CADA MES').toUpperCase(),
-                fecha_inicio: createDto.fecha_inicio,
-                fecha_fin: createDto.fecha_fin || '',
-                lugar_prestacion: (createDto.lugar_prestacion || '').toUpperCase(),
-                dia_firma: today.getDate(),
-                mes_firma: meses[today.getMonth()],
-                anio_firma: today.getFullYear(),
-                ...(typeof createDto.datos_json === 'string' ? JSON.parse(createDto.datos_json) : createDto.datos_json)
-            };
-
-            this.logger.debug(`Datos para plantilla: ${JSON.stringify(datos, null, 2)}`);
-
-            const docGenerado = await this.documentosService.create({
-                plantilla_id: createDto.plantilla_id,
-                entidad_tipo: EntidadTipo.CONTRATO_PERSONAL,
-                entidad_id: createDto.empleado_id,
-                datos_json: datos
-            }, user);
-
-            documentoGeneradoId = docGenerado.id;
-
-            const datosFinales = typeof createDto.datos_json === 'string' ? JSON.parse(createDto.datos_json) : createDto.datos_json;
-
-            // 3. Registrar FIRMA DEL TRABAJADOR (Orden 1) si viene en el JSON
-            if (datosFinales?.firma_1) {
-                await this.firmasService.create({
-                    documento_id: docGenerado.id,
-                    empleado_id: createDto.empleado_id,
-                    nombre_firmante: empleado.nombre_completo,
-                    documento_identidad_firmante: empleado.cedula,
-                    cargo_firmante: empleado.cargo_oficial || 'Trabajador',
-                    tipo_firma: 'digital',
-                    firma_base64: datosFinales.firma_1,
-                    huella_base64: datosFinales.huella_1 || null,
-                    orden: 1,
-                    es_ultima_firma: false
-                }, '127.0.0.1');
-            }
-
-            // 4. Registrar FIRMA DEL EMPLEADOR (Orden 2)
-            if (createDto.firma_empleador_base64) {
-                const employerObj = await this.supabaseService.getClient().from('empleados').select('*').eq('id', createDto.empleador_id).single();
-                await this.firmasService.create({
-                    documento_id: docGenerado.id,
-                    empleado_id: createDto.empleador_id,
-                    nombre_firmante: employerObj.data?.nombre_completo || 'Representante Legal',
-                    documento_identidad_firmante: employerObj.data?.cedula || '',
-                    cargo_firmante: employerObj.data?.cargo_oficial || 'Empleador',
-                    tipo_firma: 'digital',
-                    firma_base64: createDto.firma_empleador_base64,
-                    orden: 2,
-                    es_ultima_firma: false
-                }, '127.0.0.1');
-            } else if (createDto.empleador_id) {
-                await this.firmasService.autoSign(docGenerado.id, createDto.empleador_id, 2);
-            }
-
-            // 5. Generar PDF (Ya con ambas firmas incluidas)
-            const docConPdf = await this.documentosService.generarPdf(docGenerado.id);
-            contratoPdfUrl = docConPdf.url_pdf;
-        }
-
-        // 5. Determinar estado inicial
-        // Si es por plantilla y NO tiene firma del trabajador, queda como pendiente_firma
-        let estadoInicial = 'activo';
-        if (createDto.plantilla_id) {
-            const datosFinales = typeof createDto.datos_json === 'string' ? JSON.parse(createDto.datos_json) : createDto.datos_json;
-            if (!datosFinales?.firma_1) {
-                estadoInicial = 'pendiente_firma';
-            }
-        }
-
-        // 6. Insertar registro en contratos_personal
         const { data: newContract, error } = await supabase
             .from('contratos_personal')
             .insert({
@@ -171,10 +61,8 @@ export class ContratosPersonalService {
                 fecha_fin_prueba: createDto.fecha_fin_prueba || null,
                 salario_id: createDto.salario_id,
                 contrato_pdf_url: contratoPdfUrl,
-                documento_generado_id: documentoGeneradoId,
                 creado_por: userId,
-                estado: estadoInicial,
-                modalidad_trabajo: createDto.modalidad_trabajo || 'tiempo_completo',
+                estado: 'activo',
             })
             .select()
             .single();
@@ -184,15 +72,11 @@ export class ContratosPersonalService {
             throw new InternalServerErrorException('Error al crear el contrato');
         }
 
-        // 6. Actualizar empleado (vinculación)
         await supabase
             .from('empleados')
-            .update({
-                contrato_personal_id: newContract.id,
-            })
+            .update({ contrato_personal_id: newContract.id })
             .eq('id', createDto.empleado_id);
 
-        // 7. Auditar
         await this.auditoriaService.create({
             tabla_afectada: 'contratos_personal',
             registro_id: newContract.id,
@@ -204,7 +88,8 @@ export class ContratosPersonalService {
         return newContract;
     }
 
-    // 🔹 Terminar contrato
+
+    // ðŸ”¹ Terminar contrato
     async terminate(terminateDto: TerminateContratoPersonalDto, userId: number, file?: any) {
         const supabase = this.supabaseService.getClient();
 
@@ -216,7 +101,7 @@ export class ContratosPersonalService {
             .single();
 
         if (!contract) throw new NotFoundException('Contrato no encontrado');
-        if (contract.estado !== 'activo') throw new BadRequestException('El contrato no está activo');
+        if (contract.estado !== 'activo') throw new BadRequestException('El contrato no estÃ¡ activo');
 
         let terminacionPdfUrl: string | null = null;
 
@@ -270,7 +155,7 @@ export class ContratosPersonalService {
         return updatedContract;
     }
 
-    // 🔹 Helper Subida
+    // ðŸ”¹ Helper Subida
     private async uploadFile(file: any, bucket: string, path: string): Promise<string> {
         const supabase = this.supabaseService.getSupabaseAdminClient();
         const { error } = await supabase.storage
@@ -289,7 +174,7 @@ export class ContratosPersonalService {
         return data.publicUrl;
     }
 
-    // 🔹 Historial por empleado
+    // ðŸ”¹ Historial por empleado
     async getByEmpleado(empleadoId: number) {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase
@@ -305,7 +190,7 @@ export class ContratosPersonalService {
         return data;
     }
 
-    // 🔹 Obtener Contrato por ID
+    // ðŸ”¹ Obtener Contrato por ID
     async findOne(id: number) {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase
@@ -322,7 +207,7 @@ export class ContratosPersonalService {
         return data;
     }
 
-    // 🔹 Actualizar Contrato (Datos no sensibles/legales estrictos)
+    // ðŸ”¹ Actualizar Contrato (Datos no sensibles/legales estrictos)
     async update(id: number, dto: UpdateContratoPersonalDto, userId: number) {
         const supabase = this.supabaseService.getClient();
         const { data: oldData } = await supabase.from('contratos_personal').select('*').eq('id', id).single();
@@ -349,7 +234,7 @@ export class ContratosPersonalService {
         return data;
     }
 
-    // 🔹 Renovar Contrato
+    // ðŸ”¹ Renovar Contrato
     async renew(dto: RenovarContratoDto, userId: number) {
         const supabase = this.supabaseService.getClient();
 
@@ -387,7 +272,7 @@ export class ContratosPersonalService {
             .update({ contrato_personal_id: newContract.id })
             .eq('id', oldContract.empleado_id);
 
-        // 5. Auditar renovación
+        // 5. Auditar renovaciÃ³n
         await this.auditoriaService.create({
             tabla_afectada: 'contratos_personal',
             registro_id: newContract.id,
@@ -399,7 +284,7 @@ export class ContratosPersonalService {
         return newContract;
     }
 
-    // 🔹 Contratos Activos
+    // ðŸ”¹ Contratos Activos
     async findActive() {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase
@@ -415,7 +300,7 @@ export class ContratosPersonalService {
         return data;
     }
 
-    // 🔹 Contratos Inactivos/Vencidos
+    // ðŸ”¹ Contratos Inactivos/Vencidos
     async findInactive() {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase
@@ -431,7 +316,7 @@ export class ContratosPersonalService {
         return data;
     }
 
-    // 🔹 Vencimientos Próximos (30 dias)
+    // ðŸ”¹ Vencimientos PrÃ³ximos (30 dias)
     async findExpiring(days: number = 30) {
         const supabase = this.supabaseService.getClient();
         const today = new Date();
@@ -453,7 +338,7 @@ export class ContratosPersonalService {
         return data;
     }
 
-    // 🔹 Validar Vencidos (Job/Manual)
+    // ðŸ”¹ Validar Vencidos (Job/Manual)
     async validateExpired(userId: number) {
         const supabase = this.supabaseService.getClient();
         const today = new Date().toISOString().split('T')[0];
@@ -486,7 +371,7 @@ export class ContratosPersonalService {
         return { message: `Se actualizaron ${ids.length} contratos a estado finalizado`, contratos: ids };
     }
 
-    // 🔹 Eliminar Contrato
+    // ðŸ”¹ Eliminar Contrato
     async remove(id: number, userId: number) {
         const supabase = this.supabaseService.getClient();
 
@@ -494,14 +379,14 @@ export class ContratosPersonalService {
         const { data: contract } = await supabase.from('contratos_personal').select('*').eq('id', id).single();
         if (!contract) throw new NotFoundException('Contrato no encontrado');
 
-        // 2. Verificar si está asignado a un empleado como activo
+        // 2. Verificar si estÃ¡ asignado a un empleado como activo
         const { data: empleado } = await supabase
             .from('empleados')
             .select('id, contrato_personal_id')
             .eq('contrato_personal_id', id)
             .single();
 
-        // 3. Si está asignado, desvincular
+        // 3. Si estÃ¡ asignado, desvincular
         if (empleado) {
             await supabase
                 .from('empleados')
@@ -517,7 +402,7 @@ export class ContratosPersonalService {
 
         if (error) throw new InternalServerErrorException('Error al eliminar el contrato');
 
-        // 5. Auditoría
+        // 5. AuditorÃ­a
         await this.auditoriaService.create({
             tabla_afectada: 'contratos_personal',
             registro_id: id,
@@ -529,8 +414,9 @@ export class ContratosPersonalService {
         return { message: 'Contrato eliminado correctamente' };
     }
 
-    // 🔹 Auditoria de Contrato
+    // ðŸ”¹ Auditoria de Contrato
     async getAudit(contratoId: number) {
         return this.auditoriaService.getByRegistro('contratos_personal', contratoId);
     }
 }
+

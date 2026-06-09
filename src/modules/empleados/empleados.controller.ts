@@ -46,8 +46,16 @@ export class EmpleadosController {
   @RequirePermissions("empleados")
   @ApiOperation({ summary: "Listar todos los empleados (activos e inactivos)" })
   @ApiResponse({ status: 200, description: "Lista completa de empleados" })
-  async findAll() {
-    return this.empleadosService.findAll({});
+  async findAll(
+    @Query("activo") activo?: string,
+    @Query("tipoEmpleadoId") tipoEmpleadoId?: string,
+    @Query("resumen") resumen?: string,
+  ) {
+    return this.empleadosService.findAll({
+      activo: activo === undefined ? undefined : activo === "true" || activo === "1",
+      tipoEmpleadoId: tipoEmpleadoId ? Number(tipoEmpleadoId) : undefined,
+      resumen: resumen === "true" || resumen === "1",
+    });
   }
 
   /**

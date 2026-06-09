@@ -140,8 +140,10 @@ export class DocumentosGeneradosService {
     async findAll(filters?: any) {
         const supabase = this.supabaseService.getClient();
         let query = supabase.from("documentos_generados").select("*");
+        if (filters?.entidad_tipo) query = query.eq("entidad_tipo", filters.entidad_tipo);
+        if (filters?.entidad_id) query = query.eq("entidad_id", filters.entidad_id);
         if (filters?.estado) query = query.eq("estado", filters.estado);
-        const { data, error } = await query;
+        const { data, error } = await query.order("created_at", { ascending: false });
         if (error) throw new BadRequestException(error.message);
         return data;
     }
