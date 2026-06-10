@@ -70,7 +70,7 @@ export class EmpleadosService {
              e.tiene_curso_vigilancia,
              e.fecha_vencimiento_curso,
              cp.fecha_inicio AS fecha_ingreso,
-             e.puesto_id,
+             (SELECT puesto_id FROM asignacion_guardas_puesto WHERE empleado_id = e.id AND activo = true LIMIT 1) AS puesto_id,
              e.sede_id,
              e.cargo_oficial,
              e.orden,
