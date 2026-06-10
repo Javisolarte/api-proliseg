@@ -69,7 +69,7 @@ export class EmpleadosService {
              e.tiene_discapacidad,
              e.tiene_curso_vigilancia,
              e.fecha_vencimiento_curso,
-             e.fecha_ingreso,
+             cp.fecha_inicio AS fecha_ingreso,
              e.puesto_id,
              e.sede_id,
              e.cargo_oficial,
