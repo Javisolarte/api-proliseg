@@ -562,6 +562,21 @@ export class ControlAccesoService implements OnModuleInit {
     operator?: any,
   ): Promise<any> {
     const target = await this.resolveAudioNetworkTarget(targetIp, deviceId);
+    
+    // 1. Abrir el canal de audio bidireccional en el dispositivo (Hikvision ISAPI)
+    const openUrl = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}/open`;
+    const openPayload = `<?xml version="1.0" encoding="UTF-8"?>
+<TwoWayAudioChannel version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
+  <id>${this.audioTalkChannelId}</id>
+</TwoWayAudioChannel>`;
+
+    try {
+      this.logger.debug(`[AUDIO-IN] Abriendo canal de audio en ${target.host}:${target.port}`);
+      await this.executeDigestAuth('PUT', openUrl, target.user, target.pass, openPayload, 'text');
+    } catch (openErr) {
+      this.logger.warn(`⚠️ [AUDIO-IN] Advertencia al abrir canal (puede estar ya abierto): ${openErr.message}`);
+    }
+
     const deviceUrl = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}/audioData`;
 
     this.logger.log(`[AUDIO-IN] Enviando audio a ${target.host}:${target.port} (${target.via})${deviceId ? ` device=${deviceId}` : ''}`);
@@ -585,13 +600,23 @@ export class ControlAccesoService implements OnModuleInit {
       ]);
 
       let settled = false;
-      const finalize = (fn: (value?: any) => void, value?: any) => {
+      const finalize = async (fn: (value?: any) => void, value?: any) => {
         if (settled) return;
         settled = true;
         try { (audioStream as any).destroy?.(); } catch {}
         try { ffmpeg.stdin.destroy(); } catch {}
         try { ffmpeg.stdout.destroy(); } catch {}
         try { ffmpeg.kill('SIGKILL'); } catch {}
+
+        // 3. Cerrar el canal de audio en el dispositivo
+        const closeUrl = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}/close`;
+        try {
+          this.logger.debug(`[AUDIO-IN] Cerrando canal de audio en ${target.host}:${target.port}`);
+          await this.executeDigestAuth('PUT', closeUrl, target.user, target.pass, '', 'text');
+        } catch (closeErr) {
+          this.logger.warn(`⚠️ [AUDIO-IN] Error al cerrar canal de audio: ${closeErr.message}`);
+        }
+
         fn(value);
       };
 
@@ -645,6 +670,110 @@ export class ControlAccesoService implements OnModuleInit {
       audioStream.on('error', (error) => finalize(reject, error));
       audioStream.pipe(ffmpeg.stdin);
     });
+  }
+
+  async relayAudioFromDevice(
+    res: any,
+    targetIp: string,
+    deviceId?: string,
+  ): Promise<any> {
+    const target = await this.resolveAudioNetworkTarget(targetIp, deviceId);
+
+    // 1. Abrir el canal de audio bidireccional
+    const openUrl = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}/open`;
+    const openPayload = `<?xml version="1.0" encoding="UTF-8"?>
+<TwoWayAudioChannel version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
+  <id>${this.audioTalkChannelId}</id>
+</TwoWayAudioChannel>`;
+
+    try {
+      this.logger.debug(`[AUDIO-OUT] Abriendo canal de audio en ${target.host}:${target.port}`);
+      await this.executeDigestAuth('PUT', openUrl, target.user, target.pass, openPayload, 'text');
+    } catch (openErr) {
+      this.logger.warn(`⚠️ [AUDIO-OUT] Advertencia al abrir canal: ${openErr.message}`);
+    }
+
+    const deviceUrl = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}/audioData`;
+
+    this.logger.log(`[AUDIO-OUT] Solicitando audio de ${target.host}:${target.port} (${target.via})`);
+
+    await this.ensureDigestChallenge(deviceUrl, target.user, target.pass);
+    const authHeader = this.buildDigestAuthHeader('GET', deviceUrl, target.user, target.pass);
+    if (!authHeader) {
+      throw new Error('No se pudo construir la autenticación Digest para audio de salida');
+    }
+
+    const ffmpeg = spawn('ffmpeg', [
+      '-hide_banner',
+      '-loglevel', 'error',
+      '-f', 'mulaw',
+      '-ar', '8000',
+      '-ac', '1',
+      '-i', 'pipe:0',
+      '-c:a', 'libmp3lame',
+      '-b:a', '64k',
+      '-f', 'mp3',
+      'pipe:1',
+    ]);
+
+    let settled = false;
+    const finalize = async () => {
+      if (settled) return;
+      settled = true;
+      try { ffmpeg.stdin.destroy(); } catch {}
+      try { ffmpeg.stdout.destroy(); } catch {}
+      try { ffmpeg.kill('SIGKILL'); } catch {}
+
+      // Cerrar el canal de audio en el dispositivo
+      const closeUrl = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}/close`;
+      try {
+        this.logger.debug(`[AUDIO-OUT] Cerrando canal de audio en ${target.host}:${target.port}`);
+        await this.executeDigestAuth('PUT', closeUrl, target.user, target.pass, '', 'text');
+      } catch (closeErr) {
+        this.logger.warn(`⚠️ [AUDIO-OUT] Error al cerrar canal de audio: ${closeErr.message}`);
+      }
+    };
+
+    res.set({
+      'Content-Type': 'audio/mpeg',
+      'Transfer-Encoding': 'chunked',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
+
+    res.on('close', () => {
+      this.logger.debug(`[AUDIO-OUT] Cliente finalizó conexión, limpiando subprocesos`);
+      finalize();
+    });
+
+    ffmpeg.stdout.pipe(res);
+
+    axios
+      .request({
+        method: 'GET',
+        url: deviceUrl,
+        headers: {
+          Authorization: authHeader,
+          'User-Agent': 'PROLISEG-ControlAcceso/1.0',
+        },
+        responseType: 'stream',
+        timeout: 300000,
+      })
+      .then((response) => {
+        response.data.pipe(ffmpeg.stdin);
+        response.data.on('error', (err) => {
+          this.logger.error(`[AUDIO-OUT] Error en el stream de la cámara: ${err.message}`);
+          finalize();
+        });
+      })
+      .catch((err) => {
+        this.logger.error(`[AUDIO-OUT] Error al conectar con el stream de la cámara: ${err.message}`);
+        finalize();
+        if (!res.headersSent) {
+          res.status(502).send('Error conectando con la cámara');
+        }
+      });
   }
 
   private isVpnIp(ip: string): boolean {

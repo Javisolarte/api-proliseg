@@ -352,6 +352,18 @@ export class DocumentosGeneradosService {
                     timeout: 60000
                 });
 
+                // Esperar a que todas las imágenes (incluyendo firmas en base64 y fotos de red) terminen de cargarse
+                await page.evaluate(async () => {
+                    const imagenes = Array.from(document.querySelectorAll('img'));
+                    await Promise.all(imagenes.map(img => {
+                        if (img.complete) return;
+                        return new Promise((resolve) => {
+                            img.addEventListener('load', resolve);
+                            img.addEventListener('error', resolve); // Continuar incluso si falla una carga
+                        });
+                    }));
+                });
+
                 const pdfBuffer = await page.pdf({
                     format: 'Letter' as puppeteer.PaperFormat,
                     printBackground: true,

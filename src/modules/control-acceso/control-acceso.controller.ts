@@ -70,6 +70,24 @@ export class ControlAccesoController {
     return this.controlAccesoService.relayAudioToDevice(req, targetIp, deviceId, operator);
   }
 
+  @Public()
+  @Get('audio-out')
+  @ApiOperation({ summary: 'Proxy de audio de salida para escuchar el intercomunicador de la cámara' })
+  async audioOut(
+    @Query('ip') targetIp: string,
+    @Query('deviceId') deviceId: string,
+    @Res() res: Response
+  ) {
+    const ip = String(targetIp || '').trim();
+    const devId = String(deviceId || '').trim() || undefined;
+
+    if (!ip && !devId) {
+      throw new BadRequestException('Falta ip o deviceId');
+    }
+
+    return this.controlAccesoService.relayAudioFromDevice(res, ip, devId);
+  }
+
   @Get('dispositivos')
   @ApiOperation({ summary: 'Obtener lista de dispositivos IoT registrados' })
   async getDispositivos() {
