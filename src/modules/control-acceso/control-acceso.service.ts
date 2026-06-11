@@ -573,6 +573,11 @@ export class ControlAccesoService implements OnModuleInit {
 
     this.logger.log(`🎙️ [AUDIO-IN] Target resolved: host=${target.host}:${target.port}, user=${target.user}, passLength=${target.pass?.length || 0}`);
 
+    let clientDisconnected = false;
+    (audioStream as any).on('close', () => {
+      clientDisconnected = true;
+    });
+
     // Limpiar caché de Digest para evitar nonces obsoletos que causen bloqueos 401 en el dispositivo
     const deviceHost = `${target.host}:${target.port}`;
     this.digestChallengeCache.delete(deviceHost);
@@ -704,6 +709,20 @@ export class ControlAccesoService implements OnModuleInit {
           finalize(reject, new Error(`El dispositivo respondió con estado ${response.status}: ${bodyText}`));
         })
         .catch((err) => {
+          if (clientDisconnected || (audioStream as any).aborted) {
+            this.logger.log(`[AUDIO-IN] Conexión PUT terminada normalmente al colgar/detener.`);
+            finalize(resolve, {
+              ok: true,
+              mensaje: 'Transmisión finalizada',
+              detalle: {
+                target: `${target.host}:${target.port}`,
+                via: target.via,
+                status: 'closed',
+              },
+              operador: operator || null,
+            });
+            return;
+          }
           this.logger.error(`❌ [AUDIO-IN] Error en la conexión PUT audioData: ${err.message}`);
           finalize(reject, err);
         });
@@ -714,11 +733,28 @@ export class ControlAccesoService implements OnModuleInit {
         this.logger.debug(`[AUDIO-IN] ffmpeg stderr: ${chunk.toString()}`);
       });
       ffmpeg.on('error', (error) => {
+        if (clientDisconnected || (audioStream as any).aborted) {
+          finalize(resolve, { ok: true, mensaje: 'Transmisión finalizada' });
+          return;
+        }
         this.logger.error(`❌ [AUDIO-IN] ffmpeg error: ${error.message}`);
         finalize(reject, error);
       });
       ffmpeg.on('close', (code) => {
         if (code !== 0 && !settled) {
+          if (clientDisconnected || (audioStream as any).aborted) {
+            finalize(resolve, {
+              ok: true,
+              mensaje: 'Transmisión finalizada',
+              detalle: {
+                target: `${target.host}:${target.port}`,
+                via: target.via,
+                status: 'closed',
+              },
+              operador: operator || null,
+            });
+            return;
+          }
           const message = Buffer.concat(ffmpegErrors).toString('utf8') || `ffmpeg terminó con código ${code}`;
           this.logger.error(`❌ [AUDIO-IN] ffmpeg cerró con código ${code}: ${message}`);
           finalize(reject, new Error(message));
@@ -726,6 +762,10 @@ export class ControlAccesoService implements OnModuleInit {
       });
 
       audioStream.on('error', (error) => {
+        if (clientDisconnected || (audioStream as any).aborted) {
+          finalize(resolve, { ok: true, mensaje: 'Transmisión finalizada' });
+          return;
+        }
         this.logger.error(`❌ [AUDIO-IN] Error en el stream de entrada: ${error.message}`);
         finalize(reject, error);
       });
