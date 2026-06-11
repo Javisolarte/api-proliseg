@@ -744,7 +744,7 @@ export class ControlAccesoService implements OnModuleInit {
       });
 
       req.on('error', (err) => {
-        if (clientDisconnected || (audioStream as any).aborted) {
+        if (clientDisconnected || (audioStream as any).clientDisconnected || (audioStream as any).aborted) {
           this.logger.log(`[AUDIO-IN] Conexión PUT terminada normalmente al colgar/detener.`);
           finalize(resolve, {
             ok: true,

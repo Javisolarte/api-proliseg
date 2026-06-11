@@ -210,6 +210,7 @@ export class ComunicacionesGateway implements OnGatewayInit, OnGatewayConnection
         // Limpieza de audio de control de acceso si existe
         const audioSession = this.activeAudioStreams.get(client.id);
         if (audioSession) {
+            (audioSession.stream as any).clientDisconnected = true;
             try { audioSession.stream.end(); } catch (e) {}
             this.activeAudioStreams.delete(client.id);
             this.logger.log(`🎙️ [AUDIO-IN-WS] Stream de audio cerrado por desconexión de socket del cliente: ${client.id}`);
@@ -608,6 +609,7 @@ export class ComunicacionesGateway implements OnGatewayInit, OnGatewayConnection
         const session = this.activeAudioStreams.get(client.id);
         if (session) {
             this.logger.log(`🎙️ [AUDIO-IN-WS] Finalizando stream de audio para IP=${session.targetIp}`);
+            (session.stream as any).clientDisconnected = true;
             try { session.stream.end(); } catch (e) {}
             this.activeAudioStreams.delete(client.id);
         }
