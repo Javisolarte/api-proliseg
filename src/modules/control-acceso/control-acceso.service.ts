@@ -458,7 +458,7 @@ export class ControlAccesoService implements OnModuleInit {
     let pass = '';
     let config: any = {};
 
-    if (deviceId) {
+    if (deviceId && deviceId !== 'undefined') {
       const { data: dev } = await this.supabase
         .getClient()
         .from('dispositivos_iot')
@@ -474,18 +474,25 @@ export class ControlAccesoService implements OnModuleInit {
         port = Number(config?.puerto || dev.puerto_servicio || port || 80);
       }
     } else if (host) {
-      const { data: dev } = await this.supabase
+      const { data: devices } = await this.supabase
         .getClient()
         .from('dispositivos_iot')
         .select('ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica, puerto_servicio')
-        .eq('ip_direccion', host)
-        .maybeSingle();
+        .eq('ip_direccion', host);
 
-      if (dev) {
-        user = dev.credencial_usuario || user;
-        pass = dev.credencial_password || pass;
-        config = dev.configuracion_tecnica || {};
-        port = Number(config?.puerto || dev.puerto_servicio || port || 80);
+      if (devices && devices.length > 0) {
+        // Encontrar el dispositivo que coincida con el puerto configurado
+        const dev = devices.find(d => {
+          const p = Number(d.configuracion_tecnica?.puerto || d.puerto_servicio || 80);
+          return p === port;
+        }) || devices[0];
+
+        if (dev) {
+          user = dev.credencial_usuario || user;
+          pass = dev.credencial_password || pass;
+          config = dev.configuracion_tecnica || {};
+          port = Number(config?.puerto || dev.puerto_servicio || port || 80);
+        }
       }
     }
 
