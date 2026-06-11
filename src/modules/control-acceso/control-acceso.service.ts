@@ -660,7 +660,7 @@ export class ControlAccesoService implements OnModuleInit {
       // ffmpeg: convierte WebM/Opus del navegador → PCM G.711 a/μ-law crudo (sin contenedor WAV)
       const ffmpeg = spawn('ffmpeg', [
         '-hide_banner',
-        '-loglevel', 'warning',
+        '-loglevel', 'info',
         '-fflags', 'nobuffer',
         '-flags', 'low_delay',
         '-probesize', '4096',
