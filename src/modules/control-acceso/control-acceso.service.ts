@@ -458,42 +458,41 @@ export class ControlAccesoService implements OnModuleInit {
     let pass = '';
     let config: any = {};
 
+    let dev: any = null;
+
     if (deviceId && deviceId !== 'undefined') {
-      const { data: dev } = await this.supabase
-        .getClient()
+      const { data } = await this.supabase
+        .getSupabaseAdminClient()
         .from('dispositivos_iot')
         .select('ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica, puerto_servicio')
         .eq('id', deviceId)
         .maybeSingle();
+      dev = data;
+    }
 
-      if (dev) {
-        host = dev.ip_direccion || host;
-        user = dev.credencial_usuario || user;
-        pass = dev.credencial_password || pass;
-        config = dev.configuracion_tecnica || {};
-        port = Number(config?.puerto || dev.puerto_servicio || port || 80);
-      }
-    } else if (host) {
+    // Si no se encontró el dispositivo por ID (o no se envió), buscar por IP y puerto
+    if (!dev && host) {
       const { data: devices } = await this.supabase
-        .getClient()
+        .getSupabaseAdminClient()
         .from('dispositivos_iot')
         .select('ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica, puerto_servicio')
         .eq('ip_direccion', host);
 
       if (devices && devices.length > 0) {
         // Encontrar el dispositivo que coincida con el puerto configurado
-        const dev = devices.find(d => {
+        dev = devices.find(d => {
           const p = Number(d.configuracion_tecnica?.puerto || d.puerto_servicio || 80);
           return p === port;
         }) || devices[0];
-
-        if (dev) {
-          user = dev.credencial_usuario || user;
-          pass = dev.credencial_password || pass;
-          config = dev.configuracion_tecnica || {};
-          port = Number(config?.puerto || dev.puerto_servicio || port || 80);
-        }
       }
+    }
+
+    if (dev) {
+      host = dev.ip_direccion || host;
+      user = dev.credencial_usuario || user;
+      pass = dev.credencial_password || pass;
+      config = dev.configuracion_tecnica || {};
+      port = Number(config?.puerto || dev.puerto_servicio || port || 80);
     }
 
     const resolved = await this.resolveDoorNetworkTarget(host, port, config);
