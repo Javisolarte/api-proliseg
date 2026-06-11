@@ -661,12 +661,17 @@ export class ControlAccesoService implements OnModuleInit {
       const ffmpeg = spawn('ffmpeg', [
         '-hide_banner',
         '-loglevel', 'warning',
+        '-fflags', 'nobuffer',
+        '-flags', 'low_delay',
+        '-probesize', '4096',
         '-f', 'webm',           // Formato de entrada explícito: WebM/Opus del navegador
         '-i', 'pipe:0',
         '-ac', '1',             // Mono
         '-ar', '8000',          // 8kHz (requerido por G.711)
         '-c:a', audioFormat === 'alaw' ? 'pcm_alaw' : 'pcm_mulaw',   // Codec de salida
+        '-af', 'volume=3.0',    // Aumento de volumen para asegurar claridad
         '-f', audioFormat,      // Formato de salida: raw alaw/mulaw
+        '-flush_packets', '1',
         'pipe:1',
       ]);
 
