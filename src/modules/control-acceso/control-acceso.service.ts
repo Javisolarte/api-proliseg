@@ -711,7 +711,7 @@ export class ControlAccesoService implements OnModuleInit {
           'Authorization': finalAuthHeader,
           'Content-Type': 'application/octet-stream',
           'User-Agent': 'PROLISEG-ControlAcceso/1.0',
-          'Transfer-Encoding': 'chunked',
+          'Content-Length': '99999999',
           'Connection': 'keep-alive',
         }
       }, (response) => {
