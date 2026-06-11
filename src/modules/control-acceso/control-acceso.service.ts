@@ -464,7 +464,7 @@ export class ControlAccesoService implements OnModuleInit {
       const { data } = await this.supabase
         .getSupabaseAdminClient()
         .from('dispositivos_iot')
-        .select('ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica, puerto_servicio')
+        .select('ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica')
         .eq('id', deviceId)
         .maybeSingle();
       dev = data;
@@ -475,13 +475,13 @@ export class ControlAccesoService implements OnModuleInit {
       const { data: devices } = await this.supabase
         .getSupabaseAdminClient()
         .from('dispositivos_iot')
-        .select('ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica, puerto_servicio')
+        .select('ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica')
         .eq('ip_direccion', host);
 
       if (devices && devices.length > 0) {
         // Encontrar el dispositivo que coincida con el puerto configurado
         dev = devices.find(d => {
-          const p = Number(d.configuracion_tecnica?.puerto || d.puerto_servicio || 80);
+          const p = Number(d.configuracion_tecnica?.puerto || 80);
           return p === port;
         }) || devices[0];
       }
@@ -492,7 +492,7 @@ export class ControlAccesoService implements OnModuleInit {
       user = dev.credencial_usuario || user;
       pass = dev.credencial_password || pass;
       config = dev.configuracion_tecnica || {};
-      port = Number(config?.puerto || dev.puerto_servicio || port || 80);
+      port = Number(config?.puerto || port || 80);
     }
 
     const resolved = await this.resolveDoorNetworkTarget(host, port, config);
