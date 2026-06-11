@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import axios from 'axios';
+import { createHash, randomBytes } from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
 
 // ─── Tipos públicos ────────────────────────────────────────────────────────
@@ -292,10 +293,14 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   </HttpHostNotification>
 </HttpHostNotificationList>`;
 
-    await axios.put(
+    await this.executeDigestRequest(
+      'PUT',
       `${base}/ISAPI/Event/notification/httpHosts/1`,
+      user,
+      pass,
       payload,
-      { auth, timeout: 5_000, headers: { 'Content-Type': 'application/xml' } }
+      'application/xml',
+      5000
     );
 
     this.logger.log(`✅ [EventSystem] Webhook Hikvision registrado → ${device.nombre_identificador} via ${protocolVal} (${ipAddressVal}:${portNoVal})`);
@@ -326,9 +331,14 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       protocol = 'HTTPS';
     }
 
-    await axios.get(
+    await this.executeDigestRequest(
+      'GET',
       `${base}/cgi-bin/configManager.cgi?action=setConfig&VSP_IPAddress[0].Enable=true&VSP_IPAddress[0].Address=${encodeURIComponent(webhookUrl)}&VSP_IPAddress[0].Protocol=${protocol}`,
-      { auth, timeout: 5_000 }
+      user,
+      pass,
+      null,
+      'application/x-www-form-urlencoded',
+      5000
     );
 
     this.logger.log(`✅ [EventSystem] Webhook Dahua registrado → ${device.nombre_identificador} via ${protocol}`);
@@ -365,8 +375,11 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       const base = `http://${ip}:${port}`;
       const auth = { username: user, password: pass };
 
-      const resp = await axios.post(
+      const resp = await this.executeDigestRequest(
+        'POST',
         `${base}/ISAPI/AccessControl/AcsEvent?format=json`,
+        user,
+        pass,
         { 
           AcsEventCond: { 
             searchID: `fb_${device.id}_${Date.now()}`, 
@@ -376,7 +389,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
             minor: 0 
           } 
         },
-        { auth, timeout: 5_000, headers: { 'Content-Type': 'application/json' } }
+        'application/json',
+        5000
       );
 
       const infos = resp.data?.AcsEvent?.InfoList || [];
@@ -414,6 +428,74 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     } catch { /* offline — silencioso */ }
   }
 
+  private buildDigestHeader(method: string, url: string, user: string, pass: string, challenge: any) {
+    const { realm, nonce, qop } = challenge;
+    const nc = '00000001';
+    const cnonce = randomBytes(4).toString('hex');
+    const uri = new URL(url).pathname + (new URL(url).search || '');
+
+    const ha1 = createHash('md5').update(`${user}:${realm}:${pass}`).digest('hex');
+    const ha2 = createHash('md5').update(`${method}:${uri}`).digest('hex');
+    let responseHash = '';
+
+    if (qop === 'auth') {
+      responseHash = createHash('md5').update(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`).digest('hex');
+    } else {
+      responseHash = createHash('md5').update(`${ha1}:${nonce}:${ha2}`).digest('hex');
+    }
+
+    let authStr = `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${responseHash}"`;
+    if (qop === 'auth') {
+      authStr += `, qop="${qop}", nc=${nc}, cnonce="${cnonce}"`;
+    }
+    return authStr;
+  }
+
+  private async executeDigestRequest(
+    method: string,
+    url: string,
+    user: string,
+    pass: string,
+    body: any = null,
+    contentType: string = 'application/xml',
+    timeout: number = 5000
+  ): Promise<any> {
+    try {
+      return await axios.request({
+        method,
+        url,
+        data: body,
+        headers: { 'Content-Type': contentType },
+        timeout
+      });
+    } catch (err) {
+      if (err.response && err.response.status === 401) {
+        const authHeader = err.response.headers['www-authenticate'];
+        if (!authHeader) throw err;
+        
+        const realm = authHeader.match(/realm="([^"]+)"/)?.[1];
+        const nonce = authHeader.match(/nonce="([^"]+)"/)?.[1];
+        const qop = authHeader.match(/qop="([^"]+)"/)?.[1];
+        
+        const challenge = { realm, nonce, qop };
+        const header = this.buildDigestHeader(method, url, user, pass, challenge);
+        
+        return await axios.request({
+          method,
+          url,
+          data: body,
+          headers: {
+            Authorization: header,
+            'Content-Type': contentType,
+            'Accept': 'application/xml'
+          },
+          timeout
+        });
+      }
+      throw err;
+    }
+  }
+
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
   private async getDeviceById(idOrIp: string): Promise<DeviceInfo | null> {
@@ -439,8 +521,10 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private mapHikvisionEventType(major: number, minor: number, eventType: string): string {
+    const et = String(eventType || '').toLowerCase();
     // Intercomunicador / Timbre
-    if (major === 3 || minor === 44 || minor === 9 || minor === 22 || String(eventType).toLowerCase().includes('call') || String(eventType).toLowerCase().includes('ring')) {
+    if (major === 3 || minor === 44 || minor === 9 || minor === 22 || 
+        et.includes('call') || et.includes('ring') || et.includes('intercom') || et.includes('videotalk')) {
       return 'llamada';
     }
     if (major === 5) {
