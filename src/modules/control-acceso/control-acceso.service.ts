@@ -578,8 +578,8 @@ export class ControlAccesoService implements OnModuleInit {
       clientDisconnected = true;
     });
 
-    // Limpiar caché de Digest para evitar nonces obsoletos que causen bloqueos 401 en el dispositivo
     const deviceHost = `${target.host}:${target.port}`;
+    // Limpiar caché de Digest para evitar nonces obsoletos que causen bloqueos 401 en el dispositivo
     this.digestChallengeCache.delete(deviceHost);
     this.digestChallengeCache.delete(target.host);
 
@@ -588,16 +588,38 @@ export class ControlAccesoService implements OnModuleInit {
       'Accept': 'application/xml',
     };
 
+    // 1. Detectar codec soportado por el dispositivo (usando caché para comunicación inmediata)
+    let audioFormat = 'mulaw'; // default G.711 μ-law
+    const cachedCodec = this.deviceCodecCache.get(deviceHost);
+    if (cachedCodec) {
+      audioFormat = cachedCodec;
+      this.logger.log(`[AUDIO-IN] Dispositivo usa codec cacheado: G.711 ${audioFormat}`);
+    } else {
+      try {
+        const capResult = await this.executeDigestAuth(
+          'GET', baseIsapi, target.user, target.pass, null, 'text', 15000, isapiHeaders
+        );
+        const capText = typeof capResult === 'string' ? capResult : JSON.stringify(capResult);
+        if (/G\.711alaw|alaw/i.test(capText)) {
+          audioFormat = 'alaw';
+        }
+        this.deviceCodecCache.set(deviceHost, audioFormat);
+        this.logger.log(`[AUDIO-IN] Codec de dispositivo detectado y cacheado: G.711 ${audioFormat}`);
+      } catch (capErr) {
+        this.logger.debug(`[AUDIO-IN] No se pudo detectar codec, usando μ-law por defecto: ${capErr.message}`);
+      }
+    }
+
     // 0. Cerrar canal previo que pueda haber quedado abierto (ignorar errores)
     try {
       await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text', 15000, isapiHeaders);
     } catch {}
 
-    // 1. Abrir el canal de audio bidireccional en el dispositivo (Hikvision ISAPI)
+    // 2. Abrir el canal de audio bidireccional en el dispositivo (Hikvision ISAPI)
     const openPayload = `<?xml version="1.0" encoding="UTF-8"?>
 <TwoWayAudioChannel version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
   <id>${this.audioTalkChannelId}</id>
-  <audioCompressionType>G.711ulaw</audioCompressionType>
+  <audioCompressionType>${audioFormat === 'alaw' ? 'G.711alaw' : 'G.711ulaw'}</audioCompressionType>
 </TwoWayAudioChannel>`;
 
     try {
@@ -613,7 +635,7 @@ export class ControlAccesoService implements OnModuleInit {
 
     this.logger.log(`[AUDIO-IN] Enviando audio a ${target.host}:${target.port} (${target.via})${deviceId ? ` device=${deviceId}` : ''}`);
 
-    // 2. Calentar el Digest Auth contra la misma URL para obtener un nonce fresco
+    // 3. Calentar el Digest Auth contra la misma URL para obtener un nonce fresco
     await this.ensureDigestChallenge(deviceUrl, target.user, target.pass);
     const authHeader = this.buildDigestAuthHeader('PUT', deviceUrl, target.user, target.pass);
     if (!authHeader) {
@@ -630,8 +652,7 @@ export class ControlAccesoService implements OnModuleInit {
     const finalAuthHeader = this.buildDigestAuthHeader('PUT', deviceUrl, target.user, target.pass)!;
 
     return new Promise((resolve, reject) => {
-      // ffmpeg: convierte WebM/Opus del navegador → PCM G.711 μ-law crudo (sin contenedor WAV)
-      // Hikvision ISAPI TwoWayAudio espera raw PCM μ-law a 8kHz mono
+      // ffmpeg: convierte WebM/Opus del navegador → PCM G.711 a/μ-law crudo (sin contenedor WAV)
       const ffmpeg = spawn('ffmpeg', [
         '-hide_banner',
         '-loglevel', 'warning',
@@ -639,8 +660,8 @@ export class ControlAccesoService implements OnModuleInit {
         '-i', 'pipe:0',
         '-ac', '1',             // Mono
         '-ar', '8000',          // 8kHz (requerido por G.711)
-        '-c:a', 'pcm_mulaw',   // Codec de salida: G.711 μ-law
-        '-f', 'mulaw',          // Formato de salida: raw μ-law (SIN contenedor WAV)
+        '-c:a', audioFormat === 'alaw' ? 'pcm_alaw' : 'pcm_mulaw',   // Codec de salida
+        '-f', audioFormat,      // Formato de salida: raw alaw/mulaw
         'pipe:1',
       ]);
 
