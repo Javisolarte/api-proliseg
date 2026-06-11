@@ -562,40 +562,61 @@ export class ControlAccesoService implements OnModuleInit {
     operator?: any,
   ): Promise<any> {
     const target = await this.resolveAudioNetworkTarget(targetIp, deviceId);
-    
+    const baseIsapi = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}`;
+
+    // 0. Cerrar canal previo que pueda haber quedado abierto (ignorar errores)
+    try {
+      await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text');
+    } catch {}
+
     // 1. Abrir el canal de audio bidireccional en el dispositivo (Hikvision ISAPI)
-    const openUrl = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}/open`;
     const openPayload = `<?xml version="1.0" encoding="UTF-8"?>
 <TwoWayAudioChannel version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
   <id>${this.audioTalkChannelId}</id>
+  <audioCompressionType>G.711ulaw</audioCompressionType>
 </TwoWayAudioChannel>`;
 
     try {
-      this.logger.debug(`[AUDIO-IN] Abriendo canal de audio en ${target.host}:${target.port}`);
-      await this.executeDigestAuth('PUT', openUrl, target.user, target.pass, openPayload, 'text');
+      this.logger.log(`🎙️ [AUDIO-IN] Abriendo canal de audio en ${target.host}:${target.port}`);
+      const openResult = await this.executeDigestAuth('PUT', `${baseIsapi}/open`, target.user, target.pass, openPayload, 'text');
+      this.logger.log(`✅ [AUDIO-IN] Canal de audio abierto correctamente`);
     } catch (openErr) {
-      this.logger.warn(`⚠️ [AUDIO-IN] Advertencia al abrir canal (puede estar ya abierto): ${openErr.message}`);
+      this.logger.error(`❌ [AUDIO-IN] FALLO al abrir canal de audio: ${openErr.message}`);
+      throw new Error(`No se pudo abrir el canal de audio en el dispositivo: ${openErr.message}`);
     }
 
-    const deviceUrl = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}/audioData`;
+    const deviceUrl = `${baseIsapi}/audioData`;
 
     this.logger.log(`[AUDIO-IN] Enviando audio a ${target.host}:${target.port} (${target.via})${deviceId ? ` device=${deviceId}` : ''}`);
 
+    // 2. Calentar el Digest Auth contra la misma URL para obtener un nonce fresco
     await this.ensureDigestChallenge(deviceUrl, target.user, target.pass);
     const authHeader = this.buildDigestAuthHeader('PUT', deviceUrl, target.user, target.pass);
     if (!authHeader) {
-      throw new Error('No se pudo construir la autenticación Digest para audio bidireccional');
+      // Si no hay nonce cacheado, intentar un warmup extra
+      this.logger.warn(`⚠️ [AUDIO-IN] No hay nonce cached, calentando Digest Auth...`);
+      await this.ensureDigestChallenge(`http://${target.host}:${target.port}/ISAPI/System/deviceInfo`, target.user, target.pass);
+      await this.ensureDigestChallenge(deviceUrl, target.user, target.pass);
+      const retryHeader = this.buildDigestAuthHeader('PUT', deviceUrl, target.user, target.pass);
+      if (!retryHeader) {
+        throw new Error('No se pudo construir la autenticación Digest para audio bidireccional');
+      }
     }
 
+    const finalAuthHeader = this.buildDigestAuthHeader('PUT', deviceUrl, target.user, target.pass)!;
+
     return new Promise((resolve, reject) => {
+      // ffmpeg: convierte WebM/Opus del navegador → PCM G.711 μ-law crudo (sin contenedor WAV)
+      // Hikvision ISAPI TwoWayAudio espera raw PCM μ-law a 8kHz mono
       const ffmpeg = spawn('ffmpeg', [
         '-hide_banner',
-        '-loglevel', 'error',
+        '-loglevel', 'warning',
+        '-f', 'webm',           // Formato de entrada explícito: WebM/Opus del navegador
         '-i', 'pipe:0',
-        '-ac', '1',
-        '-ar', '8000',
-        '-c:a', 'pcm_mulaw',
-        '-f', 'wav',
+        '-ac', '1',             // Mono
+        '-ar', '8000',          // 8kHz (requerido por G.711)
+        '-c:a', 'pcm_mulaw',   // Codec de salida: G.711 μ-law
+        '-f', 'mulaw',          // Formato de salida: raw μ-law (SIN contenedor WAV)
         'pipe:1',
       ]);
 
@@ -609,10 +630,10 @@ export class ControlAccesoService implements OnModuleInit {
         try { ffmpeg.kill('SIGKILL'); } catch {}
 
         // 3. Cerrar el canal de audio en el dispositivo
-        const closeUrl = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}/close`;
         try {
           this.logger.debug(`[AUDIO-IN] Cerrando canal de audio en ${target.host}:${target.port}`);
-          await this.executeDigestAuth('PUT', closeUrl, target.user, target.pass, '', 'text');
+          await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text');
+          this.logger.log(`✅ [AUDIO-IN] Canal de audio cerrado`);
         } catch (closeErr) {
           this.logger.warn(`⚠️ [AUDIO-IN] Error al cerrar canal de audio: ${closeErr.message}`);
         }
@@ -620,12 +641,13 @@ export class ControlAccesoService implements OnModuleInit {
         fn(value);
       };
 
+      // Enviar el stream de ffmpeg al dispositivo via PUT con Digest Auth
       axios
         .request({
           method: 'PUT',
           url: deviceUrl,
           headers: {
-            Authorization: authHeader,
+            Authorization: finalAuthHeader,
             'Content-Type': 'application/octet-stream',
             'User-Agent': 'PROLISEG-ControlAcceso/1.0',
           },
@@ -637,6 +659,7 @@ export class ControlAccesoService implements OnModuleInit {
           validateStatus: () => true,
         })
         .then((response) => {
+          this.logger.log(`[AUDIO-IN] Dispositivo respondió con status ${response.status}`);
           if (response.status >= 200 && response.status < 300) {
             finalize(resolve, {
               ok: true,
@@ -651,23 +674,42 @@ export class ControlAccesoService implements OnModuleInit {
             return;
           }
 
-          finalize(reject, new Error(`El dispositivo respondió con estado ${response.status}`));
+          if (response.status === 401) {
+            this.logger.error(`❌ [AUDIO-IN] Autenticación rechazada (401) — nonce posiblemente expirado`);
+            // Limpiar cache de Digest para forzar re-auth en el próximo intento
+            const host = new URL(deviceUrl).host;
+            this.digestChallengeCache.delete(host);
+          }
+
+          const bodyText = response.data ? Buffer.from(response.data).toString('utf8').substring(0, 200) : '';
+          finalize(reject, new Error(`El dispositivo respondió con estado ${response.status}: ${bodyText}`));
         })
-        .catch((err) => finalize(reject, err));
+        .catch((err) => {
+          this.logger.error(`❌ [AUDIO-IN] Error en la conexión PUT audioData: ${err.message}`);
+          finalize(reject, err);
+        });
 
       const ffmpegErrors: Buffer[] = [];
-      ffmpeg.stderr.on('data', (chunk) => ffmpegErrors.push(Buffer.from(chunk)));
+      ffmpeg.stderr.on('data', (chunk) => {
+        ffmpegErrors.push(Buffer.from(chunk));
+        this.logger.debug(`[AUDIO-IN] ffmpeg stderr: ${chunk.toString()}`);
+      });
       ffmpeg.on('error', (error) => {
+        this.logger.error(`❌ [AUDIO-IN] ffmpeg error: ${error.message}`);
         finalize(reject, error);
       });
       ffmpeg.on('close', (code) => {
         if (code !== 0 && !settled) {
           const message = Buffer.concat(ffmpegErrors).toString('utf8') || `ffmpeg terminó con código ${code}`;
+          this.logger.error(`❌ [AUDIO-IN] ffmpeg cerró con código ${code}: ${message}`);
           finalize(reject, new Error(message));
         }
       });
 
-      audioStream.on('error', (error) => finalize(reject, error));
+      audioStream.on('error', (error) => {
+        this.logger.error(`❌ [AUDIO-IN] Error en el stream de entrada: ${error.message}`);
+        finalize(reject, error);
+      });
       audioStream.pipe(ffmpeg.stdin);
     });
   }
@@ -678,35 +720,75 @@ export class ControlAccesoService implements OnModuleInit {
     deviceId?: string,
   ): Promise<any> {
     const target = await this.resolveAudioNetworkTarget(targetIp, deviceId);
+    const baseIsapi = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}`;
 
-    // 1. Abrir el canal de audio bidireccional
-    const openUrl = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}/open`;
+    // 0. Cerrar canal previo que pueda haber quedado abierto (ignorar errores)
+    try {
+      await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text');
+    } catch {}
+
+    // 1. Detectar codec soportado por el dispositivo
+    let audioFormat = 'mulaw'; // default G.711 μ-law
+    try {
+      const capResult = await this.executeDigestAuth(
+        'GET', baseIsapi, target.user, target.pass, null, 'text'
+      );
+      const capText = typeof capResult === 'string' ? capResult : JSON.stringify(capResult);
+      if (/G\.711alaw|alaw/i.test(capText)) {
+        audioFormat = 'alaw';
+        this.logger.log(`[AUDIO-OUT] Dispositivo usa G.711 A-law`);
+      } else {
+        this.logger.log(`[AUDIO-OUT] Dispositivo usa G.711 μ-law (default)`);
+      }
+    } catch (capErr) {
+      this.logger.debug(`[AUDIO-OUT] No se pudo detectar codec, usando μ-law por defecto: ${capErr.message}`);
+    }
+
+    // 2. Abrir el canal de audio
     const openPayload = `<?xml version="1.0" encoding="UTF-8"?>
 <TwoWayAudioChannel version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
   <id>${this.audioTalkChannelId}</id>
+  <audioCompressionType>${audioFormat === 'alaw' ? 'G.711alaw' : 'G.711ulaw'}</audioCompressionType>
 </TwoWayAudioChannel>`;
 
     try {
-      this.logger.debug(`[AUDIO-OUT] Abriendo canal de audio en ${target.host}:${target.port}`);
-      await this.executeDigestAuth('PUT', openUrl, target.user, target.pass, openPayload, 'text');
+      this.logger.log(`🔊 [AUDIO-OUT] Abriendo canal de audio en ${target.host}:${target.port}`);
+      await this.executeDigestAuth('PUT', `${baseIsapi}/open`, target.user, target.pass, openPayload, 'text');
+      this.logger.log(`✅ [AUDIO-OUT] Canal de audio abierto correctamente`);
     } catch (openErr) {
-      this.logger.warn(`⚠️ [AUDIO-OUT] Advertencia al abrir canal: ${openErr.message}`);
+      this.logger.error(`❌ [AUDIO-OUT] FALLO al abrir canal de audio: ${openErr.message}`);
+      if (!res.headersSent) {
+        res.status(502).send(`Error al abrir canal de audio: ${openErr.message}`);
+      }
+      return;
     }
 
-    const deviceUrl = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}/audioData`;
+    const deviceUrl = `${baseIsapi}/audioData`;
 
     this.logger.log(`[AUDIO-OUT] Solicitando audio de ${target.host}:${target.port} (${target.via})`);
 
+    // 3. Calentar el Digest Auth
     await this.ensureDigestChallenge(deviceUrl, target.user, target.pass);
-    const authHeader = this.buildDigestAuthHeader('GET', deviceUrl, target.user, target.pass);
+    let authHeader = this.buildDigestAuthHeader('GET', deviceUrl, target.user, target.pass);
     if (!authHeader) {
-      throw new Error('No se pudo construir la autenticación Digest para audio de salida');
+      this.logger.warn(`⚠️ [AUDIO-OUT] No hay nonce cached, calentando Digest Auth...`);
+      await this.ensureDigestChallenge(`http://${target.host}:${target.port}/ISAPI/System/deviceInfo`, target.user, target.pass);
+      await this.ensureDigestChallenge(deviceUrl, target.user, target.pass);
+      authHeader = this.buildDigestAuthHeader('GET', deviceUrl, target.user, target.pass);
+      if (!authHeader) {
+        this.logger.error(`❌ [AUDIO-OUT] No se pudo construir Digest Auth`);
+        if (!res.headersSent) {
+          res.status(500).send('Error de autenticación con el dispositivo');
+        }
+        return;
+      }
     }
 
+    // 4. ffmpeg: convierte G.711 crudo del dispositivo → MP3 para el navegador
     const ffmpeg = spawn('ffmpeg', [
       '-hide_banner',
-      '-loglevel', 'error',
-      '-f', 'mulaw',
+      '-loglevel', 'warning',
+      '-f', audioFormat,       // mulaw o alaw según detección
       '-ar', '8000',
       '-ac', '1',
       '-i', 'pipe:0',
@@ -725,14 +807,23 @@ export class ControlAccesoService implements OnModuleInit {
       try { ffmpeg.kill('SIGKILL'); } catch {}
 
       // Cerrar el canal de audio en el dispositivo
-      const closeUrl = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}/close`;
       try {
         this.logger.debug(`[AUDIO-OUT] Cerrando canal de audio en ${target.host}:${target.port}`);
-        await this.executeDigestAuth('PUT', closeUrl, target.user, target.pass, '', 'text');
+        await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text');
+        this.logger.log(`✅ [AUDIO-OUT] Canal de audio cerrado`);
       } catch (closeErr) {
         this.logger.warn(`⚠️ [AUDIO-OUT] Error al cerrar canal de audio: ${closeErr.message}`);
       }
     };
+
+    // ffmpeg stderr logging
+    ffmpeg.stderr.on('data', (chunk) => {
+      this.logger.debug(`[AUDIO-OUT] ffmpeg stderr: ${chunk.toString()}`);
+    });
+    ffmpeg.on('error', (err) => {
+      this.logger.error(`❌ [AUDIO-OUT] ffmpeg error: ${err.message}`);
+      finalize();
+    });
 
     res.set({
       'Content-Type': 'audio/mpeg',
@@ -740,6 +831,7 @@ export class ControlAccesoService implements OnModuleInit {
       'Cache-Control': 'no-cache, no-store, must-revalidate',
       'Pragma': 'no-cache',
       'Expires': '0',
+      'Access-Control-Allow-Origin': '*',
     });
 
     res.on('close', () => {
@@ -749,6 +841,7 @@ export class ControlAccesoService implements OnModuleInit {
 
     ffmpeg.stdout.pipe(res);
 
+    // 5. Conectar al stream de audio del dispositivo
     axios
       .request({
         method: 'GET',
@@ -761,14 +854,24 @@ export class ControlAccesoService implements OnModuleInit {
         timeout: 300000,
       })
       .then((response) => {
+        this.logger.log(`✅ [AUDIO-OUT] Stream de audio conectado (status ${response.status})`);
         response.data.pipe(ffmpeg.stdin);
         response.data.on('error', (err) => {
           this.logger.error(`[AUDIO-OUT] Error en el stream de la cámara: ${err.message}`);
           finalize();
         });
+        response.data.on('end', () => {
+          this.logger.debug(`[AUDIO-OUT] Stream de audio del dispositivo terminó`);
+          finalize();
+        });
       })
       .catch((err) => {
-        this.logger.error(`[AUDIO-OUT] Error al conectar con el stream de la cámara: ${err.message}`);
+        this.logger.error(`❌ [AUDIO-OUT] Error al conectar con el stream de la cámara: ${err.message}`);
+        if (err.response?.status === 401) {
+          this.logger.error(`❌ [AUDIO-OUT] Autenticación rechazada (401). Limpiando cache Digest.`);
+          const host = new URL(deviceUrl).host;
+          this.digestChallengeCache.delete(host);
+        }
         finalize();
         if (!res.headersSent) {
           res.status(502).send('Error conectando con la cámara');
