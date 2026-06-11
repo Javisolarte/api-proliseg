@@ -14,6 +14,7 @@ export class ControlAccesoService implements OnModuleInit {
   private readonly proxyUrl = 'https://servidor.proliseg.com/dispositivos';
   private readonly apiKey = 'proliseg-acceso-2026';
   private digestChallengeCache = new Map<string, { realm: string; nonce: string; qop: string }>();
+  private deviceCodecCache = new Map<string, string>();
   private readonly audioTalkChannelId = 1;
 
   constructor(
@@ -564,9 +565,19 @@ export class ControlAccesoService implements OnModuleInit {
     const target = await this.resolveAudioNetworkTarget(targetIp, deviceId);
     const baseIsapi = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}`;
 
+    // Limpiar caché de Digest para evitar nonces obsoletos que causen bloqueos 401 en el dispositivo
+    const deviceHost = `${target.host}:${target.port}`;
+    this.digestChallengeCache.delete(deviceHost);
+    this.digestChallengeCache.delete(target.host);
+
+    const isapiHeaders = {
+      'Content-Type': 'application/xml',
+      'Accept': 'application/xml',
+    };
+
     // 0. Cerrar canal previo que pueda haber quedado abierto (ignorar errores)
     try {
-      await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text');
+      await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text', 15000, isapiHeaders);
     } catch {}
 
     // 1. Abrir el canal de audio bidireccional en el dispositivo (Hikvision ISAPI)
@@ -578,7 +589,7 @@ export class ControlAccesoService implements OnModuleInit {
 
     try {
       this.logger.log(`🎙️ [AUDIO-IN] Abriendo canal de audio en ${target.host}:${target.port}`);
-      const openResult = await this.executeDigestAuth('PUT', `${baseIsapi}/open`, target.user, target.pass, openPayload, 'text');
+      const openResult = await this.executeDigestAuth('PUT', `${baseIsapi}/open`, target.user, target.pass, openPayload, 'text', 15000, isapiHeaders);
       this.logger.log(`✅ [AUDIO-IN] Canal de audio abierto correctamente`);
     } catch (openErr) {
       this.logger.error(`❌ [AUDIO-IN] FALLO al abrir canal de audio: ${openErr.message}`);
@@ -632,7 +643,7 @@ export class ControlAccesoService implements OnModuleInit {
         // 3. Cerrar el canal de audio en el dispositivo
         try {
           this.logger.debug(`[AUDIO-IN] Cerrando canal de audio en ${target.host}:${target.port}`);
-          await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text');
+          await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text', 15000, isapiHeaders);
           this.logger.log(`✅ [AUDIO-IN] Canal de audio cerrado`);
         } catch (closeErr) {
           this.logger.warn(`⚠️ [AUDIO-IN] Error al cerrar canal de audio: ${closeErr.message}`);
@@ -722,26 +733,41 @@ export class ControlAccesoService implements OnModuleInit {
     const target = await this.resolveAudioNetworkTarget(targetIp, deviceId);
     const baseIsapi = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}`;
 
+    // Limpiar caché de Digest para evitar nonces obsoletos que causen bloqueos 401 en el dispositivo
+    const deviceHost = `${target.host}:${target.port}`;
+    this.digestChallengeCache.delete(deviceHost);
+    this.digestChallengeCache.delete(target.host);
+
+    const isapiHeaders = {
+      'Content-Type': 'application/xml',
+      'Accept': 'application/xml',
+    };
+
     // 0. Cerrar canal previo que pueda haber quedado abierto (ignorar errores)
     try {
-      await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text');
+      await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text', 15000, isapiHeaders);
     } catch {}
 
-    // 1. Detectar codec soportado por el dispositivo
+    // 1. Detectar codec soportado por el dispositivo (usando caché para comunicación inmediata)
     let audioFormat = 'mulaw'; // default G.711 μ-law
-    try {
-      const capResult = await this.executeDigestAuth(
-        'GET', baseIsapi, target.user, target.pass, null, 'text'
-      );
-      const capText = typeof capResult === 'string' ? capResult : JSON.stringify(capResult);
-      if (/G\.711alaw|alaw/i.test(capText)) {
-        audioFormat = 'alaw';
-        this.logger.log(`[AUDIO-OUT] Dispositivo usa G.711 A-law`);
-      } else {
-        this.logger.log(`[AUDIO-OUT] Dispositivo usa G.711 μ-law (default)`);
+    const cachedCodec = this.deviceCodecCache.get(deviceHost);
+    if (cachedCodec) {
+      audioFormat = cachedCodec;
+      this.logger.log(`[AUDIO-OUT] Dispositivo usa codec cacheado: G.711 ${audioFormat}`);
+    } else {
+      try {
+        const capResult = await this.executeDigestAuth(
+          'GET', baseIsapi, target.user, target.pass, null, 'text', 15000, isapiHeaders
+        );
+        const capText = typeof capResult === 'string' ? capResult : JSON.stringify(capResult);
+        if (/G\.711alaw|alaw/i.test(capText)) {
+          audioFormat = 'alaw';
+        }
+        this.deviceCodecCache.set(deviceHost, audioFormat);
+        this.logger.log(`[AUDIO-OUT] Codec de dispositivo detectado y cacheado: G.711 ${audioFormat}`);
+      } catch (capErr) {
+        this.logger.debug(`[AUDIO-OUT] No se pudo detectar codec, usando μ-law por defecto: ${capErr.message}`);
       }
-    } catch (capErr) {
-      this.logger.debug(`[AUDIO-OUT] No se pudo detectar codec, usando μ-law por defecto: ${capErr.message}`);
     }
 
     // 2. Abrir el canal de audio
@@ -753,7 +779,7 @@ export class ControlAccesoService implements OnModuleInit {
 
     try {
       this.logger.log(`🔊 [AUDIO-OUT] Abriendo canal de audio en ${target.host}:${target.port}`);
-      await this.executeDigestAuth('PUT', `${baseIsapi}/open`, target.user, target.pass, openPayload, 'text');
+      await this.executeDigestAuth('PUT', `${baseIsapi}/open`, target.user, target.pass, openPayload, 'text', 15000, isapiHeaders);
       this.logger.log(`✅ [AUDIO-OUT] Canal de audio abierto correctamente`);
     } catch (openErr) {
       this.logger.error(`❌ [AUDIO-OUT] FALLO al abrir canal de audio: ${openErr.message}`);
@@ -809,7 +835,7 @@ export class ControlAccesoService implements OnModuleInit {
       // Cerrar el canal de audio en el dispositivo
       try {
         this.logger.debug(`[AUDIO-OUT] Cerrando canal de audio en ${target.host}:${target.port}`);
-        await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text');
+        await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text', 15000, isapiHeaders);
         this.logger.log(`✅ [AUDIO-OUT] Canal de audio cerrado`);
       } catch (closeErr) {
         this.logger.warn(`⚠️ [AUDIO-OUT] Error al cerrar canal de audio: ${closeErr.message}`);
@@ -2806,8 +2832,17 @@ export class ControlAccesoService implements OnModuleInit {
     }
   }
 
-  private async executeDigestAuth(method: string, url: string, user: string, pass: string, data?: any, responseType: string = 'json', timeout: number = 15000): Promise<any> {
-    const response = await this.executeDigestAuthRequest(method, url, user, pass, data, responseType, timeout);
+  private async executeDigestAuth(
+    method: string,
+    url: string,
+    user: string,
+    pass: string,
+    data?: any,
+    responseType: string = 'json',
+    timeout: number = 15000,
+    headers: Record<string, string> = {},
+  ): Promise<any> {
+    const response = await this.executeDigestAuthRequest(method, url, user, pass, data, responseType, timeout, headers);
     return response.data;
   }
 
