@@ -577,6 +577,9 @@ export class ControlAccesoService implements OnModuleInit {
     (audioStream as any).on('close', () => {
       clientDisconnected = true;
     });
+    (audioStream as any).on('end', () => {
+      clientDisconnected = true;
+    });
 
     const deviceHost = `${target.host}:${target.port}`;
     // Limpiar caché de Digest para evitar nonces obsoletos que causen bloqueos 401 en el dispositivo

@@ -14,6 +14,8 @@ import { AuthService } from '../auth/auth.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import { IniciarComunicacionDto, FinalizarComunicacionDto, MensajeTextoDto, ResponderComunicacionDto, OrigenAudio, IniciarComunicacionDashboardDto, RegistrarDispositivoDto, WebRTCOfferDto, WebRTCAnswerDto, WebRTCCandidateDto, JoinRoomDto } from './dto/comunicacion.dto';
 import { DevicePollerService } from '../control-acceso/device-poller.service';
+import { ControlAccesoService } from '../control-acceso/control-acceso.service';
+import { PassThrough } from 'stream';
 
 // 🟢 Máquina de Estados (FSM)
 export enum SessionState {
@@ -67,6 +69,7 @@ export class ComunicacionesGateway implements OnGatewayInit, OnGatewayConnection
     private sesionesActivas: Map<string, SesionActiva> = new Map();
     private socketToSesion: Map<string, string> = new Map();
     private empleadoToSocket: Map<number, string> = new Map();
+    private activeAudioStreams: Map<string, { stream: PassThrough; targetIp: string; deviceId?: string }> = new Map();
 
     private cleanupInterval: NodeJS.Timeout;
     private readonly SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutos (aumentado para WebRTC)
@@ -75,6 +78,7 @@ export class ComunicacionesGateway implements OnGatewayInit, OnGatewayConnection
         private readonly authService: AuthService,
         private readonly supabaseService: SupabaseService,
         private readonly devicePoller: DevicePollerService,
+        private readonly controlAccesoService: ControlAccesoService,
     ) {
         this.cleanupInterval = setInterval(() => this.checkInactiveSessions(), 60 * 1000);
     }
@@ -201,6 +205,14 @@ export class ComunicacionesGateway implements OnGatewayInit, OnGatewayConnection
         // Limpieza de empleado
         if (client.data.empleado_id) {
             this.empleadoToSocket.delete(client.data.empleado_id);
+        }
+
+        // Limpieza de audio de control de acceso si existe
+        const audioSession = this.activeAudioStreams.get(client.id);
+        if (audioSession) {
+            try { audioSession.stream.end(); } catch (e) {}
+            this.activeAudioStreams.delete(client.id);
+            this.logger.log(`🎙️ [AUDIO-IN-WS] Stream de audio cerrado por desconexión de socket del cliente: ${client.id}`);
         }
     }
 
@@ -527,5 +539,77 @@ export class ComunicacionesGateway implements OnGatewayInit, OnGatewayConnection
             empleados_online: this.empleadoToSocket.size,
             lista_sesiones: Array.from(this.sesionesActivas.values())
         };
+    }
+
+    // ==========================================
+    // 🎙️ Eventos de Audio Bidireccional por WebSocket
+    // ==========================================
+
+    @SubscribeMessage('control_acceso_audio_iniciar')
+    async handleControlAccesoAudioIniciar(
+        @MessageBody() data: { targetIp: string; deviceId?: string },
+        @ConnectedSocket() client: Socket,
+    ) {
+        const user = client.data.user;
+        this.logger.log(`🎙️ [AUDIO-IN-WS] Solicitud de inicio de audio de ${user?.email || 'desconocido'} para IP=${data.targetIp}, DeviceId=${data.deviceId}`);
+
+        // Limpiar stream previo si existiera
+        const prev = this.activeAudioStreams.get(client.id);
+        if (prev) {
+            try { prev.stream.end(); } catch (e) {}
+            this.activeAudioStreams.delete(client.id);
+        }
+
+        const passThroughStream = new PassThrough();
+        this.activeAudioStreams.set(client.id, {
+            stream: passThroughStream,
+            targetIp: data.targetIp,
+            deviceId: data.deviceId,
+        });
+
+        // Correr el relayer en background.
+        this.controlAccesoService.relayAudioToDevice(
+            passThroughStream,
+            data.targetIp,
+            data.deviceId,
+            user,
+        ).then((res) => {
+            this.logger.log(`🎙️ [AUDIO-IN-WS] Transmisión terminada para ${data.targetIp}: ${JSON.stringify(res)}`);
+        }).catch((err) => {
+            this.logger.error(`🎙️ [AUDIO-IN-WS] Error en la transmisión para ${data.targetIp}: ${err.message}`);
+            client.emit('control_acceso_audio_error', { mensaje: err.message });
+        });
+
+        return { success: true };
+    }
+
+    @SubscribeMessage('control_acceso_audio_chunk')
+    handleControlAccesoAudioChunk(
+        @MessageBody() data: { chunk: ArrayBuffer | Buffer },
+        @ConnectedSocket() client: Socket,
+    ) {
+        const session = this.activeAudioStreams.get(client.id);
+        if (!session) return { success: false, error: 'No hay sesión de audio activa' };
+
+        try {
+            const buffer = Buffer.isBuffer(data.chunk) ? data.chunk : Buffer.from(data.chunk);
+            session.stream.write(buffer);
+        } catch (err) {
+            this.logger.error(`🎙️ [AUDIO-IN-WS] Error escribiendo chunk en stream: ${err.message}`);
+        }
+        return { success: true };
+    }
+
+    @SubscribeMessage('control_acceso_audio_finalizar')
+    handleControlAccesoAudioFinalizar(
+        @ConnectedSocket() client: Socket,
+    ) {
+        const session = this.activeAudioStreams.get(client.id);
+        if (session) {
+            this.logger.log(`🎙️ [AUDIO-IN-WS] Finalizando stream de audio para IP=${session.targetIp}`);
+            try { session.stream.end(); } catch (e) {}
+            this.activeAudioStreams.delete(client.id);
+        }
+        return { success: true };
     }
 }
