@@ -572,6 +572,8 @@ export class ControlAccesoService implements OnModuleInit {
     const target = await this.resolveAudioNetworkTarget(targetIp, deviceId);
     const baseIsapi = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}`;
 
+    this.logger.log(`🎙️ [AUDIO-IN] Target resolved: host=${target.host}:${target.port}, user=${target.user}, passLength=${target.pass?.length || 0}`);
+
     // Limpiar caché de Digest para evitar nonces obsoletos que causen bloqueos 401 en el dispositivo
     const deviceHost = `${target.host}:${target.port}`;
     this.digestChallengeCache.delete(deviceHost);
@@ -739,6 +741,8 @@ export class ControlAccesoService implements OnModuleInit {
   ): Promise<any> {
     const target = await this.resolveAudioNetworkTarget(targetIp, deviceId);
     const baseIsapi = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}`;
+
+    this.logger.log(`🔊 [AUDIO-OUT] Target resolved: host=${target.host}:${target.port}, user=${target.user}, passLength=${target.pass?.length || 0}`);
 
     // Limpiar caché de Digest para evitar nonces obsoletos que causen bloqueos 401 en el dispositivo
     const deviceHost = `${target.host}:${target.port}`;
