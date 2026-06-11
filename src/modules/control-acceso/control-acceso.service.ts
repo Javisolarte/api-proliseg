@@ -652,6 +652,8 @@ export class ControlAccesoService implements OnModuleInit {
     const finalAuthHeader = this.buildDigestAuthHeader('PUT', deviceUrl, target.user, target.pass)!;
 
     return new Promise((resolve, reject) => {
+      let req: any = null;
+
       // ffmpeg: convierte WebM/Opus del navegador → PCM G.711 a/μ-law crudo (sin contenedor WAV)
       const ffmpeg = spawn('ffmpeg', [
         '-hide_banner',
@@ -673,6 +675,7 @@ export class ControlAccesoService implements OnModuleInit {
         try { ffmpeg.stdin.destroy(); } catch {}
         try { ffmpeg.stdout.destroy(); } catch {}
         try { ffmpeg.kill('SIGKILL'); } catch {}
+        try { req?.destroy(); } catch {}
 
         // 3. Cerrar el canal de audio en el dispositivo
         try {
@@ -686,67 +689,73 @@ export class ControlAccesoService implements OnModuleInit {
         fn(value);
       };
 
-      // Enviar el stream de ffmpeg al dispositivo via PUT con Digest Auth
-      axios
-        .request({
-          method: 'PUT',
-          url: deviceUrl,
-          headers: {
-            Authorization: finalAuthHeader,
-            'Content-Type': 'application/octet-stream',
-            'User-Agent': 'PROLISEG-ControlAcceso/1.0',
-          },
-          data: ffmpeg.stdout,
-          timeout: 300000,
-          maxBodyLength: Infinity,
-          maxContentLength: Infinity,
-          responseType: 'arraybuffer',
-          validateStatus: () => true,
-        })
-        .then((response) => {
-          this.logger.log(`[AUDIO-IN] Dispositivo respondió con status ${response.status}`);
-          if (response.status >= 200 && response.status < 300) {
+      // Realizar la petición PUT de subida en tiempo real usando el módulo nativo http/https
+      // Esto evita que Axios bufferice el stream de audio completo en memoria.
+      const parsedUrl = new URL(deviceUrl);
+      const transport = parsedUrl.protocol === 'https:' ? require('https') : require('http');
+
+      req = transport.request({
+        method: 'PUT',
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
+        path: parsedUrl.pathname + parsedUrl.search,
+        headers: {
+          'Authorization': finalAuthHeader,
+          'Content-Type': 'application/octet-stream',
+          'User-Agent': 'PROLISEG-ControlAcceso/1.0',
+          'Transfer-Encoding': 'chunked',
+          'Connection': 'keep-alive',
+        }
+      }, (response) => {
+        this.logger.log(`[AUDIO-IN] Dispositivo respondió con status ${response.statusCode}`);
+        let responseData = '';
+        response.on('data', (chunk) => {
+          responseData += chunk.toString();
+        });
+        response.on('end', () => {
+          if (response.statusCode >= 200 && response.statusCode < 300) {
             finalize(resolve, {
               ok: true,
               mensaje: 'Audio transmitido al dispositivo',
               detalle: {
                 target: `${target.host}:${target.port}`,
                 via: target.via,
-                status: response.status,
+                status: response.statusCode,
               },
               operador: operator || null,
             });
-            return;
+          } else {
+            if (response.statusCode === 401) {
+              this.logger.error(`❌ [AUDIO-IN] Autenticación rechazada (401) — nonce posiblemente expirado`);
+              const host = new URL(deviceUrl).host;
+              this.digestChallengeCache.delete(host);
+            }
+            finalize(reject, new Error(`El dispositivo respondió con estado ${response.statusCode}: ${responseData.substring(0, 200)}`));
           }
-
-          if (response.status === 401) {
-            this.logger.error(`❌ [AUDIO-IN] Autenticación rechazada (401) — nonce posiblemente expirado`);
-            // Limpiar cache de Digest para forzar re-auth en el próximo intento
-            const host = new URL(deviceUrl).host;
-            this.digestChallengeCache.delete(host);
-          }
-
-          const bodyText = response.data ? Buffer.from(response.data).toString('utf8').substring(0, 200) : '';
-          finalize(reject, new Error(`El dispositivo respondió con estado ${response.status}: ${bodyText}`));
-        })
-        .catch((err) => {
-          if (clientDisconnected || (audioStream as any).aborted) {
-            this.logger.log(`[AUDIO-IN] Conexión PUT terminada normalmente al colgar/detener.`);
-            finalize(resolve, {
-              ok: true,
-              mensaje: 'Transmisión finalizada',
-              detalle: {
-                target: `${target.host}:${target.port}`,
-                via: target.via,
-                status: 'closed',
-              },
-              operador: operator || null,
-            });
-            return;
-          }
-          this.logger.error(`❌ [AUDIO-IN] Error en la conexión PUT audioData: ${err.message}`);
-          finalize(reject, err);
         });
+      });
+
+      req.on('error', (err) => {
+        if (clientDisconnected || (audioStream as any).aborted) {
+          this.logger.log(`[AUDIO-IN] Conexión PUT terminada normalmente al colgar/detener.`);
+          finalize(resolve, {
+            ok: true,
+            mensaje: 'Transmisión finalizada',
+            detalle: {
+              target: `${target.host}:${target.port}`,
+              via: target.via,
+              status: 'closed',
+            },
+            operador: operator || null,
+          });
+          return;
+        }
+        this.logger.error(`❌ [AUDIO-IN] Error en la conexión PUT audioData: ${err.message}`);
+        finalize(reject, err);
+      });
+
+      // Pipear el stream de audio transcrito por ffmpeg directamente al socket de la petición HTTP
+      ffmpeg.stdout.pipe(req);
 
       const ffmpegErrors: Buffer[] = [];
       ffmpeg.stderr.on('data', (chunk) => {
