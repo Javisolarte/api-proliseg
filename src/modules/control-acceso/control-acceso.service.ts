@@ -2692,7 +2692,9 @@ export class ControlAccesoService implements OnModuleInit {
   async crearUsuarioEnHardware(ip: string, userId: string, nombre: string): Promise<any> {
     const isapiPath = `/ISAPI/AccessControl/UserInfo/Record?format=json`;
     const sanitizedNombre = this.sanitizeHardwareName(nombre);
-    const body = {
+
+    // Formato 1: Completo con planTemplateNo como string (estándar de Hikvision)
+    const body1 = {
       UserInfo: {
         employeeNo: userId,
         name: sanitizedNombre,
@@ -2712,11 +2714,66 @@ export class ControlAccesoService implements OnModuleInit {
         ],
       },
     };
+
+    // Formato 2: Con planTemplateNo como número (requerido por algunas firmwares)
+    const body2 = {
+      UserInfo: {
+        ...body1.UserInfo,
+        RightPlan: [
+          {
+            doorNo: 1,
+            planTemplateNo: 1,
+          },
+        ],
+      },
+    };
+
+    // Formato 3: Simplificado (sin configuración explícita de puertas, autodetecta privilegios)
+    const body3 = {
+      UserInfo: {
+        employeeNo: userId,
+        name: sanitizedNombre,
+        userType: 'normal',
+        Valid: {
+          enable: true,
+          beginTime: '2026-01-01T00:00:00',
+          endTime: '2036-12-31T23:59:59',
+          timeType: 'local',
+        },
+      },
+    };
+
+    const intentar = async (body: any, method: 'post' | 'put') => {
+      return await this.proxyRequestDynamic(ip, method, isapiPath, body);
+    };
+
+    // Cadena de reintentos con fallbacks sucesivos
     try {
-      return await this.proxyRequestDynamic(ip, 'post', isapiPath, body);
-    } catch (error) {
-      this.logger.warn(`⚠️ [HARDWARE] POST UserInfo/Record falló, probando PUT: ${error.message}`);
-      return this.proxyRequestDynamic(ip, 'put', isapiPath, body);
+      this.logger.log(`👤 [HARDWARE SYNC] Creando usuario ${userId} (${sanitizedNombre}) en ${ip} - POST (Formato 1)`);
+      return await intentar(body1, 'post');
+    } catch (err1) {
+      this.logger.warn(`⚠️ [HARDWARE SYNC] POST Formato 1 falló en ${ip}: ${err1.message}. Reintentando con PUT...`);
+      try {
+        return await intentar(body1, 'put');
+      } catch (err2) {
+        this.logger.warn(`⚠️ [HARDWARE SYNC] PUT Formato 1 falló en ${ip}: ${err2.message}. Probando POST (Formato 2 - numérico)...`);
+        try {
+          return await intentar(body2, 'post');
+        } catch (err3) {
+          this.logger.warn(`⚠️ [HARDWARE SYNC] POST Formato 2 falló en ${ip}: ${err3.message}. Reintentando con PUT...`);
+          try {
+            return await intentar(body2, 'put');
+          } catch (err4) {
+            this.logger.warn(`⚠️ [HARDWARE SYNC] PUT Formato 2 falló en ${ip}: ${err4.message}. Probando POST (Formato 3 - simplificado)...`);
+            try {
+              return await intentar(body3, 'post');
+            } catch (err5) {
+              this.logger.warn(`⚠️ [HARDWARE SYNC] POST Formato 3 falló en ${ip}: ${err5.message}. Intentando último recurso con PUT...`);
+              return await intentar(body3, 'put');
+            }
+          }
+        }
+      }
     }
   }
 
