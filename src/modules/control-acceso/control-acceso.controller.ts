@@ -206,6 +206,14 @@ export class ControlAccesoController {
     return this.controlAccesoService.startVideoStream(id);
   }
 
+  @Public()
+  @Get('debug-intercom/:id')
+  @ApiOperation({ summary: 'Queries intercom configuration and status' })
+  async debugIntercom(@Param('id') id: string) {
+    this.logger.log(`🔍 [DEBUG-INTERCOM] Querying call config for device: ${id}`);
+    return this.controlAccesoService.debugIntercomDevice(id);
+  }
+
   @Get('recopilacion/lugares')
   @ApiOperation({ summary: 'Lista lugares de recopilacion de datos' })
   async getLugaresRecopilacion() {

@@ -2111,6 +2111,56 @@ export class ControlAccesoService implements OnModuleInit {
     return this.guardarFotoPersona(personaId, buffer);
   }
 
+  async debugIntercomDevice(id: string): Promise<any> {
+    const { data: device } = await this.supabase
+      .getClient()
+      .from('dispositivos_iot')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (!device) {
+      return { error: 'Dispositivo no encontrado' };
+    }
+
+    const ip = device.ip_direccion;
+    const results: any = {};
+
+    const paths = [
+      { key: 'sip_config_json', path: '/ISAPI/VideoIntercom/sip/config?format=json', method: 'get' },
+      { key: 'sip_config_xml', path: '/ISAPI/VideoIntercom/sip/config', method: 'get' },
+      { key: 'center_cfg_json', path: '/ISAPI/System/Network/Extension/centerCfg?format=json', method: 'get' },
+      { key: 'center_cfg_xml', path: '/ISAPI/System/Network/Extension/centerCfg', method: 'get' },
+      { key: 'dial_param_json', path: '/ISAPI/VideoIntercom/dialParam?format=json', method: 'get' },
+      { key: 'dial_param_xml', path: '/ISAPI/VideoIntercom/dialParam', method: 'get' },
+      { key: 'call_status_json', path: '/ISAPI/VideoIntercom/callStatus?format=json', method: 'get' },
+      { key: 'center_server_json', path: '/ISAPI/VideoIntercom/centerServer?format=json', method: 'get' },
+      { key: 'caller_info_json', path: '/ISAPI/VideoIntercom/callerInfo?format=json', method: 'get' }
+    ];
+
+    for (const item of paths) {
+      try {
+        const resp = await this.proxyRequestDynamic(ip, item.method, item.path, null, {
+          deviceId: id,
+          customTimeout: 3000,
+          responseType: item.path.includes('format=json') ? 'json' : 'text'
+        });
+        results[item.key] = resp;
+      } catch (err) {
+        results[item.key] = { error: err.message, response: err.response?.data || null };
+      }
+    }
+
+    return {
+      dispositivo: {
+        id: device.id,
+        nombre: device.nombre_identificador,
+        ip: device.ip_direccion,
+      },
+      results
+    };
+  }
+
   private async descargarFotoHardware(ip: string, urlOrPath: string): Promise<Buffer> {
     let path = urlOrPath;
     if (/^https?:\/\//i.test(urlOrPath)) {
