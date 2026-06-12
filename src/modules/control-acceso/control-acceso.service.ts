@@ -4083,7 +4083,30 @@ export class ControlAccesoService implements OnModuleInit {
     return data;
   }
 
-  async validarQrVisita(token: string) {
+  async validarQrVisita(tokenInput: string) {
+    let token = String(tokenInput || '').trim();
+
+    // 1. Si es una URL, extraer el parámetro "data" o el token
+    if (token.startsWith('http')) {
+      try {
+        const urlObj = new URL(token);
+        const dataParam = urlObj.searchParams.get('data');
+        if (dataParam) {
+          token = dataParam;
+        }
+      } catch (e) {}
+    }
+
+    // 2. Si es un JSON, parsear y extraer el campo "token"
+    if (token.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(token);
+        if (parsed.token) {
+          token = parsed.token;
+        }
+      } catch (e) {}
+    }
+
     const admin = this.supabase.getSupabaseAdminClient();
     const { data: visita, error } = await admin
       .from('visitas_acceso')
@@ -4127,6 +4150,19 @@ export class ControlAccesoService implements OnModuleInit {
         fotoIngresoUrl = urlData?.publicUrl || null;
       } catch (e) {
         this.logger.warn(`[VISITAS] Sin foto de ingreso: ${e.message}`);
+      }
+    }
+
+    // Abrir la puerta físicamente
+    if (visita.dispositivo?.ip_direccion) {
+      try {
+        await this.controlPuerta(visita.dispositivo.ip_direccion, 1, 'abrir', {
+          deviceId: visita.dispositivo.id,
+          marca: visita.dispositivo.configuracion_tecnica?.marca,
+        });
+        this.logger.log(`🚪 [Manual QR Validation] Puerta abierta automáticamente en dispositivo ${visita.dispositivo_id}`);
+      } catch (cmdErr) {
+        this.logger.error(`❌ [Manual QR Validation] Error al enviar comando de puerta: ${cmdErr.message}`);
       }
     }
 
