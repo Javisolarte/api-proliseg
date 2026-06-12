@@ -783,6 +783,13 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         .maybeSingle();
 
       if (!errorReg && visitaReg) {
+        // Verificar vigencia (Ej: fecha_esperada es hoy)
+        const hoy = new Date().toISOString().split('T')[0];
+        if (visitaReg.fecha_esperada && !visitaReg.fecha_esperada.startsWith(hoy)) {
+          this.logger.warn(`⚠️ [QR AUTO-OPEN] Token de residente fuera de fecha. ID: ${visitaReg.id}, Esperada: ${visitaReg.fecha_esperada}`);
+          return;
+        }
+
         this.logger.log(`🔑 [QR AUTO-OPEN] Token QR de residente válido: ${token} para visitante ${visitaReg.nombre_visitante_temporal || 'Invitado'}`);
         
         const { error: updErr } = await admin
@@ -816,6 +823,21 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       // Restricción de dispositivo: "solo en el dispositivo que se envio"
       if (visitaAcc.dispositivo_id && visitaAcc.dispositivo_id !== evento.dispositivo_id) {
         this.logger.warn(`⚠️ [QR AUTO-OPEN] Token QR válido pero presentado en dispositivo equivocado. Esperado: ${visitaAcc.dispositivo_id}, Escaneado: ${evento.dispositivo_id}`);
+        return;
+      }
+
+      // Verificar vencimiento de fecha
+      const ahora = new Date();
+      if (visitaAcc.fecha_vencimiento && ahora > new Date(visitaAcc.fecha_vencimiento)) {
+        this.logger.warn(`⚠️ [QR AUTO-OPEN] Intento de ingreso con QR vencido. ID Visita: ${visitaAcc.id}, Expiró: ${visitaAcc.fecha_vencimiento}`);
+        await admin.from('visitas_acceso').update({ estado: 'vencida', updated_at: ahora.toISOString() }).eq('id', visitaAcc.id);
+        return;
+      }
+
+      // Verificar si es muy temprano (más de 30 minutos antes de la hora programada)
+      const diffMs = new Date(visitaAcc.fecha_programada).getTime() - ahora.getTime();
+      if (diffMs > 30 * 60 * 1000) {
+        this.logger.warn(`⚠️ [QR AUTO-OPEN] Intento de ingreso demasiado temprano. ID Visita: ${visitaAcc.id}, Programada: ${visitaAcc.fecha_programada}`);
         return;
       }
 
