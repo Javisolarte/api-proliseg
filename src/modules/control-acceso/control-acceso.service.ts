@@ -2800,7 +2800,6 @@ export class ControlAccesoService implements OnModuleInit {
       lista_estado: 'blanca',
       entidad_tipo: 'residente',
       activo: true,
-      foto_rostro_url: rec.foto_rostro_url,
     };
 
     const { data: persona, error: pErr } = await admin
@@ -3584,7 +3583,7 @@ export class ControlAccesoService implements OnModuleInit {
 
     let query = (admin as any)
       .from('visitas_acceso')
-      .select(`*, dispositivo:dispositivos_iot(id, nombre_identificador, ip_direccion), residente:personas_gestion_acceso(id, nombre_completo, documento_identidad, foto_rostro_url)`)
+      .select(`*, dispositivo:dispositivos_iot(id, nombre_identificador, ip_direccion), residente:personas_gestion_acceso(id, nombre_completo, documento_identidad)`)
       .order('created_at', { ascending: false })
       .limit(filters?.limit || 200);
 
