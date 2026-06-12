@@ -3280,7 +3280,7 @@ export class ControlAccesoService implements OnModuleInit {
         FROM public.control_acceso_recoleccion_registros 
         GROUP BY lugar_id
       ) r ON r.lugar_id = l.id
-      ORDER BY l.created_at DESC;
+      ORDER BY l.created_at DESC
     `;
     const { data, error } = await this.supabase
       .getClient()
