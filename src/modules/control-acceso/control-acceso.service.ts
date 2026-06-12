@@ -2247,7 +2247,7 @@ export class ControlAccesoService implements OnModuleInit {
     }
 
     return rows.map((row: any) => {
-      const personaId = row?.persona_id || row?.persona?.id;
+      const personaId = row?.persona_id || row?.persona?.id || row?.id;
       const foto = personaId ? byPersona.get(personaId) : null;
       if (row?.persona) {
         return {

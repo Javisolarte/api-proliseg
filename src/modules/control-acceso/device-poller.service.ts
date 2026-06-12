@@ -795,6 +795,14 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       return null;
     }
 
+    // SI ES UN QR O UN EVENTO DE VISITA, ¡NO AUTO-CREAR PERSONA EN EL MAESTRO DE ACCESOS!
+    const esVisitanteQr = (codigoTarjeta && (codigoTarjeta.startsWith('{') || (codigoTarjeta.length === 8 && /^\d+$/.test(codigoTarjeta)) || (codigoTarjeta.length === 32 && /^[0-9a-fA-F]+$/.test(codigoTarjeta)))) 
+      || (documento && (documento.startsWith('{') || (documento.length === 8 && /^\d+$/.test(documento)) || (documento.length === 32 && /^[0-9a-fA-F]+$/.test(documento))));
+    
+    if (esVisitanteQr) {
+      return null;
+    }
+
     const { data, error } = await admin
       .from('personas_gestion_acceso')
       .insert(payload)
