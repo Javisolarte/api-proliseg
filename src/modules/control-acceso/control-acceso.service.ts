@@ -2679,12 +2679,23 @@ export class ControlAccesoService implements OnModuleInit {
     }
   }
 
+  private sanitizeHardwareName(name: string): string {
+    if (!name) return 'Usuario';
+    return name
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '') // Quitar acentos
+      .replace(/[^a-zA-Z0-9 ]/g, '')  // Quitar caracteres raros excepto letras, números y espacios
+      .trim()
+      .slice(0, 32);
+  }
+
   async crearUsuarioEnHardware(ip: string, userId: string, nombre: string): Promise<any> {
     const isapiPath = `/ISAPI/AccessControl/UserInfo/Record?format=json`;
+    const sanitizedNombre = this.sanitizeHardwareName(nombre);
     const body = {
       UserInfo: {
         employeeNo: userId,
-        name: nombre.slice(0, 32),
+        name: sanitizedNombre,
         userType: 'normal',
         Valid: {
           enable: true,
@@ -3082,6 +3093,12 @@ export class ControlAccesoService implements OnModuleInit {
         }
       }
     }
+
+    // Nullify events referencing this person to prevent foreign key errors on delete
+    await admin
+      .from('dispositivos_eventos_historico')
+      .update({ persona_id: null })
+      .eq('persona_id', personaId);
 
     await admin.from('biometria_facial').delete().eq('persona_id', personaId);
     await admin.from('acceso_permisos_dispositivos').delete().eq('persona_id', personaId);
