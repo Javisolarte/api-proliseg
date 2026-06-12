@@ -2651,41 +2651,94 @@ export class ControlAccesoService implements OnModuleInit {
   async uploadRostro(ip: string, userId: string, faceData: string, deviceId?: string): Promise<any> {
     const isapiPath = `/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json`;
     
-    // Intentar primero con 'staticFD' (librería estática/lista blanca estándar en biométricos Hikvision DS-K1T)
-    // El payload JSON debe estar envuelto en el objeto raíz 'FaceDataRecord' según el estándar de Hikvision ISAPI.
-    const bodyStatic = {
-      FaceDataRecord: {
-        faceLibType: 'staticFD',
-        FDLibID: '1',
-        FDID: '1', // Proveer FDID por compatibilidad con diferentes firmwares
-        FPID: userId,
-        faceData: faceData
-      }
-    };
+    const cleanUserId = /^\d+$/.test(userId) ? Number(userId) : userId;
+    const userIds = [userId];
+    if (typeof cleanUserId === 'number') {
+      userIds.push(cleanUserId as any);
+    }
 
-    try {
-      return await this.proxyRequestDynamic(ip, 'post', isapiPath, bodyStatic, { deviceId });
-    } catch (err) {
-      this.logger.warn(`⚠️ [HARDWARE ROSTRO] Error al subir con tipo 'staticFD' en ${ip}: ${err.message}. Reintentando con 'blackFD'...`);
-      
-      // Fallback a 'blackFD' (lista negra / genérico) por compatibilidad
-      const bodyBlack = {
-        FaceDataRecord: {
-          faceLibType: 'blackFD',
-          FDLibID: '1',
-          FDID: '1',
-          FPID: userId,
-          faceData: faceData
-        }
-      };
+    const libTypes = ['staticFD', 'blackFD', 'normalFD'];
+    const payloads: { label: string; method: string; body: any }[] = [];
 
-      try {
-        return await this.proxyRequestDynamic(ip, 'post', isapiPath, bodyBlack, { deviceId });
-      } catch (err2) {
-        this.logger.error(`❌ [HARDWARE ROSTRO FAIL] No se pudo subir foto de rostro a ${ip} con ningún tipo de librería: ${err2.message}`);
-        throw err2;
+    for (const uId of userIds) {
+      const idStr = typeof uId === 'number' ? 'númerico' : 'string';
+      for (const libType of libTypes) {
+        // Formato Flat (Sin envolver en FaceDataRecord) - Recomendado/Esperado por algunos firmwares
+        payloads.push({
+          label: `Flat (POST, ID: ${idStr}, lib: ${libType})`,
+          method: 'post',
+          body: {
+            faceLibType: libType,
+            FDLibID: '1',
+            FDID: '1',
+            FPID: uId,
+            faceData: faceData
+          }
+        });
+        payloads.push({
+          label: `Flat (PUT, ID: ${idStr}, lib: ${libType})`,
+          method: 'put',
+          body: {
+            faceLibType: libType,
+            FDLibID: '1',
+            FDID: '1',
+            FPID: uId,
+            faceData: faceData
+          }
+        });
+
+        // Formato Wrapped (Envuelto en FaceDataRecord) - Estándar Hikvision ISAPI original
+        payloads.push({
+          label: `Wrapped (POST, ID: ${idStr}, lib: ${libType})`,
+          method: 'post',
+          body: {
+            FaceDataRecord: {
+              faceLibType: libType,
+              FDLibID: '1',
+              FDID: '1',
+              FPID: uId,
+              faceData: faceData
+            }
+          }
+        });
+        payloads.push({
+          label: `Wrapped (PUT, ID: ${idStr}, lib: ${libType})`,
+          method: 'put',
+          body: {
+            FaceDataRecord: {
+              faceLibType: libType,
+              FDLibID: '1',
+              FDID: '1',
+              FPID: uId,
+              faceData: faceData
+            }
+          }
+        });
       }
     }
+
+    this.logger.log(`👤 [HARDWARE ROSTRO] Sincronizando rostro de usuario ${userId} en ${ip} (${payloads.length} variantes)...`);
+
+    let lastError: any = null;
+    for (let i = 0; i < payloads.length; i++) {
+      const payload = payloads[i];
+      try {
+        this.logger.log(`👤 [HARDWARE ROSTRO TRY] Intento ${i + 1}/${payloads.length}: ${payload.label}`);
+        const response = await this.proxyRequestDynamic(ip, payload.method, isapiPath, payload.body, { deviceId });
+        this.logger.log(`✅ [HARDWARE ROSTRO OK] Sincronizado correctamente con ${payload.label}`);
+        return response;
+      } catch (err) {
+        lastError = err;
+        let errMsg = err.message;
+        if (err.response && err.response.data) {
+          errMsg = typeof err.response.data === 'object' ? JSON.stringify(err.response.data) : String(err.response.data);
+        }
+        this.logger.warn(`⚠️ [HARDWARE ROSTRO TRY FAIL] Variante fallida ${i + 1}/${payloads.length} (${payload.label}): ${errMsg}`);
+      }
+    }
+
+    this.logger.error(`❌ [HARDWARE ROSTRO FAIL] Todas las variantes fallaron para el usuario ${userId} en ${ip}`);
+    throw lastError || new Error('Error al sincronizar rostro en hardware');
   }
 
   private sanitizeHardwareName(name: string): string {
@@ -2907,7 +2960,7 @@ export class ControlAccesoService implements OnModuleInit {
         }
 
         if (base64Photo) {
-          await this.uploadRostro(ip, persona.documento_identidad, base64Photo);
+          await this.uploadRostro(ip, persona.documento_identidad, base64Photo, dispositivoId);
         }
       } catch (err) {
         this.logger.error(`❌ [HARDWARE SYNC] No se pudo subir foto de rostro a ${ip}: ${err.message}`);
