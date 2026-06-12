@@ -631,17 +631,37 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     if (faceId) payload.face_id_ref = faceId;
 
     if (existing?.id) {
-      const { data, error } = await admin
-        .from('personas_gestion_acceso')
-        .update(payload)
-        .eq('id', existing.id)
-        .select()
-        .single();
-      if (error) {
-        this.logger.warn(`⚠️ [EventSystem] Persona no actualizada: ${error.message}`);
-        return existing;
+      // FIX: solo actualizar campos de identificacion biometrica, NUNCA sobreescribir el nombre real
+      const updatePayload: any = { activo: true };
+      if (codigoTarjeta && codigoTarjeta !== existing.codigo_tarjeta) {
+        updatePayload.codigo_tarjeta = codigoTarjeta;
       }
-      return data;
+      if (faceId && faceId !== existing.face_id_ref) {
+        updatePayload.face_id_ref = faceId;
+      }
+      // Solo actualizar si hay cambios reales en campos biometricos
+      if (Object.keys(updatePayload).length > 1) {
+        const { data, error } = await admin
+          .from('personas_gestion_acceso')
+          .update(updatePayload)
+          .eq('id', existing.id)
+          .select()
+          .single();
+        if (error) {
+          this.logger.warn(`⚠️ [EventSystem] Persona no actualizada: ${error.message}`);
+          return existing;
+        }
+        return data;
+      }
+      return existing;
+    }
+
+    // Si no existe, solo auto-crear si tiene credenciales reales y NO es una apertura manual
+    const esAperturaManual = nombre && (nombre.toLowerCase().startsWith('abierto por') || nombre.toLowerCase().includes('abierto por'));
+    const tieneCredenciales = !!(documento || codigoTarjeta || faceId);
+
+    if (esAperturaManual || !tieneCredenciales) {
+      return null;
     }
 
     const { data, error } = await admin
@@ -664,6 +684,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
     return data;
   }
+
 
   private async findPersonaByIdentifiers(documento?: string, codigoTarjeta?: string, faceId?: string): Promise<any | null> {
     const lookups = [

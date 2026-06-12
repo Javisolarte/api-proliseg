@@ -146,9 +146,16 @@ export class ControlAccesoController {
 
   @Post('subir-rostro')
   @ApiOperation({ summary: 'Sincroniza foto de rostro al hardware' })
-  async subirRostro(@Body() body: { ip: string, userId: string, faceBase64: string }) {
+  async subirRostro(@Body() body: { ip: string, userId: string, faceBase64: string, deviceId?: string }) {
     this.logger.log(`👤 [ROSTRO] Subiendo cara para el usuario ${body.userId} en ${body.ip}`);
-    return this.controlAccesoService.uploadRostro(body.ip, body.userId, body.faceBase64);
+    return this.controlAccesoService.uploadRostro(body.ip, body.userId, body.faceBase64, body.deviceId);
+  }
+
+  @Post('personas/:personaId/push-to-device/:dispositivoId')
+  @ApiOperation({ summary: 'Sincroniza una persona específica a un dispositivo específico' })
+  async pushPersonaToDevice(@Param('personaId') personaId: string, @Param('dispositivoId') dispositivoId: string) {
+    this.logger.log(`👤 [SYNC-PERSON] Pushing person ${personaId} to device ${dispositivoId}`);
+    return this.controlAccesoService.pushPersonaToDevice(personaId, dispositivoId);
   }
 
   @Get('scan')
@@ -214,9 +221,31 @@ export class ControlAccesoController {
       requiere_torre?: boolean;
       codigo_seguridad?: string;
       creado_por?: number;
+      fecha_vigencia?: string;
     }
   ) {
     return this.controlAccesoService.createLugarRecopilacion(body);
+  }
+
+  @Put('recopilacion/lugares/:id')
+  @ApiOperation({ summary: 'Actualiza lugar y link de recopilacion de datos' })
+  async updateLugarRecopilacion(
+    @Param('id') id: string,
+    @Body() body: {
+      nombre_lugar: string;
+      descripcion?: string;
+      requiere_torre?: boolean;
+      codigo_seguridad?: string;
+      fecha_vigencia?: string;
+    }
+  ) {
+    return this.controlAccesoService.updateLugarRecopilacion(Number(id), body);
+  }
+
+  @Delete('recopilacion/lugares/:id')
+  @ApiOperation({ summary: 'Elimina un lugar y su link de recopilacion' })
+  async deleteLugarRecopilacion(@Param('id') id: string) {
+    return this.controlAccesoService.deleteLugarRecopilacion(Number(id));
   }
 
   @Get('recopilacion/lugares/:lugarId/registros')
@@ -375,5 +404,49 @@ export class ControlAccesoController {
   @ApiOperation({ summary: 'Eliminar una persona de la base de datos y de los dispositivos vinculados' })
   async deletePersona(@Param('id') id: string) {
     return this.controlAccesoService.deletePersona(id);
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // VISITAS
+  // ─────────────────────────────────────────────────────────────────
+
+  @Get('visitas')
+  @ApiOperation({ summary: 'Listar visitas programadas' })
+  async getVisitas(@Query('estado') estado?: string, @Query('dispositivo_id') dispositivo_id?: string, @Query('limit') limit?: string) {
+    return this.controlAccesoService.getVisitas({ estado, dispositivo_id, limit: limit ? parseInt(limit) : undefined });
+  }
+
+  @Post('visitas')
+  @ApiOperation({ summary: 'Crear nueva visita y generar QR' })
+  async createVisita(@Body() body: any, @CurrentUser() user?: any) {
+    const operador = user || {};
+    body.operador_nombre = body.operador_nombre || operador.nombre_completo || 'Operador';
+    body.operador_id = body.operador_id || String(operador.id || '');
+    return this.controlAccesoService.createVisita(body);
+  }
+
+  @Put('visitas/:id')
+  @ApiOperation({ summary: 'Editar o reprogramar una visita' })
+  async updateVisita(@Param('id') id: string, @Body() body: any) {
+    return this.controlAccesoService.updateVisita(id, body);
+  }
+
+  @Delete('visitas/:id')
+  @ApiOperation({ summary: 'Cancelar una visita' })
+  async cancelarVisita(@Param('id') id: string) {
+    return this.controlAccesoService.cancelarVisita(id);
+  }
+
+  @Get('visitas/validar-qr/:token')
+  @Public()
+  @ApiOperation({ summary: 'Validar token QR de visita y registrar ingreso' })
+  async validarQrVisita(@Param('token') token: string) {
+    return this.controlAccesoService.validarQrVisita(token);
+  }
+
+  @Post('visitas/:id/registrar-egreso')
+  @ApiOperation({ summary: 'Registrar egreso del visitante' })
+  async registrarEgresoVisita(@Param('id') id: string) {
+    return this.controlAccesoService.registrarEgresoVisita(id);
   }
 }

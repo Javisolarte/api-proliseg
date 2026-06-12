@@ -50,4 +50,28 @@ export class CreatePersonaAccesoDto {
 
   @ApiProperty({ required: false, description: 'IDs de dispositivos a los que tiene acceso' })
   dispositivos_ids?: string[];
+
+  @ApiProperty({ required: false })
+  telefono?: string;
+
+  @ApiProperty({ required: false })
+  telefono2?: string;
+
+  @ApiProperty({ required: false })
+  correo?: string;
+
+  @ApiProperty({ required: false })
+  torre?: string;
+
+  @ApiProperty({ required: false })
+  apartamento?: string;
+
+  @ApiProperty({ required: false })
+  tipo_residente?: string;
+
+  @ApiProperty({ required: false })
+  placa_vehiculo?: string;
+
+  @ApiProperty({ required: false })
+  color_vehiculo?: string;
 }

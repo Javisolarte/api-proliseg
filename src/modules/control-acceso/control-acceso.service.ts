@@ -1037,13 +1037,13 @@ export class ControlAccesoService implements OnModuleInit {
         const operatorName = operator?.nombre_completo || operator?.name || 'Operador Central';
         const operatorDoc = operator?.cedula || 'CENTRAL';
 
-        this.devicePoller.guardarEventoManual({
+        // Only include persona info for door open/close commands
+        const isDoorCommand = ['abrir', 'cerrar', 'siempre-abierta', 'siempre-cerrada'].includes(command);
+        const eventPayload: any = {
           dispositivo_id: device.id,
           nombre_dispositivo: device.nombre_identificador || ip,
           tipo_evento: this.mapDoorCommandToEvent(command),
           metodo_acceso: 'remoto',
-          nombre_persona: `Abierto por ${operatorName}`,
-          documento_persona: operatorDoc,
           timestamp: new Date().toISOString(),
           detalles_raw: {
             origen: 'comando_backend',
@@ -1054,10 +1054,15 @@ export class ControlAccesoService implements OnModuleInit {
             operador: {
               id: operator?.id || null,
               nombre: operatorName,
-              cedula: operatorDoc,
             }
-          },
-        });
+          }
+        };
+        // Add persona info only for door commands
+        if (isDoorCommand) {
+          eventPayload.nombre_persona = `Abierto por ${operatorName}`;
+          eventPayload.documento_persona = operatorDoc;
+        }
+        this.devicePoller.guardarEventoManual(eventPayload);
       }
     } catch (eventError) {
       this.logger.warn(`⚠️ [PUERTA] Comando ejecutado, pero no se pudo registrar evento: ${eventError.message}`);
@@ -1352,15 +1357,17 @@ export class ControlAccesoService implements OnModuleInit {
       activo: personaInput.activo ?? true,
     };
 
-    // Si se provee correo, crear/asegurar cuenta de residente y vincularla
+    // Si se provee correo y crear_usuario no es falso, crear/asegurar cuenta de residente y vincularla
     const correo = personaInput.correo || personaInput.correo_electronico;
-    if (correo) {
+    const crearUsuario = personaInput.crear_usuario ?? true;
+    if (correo && crearUsuario !== false) {
       try {
         const residentResult = await this.asegurarCuentaResidente({
           cedula: documento,
           nombre_completo: personaData.nombre_completo,
           correo: correo,
           telefono: personaInput.telefono || null,
+          telefono2: personaInput.telefono2 || null,
           torre: personaInput.torre || null,
           apartamento: personaInput.apartamento || personaInput.apto || null,
         });
@@ -1441,39 +1448,137 @@ export class ControlAccesoService implements OnModuleInit {
       throw new Error(`Persona no encontrada: ${pErr?.message}`);
     }
 
-    // 2. Actualizar en la base de datos
+    const { 
+      foto_base64, 
+      capturedBase64,
+      correo, 
+      telefono, 
+      telefono2, 
+      torre, 
+      apartamento, 
+      apto, 
+      placa_vehiculo, 
+      color_vehiculo, 
+      dispositivos_ids,
+      ...personaFields 
+    } = body;
+
+    const personaData: any = {
+      ...personaFields
+    };
+
+    const inputCorreo = correo || body.correo_electronico;
+    const crearUsuario = body.crear_usuario ?? true;
+    const documento = persona.documento_identidad;
+    const nombre = body.nombre_completo || persona.nombre_completo;
+
+    // Si se provee o actualiza correo y crear_usuario no es falso, asegurar/crear cuenta de residente
+    if (inputCorreo && crearUsuario !== false) {
+      try {
+        const residentResult = await this.asegurarCuentaResidente({
+          cedula: documento,
+          nombre_completo: nombre,
+          correo: inputCorreo,
+          telefono: telefono || body.telefono_contacto || null,
+          telefono2: telefono2 || null,
+          torre: torre || null,
+          apartamento: apartamento || apto || null,
+        });
+
+        if (residentResult?.residente?.id) {
+          personaData.entidad_tipo = 'residente';
+          personaData.entidad_id = residentResult.residente.id;
+
+          // Si tiene datos de vehículo, registrar/actualizar
+          if (placa_vehiculo) {
+            try {
+              const placaNormal = String(placa_vehiculo).toUpperCase().trim();
+              const { data: existingVeh } = await admin
+                .from('residentes_vehiculos')
+                .select('id')
+                .eq('residente_id', residentResult.residente.id)
+                .eq('placa', placaNormal)
+                .maybeSingle();
+
+              if (!existingVeh) {
+                await admin
+                  .from('residentes_vehiculos')
+                  .insert({
+                    residente_id: residentResult.residente.id,
+                    placa: placaNormal,
+                    color: color_vehiculo || null,
+                    tipo_vehiculo: 'carro'
+                  });
+              } else {
+                await admin
+                  .from('residentes_vehiculos')
+                  .update({ color: color_vehiculo || null })
+                  .eq('id', existingVeh.id);
+              }
+            } catch (vehErr) {
+              this.logger.warn(`⚠️ [VEHICULO AUTO-UPDATE] FAILED: ${vehErr.message}`);
+            }
+          }
+        }
+      } catch (authErr) {
+        this.logger.warn(`⚠️ [RESIDENT AUTO-PROVISION IN UPDATE] FAILED for ${documento}: ${authErr.message}`);
+      }
+    } else if (persona.entidad_tipo === 'residente' && persona.entidad_id) {
+      // Si ya era residente y se actualizan teléfonos o ubicación sin correo
+      try {
+        await admin
+          .from('residentes')
+          .update({
+            telefono: telefono || null,
+            telefono2: telefono2 || null,
+            torre_bloque: torre || null,
+            apto_casa: apartamento || apto || null,
+          })
+          .eq('id', persona.entidad_id);
+      } catch (resUpdErr) {
+        this.logger.warn(`⚠️ [RESIDENT UPDATE NO EMAIL] FAILED: ${resUpdErr.message}`);
+      }
+    }
+
+    // 2. Actualizar en la base de datos la persona de acceso
     const { data: updatedPersona, error: uErr } = await admin
       .from('personas_gestion_acceso')
-      .update(body)
+      .update(personaData)
       .eq('id', id)
       .select()
       .single();
 
     if (uErr) throw uErr;
 
-    // 3. Si se cambia el estado "activo", sincronizar con los dispositivos vinculados
-    if (body.activo !== undefined && body.activo !== persona.activo) {
-      const { data: permisos } = await admin
-        .from('acceso_permisos_dispositivos')
-        .select('*, dispositivo:dispositivos_iot(*)')
-        .eq('persona_id', id);
+    // 3. Sincronizar rostro nuevo si se cargó en el formulario
+    const fotoData = foto_base64 || capturedBase64;
+    if (fotoData) {
+      await this.guardarFotoPersona(id, fotoData).catch((error) => {
+        this.logger.warn(`⚠️ [PERSONA] No se pudo actualizar foto facial: ${error.message}`);
+      });
+    }
 
-      for (const p of permisos || []) {
-        const ip = p.dispositivo?.ip_direccion;
-        if (ip) {
-          try {
-            if (body.activo === false) {
-              // Si se desactiva, lo quitamos físicamente del chip del hardware
-              await this.eliminarUsuarioDeHardware(ip, persona.documento_identidad);
-              this.logger.log(`👤 [HARDWARE SYNC] Acceso DESACTIVADO: Eliminado usuario ${persona.documento_identidad} de dispositivo ${ip}`);
-            } else if (body.activo === true) {
-              // Si se activa, lo volvemos a empujar al chip del hardware
-              await this.pushPersonaToDevice(id, p.dispositivo_id);
-              this.logger.log(`👤 [HARDWARE SYNC] Acceso ACTIVADO: Empujado usuario ${persona.documento_identidad} a dispositivo ${ip}`);
-            }
-          } catch (err) {
-            this.logger.warn(`⚠️ [HARDWARE SYNC] Error al sincronizar estado activo de persona en ${ip}: ${err.message}`);
+    // 4. Sincronizar estado y datos físicos con los dispositivos vinculados
+    const { data: permisos } = await admin
+      .from('acceso_permisos_dispositivos')
+      .select('*, dispositivo:dispositivos_iot(*)')
+      .eq('persona_id', id);
+
+    for (const p of permisos || []) {
+      const ip = p.dispositivo?.ip_direccion;
+      if (ip) {
+        try {
+          if (body.activo === false) {
+            // Si se desactiva, lo quitamos físicamente del chip del hardware
+            await this.eliminarUsuarioDeHardware(ip, persona.documento_identidad);
+            this.logger.log(`👤 [HARDWARE SYNC] Acceso DESACTIVADO: Eliminado usuario ${persona.documento_identidad} de dispositivo ${ip}`);
+          } else {
+            // Re-sincronizar siempre en caliente con los nuevos datos (nombre, rostro, tarjeta, etc.)
+            await this.pushPersonaToDevice(id, p.dispositivo_id);
+            this.logger.log(`👤 [HARDWARE SYNC] Datos actualizados: Re-sincronizado usuario ${persona.documento_identidad} en dispositivo ${ip}`);
           }
+        } catch (err) {
+          this.logger.warn(`⚠️ [HARDWARE SYNC] Error al sincronizar cambios de persona en ${ip}: ${err.message}`);
         }
       }
     }
@@ -2537,7 +2642,7 @@ export class ControlAccesoService implements OnModuleInit {
     }
   }
 
-  async uploadRostro(ip: string, userId: string, faceData: string): Promise<any> {
+  async uploadRostro(ip: string, userId: string, faceData: string, deviceId?: string): Promise<any> {
     const isapiPath = `/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json`;
     const body = {
       faceLibType: 'blackList',
@@ -2545,7 +2650,7 @@ export class ControlAccesoService implements OnModuleInit {
       FPID: userId,
       faceData: faceData
     };
-    return this.proxyRequestDynamic(ip, 'post', isapiPath, body);
+    return this.proxyRequestDynamic(ip, 'post', isapiPath, body, { deviceId });
   }
 
   async crearUsuarioEnHardware(ip: string, userId: string, nombre: string): Promise<any> {
@@ -2739,6 +2844,7 @@ export class ControlAccesoService implements OnModuleInit {
           nombre_completo: rec.nombre_completo,
           correo: rec.correo_electronico,
           telefono: rec.telefono,
+          telefono2: rec.telefono2,
           torre: rec.torre,
           apartamento: rec.apartamento,
           puesto_id: rec.lugar?.creado_por || null,
@@ -2796,6 +2902,7 @@ export class ControlAccesoService implements OnModuleInit {
     nombre_completo: string;
     correo: string;
     telefono?: string;
+    telefono2?: string;
     torre?: string;
     apartamento?: string;
     cliente_id?: number;
@@ -2876,6 +2983,7 @@ export class ControlAccesoService implements OnModuleInit {
       torre_bloque: input.torre || null,
       apto_casa: input.apartamento || null,
       telefono: input.telefono || null,
+      telefono2: input.telefono2 || null,
       correo: input.correo || null,
       tipo_habitante: 'propietario',
       activo: true,
@@ -2899,6 +3007,7 @@ export class ControlAccesoService implements OnModuleInit {
           usuario_id: usuarioExt.id,
           correo: input.correo,
           telefono: input.telefono || residente.telefono,
+          telefono2: input.telefono2 || residente.telefono2,
           torre_bloque: input.torre || residente.torre_bloque,
           apto_casa: input.apartamento || residente.apto_casa,
         })
@@ -3162,11 +3271,21 @@ export class ControlAccesoService implements OnModuleInit {
   }
 
   async getLugaresRecopilacion() {
+    const query = `
+      SELECT 
+        l.*,
+        COALESCE(r.total, 0)::integer as total_registros
+      FROM public.control_acceso_recoleccion_lugares l
+      LEFT JOIN (
+        SELECT lugar_id, COUNT(*) as total 
+        FROM public.control_acceso_recoleccion_registros 
+        GROUP BY lugar_id
+      ) r ON r.lugar_id = l.id
+      ORDER BY l.created_at DESC;
+    `;
     const { data, error } = await this.supabase
       .getClient()
-      .from('control_acceso_recoleccion_lugares')
-      .select('*')
-      .order('created_at', { ascending: false });
+      .rpc('exec_sql', { query });
     if (error) throw error;
     return data || [];
   }
@@ -3177,6 +3296,7 @@ export class ControlAccesoService implements OnModuleInit {
     requiere_torre?: boolean;
     codigo_seguridad?: string;
     creado_por?: number;
+    fecha_vigencia?: string;
   }) {
     const token = randomBytes(16).toString('hex');
     const payload = {
@@ -3185,6 +3305,7 @@ export class ControlAccesoService implements OnModuleInit {
       requiere_torre: input.requiere_torre ?? false,
       token_publico: token,
       codigo_seguridad: input.codigo_seguridad || null,
+      fecha_vigencia: input.fecha_vigencia || null,
       activo: true,
       creado_por: input.creado_por || null,
     };
@@ -3199,6 +3320,44 @@ export class ControlAccesoService implements OnModuleInit {
       ...data,
       link_publico: `/public/control-acceso/recopilacion/${token}`,
     };
+  }
+
+  async updateLugarRecopilacion(id: number, input: {
+    nombre_lugar: string;
+    descripcion?: string;
+    requiere_torre?: boolean;
+    codigo_seguridad?: string;
+    fecha_vigencia?: string;
+  }) {
+    const payload = {
+      nombre_lugar: input.nombre_lugar,
+      descripcion: input.descripcion || null,
+      requiere_torre: input.requiere_torre ?? false,
+      codigo_seguridad: input.codigo_seguridad || null,
+      fecha_vigencia: input.fecha_vigencia || null,
+      updated_at: new Date().toISOString(),
+    };
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('control_acceso_recoleccion_lugares')
+      .update(payload)
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  async deleteLugarRecopilacion(id: number) {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('control_acceso_recoleccion_lugares')
+      .delete()
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) throw error;
+    return data;
   }
 
   async getRegistrosRecopilacion(lugarId: number) {
@@ -3216,11 +3375,14 @@ export class ControlAccesoService implements OnModuleInit {
     const { data, error } = await this.supabase
       .getClient()
       .from('control_acceso_recoleccion_lugares')
-      .select('id,nombre_lugar,descripcion,requiere_torre,activo')
+      .select('id,nombre_lugar,descripcion,requiere_torre,activo,fecha_vigencia')
       .eq('token_publico', token)
       .maybeSingle();
     if (error) throw error;
     if (!data || !data.activo) return null;
+    if (data.fecha_vigencia && new Date(data.fecha_vigencia) < new Date()) {
+      return null;
+    }
     return data;
   }
 
@@ -3261,6 +3423,24 @@ export class ControlAccesoService implements OnModuleInit {
     }
     if (existingCedula) {
       throw new Error('Esta cédula ya se encuentra registrada en esta lista de recopilación');
+    }
+
+    // Validar unicidad del correo electrónico dentro del mismo lugar_id (si se proporciona)
+    if (body.correo_electronico && String(body.correo_electronico).trim()) {
+      const { data: existingCorreo, error: correoErr } = await this.supabase
+        .getSupabaseAdminClient()
+        .from('control_acceso_recoleccion_registros')
+        .select('id')
+        .eq('lugar_id', form.id)
+        .eq('correo_electronico', String(body.correo_electronico).trim())
+        .maybeSingle();
+
+      if (correoErr) {
+        throw new Error(`Error al verificar correo electrónico: ${correoErr.message}`);
+      }
+      if (existingCorreo) {
+        throw new Error('Este correo electrónico ya se encuentra registrado en esta lista de recopilación');
+      }
     }
 
     let fotoUrl: string | null = null;
@@ -3382,5 +3562,138 @@ export class ControlAccesoService implements OnModuleInit {
       .select();
     if (error) throw error;
     return data[0];
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // MÓDULO DE VISITAS
+  // ─────────────────────────────────────────────────────────────────
+
+  async getVisitas(filters?: { estado?: string; dispositivo_id?: string; limit?: number }) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    
+    // Auto-vencer visitas que ya expiraron
+    try {
+      await admin
+        .from('visitas_acceso')
+        .update({ estado: 'vencida', updated_at: new Date().toISOString() })
+        .eq('estado', 'programada')
+        .lt('fecha_vencimiento', new Date().toISOString());
+    } catch (err) {
+      this.logger.error(`Error al auto-vencer visitas expiradas: ${err.message}`);
+    }
+
+    let query = (admin as any)
+      .from('visitas_acceso')
+      .select(`*, dispositivo:dispositivos_iot(id, nombre_identificador, ip_direccion), residente:personas_gestion_acceso(id, nombre_completo, documento_identidad, foto_rostro_url)`)
+      .order('created_at', { ascending: false })
+      .limit(filters?.limit || 200);
+
+    if (filters?.estado) query = query.eq('estado', filters.estado);
+    if (filters?.dispositivo_id) query = query.eq('dispositivo_id', filters.dispositivo_id);
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return data || [];
+  }
+
+  async createVisita(body: any) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const payload: any = {
+      nombre_visitante: body.nombre_visitante,
+      documento_visitante: body.documento_visitante,
+      telefono_visitante: body.telefono_visitante || null,
+      empresa_visitante: body.empresa_visitante || null,
+      motivo: body.motivo,
+      residente_responsable_id: body.residente_responsable_id || null,
+      residente_responsable_nombre: body.residente_responsable_nombre || null,
+      operador_id: body.operador_id || null,
+      operador_nombre: body.operador_nombre || null,
+      dispositivo_id: body.dispositivo_id || null,
+      fecha_programada: body.fecha_programada,
+      duracion_horas: body.duracion_horas || 2,
+      foto_visitante_url: body.foto_visitante_url || null,
+      estado: 'programada',
+    };
+    const { data, error } = await admin.from('visitas_acceso').insert(payload).select().single();
+    if (error) throw error;
+    this.logger.log(`Nueva visita: ${data.nombre_visitante} | QR: ${data.token_qr}`);
+    return data;
+  }
+
+  async updateVisita(id: string, body: any) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const { data, error } = await admin
+      .from('visitas_acceso')
+      .update({ ...body, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  async cancelarVisita(id: string) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const { data, error } = await admin
+      .from('visitas_acceso')
+      .update({ estado: 'cancelada', updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  async validarQrVisita(token: string) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const { data: visita, error } = await admin
+      .from('visitas_acceso')
+      .select('*, dispositivo:dispositivos_iot(id, ip_direccion, nombre_identificador, credencial_usuario, credencial_password, configuracion_tecnica)')
+      .eq('token_qr', token)
+      .single();
+
+    if (error || !visita) return { ok: false, mensaje: 'QR invalido o visita no encontrada' };
+    if (visita.estado !== 'programada') return { ok: false, mensaje: `Visita ya procesada (${visita.estado})`, visita };
+
+    const ahora = new Date();
+    if (ahora > new Date(visita.fecha_vencimiento)) {
+      await admin.from('visitas_acceso').update({ estado: 'vencida' }).eq('id', visita.id);
+      return { ok: false, mensaje: 'El QR ha vencido', visita };
+    }
+    const diffMs = new Date(visita.fecha_programada).getTime() - ahora.getTime();
+    if (diffMs > 30 * 60 * 1000) {
+      return { ok: false, mensaje: `Visita programada para ${new Date(visita.fecha_programada).toLocaleString()}`, visita };
+    }
+
+    let fotoIngresoUrl: string | null = null;
+    if (visita.dispositivo?.ip_direccion) {
+      try {
+        const ip = visita.dispositivo.ip_direccion;
+        const user = visita.dispositivo.credencial_usuario || 'admin';
+        const pass = visita.dispositivo.credencial_password || '';
+        const port = visita.dispositivo.configuracion_tecnica?.puertos_mapeados?.mapped_http || visita.dispositivo.configuracion_tecnica?.puerto || 80;
+        const responseData = await this.executeDigestAuth('GET', `http://${ip}:${port}/ISAPI/Streaming/channels/1/picture`, user, pass, null, 'arraybuffer', 5000);
+        const buffer = Buffer.from(responseData);
+        const fileName = `visitas/${visita.id}/ingreso_${Date.now()}.jpg`;
+        await admin.storage.from('control-acceso').upload(fileName, buffer, { contentType: 'image/jpeg', upsert: true });
+        const { data: urlData } = admin.storage.from('control-acceso').getPublicUrl(fileName);
+        fotoIngresoUrl = urlData?.publicUrl || null;
+      } catch (e) {
+        this.logger.warn(`[VISITAS] Sin foto de ingreso: ${e.message}`);
+      }
+    }
+
+    const { data: updated } = await admin
+      .from('visitas_acceso')
+      .update({ estado: 'realizada', timestamp_ingreso: new Date().toISOString(), foto_ingreso_url: fotoIngresoUrl, updated_at: new Date().toISOString() })
+      .eq('id', visita.id)
+      .select()
+      .single();
+
+    return { ok: true, mensaje: `Ingreso autorizado: ${visita.nombre_visitante}`, visita: updated, foto_ingreso_url: fotoIngresoUrl };
+  }
+
+  async registrarEgresoVisita(id: string) {
+    throw new Error('El registro de egreso ha sido deshabilitado ya que no se cuenta con control de salida.');
   }
 }
