@@ -111,7 +111,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         return { ok: false };
       }
 
-      const eventId = `hik_push_${device.id}_${info?.serialNo || info?.dateTime || Date.now()}`;
+      const eventId = this.getEventId(device.id, info);
       if (this.seenEventIds.has(eventId)) return { ok: true, duplicado: true };
       this.markAsSeen(eventId);
 
@@ -125,7 +125,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         codigo_tarjeta: this.firstText(info?.cardNo, info?.CardNo, info?.cardNumber),
         face_id_ref: this.firstText(info?.FPID, info?.faceID, info?.faceId),
         foto_evidencia_url: this.firstText(info?.pictureURL, info?.picUrl, info?.faceURL),
-        timestamp: info?.dateTime || new Date().toISOString(),
+        timestamp: this.sanitizeTimestamp(info?.dateTime),
         detalles_raw: info,
       };
 
@@ -218,21 +218,25 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       const pass = device.credencial_password || '';
       const ip = device.ip_direccion;
 
+      // Sincronizar hora del biométrico al iniciar/refrescar
+      await this.syncDeviceTime(device).catch(() => {});
+
       if (marca.includes('hikvision') || marca.includes('hik')) {
         // Intentar registrar el webhook en Hikvision
-        await this.registerHikvisionWebhook(device, ip, port, user, pass, webhookBase).catch(() => {
-          // Si falla el registro (cámara no soporta push), usar fallback polling
-          this.startFallbackPolling(device, ip, port, user, pass, marca);
+        await this.registerHikvisionWebhook(device, ip, port, user, pass, webhookBase).catch((err) => {
+          this.logger.warn(`⚠️ [EventSystem] Error al registrar webhook en ${device.nombre_identificador}: ${err.message}`);
         });
+        // Siempre iniciar polling como respaldo de seguridad
+        this.startFallbackPolling(device, ip, port, user, pass, marca);
       } else if (marca.includes('dahua')) {
-        await this.registerDahuaWebhook(device, ip, port, user, pass, webhookBase).catch(() => {
-          this.startFallbackPolling(device, ip, port, user, pass, marca);
+        await this.registerDahuaWebhook(device, ip, port, user, pass, webhookBase).catch((err) => {
+          this.logger.warn(`⚠️ [EventSystem] Error al registrar webhook en ${device.nombre_identificador}: ${err.message}`);
         });
+        this.startFallbackPolling(device, ip, port, user, pass, marca);
       } else {
         // Genérico: intentar Hikvision, si falla usar fallback
-        await this.registerHikvisionWebhook(device, ip, port, user, pass, webhookBase).catch(() => {
-          this.startFallbackPolling(device, ip, port, user, pass, 'hikvision');
-        });
+        await this.registerHikvisionWebhook(device, ip, port, user, pass, webhookBase).catch(() => {});
+        this.startFallbackPolling(device, ip, port, user, pass, 'hikvision');
       }
     }
   }
@@ -373,7 +377,6 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       }
 
       const base = `http://${ip}:${port}`;
-      const auth = { username: user, password: pass };
 
       const resp = await this.executeDigestRequest(
         'POST',
@@ -390,20 +393,42 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           } 
         },
         'application/json',
-        5000
+        5000,
+        'json'
       );
 
-      const infos = resp.data?.AcsEvent?.InfoList || [];
+      let responseData = resp.data;
+      if (typeof responseData === 'string') {
+        try {
+          responseData = JSON.parse(responseData);
+        } catch (e) {
+          this.logger.warn(`⚠️ [EventSystem] Error al parsear JSON de eventos fallback: ${e.message}`);
+        }
+      }
+
+      const infos = responseData?.AcsEvent?.InfoList || [];
       const lastDbTimeStr = this.latestDbTimestamp.get(device.id) || new Date(0).toISOString();
       const lastDbTime = new Date(lastDbTimeStr).getTime();
 
       for (const info of infos) {
-        const eventTimeStr = info.time || new Date().toISOString();
-        const eventTime = new Date(eventTimeStr).getTime();
+        let eventTimeStr = info.time || new Date().toISOString();
+        try {
+          const dt = new Date(eventTimeStr);
+          if (isNaN(dt.getTime()) || dt.getFullYear() < 2025) {
+            // Si la fecha es inválida o en 1970 (reloj desconfigurado), le asignamos la hora actual
+            // con un desfase incremental en segundos basado en el índice para mantener orden cronológico y evitar exclusión por timestamp
+            const now = new Date();
+            now.setSeconds(now.getSeconds() - (infos.length - infos.indexOf(info)));
+            eventTimeStr = now.toISOString();
+          }
+        } catch {
+          eventTimeStr = new Date().toISOString();
+        }
 
+        const eventTime = new Date(eventTimeStr).getTime();
         if (eventTime <= lastDbTime) continue;
 
-        const eventId = `fb_${device.id}_${info.serialNo || info.time}`;
+        const eventId = this.getEventId(device.id, info);
         if (this.seenEventIds.has(eventId)) continue;
         this.markAsSeen(eventId);
 
@@ -425,7 +450,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           detalles_raw: info,
         });
       }
-    } catch { /* offline — silencioso */ }
+    } catch (err) { /* offline — silencioso */ }
   }
 
   private buildDigestHeader(method: string, url: string, user: string, pass: string, challenge: any) {
@@ -548,6 +573,13 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   // ─── Guardar en BD y Emitir por WebSocket (fire & forget) ─────────────────
 
   saveAndEmit(evento: EventoAcceso) {
+    if (evento.timestamp) {
+      const currentLatest = this.latestDbTimestamp.get(evento.dispositivo_id);
+      if (!currentLatest || new Date(evento.timestamp).getTime() > new Date(currentLatest).getTime()) {
+        this.latestDbTimestamp.set(evento.dispositivo_id, evento.timestamp);
+      }
+    }
+
     const persistirEvento = async () => {
       let persona: any = null;
       if (evento.tipo_evento === 'llamada') {
@@ -731,6 +763,68 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
   private isVpnIp(ip: string): boolean {
     return /^10\.8\./.test(ip);
+  }
+
+  private sanitizeTimestamp(timeStr: string): string {
+    if (!timeStr) return new Date().toISOString();
+    try {
+      const dt = new Date(timeStr);
+      if (isNaN(dt.getTime()) || dt.getFullYear() < 2025) {
+        return new Date().toISOString();
+      }
+      return timeStr;
+    } catch {
+      return new Date().toISOString();
+    }
+  }
+
+  private getEventId(deviceId: string, info: any): string {
+    const uniqueVal = info?.serialNo || info?.time || info?.dateTime || info?.dateTimeString || 'rand_' + randomBytes(4).toString('hex');
+    return `${deviceId}_${uniqueVal}`;
+  }
+
+  private async syncDeviceTime(device: DeviceInfo) {
+    try {
+      const ip = device.ip_direccion;
+      const port = device.configuracion_tecnica?.puertos_mapeados?.mapped_http
+        || device.configuracion_tecnica?.puerto
+        || 80;
+      const user = device.credencial_usuario || 'admin';
+      const pass = device.credencial_password || '';
+
+      // Obtener hora local de Colombia (UTC-5)
+      const d = new Date();
+      const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
+      const colTime = new Date(utc - (3600000 * 5));
+      
+      const year = colTime.getFullYear();
+      const month = String(colTime.getMonth() + 1).padStart(2, '0');
+      const day = String(colTime.getDate()).padStart(2, '0');
+      const hours = String(colTime.getHours()).padStart(2, '0');
+      const minutes = String(colTime.getMinutes()).padStart(2, '0');
+      const seconds = String(colTime.getSeconds()).padStart(2, '0');
+      
+      const timeStr = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}-05:00`;
+
+      const payload = `<?xml version="1.0" encoding="UTF-8"?>
+<Time version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
+  <timeMode>manual</timeMode>
+  <localTime>${timeStr}</localTime>
+</Time>`;
+
+      await this.executeDigestRequest(
+        'PUT',
+        `http://${ip}:${port}/ISAPI/System/time`,
+        user,
+        pass,
+        payload,
+        'application/xml',
+        5000
+      );
+      this.logger.log(`⏰ [EventSystem] Hora sincronizada con éxito en ${device.nombre_identificador}: ${timeStr}`);
+    } catch (err) {
+      this.logger.warn(`⚠️ [EventSystem] No se pudo sincronizar la hora en ${device.nombre_identificador}: ${err.message}`);
+    }
   }
 
   private async triggerDoorOpen(dispositivoId: string) {
