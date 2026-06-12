@@ -604,6 +604,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         evento.nombre_persona = 'Llamada a central/residente';
         evento.documento_persona = 'LLAMADA';
       } else {
+        await this.enrichQrEvent(evento);
         persona = await this.resolvePersonaForEvento(evento);
       }
       
@@ -628,19 +629,23 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         .from('dispositivos_eventos_historico')
         .insert(payloadExtendido);
 
-      if (!error) return;
-
-      const missingExtendedColumn = /nombre_persona|documento_persona|detalles_raw/i.test(error.message || '');
-      if (missingExtendedColumn) {
-        const { error: fallbackError } = await this.supabase
-          .getSupabaseAdminClient()
-          .from('dispositivos_eventos_historico')
-          .insert(payloadBase);
-        if (fallbackError) this.logger.warn(`⚠️ [EventSystem] INSERT fallback: ${fallbackError.message}`);
-        return;
+      if (error) {
+        const missingExtendedColumn = /nombre_persona|documento_persona|detalles_raw/i.test(error.message || '');
+        if (missingExtendedColumn) {
+          const { error: fallbackError } = await this.supabase
+            .getSupabaseAdminClient()
+            .from('dispositivos_eventos_historico')
+            .insert(payloadBase);
+          if (fallbackError) this.logger.warn(`⚠️ [EventSystem] INSERT fallback: ${fallbackError.message}`);
+        } else {
+          this.logger.warn(`⚠️ [EventSystem] INSERT: ${error.message}`);
+        }
       }
 
-      this.logger.warn(`⚠️ [EventSystem] INSERT: ${error.message}`);
+      // Emitir por WebSocket - enriquecido
+      if (this.emitFn) {
+        try { this.emitFn(evento); } catch {}
+      }
     };
 
     persistirEvento().catch((error) => {
@@ -650,10 +655,83 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     this.checkQrAutoOpen(evento).catch((error) => {
       this.logger.error(`❌ [QR AUTO-OPEN ERROR]: ${error.message}`);
     });
+  }
 
-    // Emitir por WebSocket - instantáneo
-    if (this.emitFn) {
-      try { this.emitFn(evento); } catch {}
+  private async enrichQrEvent(evento: EventoAcceso) {
+    const rawScanned = this.firstText(evento.codigo_tarjeta, evento.documento_persona);
+    if (!rawScanned) return;
+
+    let scannedCode = rawScanned.trim();
+    let token = scannedCode;
+
+    // 1. Si es un JSON de visita_acceso
+    if (scannedCode.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(scannedCode);
+        if (parsed.token) {
+          token = parsed.token;
+        }
+        if (parsed.visitante) {
+          evento.nombre_persona = parsed.visitante.trim();
+        }
+        if (parsed.doc) {
+          evento.documento_persona = parsed.doc.trim();
+        }
+        return;
+      } catch (e) {
+        // Ignorar y seguir
+      }
+    }
+
+    const admin = this.supabase.getSupabaseAdminClient();
+
+    // 2. Si es un token de residente (8 dígitos numéricos)
+    if (token.length === 8 && /^\d+$/.test(token)) {
+      try {
+        const { data: visitaReg } = await admin
+          .from('visitas_registro')
+          .select('*')
+          .eq('token_qr', token)
+          .maybeSingle();
+
+        if (visitaReg) {
+          if (visitaReg.visitante_id) {
+            const { data: pers } = await admin
+              .from('personas_gestion_acceso')
+              .select('nombre_completo, documento_identidad')
+              .eq('id', visitaReg.visitante_id)
+              .maybeSingle();
+            
+            if (pers) {
+              evento.nombre_persona = pers.nombre_completo;
+              evento.documento_persona = pers.documento_identidad;
+              return;
+            }
+          }
+          evento.nombre_persona = visitaReg.nombre_visitante_temporal || 'Invitado Residente';
+          evento.documento_persona = 'RESIDENTE_QR';
+        }
+      } catch (err) {
+        this.logger.warn(`⚠️ [Enrich QR] Error al enriquecer QR de residente: ${err.message}`);
+      }
+    }
+
+    // 3. Si es un token de administración (ej: 32 caracteres hexadecimal)
+    if (token && token.length >= 16) {
+      try {
+        const { data: visitaAcc } = await admin
+          .from('visitas_acceso')
+          .select('nombre_visitante, documento_visitante')
+          .eq('token_qr', token)
+          .maybeSingle();
+
+        if (visitaAcc) {
+          evento.nombre_persona = visitaAcc.nombre_visitante.trim();
+          evento.documento_persona = visitaAcc.documento_visitante.trim();
+        }
+      } catch (err) {
+        this.logger.warn(`⚠️ [Enrich QR] Error al enriquecer QR de admin: ${err.message}`);
+      }
     }
   }
 
