@@ -1418,16 +1418,16 @@ export class ControlAccesoService implements OnModuleInit {
 
     if (pError) throw pError;
 
-    // 2. Vincular con dispositivos si existen
-    if (dispositivos_ids && dispositivos_ids.length > 0) {
-      await this.vincularPersonaDispositivos(persona.id, dispositivos_ids);
-    }
-
-    // 3. Guardar rostro capturado si vino desde el frontend
+    // 2. Guardar rostro capturado si vino desde el frontend (ANTES de vincular/sincronizar para evitar race conditions)
     if (foto_base64) {
       await this.guardarFotoPersona(persona.id, foto_base64).catch((error) => {
         this.logger.warn(`⚠️ [PERSONA] No se pudo guardar foto facial: ${error.message}`);
       });
+    }
+
+    // 3. Vincular con dispositivos si existen
+    if (dispositivos_ids && dispositivos_ids.length > 0) {
+      await this.vincularPersonaDispositivos(persona.id, dispositivos_ids);
     }
 
     const [personaConFoto] = await this.attachFotosPersonas([persona]);
@@ -1564,6 +1564,7 @@ export class ControlAccesoService implements OnModuleInit {
       .select('*, dispositivo:dispositivos_iot(*)')
       .eq('persona_id', id);
 
+    const syncErrors: string[] = [];
     for (const p of permisos || []) {
       const ip = p.dispositivo?.ip_direccion;
       if (ip) {
@@ -1578,9 +1579,14 @@ export class ControlAccesoService implements OnModuleInit {
             this.logger.log(`👤 [HARDWARE SYNC] Datos actualizados: Re-sincronizado usuario ${persona.documento_identidad} en dispositivo ${ip}`);
           }
         } catch (err) {
-          this.logger.warn(`⚠️ [HARDWARE SYNC] Error al sincronizar cambios de persona en ${ip}: ${err.message}`);
+          this.logger.error(`❌ [HARDWARE SYNC] Error al sincronizar cambios de persona en ${ip}: ${err.message}`);
+          syncErrors.push(`${p.dispositivo?.nombre_identificador || ip}: ${err.message}`);
         }
       }
+    }
+
+    if (syncErrors.length > 0) {
+      throw new Error(`Error al sincronizar con algunos dispositivos: ${syncErrors.join(', ')}`);
     }
 
     return updatedPersona;
@@ -2644,13 +2650,33 @@ export class ControlAccesoService implements OnModuleInit {
 
   async uploadRostro(ip: string, userId: string, faceData: string, deviceId?: string): Promise<any> {
     const isapiPath = `/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json`;
-    const body = {
-      faceLibType: 'blackList',
+    
+    // Intentar primero con 'staticFD' (librería estática/lista blanca estándar en biométricos Hikvision DS-K1T)
+    const bodyStatic = {
+      faceLibType: 'staticFD',
       FDLibID: '1',
       FPID: userId,
       faceData: faceData
     };
-    return this.proxyRequestDynamic(ip, 'post', isapiPath, body, { deviceId });
+
+    try {
+      return await this.proxyRequestDynamic(ip, 'post', isapiPath, bodyStatic, { deviceId });
+    } catch (err) {
+      this.logger.warn(`⚠️ [HARDWARE ROSTRO] Error al subir con tipo 'staticFD' en ${ip}: ${err.message}. Reintentando con 'blackFD'...`);
+      
+      // Fallback a 'blackFD' (lista negra / genérico) por compatibilidad
+      const bodyBlack = {
+        ...bodyStatic,
+        faceLibType: 'blackFD'
+      };
+
+      try {
+        return await this.proxyRequestDynamic(ip, 'post', isapiPath, bodyBlack, { deviceId });
+      } catch (err2) {
+        this.logger.error(`❌ [HARDWARE ROSTRO FAIL] No se pudo subir foto de rostro a ${ip} con ningún tipo de librería: ${err2.message}`);
+        throw err2;
+      }
+    }
   }
 
   async crearUsuarioEnHardware(ip: string, userId: string, nombre: string): Promise<any> {
@@ -2705,8 +2731,7 @@ export class ControlAccesoService implements OnModuleInit {
   async eliminarUsuarioDeHardware(ip: string, userId: string): Promise<any> {
     const isapiPath = `/ISAPI/AccessControl/UserInfo/Delete?format=json`;
     const body = {
-      UserInfoDetail: {
-        mode: 'byEmployeeNo',
+      UserInfoDelCond: {
         EmployeeNoList: [
           {
             employeeNo: userId,
@@ -2774,7 +2799,8 @@ export class ControlAccesoService implements OnModuleInit {
           await this.uploadRostro(ip, persona.documento_identidad, base64Photo);
         }
       } catch (err) {
-        this.logger.warn(`⚠️ [HARDWARE SYNC] No se pudo subir foto de rostro a ${ip}: ${err.message}`);
+        this.logger.error(`❌ [HARDWARE SYNC] No se pudo subir foto de rostro a ${ip}: ${err.message}`);
+        throw new Error(`Error al sincronizar rostro en hardware: ${err.message}`);
       }
     }
 
@@ -2812,10 +2838,7 @@ export class ControlAccesoService implements OnModuleInit {
       throw new Error(`Error al upsertar persona: ${pErr?.message}`);
     }
 
-    if (dispositivoIds && dispositivoIds.length > 0) {
-      await this.vincularPersonaDispositivos(persona.id, dispositivoIds);
-    }
-
+    // 1. Guardar la biometría facial antes de vincular y sincronizar con los dispositivos para evitar race conditions
     if (rec.foto_rostro_url) {
       const { data: existingFacial } = await admin
         .from('biometria_facial')
@@ -2833,6 +2856,11 @@ export class ControlAccesoService implements OnModuleInit {
             sincronizado_en_biometrico: true,
           });
       }
+    }
+
+    // 2. Vincular con dispositivos
+    if (dispositivoIds && dispositivoIds.length > 0) {
+      await this.vincularPersonaDispositivos(persona.id, dispositivoIds);
     }
 
     let residentResult: any = null;
