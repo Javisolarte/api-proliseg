@@ -458,7 +458,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     pass: string,
     body: any = null,
     contentType: string = 'application/xml',
-    timeout: number = 5000
+    timeout: number = 5000,
+    responseType: any = 'text'
   ): Promise<any> {
     try {
       return await axios.request({
@@ -466,7 +467,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         url,
         data: body,
         headers: { 'Content-Type': contentType },
-        timeout
+        timeout,
+        responseType
       });
     } catch (err) {
       if (err.response && err.response.status === 401) {
@@ -489,7 +491,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
             'Content-Type': contentType,
             'Accept': 'application/xml'
           },
-          timeout
+          timeout,
+          responseType
         });
       }
       throw err;
@@ -730,53 +733,148 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     return /^10\.8\./.test(ip);
   }
 
-  private async checkQrAutoOpen(evento: EventoAcceso) {
-    const scannedCode = this.firstText(evento.codigo_tarjeta, evento.documento_persona);
-    if (!scannedCode || scannedCode.length !== 8 || !/^\d+$/.test(scannedCode)) {
-      return;
-    }
-
-    const admin = this.supabase.getSupabaseAdminClient();
-    const { data: visita, error } = await admin
-      .from('visitas_registro')
-      .select('*')
-      .eq('token_qr', scannedCode)
-      .eq('estado', 'programada')
-      .maybeSingle();
-
-    if (error || !visita) return;
-
-    this.logger.log(`🔑 [QR AUTO-OPEN] Token QR válido detectado: ${scannedCode} para visitante ${visita.nombre_visitante_temporal || 'Invitado'}`);
-
-    const { error: updErr } = await admin
-      .from('visitas_registro')
-      .update({
-        estado: 'activo',
-        fecha_entrada: new Date().toISOString(),
-        observaciones: (visita.observaciones || '') + ' [Ingreso automático por código QR]',
-      })
-      .eq('id', visita.id);
-
-    if (updErr) {
-      this.logger.error(`❌ [QR AUTO-OPEN] No se pudo activar la visita ${visita.id}: ${updErr.message}`);
-      return;
-    }
-
+  private async triggerDoorOpen(dispositivoId: string) {
     if (this.controlPuertaFn) {
       try {
-        const device = await this.getDeviceById(evento.dispositivo_id);
+        const device = await this.getDeviceById(dispositivoId);
         if (device?.ip_direccion) {
           await this.controlPuertaFn(device.ip_direccion, 1, 'abrir', {
             deviceId: device.id,
             marca: device.configuracion_tecnica?.marca,
           });
-          this.logger.log(`🚪 [QR AUTO-OPEN] Puerta abierta automáticamente para visita ${visita.id}`);
+          this.logger.log(`🚪 [QR AUTO-OPEN] Puerta abierta automáticamente en dispositivo ${dispositivoId}`);
         }
       } catch (cmdErr) {
         this.logger.error(`❌ [QR AUTO-OPEN] Error al enviar comando de puerta: ${cmdErr.message}`);
       }
     } else {
       this.logger.warn(`⚠️ [QR AUTO-OPEN] controlPuertaFn no está registrado en el sistema`);
+    }
+  }
+
+  private async checkQrAutoOpen(evento: EventoAcceso) {
+    const rawScanned = this.firstText(evento.codigo_tarjeta, evento.documento_persona);
+    if (!rawScanned) return;
+
+    let scannedCode = rawScanned.trim();
+    let token = scannedCode;
+
+    // Si el QR escaneado es el JSON de la visita, extraemos el campo token
+    if (scannedCode.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(scannedCode);
+        if (parsed.token) {
+          token = parsed.token;
+        }
+      } catch (e) {
+        // Ignorar error de JSON parse y usar el string plano
+      }
+    }
+
+    const admin = this.supabase.getSupabaseAdminClient();
+
+    // 1. Verificar visitas de residentes (visitas_registro) -> Tokens de 8 dígitos numéricos
+    if (token.length === 8 && /^\d+$/.test(token)) {
+      const { data: visitaReg, error: errorReg } = await admin
+        .from('visitas_registro')
+        .select('*')
+        .eq('token_qr', token)
+        .eq('estado', 'programada')
+        .maybeSingle();
+
+      if (!errorReg && visitaReg) {
+        this.logger.log(`🔑 [QR AUTO-OPEN] Token QR de residente válido: ${token} para visitante ${visitaReg.nombre_visitante_temporal || 'Invitado'}`);
+        
+        const { error: updErr } = await admin
+          .from('visitas_registro')
+          .update({
+            estado: 'activo',
+            fecha_entrada: new Date().toISOString(),
+            observaciones: (visitaReg.observaciones || '') + ' [Ingreso automático por código QR]',
+          })
+          .eq('id', visitaReg.id);
+
+        if (updErr) {
+          this.logger.error(`❌ [QR AUTO-OPEN] No se pudo activar la visita de residente ${visitaReg.id}: ${updErr.message}`);
+          return;
+        }
+
+        await this.triggerDoorOpen(evento.dispositivo_id);
+        return;
+      }
+    }
+
+    // 2. Verificar visitas de la administración (visitas_acceso)
+    const { data: visitaAcc, error: errorAcc } = await admin
+      .from('visitas_acceso')
+      .select('*, dispositivo:dispositivos_iot(id, ip_direccion, nombre_identificador, credencial_usuario, credencial_password, configuracion_tecnica)')
+      .eq('token_qr', token)
+      .eq('estado', 'programada')
+      .maybeSingle();
+
+    if (!errorAcc && visitaAcc) {
+      // Restricción de dispositivo: "solo en el dispositivo que se envio"
+      if (visitaAcc.dispositivo_id && visitaAcc.dispositivo_id !== evento.dispositivo_id) {
+        this.logger.warn(`⚠️ [QR AUTO-OPEN] Token QR válido pero presentado en dispositivo equivocado. Esperado: ${visitaAcc.dispositivo_id}, Escaneado: ${evento.dispositivo_id}`);
+        return;
+      }
+
+      this.logger.log(`🔑 [QR AUTO-OPEN] Token QR de administración válido: ${token} para visitante ${visitaAcc.nombre_visitante}`);
+
+      // Abrir la puerta inmediatamente
+      await this.triggerDoorOpen(evento.dispositivo_id);
+
+      // Esperar 1.5 segundos para que la persona ingrese / mire la cámara y capturar su foto
+      setTimeout(async () => {
+        let fotoIngresoUrl: string | null = null;
+        if (visitaAcc.dispositivo?.ip_direccion) {
+          try {
+            const ip = visitaAcc.dispositivo.ip_direccion;
+            const user = visitaAcc.dispositivo.credencial_usuario || 'admin';
+            const pass = visitaAcc.dispositivo.credencial_password || '';
+            const port = visitaAcc.dispositivo.configuracion_tecnica?.puertos_mapeados?.mapped_http 
+              || visitaAcc.dispositivo.configuracion_tecnica?.puerto 
+              || 80;
+
+            const responseData = await this.executeDigestRequest(
+              'GET',
+              `http://${ip}:${port}/ISAPI/Streaming/channels/1/picture`,
+              user,
+              pass,
+              null,
+              'image/jpeg',
+              5000,
+              'arraybuffer'
+            );
+
+            const buffer = Buffer.from(responseData.data);
+            const fileName = `visitas/${visitaAcc.id}/ingreso_${Date.now()}.jpg`;
+            await admin.storage.from('control-acceso').upload(fileName, buffer, { contentType: 'image/jpeg', upsert: true });
+            const { data: urlData } = admin.storage.from('control-acceso').getPublicUrl(fileName);
+            fotoIngresoUrl = urlData?.publicUrl || null;
+            this.logger.log(`📸 [QR AUTO-OPEN] Foto de ingreso capturada y subida exitosamente: ${fotoIngresoUrl}`);
+          } catch (photoErr) {
+            this.logger.warn(`⚠️ [QR AUTO-OPEN] No se pudo capturar la foto del dispositivo: ${photoErr.message}`);
+          }
+        }
+
+        // Actualizar estado de la visita a realizada (incluso si falla la captura de foto)
+        const { error: updAccErr } = await admin
+          .from('visitas_acceso')
+          .update({
+            estado: 'realizada',
+            timestamp_ingreso: new Date().toISOString(),
+            foto_ingreso_url: fotoIngresoUrl,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', visitaAcc.id);
+
+        if (updAccErr) {
+          this.logger.error(`❌ [QR AUTO-OPEN] Error al registrar ingreso en visitas_acceso: ${updAccErr.message}`);
+        } else {
+          this.logger.log(`✅ [QR AUTO-OPEN] Ingreso registrado con éxito para visitante ${visitaAcc.nombre_visitante}`);
+        }
+      }, 1500);
     }
   }
 }
