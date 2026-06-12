@@ -2652,11 +2652,15 @@ export class ControlAccesoService implements OnModuleInit {
     const isapiPath = `/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json`;
     
     // Intentar primero con 'staticFD' (librería estática/lista blanca estándar en biométricos Hikvision DS-K1T)
+    // El payload JSON debe estar envuelto en el objeto raíz 'FaceDataRecord' según el estándar de Hikvision ISAPI.
     const bodyStatic = {
-      faceLibType: 'staticFD',
-      FDLibID: '1',
-      FPID: userId,
-      faceData: faceData
+      FaceDataRecord: {
+        faceLibType: 'staticFD',
+        FDLibID: '1',
+        FDID: '1', // Proveer FDID por compatibilidad con diferentes firmwares
+        FPID: userId,
+        faceData: faceData
+      }
     };
 
     try {
@@ -2666,8 +2670,13 @@ export class ControlAccesoService implements OnModuleInit {
       
       // Fallback a 'blackFD' (lista negra / genérico) por compatibilidad
       const bodyBlack = {
-        ...bodyStatic,
-        faceLibType: 'blackFD'
+        FaceDataRecord: {
+          faceLibType: 'blackFD',
+          FDLibID: '1',
+          FDID: '1',
+          FPID: userId,
+          faceData: faceData
+        }
       };
 
       try {
