@@ -1976,13 +1976,18 @@ export class ControlAccesoService implements OnModuleInit {
         if (!usersList.length) {
           break;
         }
+
+        const prevLength = allUsers.length;
         allUsers = allUsers.concat(usersList);
+        if (allUsers.length === prevLength) {
+          break;
+        }
 
         const currentMatches = response?.UserInfoSearch?.numOfMatches || response?.numOfMatches || usersList.length;
         totalMatches = response?.UserInfoSearch?.totalMatches || response?.totalMatches || 0;
 
-        // Condición de parada robusta: última página o se alcanzó el total informado
-        if (usersList.length < maxResults || (totalMatches > 0 && allUsers.length >= totalMatches) || currentMatches === 0) {
+        // Condición de parada robusta: se alcanzó el total de coincidencias o el bloque actual está vacío
+        if (currentMatches === 0 || (totalMatches > 0 && allUsers.length >= totalMatches)) {
           break;
         }
 
