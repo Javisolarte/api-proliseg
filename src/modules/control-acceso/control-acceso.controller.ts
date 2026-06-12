@@ -357,6 +357,20 @@ export class ControlAccesoController {
     );
   }
 
+  @Post('recopilacion/sync-registros')
+  @ApiOperation({ summary: 'Sincronizar múltiples registros recopilados y crear cuentas de residente' })
+  async syncRecopilaciones(
+    @Body() body: { registroIds: number[]; dispositivoIds: string[] }
+  ) {
+    if (!body.registroIds || !Array.isArray(body.registroIds) || body.registroIds.length === 0) {
+      throw new BadRequestException('registroIds es obligatorio y debe ser un arreglo');
+    }
+    return this.controlAccesoService.syncRecopilacionRegistros(
+      body.registroIds,
+      body.dispositivoIds || []
+    );
+  }
+
   @Delete('personas/:id')
   @ApiOperation({ summary: 'Eliminar una persona de la base de datos y de los dispositivos vinculados' })
   async deletePersona(@Param('id') id: string) {

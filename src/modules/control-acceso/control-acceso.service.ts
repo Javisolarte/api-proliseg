@@ -1284,12 +1284,56 @@ export class ControlAccesoService implements OnModuleInit {
 
     const { data, error } = await query;
     if (error) throw error;
-    return this.attachFotosPersonas(data || []);
+
+    const personas = data || [];
+    const residentIds = personas
+      .filter((p: any) => p.entidad_tipo === 'residente' && p.entidad_id)
+      .map((p: any) => p.entidad_id);
+
+    if (residentIds.length > 0) {
+      try {
+        const { data: residents } = await this.supabase
+          .getClient()
+          .from('residentes')
+          .select('*')
+          .in('id', residentIds);
+
+        const { data: vehicles } = await this.supabase
+          .getClient()
+          .from('residentes_vehiculos')
+          .select('*')
+          .in('residente_id', residentIds);
+
+        const residentsMap = new Map((residents || []).map((r: any) => [r.id, r]));
+        const vehiclesMap = new Map<number, any[]>();
+        for (const v of vehicles || []) {
+          const list = vehiclesMap.get(v.residente_id) || [];
+          list.push(v);
+          vehiclesMap.set(v.residente_id, list);
+        }
+
+        for (const p of personas) {
+          if (p.entidad_tipo === 'residente' && p.entidad_id) {
+            const res = residentsMap.get(p.entidad_id);
+            if (res) {
+              p.residente = {
+                ...res,
+                vehiculos: vehiclesMap.get(p.entidad_id) || [],
+              };
+            }
+          }
+        }
+      } catch (err) {
+        this.logger.warn(`⚠️ [FIND PERSONAS] No se pudo unir la información de residentes/vehículos: ${err.message}`);
+      }
+    }
+
+    return this.attachFotosPersonas(personas);
   }
 
   async createPersona(dto: CreatePersonaAccesoDto) {
     const { dispositivos_ids, foto_base64, ...personaInput } = dto as any;
-    const documento = String(personaInput.documento_identidad || '').trim();
+    const documento = String(personaInput.documento_identidad || personaInput.cedula || '').trim();
 
     if (!documento) {
       throw new Error('documento_identidad es obligatorio');
@@ -1298,7 +1342,7 @@ export class ControlAccesoService implements OnModuleInit {
     const personaData: any = {
       entidad_tipo: personaInput.entidad_tipo || 'otro',
       entidad_id: personaInput.entidad_id || null,
-      nombre_completo: personaInput.nombre_completo,
+      nombre_completo: personaInput.nombre_completo || personaInput.nombre,
       documento_identidad: documento,
       lista_estado: personaInput.lista_estado || 'blanca',
       motivo_restriccion: personaInput.motivo_restriccion || null,
@@ -1307,6 +1351,55 @@ export class ControlAccesoService implements OnModuleInit {
       pin_seguridad: personaInput.pin_seguridad || null,
       activo: personaInput.activo ?? true,
     };
+
+    // Si se provee correo, crear/asegurar cuenta de residente y vincularla
+    const correo = personaInput.correo || personaInput.correo_electronico;
+    if (correo) {
+      try {
+        const residentResult = await this.asegurarCuentaResidente({
+          cedula: documento,
+          nombre_completo: personaData.nombre_completo,
+          correo: correo,
+          telefono: personaInput.telefono || null,
+          torre: personaInput.torre || null,
+          apartamento: personaInput.apartamento || personaInput.apto || null,
+        });
+
+        if (residentResult?.residente?.id) {
+          personaData.entidad_tipo = 'residente';
+          personaData.entidad_id = residentResult.residente.id;
+
+          // Si tiene datos de vehículo, registrarlos en residentes_vehiculos
+          if (personaInput.placa_vehiculo) {
+            try {
+              const admin = this.supabase.getSupabaseAdminClient();
+              const placaNormal = String(personaInput.placa_vehiculo).toUpperCase().trim();
+              const { data: existingVeh } = await admin
+                .from('residentes_vehiculos')
+                .select('id')
+                .eq('residente_id', residentResult.residente.id)
+                .eq('placa', placaNormal)
+                .maybeSingle();
+
+              if (!existingVeh) {
+                await admin
+                  .from('residentes_vehiculos')
+                  .insert({
+                    residente_id: residentResult.residente.id,
+                    placa: placaNormal,
+                    color: personaInput.color_vehiculo || null,
+                    tipo_vehiculo: 'carro'
+                  });
+              }
+            } catch (vehErr) {
+              this.logger.warn(`⚠️ [VEHICULO AUTO-CREATION] FAILED: ${vehErr.message}`);
+            }
+          }
+        }
+      } catch (authErr) {
+        this.logger.warn(`⚠️ [RESIDENT AUTO-PROVISION IN CREATE] FAILED for ${documento}: ${authErr.message}`);
+      }
+    }
 
     // 1. Crear o actualizar persona
     const { data: persona, error: pError } = await this.supabase
@@ -2679,6 +2772,25 @@ export class ControlAccesoService implements OnModuleInit {
     };
   }
 
+  async syncRecopilacionRegistros(registroIds: number[], dispositivoIds: string[]): Promise<any> {
+    const resultados: any[] = [];
+    for (const id of registroIds) {
+      try {
+        const res = await this.syncRecopilacionRegistro(id, dispositivoIds);
+        resultados.push({ id, ok: true, persona_id: res.persona_id });
+      } catch (err) {
+        this.logger.error(`❌ [BATCH SYNC ERROR] No se pudo sincronizar registro ${id}: ${err.message}`);
+        resultados.push({ id, ok: false, error: err.message });
+      }
+    }
+    return {
+      total: registroIds.length,
+      exitosos: resultados.filter(r => r.ok).length,
+      fallidos: resultados.filter(r => !r.ok).length,
+      detalles: resultados
+    };
+  }
+
   async asegurarCuentaResidente(input: {
     cedula: string;
     nombre_completo: string;
@@ -3133,6 +3245,23 @@ export class ControlAccesoService implements OnModuleInit {
     if (!checkCode.ok) throw new Error('Código de seguridad inválido');
     if (!body?.acepta_tratamiento_datos) throw new Error('Debe aceptar tratamiento de datos');
     if (!body?.foto_base64) throw new Error('Debe adjuntar una foto de rostro');
+    if (!body?.cedula) throw new Error('Número de cédula es obligatorio');
+
+    // Validar unicidad de la cédula dentro del mismo lugar_id
+    const { data: existingCedula, error: checkErr } = await this.supabase
+      .getSupabaseAdminClient()
+      .from('control_acceso_recoleccion_registros')
+      .select('id')
+      .eq('lugar_id', form.id)
+      .eq('cedula', body.cedula)
+      .maybeSingle();
+
+    if (checkErr) {
+      throw new Error(`Error al verificar cédula: ${checkErr.message}`);
+    }
+    if (existingCedula) {
+      throw new Error('Esta cédula ya se encuentra registrada en esta lista de recopilación');
+    }
 
     let fotoUrl: string | null = null;
     if (body.foto_base64 && String(body.foto_base64).startsWith('data:image/')) {
