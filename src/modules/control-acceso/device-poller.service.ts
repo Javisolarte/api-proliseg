@@ -115,19 +115,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       if (this.seenEventIds.has(eventId)) return { ok: true, duplicado: true };
       this.markAsSeen(eventId);
 
-      const evento: EventoAcceso = {
-        dispositivo_id: device.id,
-        nombre_dispositivo: device.nombre_identificador,
-        tipo_evento: this.mapHikvisionEventType(info?.major, info?.minor, info?.eventType),
-        metodo_acceso: this.mapHikvisionMethod(info?.cardReaderKind),
-        nombre_persona: this.firstText(info?.name, info?.employeeName, info?.userName, info?.UserName),
-        documento_persona: this.firstText(info?.employeeNoString, info?.employeeNo, info?.userID, info?.UserID, info?.personId),
-        codigo_tarjeta: this.firstText(info?.cardNo, info?.CardNo, info?.cardNumber),
-        face_id_ref: this.firstText(info?.FPID, info?.faceID, info?.faceId),
-        foto_evidencia_url: this.firstText(info?.pictureURL, info?.picUrl, info?.faceURL),
-        timestamp: this.sanitizeTimestamp(info?.dateTime),
-        detalles_raw: info,
-      };
+      const evento = this.buildEventoAcceso(device, info, this.sanitizeTimestamp(info?.dateTime));
 
       // Guardar y emitir — siempre sin await para no bloquear la respuesta HTTP a la cámara
       this.saveAndEmit(evento);
@@ -436,19 +424,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           this.latestDbTimestamp.set(device.id, eventTimeStr);
         }
 
-        this.saveAndEmit({
-          dispositivo_id: device.id,
-          nombre_dispositivo: device.nombre_identificador,
-          tipo_evento: this.mapHikvisionEventType(info.major, info.minor, ''),
-          metodo_acceso: this.mapHikvisionMethod(info.cardReaderKind),
-          nombre_persona: this.firstText(info.name, info.employeeName, info.userName),
-          documento_persona: this.firstText(info.employeeNoString, info.employeeNo, info.userID, info.personId),
-          codigo_tarjeta: this.firstText(info.cardNo, info.CardNo, info.cardNumber),
-          face_id_ref: this.firstText(info.FPID, info.faceID, info.faceId),
-          foto_evidencia_url: this.firstText(info.pictureURL, info.picUrl, info.faceURL),
-          timestamp: eventTimeStr,
-          detalles_raw: info,
-        });
+        const evento = this.buildEventoAcceso(device, info, eventTimeStr);
+        this.saveAndEmit(evento);
       }
     } catch (err) { /* offline — silencioso */ }
   }
@@ -548,17 +525,23 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     return null;
   }
 
-  private mapHikvisionEventType(major: number, minor: number, eventType: string): string {
+  private mapHikvisionEventType(major: number, minor: number, eventType?: string): string {
     const et = String(eventType || '').toLowerCase();
-    // Intercomunicador / Timbre
-    if (major === 3 || minor === 44 || minor === 9 || minor === 22 || 
-        et.includes('call') || et.includes('ring') || et.includes('intercom') || et.includes('videotalk')) {
-      return 'llamada';
-    }
+    
+    // Si es AccessControl (major 5), manejamos detalladamente sus subestados
     if (major === 5) {
       if (minor === 75) return 'entrada';
       if (minor === 76) return 'salida';
+      if (minor === 21) return 'apertura_boton'; // Botón físico de salida presionado
+      if (minor === 22) return 'puerta_abierta'; // Evento de estado de puerta / botón liberado
+      if (minor === 23) return 'puerta_cerrada';
       return 'acceso';
+    }
+
+    // Intercomunicador / Timbre (sólo si no es major 5)
+    if (major === 3 || minor === 44 || minor === 9 || minor === 22 || 
+        et.includes('call') || et.includes('ring') || et.includes('intercom') || et.includes('videotalk')) {
+      return 'llamada';
     }
     if (major === 6) return 'alarma';
     if (major === 1 || eventType === 'doorOpen') return 'puerta_abierta';
@@ -568,6 +551,41 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
   private mapHikvisionMethod(kind: number): string {
     return { 1: 'tarjeta', 2: 'pin', 3: 'tarjeta_pin', 4: 'facial', 7: 'facial_tarjeta', 8: 'boton' }[kind] || 'desconocido';
+  }
+
+  private buildEventoAcceso(device: DeviceInfo, info: any, timestampStr: string): EventoAcceso {
+    const tipoEvento = this.mapHikvisionEventType(info?.major, info?.minor, info?.eventType);
+    let metodoAcceso = this.mapHikvisionMethod(info?.cardReaderKind);
+    let nombrePersona = this.firstText(info?.name, info?.employeeName, info?.userName, info?.UserName);
+    let documentoPersona = this.firstText(info?.employeeNoString, info?.employeeNo, info?.userID, info?.UserID, info?.personId);
+
+    if (tipoEvento === 'apertura_boton') {
+      nombrePersona = 'Apertura por Botón';
+      documentoPersona = 'BOTON';
+      metodoAcceso = 'boton';
+    } else if (tipoEvento === 'puerta_abierta') {
+      nombrePersona = 'Puerta Abierta';
+      documentoPersona = 'SENSOR';
+      metodoAcceso = 'sensor';
+    } else if (tipoEvento === 'puerta_cerrada') {
+      nombrePersona = 'Puerta Cerrada';
+      documentoPersona = 'SENSOR';
+      metodoAcceso = 'sensor';
+    }
+
+    return {
+      dispositivo_id: device.id,
+      nombre_dispositivo: device.nombre_identificador,
+      tipo_evento: tipoEvento,
+      metodo_acceso: metodoAcceso,
+      nombre_persona: nombrePersona,
+      documento_persona: documentoPersona,
+      codigo_tarjeta: this.firstText(info?.cardNo, info?.CardNo, info?.cardNumber),
+      face_id_ref: this.firstText(info?.FPID, info?.faceID, info?.faceId),
+      foto_evidencia_url: this.firstText(info?.pictureURL, info?.picUrl, info?.faceURL),
+      timestamp: timestampStr,
+      detalles_raw: info,
+    };
   }
 
   // ─── Guardar en BD y Emitir por WebSocket (fire & forget) ─────────────────

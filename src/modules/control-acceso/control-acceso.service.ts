@@ -334,7 +334,41 @@ export class ControlAccesoService implements OnModuleInit {
 
     const { data, error } = await query;
     if (error) throw error;
-    return this.attachFotosPersonas(data || []);
+
+    const rows = data || [];
+    const unlinkedRows = rows.filter(row => !row.persona && (row.documento_persona || row.detalles_raw?.cardNo || row.detalles_raw?.CardNo || row.detalles_raw?.cardNumber || row.codigo_tarjeta));
+    if (unlinkedRows.length > 0) {
+      const docs = Array.from(new Set(unlinkedRows.map(r => r.documento_persona).filter(Boolean)));
+      const cards = Array.from(new Set(unlinkedRows.map(r => r.detalles_raw?.cardNo || r.detalles_raw?.CardNo || r.detalles_raw?.cardNumber || r.codigo_tarjeta).filter(Boolean)));
+      
+      const admin = this.supabase.getSupabaseAdminClient();
+      let matches: any[] = [];
+      const conditions: string[] = [];
+      if (docs.length > 0) conditions.push(`documento_identidad.in.("${docs.join('","')}")`);
+      if (cards.length > 0) conditions.push(`codigo_tarjeta.in.("${cards.join('","')}")`);
+      
+      if (conditions.length > 0) {
+        const { data: matchedPersonas } = await admin
+          .from('personas_gestion_acceso')
+          .select('id, nombre_completo, documento_identidad, codigo_tarjeta, face_id_ref')
+          .or(conditions.join(','));
+        matches = matchedPersonas || [];
+      }
+      
+      for (const row of unlinkedRows) {
+        const doc = row.documento_persona;
+        const card = row.detalles_raw?.cardNo || row.detalles_raw?.CardNo || row.detalles_raw?.cardNumber || row.codigo_tarjeta;
+        const matched = matches.find(p => 
+          (doc && p.documento_identidad === doc) || 
+          (card && p.codigo_tarjeta === card)
+        );
+        if (matched) {
+          row.persona = matched;
+        }
+      }
+    }
+
+    return this.attachFotosPersonas(rows);
   }
 
   // ============================================================
@@ -2131,9 +2165,13 @@ export class ControlAccesoService implements OnModuleInit {
   }
 
   private async attachFotosPersonas(rows: any[]): Promise<any[]> {
+    const isUuid = (id: any) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
     const personaIds = Array.from(new Set(
       rows
-        .map((row: any) => row?.persona_id || row?.id || row?.persona?.id)
+        .map((row: any) => {
+          const val = row?.persona_id || row?.persona?.id || row?.id;
+          return isUuid(val) ? val : null;
+        })
         .filter(Boolean)
     ));
 
@@ -2152,7 +2190,7 @@ export class ControlAccesoService implements OnModuleInit {
     }
 
     return rows.map((row: any) => {
-      const personaId = row?.persona_id || row?.id || row?.persona?.id;
+      const personaId = row?.persona_id || row?.persona?.id;
       const foto = personaId ? byPersona.get(personaId) : null;
       if (row?.persona) {
         return {
