@@ -2650,7 +2650,8 @@ export class ControlAccesoService implements OnModuleInit {
 
   async uploadRostro(ip: string, userId: string, faceData: string, deviceId?: string): Promise<any> {
     const isapiPath = `/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json`;
-    
+    const imgBuffer = Buffer.from(faceData, 'base64');
+
     const cleanUserId = /^\d+$/.test(userId) ? Number(userId) : userId;
     const userIds = [userId];
     if (typeof cleanUserId === 'number') {
@@ -2658,53 +2659,155 @@ export class ControlAccesoService implements OnModuleInit {
     }
 
     const libTypes = ['staticFD', 'blackFD', 'normalFD'];
-    const payloads: { label: string; method: string; body: any }[] = [];
+    const payloads: { label: string; method: string; data: Buffer; headers: Record<string, string> }[] = [];
+    const boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW';
+
+    // Helper function to build multipart/form-data manually
+    const buildMultipart = (boundary: string, parts: any[]) => {
+      const buffers: Buffer[] = [];
+      for (const part of parts) {
+        buffers.push(Buffer.from(`--${boundary}\r\n`));
+        if (part.headers) {
+          for (const [key, value] of Object.entries(part.headers)) {
+            buffers.push(Buffer.from(`${key}: ${value}\r\n`));
+          }
+        }
+        buffers.push(Buffer.from('\r\n'));
+        if (Buffer.isBuffer(part.body)) {
+          buffers.push(part.body);
+        } else if (typeof part.body === 'object') {
+          buffers.push(Buffer.from(JSON.stringify(part.body)));
+        } else {
+          buffers.push(Buffer.from(String(part.body)));
+        }
+        buffers.push(Buffer.from('\r\n'));
+      }
+      buffers.push(Buffer.from(`--${boundary}--\r\n`));
+      return Buffer.concat(buffers);
+    };
 
     for (const uId of userIds) {
       const idStr = typeof uId === 'number' ? 'númerico' : 'string';
       for (const libType of libTypes) {
-        // Formato Flat (Sin envolver en FaceDataRecord) - Recomendado/Esperado por algunos firmwares
+        // Variante 1: Multipart estándar (FaceDataRecord como JSON block, FaceImage como binario) - COMPATIBILIDAD CONFIRMADA
+        const multipart1 = buildMultipart(boundary, [
+          {
+            headers: {
+              'Content-Disposition': 'form-data; name="FaceDataRecord"',
+              'Content-Type': 'application/json'
+            },
+            body: {
+              faceLibType: libType,
+              FDLibID: '1',
+              FDID: '1',
+              FPID: uId
+            }
+          },
+          {
+            headers: {
+              'Content-Disposition': 'form-data; name="FaceImage"; filename="face.jpg"',
+              'Content-Type': 'image/jpeg'
+            },
+            body: imgBuffer
+          }
+        ]);
+
         payloads.push({
-          label: `Flat (POST, ID: ${idStr}, lib: ${libType})`,
+          label: `Multipart (FaceDataRecord + FaceImage, ID: ${idStr}, lib: ${libType})`,
           method: 'post',
-          body: {
-            faceLibType: libType,
-            FDLibID: '1',
-            FDID: '1',
-            FPID: uId,
-            faceData: faceData
-          }
-        });
-        payloads.push({
-          label: `Flat (PUT, ID: ${idStr}, lib: ${libType})`,
-          method: 'put',
-          body: {
-            faceLibType: libType,
-            FDLibID: '1',
-            FDID: '1',
-            FPID: uId,
-            faceData: faceData
-          }
+          data: multipart1,
+          headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` }
         });
 
-        // Formato Wrapped (Envuelto en FaceDataRecord) - Estándar Hikvision ISAPI original
+        // Variante 2: Multipart alternativa (faceDataRecord minúscula + img minúscula)
+        const multipart2 = buildMultipart(boundary, [
+          {
+            headers: {
+              'Content-Disposition': 'form-data; name="faceDataRecord"',
+              'Content-Type': 'application/json'
+            },
+            body: {
+              faceLibType: libType,
+              FDLibID: '1',
+              FDID: '1',
+              FPID: uId
+            }
+          },
+          {
+            headers: {
+              'Content-Disposition': 'form-data; name="img"; filename="face.jpg"',
+              'Content-Type': 'image/jpeg'
+            },
+            body: imgBuffer
+          }
+        ]);
+
         payloads.push({
-          label: `Wrapped (POST, ID: ${idStr}, lib: ${libType})`,
+          label: `Multipart (faceDataRecord + img, ID: ${idStr}, lib: ${libType})`,
           method: 'post',
-          body: {
-            FaceDataRecord: {
-              faceLibType: libType,
-              FDLibID: '1',
-              FDID: '1',
-              FPID: uId,
-              faceData: faceData
-            }
-          }
+          data: multipart2,
+          headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` }
         });
+
+        // Variante 3: Multipart con parámetros planos + img binaria
+        const multipart3 = buildMultipart(boundary, [
+          {
+            headers: { 'Content-Disposition': 'form-data; name="faceLibType"' },
+            body: libType
+          },
+          {
+            headers: { 'Content-Disposition': 'form-data; name="FDLibID"' },
+            body: '1'
+          },
+          {
+            headers: { 'Content-Disposition': 'form-data; name="FDID"' },
+            body: '1'
+          },
+          {
+            headers: { 'Content-Disposition': 'form-data; name="FPID"' },
+            body: String(uId)
+          },
+          {
+            headers: {
+              'Content-Disposition': 'form-data; name="img"; filename="face.jpg"',
+              'Content-Type': 'image/jpeg'
+            },
+            body: imgBuffer
+          }
+        ]);
+
         payloads.push({
-          label: `Wrapped (PUT, ID: ${idStr}, lib: ${libType})`,
-          method: 'put',
-          body: {
+          label: `Multipart (Flat Params + img, ID: ${idStr}, lib: ${libType})`,
+          method: 'post',
+          data: multipart3,
+          headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` }
+        });
+      }
+    }
+
+    // JSON Base64 como último recurso
+    for (const uId of userIds) {
+      const idStr = typeof uId === 'number' ? 'númerico' : 'string';
+      for (const libType of libTypes) {
+        // Flat JSON
+        payloads.push({
+          label: `Flat JSON (ID: ${idStr}, lib: ${libType})`,
+          method: 'post',
+          data: JSON.stringify({
+            faceLibType: libType,
+            FDLibID: '1',
+            FDID: '1',
+            FPID: uId,
+            faceData: faceData
+          }) as any,
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+        // Wrapped JSON
+        payloads.push({
+          label: `Wrapped JSON (ID: ${idStr}, lib: ${libType})`,
+          method: 'post',
+          data: JSON.stringify({
             FaceDataRecord: {
               faceLibType: libType,
               FDLibID: '1',
@@ -2712,7 +2815,8 @@ export class ControlAccesoService implements OnModuleInit {
               FPID: uId,
               faceData: faceData
             }
-          }
+          }) as any,
+          headers: { 'Content-Type': 'application/json' }
         });
       }
     }
@@ -2724,7 +2828,13 @@ export class ControlAccesoService implements OnModuleInit {
       const payload = payloads[i];
       try {
         this.logger.log(`👤 [HARDWARE ROSTRO TRY] Intento ${i + 1}/${payloads.length}: ${payload.label}`);
-        const response = await this.proxyRequestDynamic(ip, payload.method, isapiPath, payload.body, { deviceId });
+        const response = await this.proxyRequestDynamic(
+          ip,
+          payload.method,
+          isapiPath,
+          payload.data,
+          { deviceId, headers: payload.headers }
+        );
         this.logger.log(`✅ [HARDWARE ROSTRO OK] Sincronizado correctamente con ${payload.label}`);
         return response;
       } catch (err) {
@@ -2734,6 +2844,8 @@ export class ControlAccesoService implements OnModuleInit {
           errMsg = typeof err.response.data === 'object' ? JSON.stringify(err.response.data) : String(err.response.data);
         }
         this.logger.warn(`⚠️ [HARDWARE ROSTRO TRY FAIL] Variante fallida ${i + 1}/${payloads.length} (${payload.label}): ${errMsg}`);
+        // Esperar 1 segundo antes del siguiente intento para no saturar al biométrico
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
 
@@ -2894,16 +3006,34 @@ export class ControlAccesoService implements OnModuleInit {
 
   async eliminarUsuarioDeHardware(ip: string, userId: string): Promise<any> {
     const isapiPath = `/ISAPI/AccessControl/UserInfo/Delete?format=json`;
-    const body = {
-      UserInfoDelCond: {
-        EmployeeNoList: [
-          {
-            employeeNo: userId,
-          },
-        ],
-      },
-    };
-    return this.proxyRequestDynamic(ip, 'put', isapiPath, body);
+    const cleanUserId = /^\d+$/.test(userId) ? Number(userId) : userId;
+    const employeeIds = [userId];
+    if (typeof cleanUserId === 'number') {
+      employeeIds.push(cleanUserId as any);
+    }
+
+    const errors: any[] = [];
+    for (const empId of employeeIds) {
+      const body = {
+        UserInfoDelCond: {
+          EmployeeNoList: [
+            {
+              employeeNo: empId,
+            },
+          ],
+        },
+      };
+      try {
+        await this.proxyRequestDynamic(ip, 'put', isapiPath, body);
+      } catch (err) {
+        errors.push(err);
+      }
+    }
+    // Si todos fallaron, lanzamos el último error. Si al menos uno funcionó, se considera éxito.
+    if (errors.length === employeeIds.length) {
+      throw errors[errors.length - 1];
+    }
+    return { ok: true };
   }
 
   async pushPersonaToDevice(personaId: string, dispositivoId: string): Promise<any> {
@@ -3275,7 +3405,7 @@ export class ControlAccesoService implements OnModuleInit {
     data: any = null,
     params: any = {}
   ): Promise<any> {
-    const { customTimeout, responseType, ...queryParams } = params || {};
+    const { customTimeout, responseType, headers, deviceId, ...queryParams } = params || {};
     const query = new URLSearchParams(queryParams).toString();
     const finalPath = `${path}${query ? (path.includes('?') ? '&' : '?') + query : ''}`;
 
@@ -3287,8 +3417,8 @@ export class ControlAccesoService implements OnModuleInit {
     try {
       // 1. Consultar base de datos para recuperar credenciales y puerto
       let dbQuery = this.supabase.getClient().from('dispositivos_iot').select('*');
-      if (params.deviceId) {
-        dbQuery = dbQuery.eq('id', params.deviceId);
+      if (deviceId) {
+        dbQuery = dbQuery.eq('id', deviceId);
       } else {
         dbQuery = dbQuery.eq('ip_direccion', targetIp);
       }
@@ -3331,7 +3461,7 @@ export class ControlAccesoService implements OnModuleInit {
     try {
       const url = `http://${resolvedIp}:${targetPort}${finalPath}`;
       const timeout = customTimeout || 15000;
-      return await this.executeDigestAuth(method.toUpperCase(), url, user, pass, data, responseType || 'json', timeout);
+      return await this.executeDigestAuth(method.toUpperCase(), url, user, pass, data, responseType || 'json', timeout, headers || {});
     } catch (error) {
       if (error.response) {
         let responseData = '';
