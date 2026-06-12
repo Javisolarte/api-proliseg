@@ -2699,91 +2699,125 @@ export class ControlAccesoService implements OnModuleInit {
   }
 
   async crearUsuarioEnHardware(ip: string, userId: string, nombre: string): Promise<any> {
-    const isapiPath = `/ISAPI/AccessControl/UserInfo/Record?format=json`;
+    const paths = [
+      `/ISAPI/AccessControl/UserInfo/Record?format=json`,
+      `/ISAPI/AccessControl/UserInfo/SetUp?format=json`
+    ];
     const sanitizedNombre = this.sanitizeHardwareName(nombre);
+    
+    // Convertir a número si el ID de usuario es puramente numérico, para soportar firmwares más antiguos/estrictos
+    const cleanUserId = /^\d+$/.test(userId) ? Number(userId) : userId;
+    const employeeIds = [userId];
+    if (typeof cleanUserId === 'number') {
+      employeeIds.push(cleanUserId as any);
+    }
 
-    // Formato 1: Completo con planTemplateNo como string (estándar de Hikvision)
-    const body1 = {
-      UserInfo: {
-        employeeNo: userId,
-        name: sanitizedNombre,
-        userType: 'normal',
-        Valid: {
-          enable: true,
-          beginTime: '2026-01-01T00:00:00',
-          endTime: '2036-12-31T23:59:59',
-          timeType: 'local',
-        },
-        doorRight: '1',
-        RightPlan: [
-          {
-            doorNo: 1,
-            planTemplateNo: '1',
+    const payloads: any[] = [];
+    for (const empId of employeeIds) {
+      const isNumeric = typeof empId === 'number';
+      const idStr = isNumeric ? 'numérico' : 'string';
+
+      // Formato 1: Completo con planTemplateNo como string
+      payloads.push({
+        _label: `Formato 1 (${idStr}, planTemplateNo string)`,
+        body: {
+          UserInfo: {
+            employeeNo: empId,
+            name: sanitizedNombre,
+            userType: 'normal',
+            Valid: {
+              enable: true,
+              beginTime: '2026-01-01T00:00:00',
+              endTime: '2036-12-31T23:59:59',
+              timeType: 'local',
+            },
+            doorRight: '1',
+            RightPlan: [
+              {
+                doorNo: 1,
+                planTemplateNo: '1',
+              },
+            ],
           },
-        ],
-      },
-    };
+        }
+      });
 
-    // Formato 2: Con planTemplateNo como número (requerido por algunas firmwares)
-    const body2 = {
-      UserInfo: {
-        ...body1.UserInfo,
-        RightPlan: [
-          {
-            doorNo: 1,
-            planTemplateNo: 1,
+      // Formato 2: Con planTemplateNo como número
+      payloads.push({
+        _label: `Formato 2 (${idStr}, planTemplateNo number)`,
+        body: {
+          UserInfo: {
+            employeeNo: empId,
+            name: sanitizedNombre,
+            userType: 'normal',
+            Valid: {
+              enable: true,
+              beginTime: '2026-01-01T00:00:00',
+              endTime: '2036-12-31T23:59:59',
+              timeType: 'local',
+            },
+            doorRight: '1',
+            RightPlan: [
+              {
+                doorNo: 1,
+                planTemplateNo: 1,
+              },
+            ],
           },
-        ],
-      },
-    };
+        }
+      });
 
-    // Formato 3: Simplificado (sin configuración explícita de puertas, autodetecta privilegios)
-    const body3 = {
-      UserInfo: {
-        employeeNo: userId,
-        name: sanitizedNombre,
-        userType: 'normal',
-        Valid: {
-          enable: true,
-          beginTime: '2026-01-01T00:00:00',
-          endTime: '2036-12-31T23:59:59',
-          timeType: 'local',
-        },
-      },
-    };
+      // Formato 3: Simplificado (con Valid pero sin configuración de puertas)
+      payloads.push({
+        _label: `Formato 3 (${idStr}, sin puertas)`,
+        body: {
+          UserInfo: {
+            employeeNo: empId,
+            name: sanitizedNombre,
+            userType: 'normal',
+            Valid: {
+              enable: true,
+              beginTime: '2026-01-01T00:00:00',
+              endTime: '2036-12-31T23:59:59',
+              timeType: 'local',
+            },
+          },
+        }
+      });
 
-    const intentar = async (body: any, method: 'post' | 'put') => {
-      return await this.proxyRequestDynamic(ip, method, isapiPath, body);
-    };
+      // Formato 4: Ultra simplificado (sin validez ni puertas, para evitar cualquier rechazo por hora/zona)
+      payloads.push({
+        _label: `Formato 4 (${idStr}, ultra simplificado)`,
+        body: {
+          UserInfo: {
+            employeeNo: empId,
+            name: sanitizedNombre,
+            userType: 'normal',
+          },
+        }
+      });
+    }
 
-    // Cadena de reintentos con fallbacks sucesivos
-    try {
-      this.logger.log(`👤 [HARDWARE SYNC] Creando usuario ${userId} (${sanitizedNombre}) en ${ip} - POST (Formato 1)`);
-      return await intentar(body1, 'post');
-    } catch (err1) {
-      this.logger.warn(`⚠️ [HARDWARE SYNC] POST Formato 1 falló en ${ip}: ${err1.message}. Reintentando con PUT...`);
-      try {
-        return await intentar(body1, 'put');
-      } catch (err2) {
-        this.logger.warn(`⚠️ [HARDWARE SYNC] PUT Formato 1 falló en ${ip}: ${err2.message}. Probando POST (Formato 2 - numérico)...`);
-        try {
-          return await intentar(body2, 'post');
-        } catch (err3) {
-          this.logger.warn(`⚠️ [HARDWARE SYNC] POST Formato 2 falló en ${ip}: ${err3.message}. Reintentando con PUT...`);
+    const methods = ['post', 'put'] as const;
+    let lastError: any = null;
+
+    // Ejecutar matriz de reintentos cruzando todos los criterios
+    for (const path of paths) {
+      for (const payload of payloads) {
+        for (const method of methods) {
           try {
-            return await intentar(body2, 'put');
-          } catch (err4) {
-            this.logger.warn(`⚠️ [HARDWARE SYNC] PUT Formato 2 falló en ${ip}: ${err4.message}. Probando POST (Formato 3 - simplificado)...`);
-            try {
-              return await intentar(body3, 'post');
-            } catch (err5) {
-              this.logger.warn(`⚠️ [HARDWARE SYNC] POST Formato 3 falló en ${ip}: ${err5.message}. Intentando último recurso con PUT...`);
-              return await intentar(body3, 'put');
-            }
+            this.logger.log(`👤 [HARDWARE SYNC] Intentando crear usuario ${userId} en ${ip} via ${method.toUpperCase()} ${path} - ${payload._label}`);
+            return await this.proxyRequestDynamic(ip, method, path, payload.body);
+          } catch (err) {
+            lastError = err;
+            this.logger.warn(`⚠️ [HARDWARE SYNC] Falló ${method.toUpperCase()} ${path} con ${payload._label}: ${err.message}`);
           }
         }
       }
     }
+
+    this.logger.error(`❌ [HARDWARE SYNC FAIL] No se pudo registrar el usuario ${userId} en ${ip} usando ninguna de las 32 combinaciones.`);
+    throw lastError || new Error('Error al registrar usuario en el biométrico');
   }
 
   async registrarTarjetaEnHardware(ip: string, userId: string, cardNo: string): Promise<any> {
@@ -3246,7 +3280,19 @@ export class ControlAccesoService implements OnModuleInit {
       const timeout = customTimeout || 15000;
       return await this.executeDigestAuth(method.toUpperCase(), url, user, pass, data, responseType || 'json', timeout);
     } catch (error) {
-      this.logger.error(`❌ [DIRECT ISAPI ERROR] ${resolvedIp}:${targetPort}${path}: ${error.message}`);
+      if (error.response) {
+        let responseData = '';
+        if (Buffer.isBuffer(error.response.data)) {
+          responseData = error.response.data.toString('utf8');
+        } else if (typeof error.response.data === 'object') {
+          responseData = JSON.stringify(error.response.data);
+        } else {
+          responseData = String(error.response.data);
+        }
+        this.logger.error(`❌ [DIRECT ISAPI ERROR] ${resolvedIp}:${targetPort}${path}: Request failed with status code ${error.response.status}. Response: ${responseData.substring(0, 1000)}`);
+      } else {
+        this.logger.error(`❌ [DIRECT ISAPI ERROR] ${resolvedIp}:${targetPort}${path}: ${error.message}`);
+      }
       throw error;
     }
   }
