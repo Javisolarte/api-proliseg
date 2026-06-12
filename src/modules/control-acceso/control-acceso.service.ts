@@ -1857,8 +1857,15 @@ export class ControlAccesoService implements OnModuleInit {
       const response = await this.executeDigestAuth('GET', `http://${targetIp}:${port}${path}`, user, pass, null, 'arraybuffer');
       return response;
     } catch (error) {
-      this.logger.error(`❌ [SNAPSHOT] Error: ${error.message} - Dest: ${targetIp}:${port}`);
-      throw error;
+      this.logger.log(`⚠️ [SNAPSHOT] Fallback to channel 101 picture for ${targetIp}:${port}`);
+      try {
+        const path101 = `/ISAPI/Streaming/channels/101/picture`;
+        const response = await this.executeDigestAuth('GET', `http://${targetIp}:${port}${path101}`, user, pass, null, 'arraybuffer');
+        return response;
+      } catch (error101) {
+        this.logger.error(`❌ [SNAPSHOT] Error in fallback: ${error101.message} - Dest: ${targetIp}:${port}`);
+        throw error;
+      }
     }
   }
 
@@ -4099,7 +4106,15 @@ export class ControlAccesoService implements OnModuleInit {
         const user = visita.dispositivo.credencial_usuario || 'admin';
         const pass = visita.dispositivo.credencial_password || '';
         const port = visita.dispositivo.configuracion_tecnica?.puertos_mapeados?.mapped_http || visita.dispositivo.configuracion_tecnica?.puerto || 80;
-        const responseData = await this.executeDigestAuth('GET', `http://${ip}:${port}/ISAPI/Streaming/channels/1/picture`, user, pass, null, 'arraybuffer', 5000);
+        
+        let responseData: any;
+        try {
+          responseData = await this.executeDigestAuth('GET', `http://${ip}:${port}/ISAPI/Streaming/channels/1/picture`, user, pass, null, 'arraybuffer', 5000);
+        } catch (err) {
+          this.logger.log(`⚠️ [VISITAS] Fallback to channel 101 picture for device ${visita.dispositivo_id}`);
+          responseData = await this.executeDigestAuth('GET', `http://${ip}:${port}/ISAPI/Streaming/channels/101/picture`, user, pass, null, 'arraybuffer', 5000);
+        }
+        
         const buffer = Buffer.from(responseData);
         const fileName = `visitas/${visita.id}/ingreso_${Date.now()}.jpg`;
         await admin.storage.from('control-acceso').upload(fileName, buffer, { contentType: 'image/jpeg', upsert: true });

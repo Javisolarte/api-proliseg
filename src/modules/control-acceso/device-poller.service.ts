@@ -970,16 +970,31 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
               || visitaAcc.dispositivo.configuracion_tecnica?.puerto 
               || 80;
 
-            const responseData = await this.executeDigestRequest(
-              'GET',
-              `http://${ip}:${port}/ISAPI/Streaming/channels/1/picture`,
-              user,
-              pass,
-              null,
-              'image/jpeg',
-              5000,
-              'arraybuffer'
-            );
+            let responseData: any;
+            try {
+              responseData = await this.executeDigestRequest(
+                'GET',
+                `http://${ip}:${port}/ISAPI/Streaming/channels/1/picture`,
+                user,
+                pass,
+                null,
+                'image/jpeg',
+                5000,
+                'arraybuffer'
+              );
+            } catch (err) {
+              this.logger.log(`⚠️ [QR AUTO-OPEN] Fallback to channel 101 picture for device ${visitaAcc.dispositivo_id}`);
+              responseData = await this.executeDigestRequest(
+                'GET',
+                `http://${ip}:${port}/ISAPI/Streaming/channels/101/picture`,
+                user,
+                pass,
+                null,
+                'image/jpeg',
+                5000,
+                'arraybuffer'
+              );
+            }
 
             const buffer = Buffer.from(responseData.data);
             const fileName = `visitas/${visitaAcc.id}/ingreso_${Date.now()}.jpg`;
