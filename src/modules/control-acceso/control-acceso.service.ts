@@ -27,6 +27,11 @@ export class ControlAccesoService implements OnModuleInit {
       this.controlPuerta(ip, doorId, command, options),
     );
 
+    // Callback para limpiar visitantes temporales del hardware después de ingreso exitoso
+    this.devicePoller.setEliminarVisitaHwFn((visita) =>
+      this.eliminarVisitaDeHardware(visita),
+    );
+
     this.logger.log('🚀 [MediaMTX] Iniciando sincronización de cámaras en 5 segundos...');
     // Ejecutar en segundo plano para no bloquear el arranque
     setTimeout(() => {
@@ -3136,6 +3141,98 @@ export class ControlAccesoService implements OnModuleInit {
     return { ok: true };
   }
 
+  // ─── Registro/Eliminación de Visitantes Temporales en Hardware ──────────
+
+  /**
+   * Registra un visitante temporal en el dispositivo Hikvision.
+   * Crea un UserInfo con validez temporal y un CardInfo con cardNo = token_qr.
+   * El QR del visitante contiene SOLO el token_qr, que Hikvision reconoce como cardNo.
+   */
+  async registrarVisitaEnHardware(visita: any): Promise<void> {
+    if (!visita?.dispositivo_id || !visita?.token_qr) {
+      this.logger.warn(`⚠️ [VISITA-HW] No se puede registrar en hardware: falta dispositivo_id o token_qr`);
+      return;
+    }
+
+    const admin = this.supabase.getSupabaseAdminClient();
+    const { data: device } = await admin
+      .from('dispositivos_iot')
+      .select('id, ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica')
+      .eq('id', visita.dispositivo_id)
+      .maybeSingle();
+
+    if (!device?.ip_direccion) {
+      this.logger.warn(`⚠️ [VISITA-HW] Dispositivo ${visita.dispositivo_id} no encontrado o sin IP`);
+      return;
+    }
+
+    const ip = device.ip_direccion;
+    // Usar un employeeNo corto y único basado en el ID de la visita
+    const employeeNo = `V${visita.id.replace(/-/g, '').slice(0, 15)}`;
+    const nombre = this.sanitizeHardwareName(visita.nombre_visitante || 'Visitante');
+    const tokenQr = visita.token_qr;
+
+    // Calcular fecha de vencimiento
+    let endTime = '2036-12-31T23:59:59';
+    if (visita.fecha_vencimiento) {
+      const venc = new Date(visita.fecha_vencimiento);
+      endTime = venc.toISOString().replace('Z', '').split('.')[0];
+    }
+
+    // Calcular fecha de inicio (30 min antes de la programada, o ahora)
+    let beginTime = new Date().toISOString().replace('Z', '').split('.')[0];
+    if (visita.fecha_programada) {
+      const prog = new Date(visita.fecha_programada);
+      prog.setMinutes(prog.getMinutes() - 30);
+      beginTime = prog.toISOString().replace('Z', '').split('.')[0];
+    }
+
+    this.logger.log(`🎫 [VISITA-HW] Registrando visitante '${nombre}' (${employeeNo}) en dispositivo ${ip} con cardNo=${tokenQr}`);
+
+    try {
+      // Paso 1: Crear el usuario temporal
+      await this.crearUsuarioEnHardware(ip, employeeNo, nombre);
+      this.logger.log(`✅ [VISITA-HW] Usuario temporal ${employeeNo} creado en ${ip}`);
+    } catch (userErr) {
+      this.logger.error(`❌ [VISITA-HW] Error creando usuario temporal ${employeeNo}: ${userErr.message}`);
+      // Intentar registrar la tarjeta de todos modos (por si el usuario ya existía)
+    }
+
+    try {
+      // Paso 2: Registrar el token_qr como tarjeta (cardNo)
+      await this.registrarTarjetaEnHardware(ip, employeeNo, tokenQr);
+      this.logger.log(`✅ [VISITA-HW] Tarjeta QR (${tokenQr.slice(0, 8)}...) registrada para ${employeeNo} en ${ip}`);
+    } catch (cardErr) {
+      this.logger.error(`❌ [VISITA-HW] Error registrando tarjeta QR: ${cardErr.message}`);
+    }
+  }
+
+  /**
+   * Elimina un visitante temporal del dispositivo Hikvision.
+   * Se ejecuta al cancelar, vencer o completar una visita.
+   */
+  async eliminarVisitaDeHardware(visita: any): Promise<void> {
+    if (!visita?.dispositivo_id) return;
+
+    const admin = this.supabase.getSupabaseAdminClient();
+    const { data: device } = await admin
+      .from('dispositivos_iot')
+      .select('id, ip_direccion')
+      .eq('id', visita.dispositivo_id)
+      .maybeSingle();
+
+    if (!device?.ip_direccion) return;
+
+    const employeeNo = `V${visita.id.replace(/-/g, '').slice(0, 15)}`;
+
+    try {
+      await this.eliminarUsuarioDeHardware(device.ip_direccion, employeeNo);
+      this.logger.log(`🗑️ [VISITA-HW] Visitante temporal ${employeeNo} eliminado del dispositivo ${device.ip_direccion}`);
+    } catch (err) {
+      this.logger.warn(`⚠️ [VISITA-HW] No se pudo eliminar visitante ${employeeNo} del hardware: ${err.message}`);
+    }
+  }
+
   async pushPersonaToDevice(personaId: string, dispositivoId: string): Promise<any> {
     const admin = this.supabase.getSupabaseAdminClient();
 
@@ -4010,13 +4107,30 @@ export class ControlAccesoService implements OnModuleInit {
   async getVisitas(filters?: { estado?: string; dispositivo_id?: string; limit?: number }) {
     const admin = this.supabase.getSupabaseAdminClient();
     
-    // Auto-vencer visitas que ya expiraron
+    // Auto-vencer visitas que ya expiraron y limpiar del hardware
     try {
+      // Primero obtener las visitas que van a vencer para limpiar del hardware
+      const { data: visitasAVencer } = await admin
+        .from('visitas_acceso')
+        .select('id, dispositivo_id, token_qr')
+        .eq('estado', 'programada')
+        .lt('fecha_vencimiento', new Date().toISOString());
+
+      // Marcar como vencidas en DB
       await admin
         .from('visitas_acceso')
         .update({ estado: 'vencida', updated_at: new Date().toISOString() })
         .eq('estado', 'programada')
         .lt('fecha_vencimiento', new Date().toISOString());
+
+      // Limpiar visitantes temporales del hardware (fire & forget)
+      if (visitasAVencer?.length) {
+        for (const v of visitasAVencer) {
+          this.eliminarVisitaDeHardware(v).catch(err =>
+            this.logger.warn(`⚠️ [VISITA-HW] Limpieza al vencer falló: ${err.message}`)
+          );
+        }
+      }
     } catch (err) {
       this.logger.error(`Error al auto-vencer visitas expiradas: ${err.message}`);
     }
@@ -4055,7 +4169,15 @@ export class ControlAccesoService implements OnModuleInit {
     };
     const { data, error } = await admin.from('visitas_acceso').insert(payload).select().single();
     if (error) throw error;
-    this.logger.log(`Nueva visita: ${data.nombre_visitante} | QR: ${data.token_qr}`);
+    this.logger.log(`🎫 Nueva visita: ${data.nombre_visitante} | QR: ${data.token_qr} | Dispositivo: ${data.dispositivo_id}`);
+
+    // Registrar visitante temporal en el dispositivo Hikvision (fire & forget)
+    if (data.dispositivo_id && data.token_qr) {
+      this.registrarVisitaEnHardware(data).catch(err =>
+        this.logger.error(`❌ [VISITA-HW] Error al registrar visita en hardware: ${err.message}`)
+      );
+    }
+
     return data;
   }
 
@@ -4080,6 +4202,14 @@ export class ControlAccesoService implements OnModuleInit {
       .select()
       .single();
     if (error) throw error;
+
+    // Limpiar visitante temporal del hardware (fire & forget)
+    if (data?.dispositivo_id) {
+      this.eliminarVisitaDeHardware(data).catch(err =>
+        this.logger.warn(`⚠️ [VISITA-HW] Limpieza al cancelar falló: ${err.message}`)
+      );
+    }
+
     return data;
   }
 

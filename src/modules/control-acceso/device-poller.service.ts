@@ -46,6 +46,13 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     this.controlPuertaFn = fn;
   }
 
+  /** Función para limpiar visitante temporal del hardware — inyectada desde ControlAccesoService */
+  private eliminarVisitaHwFn: ((visita: any) => Promise<void>) | null = null;
+
+  setEliminarVisitaHwFn(fn: (visita: any) => Promise<void>) {
+    this.eliminarVisitaHwFn = fn;
+  }
+
   /** IDs ya procesados para deduplicar — en memoria, bajo consumo */
   private readonly seenEventIds = new Set<string>();
   private readonly latestDbTimestamp = new Map<string, string>();
@@ -1108,6 +1115,13 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           this.logger.error(`❌ [QR AUTO-OPEN] Error al registrar ingreso en visitas_acceso: ${updAccErr.message}`);
         } else {
           this.logger.log(`✅ [QR AUTO-OPEN] Ingreso registrado con éxito para visitante ${visitaAcc.nombre_visitante}`);
+
+          // Limpiar visitante temporal del hardware Hikvision (ya no necesita acceso)
+          if (this.eliminarVisitaHwFn) {
+            this.eliminarVisitaHwFn(visitaAcc).catch(err =>
+              this.logger.warn(`⚠️ [QR AUTO-OPEN] No se pudo limpiar visitante del hardware: ${err.message}`)
+            );
+          }
         }
       }, 1500);
     }
