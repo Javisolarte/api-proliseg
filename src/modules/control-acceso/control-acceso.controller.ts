@@ -6,6 +6,7 @@ import type { Response } from 'express';
 import { Public } from '../auth/decorators/public.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CreateDispositivoDto, CreatePersonaAccesoDto } from './dto/control-acceso.dto';
+import axios from 'axios';
 
 @ApiTags('Control de Acceso')
 @Controller('control-acceso')
