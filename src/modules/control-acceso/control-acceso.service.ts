@@ -15,6 +15,7 @@ export class ControlAccesoService implements OnModuleInit {
   private readonly apiKey = 'proliseg-acceso-2026';
   private digestChallengeCache = new Map<string, { realm: string; nonce: string; qop: string }>();
   private deviceCodecCache = new Map<string, string>();
+  private faceUploadFormatCache = new Map<string, string>();
   private readonly audioTalkChannelId = 1;
 
   constructor(
@@ -2926,6 +2927,17 @@ export class ControlAccesoService implements OnModuleInit {
       }
     }
 
+    // Reordenar payloads si ya tenemos un formato exitoso en caché para esta IP
+    const cachedLabel = this.faceUploadFormatCache.get(ip);
+    if (cachedLabel) {
+      const cachedIdx = payloads.findIndex(p => p.label === cachedLabel);
+      if (cachedIdx !== -1) {
+        const [cachedPayload] = payloads.splice(cachedIdx, 1);
+        payloads.unshift(cachedPayload);
+        this.logger.log(`⚡ [HARDWARE ROSTRO] Usando formato en caché para ${ip}: ${cachedLabel}`);
+      }
+    }
+
     this.logger.log(`👤 [HARDWARE ROSTRO] Sincronizando rostro de usuario ${userId} en ${ip} (${payloads.length} variantes)...`);
 
     let lastError: any = null;
@@ -2941,14 +2953,32 @@ export class ControlAccesoService implements OnModuleInit {
           { deviceId, headers: payload.headers }
         );
         this.logger.log(`✅ [HARDWARE ROSTRO OK] Sincronizado correctamente con ${payload.label}`);
+        // Guardar el formato exitoso en la caché
+        this.faceUploadFormatCache.set(ip, payload.label);
         return response;
       } catch (err) {
         lastError = err;
         let errMsg = err.message;
+        let isValidationError = false;
         if (err.response && err.response.data) {
-          errMsg = typeof err.response.data === 'object' ? JSON.stringify(err.response.data) : String(err.response.data);
+          const rData = err.response.data;
+          errMsg = typeof rData === 'object' ? JSON.stringify(rData) : String(rData);
+          if (
+            rData.subStatusCode === 'badJsonContent' ||
+            rData.errorMsg === 'saveFacePic' ||
+            rData.errorMsg === 'faceURL'
+          ) {
+            isValidationError = true;
+          }
         }
         this.logger.warn(`⚠️ [HARDWARE ROSTRO TRY FAIL] Variante fallida ${i + 1}/${payloads.length} (${payload.label}): ${errMsg}`);
+
+        // Si falló el formato que ya sabíamos que funcionaba por una validación de imagen, abortamos de inmediato
+        if (cachedLabel && payload.label === cachedLabel && isValidationError) {
+          this.logger.error(`❌ [HARDWARE ROSTRO FAIL-FAST] El formato guardado falló por validación de imagen. Abortando búsqueda.`);
+          throw err;
+        }
+
         // Esperar 1 segundo antes del siguiente intento para no saturar al biométrico
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
@@ -3396,8 +3426,37 @@ export class ControlAccesoService implements OnModuleInit {
   }
 
   async syncRecopilacionRegistros(registroIds: number[], dispositivoIds: string[]): Promise<any> {
-    const resultados: any[] = [];
+    const admin = this.supabase.getSupabaseAdminClient();
+    
+    // 1. Obtener todos los registros a sincronizar
+    const { data: registros, error: regErr } = await admin
+      .from('control_acceso_recoleccion_registros')
+      .select('id, cedula')
+      .in('id', registroIds);
+
+    if (regErr) {
+      this.logger.error(`Error al consultar registros para batch sync: ${regErr.message}`);
+      throw new Error(`Error al consultar registros: ${regErr.message}`);
+    }
+
+    const uniqueIds: number[] = [];
+    const seenCedulas = new Set<string>();
+
     for (const id of registroIds) {
+      const reg = registros?.find(r => r.id === id);
+      if (!reg) continue;
+      const normalizedCedula = (reg.cedula || '').trim();
+      if (!normalizedCedula) continue;
+      if (!seenCedulas.has(normalizedCedula)) {
+        seenCedulas.add(normalizedCedula);
+        uniqueIds.push(id);
+      } else {
+        this.logger.warn(`⚠️ [BATCH SYNC DEDUPLICATE] Omitiendo registro repetido ID: ${id} con cédula: ${normalizedCedula}`);
+      }
+    }
+
+    const resultados: any[] = [];
+    for (const id of uniqueIds) {
       try {
         const res = await this.syncRecopilacionRegistro(id, dispositivoIds);
         resultados.push({ id, ok: true, persona_id: res.persona_id });
@@ -3406,10 +3465,18 @@ export class ControlAccesoService implements OnModuleInit {
         resultados.push({ id, ok: false, error: err.message });
       }
     }
+
+    // Agregar resultados para los omitidos
+    const omittedIds = registroIds.filter(id => !uniqueIds.includes(id));
+    for (const id of omittedIds) {
+      resultados.push({ id, ok: true, omitted: true, note: 'Omitido por cédula repetida' });
+    }
+
     return {
       total: registroIds.length,
-      exitosos: resultados.filter(r => r.ok).length,
+      exitosos: resultados.filter(r => r.ok && !r.omitted).length,
       fallidos: resultados.filter(r => !r.ok).length,
+      omitidos: omittedIds.length,
       detalles: resultados
     };
   }
