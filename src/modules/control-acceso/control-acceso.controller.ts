@@ -301,6 +301,31 @@ export class ControlAccesoController {
       );
       results.createUser = createRes;
 
+      // Test face download and upload
+      try {
+        const testFaceUrl = 'https://ttkubmwrwgqxjdafpgji.supabase.co/storage/v1/object/public/control-acceso-faces/personas/395923e2-2692-42a0-b1c9-2fd9cd72ce80/1781276240820.jpg';
+        const response = await axios.get(testFaceUrl, { responseType: 'arraybuffer', timeout: 10000 });
+        const base64Photo = Buffer.from(response.data).toString('base64');
+        results.downloadPhoto = `Success, size: ${base64Photo.length} chars`;
+
+        try {
+          const uploadRes = await this.controlAccesoService.uploadRostro(
+            ip,
+            '999999',
+            base64Photo,
+            '46ffd059-f888-4e2c-94cb-4ae62b2f7251'
+          );
+          results.uploadFace = uploadRes;
+        } catch (uploadErr) {
+          results.uploadFace = 'Upload failed: ' + uploadErr.message;
+          if (uploadErr.response && uploadErr.response.data) {
+            results.uploadFaceDetail = typeof uploadErr.response.data === 'object' ? JSON.stringify(uploadErr.response.data) : String(uploadErr.response.data);
+          }
+        }
+      } catch (dlErr) {
+        results.downloadPhoto = 'Download failed: ' + dlErr.message;
+      }
+
       // Clean up right away
       try {
         await this.controlAccesoService.proxyRequestDynamic(
