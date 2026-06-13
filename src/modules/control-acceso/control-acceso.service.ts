@@ -3594,7 +3594,7 @@ export class ControlAccesoService implements OnModuleInit {
     return { ok: true };
   }
 
-  private async proxyRequestDynamic(
+  public async proxyRequestDynamic(
     targetIp: string,
     method: string,
     path: string,
