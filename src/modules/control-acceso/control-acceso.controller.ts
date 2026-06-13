@@ -214,6 +214,66 @@ export class ControlAccesoController {
     return this.controlAccesoService.debugIntercomDevice(id);
   }
 
+  @Public()
+  @Get('diag-san-felipe')
+  @ApiOperation({ summary: 'Diagnósticos de conectividad del túnel de San Felipe (10.30.30.2)' })
+  async diagSanFelipe() {
+    const results: any = {};
+    const ip = '10.30.30.2';
+    const port = 10118;
+    const user = 'admin';
+    const pass = 'proliseg1015';
+
+    results.localTime = new Date().toISOString();
+
+    // 1. Ping test to router
+    try {
+      const { execSync } = require('child_process');
+      results.pingRouter = execSync('ping -c 3 10.30.30.2 || ping -n 3 10.30.30.2', { timeout: 5000 }).toString();
+    } catch (e) {
+      results.pingRouter = 'Ping failed: ' + e.message;
+    }
+
+    // 2. HTTP test direct to device
+    try {
+      const axios = require('axios');
+      const response = await axios.get(`http://10.30.30.2:10118/ISAPI/System/deviceInfo`, { timeout: 5000 });
+      results.deviceInfoDirect = 'Success direct: ' + String(response.data || '').substring(0, 300);
+    } catch (e) {
+      results.deviceInfoDirect = 'HTTP direct failed: ' + e.message;
+    }
+
+    // 3. Proxy Request test
+    try {
+      const devInfo = await this.controlAccesoService.proxyRequestDynamic(
+        ip,
+        'get',
+        '/ISAPI/System/deviceInfo',
+        null,
+        { customTimeout: 5000, deviceId: '46ffd059-f888-4e2c-94cb-4ae62b2f7251' }
+      );
+      results.proxyRequest = devInfo;
+    } catch (e) {
+      results.proxyRequest = 'Proxy request failed: ' + e.message;
+    }
+
+    // 4. San Felipe Router REST API test
+    try {
+      const axios = require('axios');
+      const httpsAgent = new (require('https').Agent)({ rejectUnauthorized: false });
+      const resp = await axios.get(`http://10.30.30.2/rest/ip/firewall/nat`, {
+        auth: { username: 'admin', password: 'proliseg1015' },
+        httpsAgent,
+        timeout: 5000
+      });
+      results.mikrotikNat = resp.data;
+    } catch (e) {
+      results.mikrotikNat = 'MikroTik REST failed: ' + e.message;
+    }
+
+    return results;
+  }
+
   @Get('recopilacion/lugares')
   @ApiOperation({ summary: 'Lista lugares de recopilacion de datos' })
   async getLugaresRecopilacion() {

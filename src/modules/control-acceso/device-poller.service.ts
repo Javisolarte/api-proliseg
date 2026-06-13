@@ -760,6 +760,18 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
   private async resolvePersonaForEvento(evento: EventoAcceso): Promise<any | null> {
     const documento = this.firstText(evento.documento_persona, evento.face_id_ref, evento.codigo_tarjeta);
+    
+    // EXCLUIR EVENTOS DE SISTEMA: No registrar "Apertura por Botón", "Puerta Cerrada", etc. en personas_gestion_acceso
+    const docUpper = String(evento.documento_persona || documento || '').toUpperCase();
+    const tipoEvento = String(evento.tipo_evento || '').toLowerCase();
+    
+    if (
+      ['BOTON', 'SENSOR', 'LLAMADA', 'PORTERO', 'SYSTEM', 'SISTEMA'].includes(docUpper) ||
+      ['apertura_boton', 'puerta_abierta', 'puerta_cerrada', 'llamada', 'alarma'].includes(tipoEvento)
+    ) {
+      return null;
+    }
+
     const nombre = this.firstText(evento.nombre_persona);
     const codigoTarjeta = this.firstText(evento.codigo_tarjeta);
     const faceId = this.firstText(evento.face_id_ref);
