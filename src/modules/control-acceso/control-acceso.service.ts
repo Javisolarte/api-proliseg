@@ -1033,7 +1033,7 @@ export class ControlAccesoService implements OnModuleInit {
   }
 
   private isVpnIp(ip: string): boolean {
-    return /^10\.8\./.test(ip);
+    return /^10\./.test(ip);
   }
 
   private isPrivateIp(ip: string): boolean {

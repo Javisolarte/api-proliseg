@@ -244,13 +244,20 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     const base = `http://${ip}:${port}`;
     const auth = { username: user, password: pass };
     
-    const isVpn = this.isVpnIp(device.ip_direccion || ip);
+    const deviceIp = device.ip_direccion || ip;
+    const isVpn = this.isVpnIp(deviceIp);
     
     let ipAddressVal = '10.8.0.1';
+    if (isVpn && deviceIp) {
+      const parts = deviceIp.split('.');
+      if (parts.length === 4) {
+        ipAddressVal = `${parts[0]}.${parts[1]}.${parts[2]}.1`;
+      }
+    }
     let portNoVal = 80;
     let protocolVal = 'HTTP';
     let addressingTypeVal = 'ipaddress';
-    let webhookUrl = `http://10.8.0.1/api/control-acceso/webhook/evento/hik/${device.id}`;
+    let webhookUrl = `http://${ipAddressVal}/api/control-acceso/webhook/evento/hik/${device.id}`;
     
     if (!isVpn) {
       ipAddressVal = 'servidor.proliseg.com';
@@ -313,9 +320,18 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     const base = `http://${ip}:${port}`;
     const auth = { username: user, password: pass };
     
-    const isVpn = this.isVpnIp(device.ip_direccion || ip);
+    const deviceIp = device.ip_direccion || ip;
+    const isVpn = this.isVpnIp(deviceIp);
+    
+    let gatewayIp = '10.8.0.1';
+    if (isVpn && deviceIp) {
+      const parts = deviceIp.split('.');
+      if (parts.length === 4) {
+        gatewayIp = `${parts[0]}.${parts[1]}.${parts[2]}.1`;
+      }
+    }
     let webhookUrl = isVpn
-      ? `http://10.8.0.1/api/control-acceso/webhook/evento/dahua/${device.id}`
+      ? `http://${gatewayIp}/api/control-acceso/webhook/evento/dahua/${device.id}`
       : `${webhookBase.replace(/^http:/i, 'https:')}/dahua/${device.id}`;
 
     // Permitir personalizar el webhook desde configuracion_tecnica
@@ -873,7 +889,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private isVpnIp(ip: string): boolean {
-    return /^10\.8\./.test(ip);
+    return /^10\./.test(ip);
   }
 
   private sanitizeTimestamp(timeStr: string): string {
