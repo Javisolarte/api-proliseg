@@ -271,6 +271,27 @@ export class ControlAccesoController {
       results.mikrotikNat = 'MikroTik REST failed: ' + e.message;
     }
 
+    // 5. User Search test
+    try {
+      const body = {
+        UserInfoSearchCond: {
+          searchID: `diag_${Date.now()}`,
+          searchResultPosition: 0,
+          maxResults: 10,
+        },
+      };
+      const searchRes = await this.controlAccesoService.proxyRequestDynamic(
+        ip,
+        'post',
+        '/ISAPI/AccessControl/UserInfo/Search?format=json',
+        body,
+        { customTimeout: 5000, deviceId: '46ffd059-f888-4e2c-94cb-4ae62b2f7251' }
+      );
+      results.searchUsers = searchRes;
+    } catch (e) {
+      results.searchUsers = 'Search failed: ' + e.message;
+    }
+
     return results;
   }
 
