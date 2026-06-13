@@ -292,6 +292,39 @@ export class ControlAccesoController {
       results.searchUsers = 'Search failed: ' + e.message;
     }
 
+    // 6. Test User Creation
+    try {
+      const createRes = await this.controlAccesoService.crearUsuarioEnHardware(
+        ip,
+        '999999',
+        'TEST SAN FELIPE'
+      );
+      results.createUser = createRes;
+
+      // Clean up right away
+      try {
+        await this.controlAccesoService.proxyRequestDynamic(
+          ip,
+          'put',
+          '/ISAPI/AccessControl/UserInfo/Delete?format=json',
+          {
+            UserInfoDelCond: {
+              EmployeeNoList: [{ employeeNo: '999999' }]
+            }
+          },
+          { customTimeout: 5000, deviceId: '46ffd059-f888-4e2c-94cb-4ae62b2f7251' }
+        );
+        results.cleanupUser = 'Success';
+      } catch (cleanErr) {
+        results.cleanupUser = 'Failed: ' + cleanErr.message;
+      }
+    } catch (e) {
+      results.createUser = 'Create failed: ' + e.message;
+      if (e.response && e.response.data) {
+        results.createUserDetail = typeof e.response.data === 'object' ? JSON.stringify(e.response.data) : String(e.response.data);
+      }
+    }
+
     return results;
   }
 
