@@ -739,8 +739,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // 3. Si es un token de administración (ej: 32 caracteres hexadecimal)
-    if (token && token.length >= 16) {
+    // 3. Si es un token de administración (ej: 12 dígitos o 32 caracteres hexadecimal)
+    if (token && token.length >= 10) {
       try {
         const { data: visitaAcc } = await admin
           .from('visitas_acceso')

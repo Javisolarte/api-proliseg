@@ -1819,7 +1819,7 @@ export class ControlAccesoService implements OnModuleInit {
     }
 
     // Si la IP es de WireGuard (ej. 10.8.0.x), conectamos DIRECTO por el túnel sin hacer NAT.
-    const isWireguardIp = targetIp.startsWith('10.8.');
+    const isWireguardIp = this.isVpnIp(targetIp);
 
     // Auto-resolución de IPs privadas locales (solo si no es WireGuard)
     const isPrivate = /^(192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(targetIp) || (targetIp.startsWith('10.') && !isWireguardIp);
@@ -3097,8 +3097,7 @@ export class ControlAccesoService implements OnModuleInit {
       CardInfo: {
         employeeNo: userId,
         cardNo: cardNo,
-        cardType: 'normal',
-        leaderCard: false,
+        cardType: 'normalCard',
       },
     };
     try {
@@ -3637,7 +3636,7 @@ export class ControlAccesoService implements OnModuleInit {
 
     // Auto-resolución de IPs privadas
     const isPrivate = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(targetIp);
-    if (isPrivate && !targetIp.startsWith('10.8.')) {
+    if (isPrivate && !this.isVpnIp(targetIp)) {
       try {
         const { data: servers } = await this.supabase
           .getClient()
@@ -4151,6 +4150,10 @@ export class ControlAccesoService implements OnModuleInit {
 
   async createVisita(body: any) {
     const admin = this.supabase.getSupabaseAdminClient();
+    
+    // Generar un token QR numérico de 12 dígitos para compatibilidad con controles de acceso Hikvision
+    const randomNumericToken = Math.floor(100000000000 + Math.random() * 900000000000).toString();
+
     const payload: any = {
       nombre_visitante: body.nombre_visitante,
       documento_visitante: body.documento_visitante,
@@ -4166,6 +4169,7 @@ export class ControlAccesoService implements OnModuleInit {
       duracion_horas: body.duracion_horas || 2,
       foto_visitante_url: body.foto_visitante_url || null,
       estado: 'programada',
+      token_qr: randomNumericToken,
     };
     const { data, error } = await admin.from('visitas_acceso').insert(payload).select().single();
     if (error) throw error;
