@@ -1611,7 +1611,7 @@ export class ControlAccesoService implements OnModuleInit {
         try {
           if (body.activo === false) {
             // Si se desactiva, lo quitamos físicamente del chip del hardware
-            await this.eliminarUsuarioDeHardware(ip, persona.documento_identidad);
+            await this.eliminarUsuarioDeHardware(ip, persona.documento_identidad, p.dispositivo_id);
             this.logger.log(`👤 [HARDWARE SYNC] Acceso DESACTIVADO: Eliminado usuario ${persona.documento_identidad} de dispositivo ${ip}`);
           } else {
             // Re-sincronizar siempre en caliente con los nuevos datos (nombre, rostro, tarjeta, etc.)
@@ -2125,7 +2125,7 @@ export class ControlAccesoService implements OnModuleInit {
     const urlOrPath = this.firstText(fotoOrigen, rawUser?.faceURL, rawUser?.pictureURL, rawUser?.photoURL);
     if (!urlOrPath) return null;
 
-    const buffer = await this.descargarFotoHardware(device.ip_direccion, urlOrPath);
+    const buffer = await this.descargarFotoHardware(device.ip_direccion, urlOrPath, device.id);
     return this.guardarFotoPersona(personaId, buffer);
   }
 
@@ -2179,7 +2179,7 @@ export class ControlAccesoService implements OnModuleInit {
     };
   }
 
-  private async descargarFotoHardware(ip: string, urlOrPath: string): Promise<Buffer> {
+  private async descargarFotoHardware(ip: string, urlOrPath: string, deviceId?: string): Promise<Buffer> {
     let path = urlOrPath;
     if (/^https?:\/\//i.test(urlOrPath)) {
       const parsed = new URL(urlOrPath);
@@ -2189,6 +2189,7 @@ export class ControlAccesoService implements OnModuleInit {
     const response = await this.proxyRequestDynamic(ip, 'get', path, null, {
       responseType: 'arraybuffer',
       customTimeout: 20000,
+      deviceId,
     });
 
     return Buffer.isBuffer(response) ? response : Buffer.from(response);
@@ -3055,7 +3056,7 @@ export class ControlAccesoService implements OnModuleInit {
       .slice(0, 32);
   }
 
-  async crearUsuarioEnHardware(ip: string, userId: string, nombre: string): Promise<any> {
+  async crearUsuarioEnHardware(ip: string, userId: string, nombre: string, deviceId?: string): Promise<any> {
     const paths = [
       `/ISAPI/AccessControl/UserInfo/Record?format=json`,
       `/ISAPI/AccessControl/UserInfo/SetUp?format=json`
@@ -3164,7 +3165,7 @@ export class ControlAccesoService implements OnModuleInit {
         for (const method of methods) {
           try {
             this.logger.log(`👤 [HARDWARE SYNC] Intentando crear usuario ${userId} en ${ip} via ${method.toUpperCase()} ${path} - ${payload._label}`);
-            return await this.proxyRequestDynamic(ip, method, path, payload.body);
+            return await this.proxyRequestDynamic(ip, method, path, payload.body, { deviceId });
           } catch (err) {
             lastError = err;
             this.logger.warn(`⚠️ [HARDWARE SYNC] Falló ${method.toUpperCase()} ${path} con ${payload._label}: ${err.message}`);
@@ -3177,7 +3178,7 @@ export class ControlAccesoService implements OnModuleInit {
     throw lastError || new Error('Error al registrar usuario en el biométrico');
   }
 
-  async registrarTarjetaEnHardware(ip: string, userId: string, cardNo: string): Promise<any> {
+  async registrarTarjetaEnHardware(ip: string, userId: string, cardNo: string, deviceId?: string): Promise<any> {
     if (!cardNo) return { ok: true, message: 'No card provided' };
     const isapiPath = `/ISAPI/AccessControl/CardInfo/Record?format=json`;
     const body = {
@@ -3188,14 +3189,14 @@ export class ControlAccesoService implements OnModuleInit {
       },
     };
     try {
-      return await this.proxyRequestDynamic(ip, 'post', isapiPath, body);
+      return await this.proxyRequestDynamic(ip, 'post', isapiPath, body, { deviceId });
     } catch (error) {
       this.logger.warn(`⚠️ [HARDWARE] POST CardInfo/Record falló, probando PUT: ${error.message}`);
-      return this.proxyRequestDynamic(ip, 'put', isapiPath, body);
+      return this.proxyRequestDynamic(ip, 'put', isapiPath, body, { deviceId });
     }
   }
 
-  async eliminarUsuarioDeHardware(ip: string, userId: string): Promise<any> {
+  async eliminarUsuarioDeHardware(ip: string, userId: string, deviceId?: string): Promise<any> {
     const isapiPath = `/ISAPI/AccessControl/UserInfo/Delete?format=json`;
     const cleanUserId = /^\d+$/.test(userId) ? Number(userId) : userId;
     const employeeIds = [userId];
@@ -3215,7 +3216,7 @@ export class ControlAccesoService implements OnModuleInit {
         },
       };
       try {
-        await this.proxyRequestDynamic(ip, 'put', isapiPath, body);
+        await this.proxyRequestDynamic(ip, 'put', isapiPath, body, { deviceId });
       } catch (err) {
         errors.push(err);
       }
@@ -3277,7 +3278,7 @@ export class ControlAccesoService implements OnModuleInit {
 
     try {
       // Paso 1: Crear el usuario temporal
-      await this.crearUsuarioEnHardware(ip, employeeNo, nombre);
+      await this.crearUsuarioEnHardware(ip, employeeNo, nombre, device.id);
       this.logger.log(`✅ [VISITA-HW] Usuario temporal ${employeeNo} creado en ${ip}`);
     } catch (userErr) {
       this.logger.error(`❌ [VISITA-HW] Error creando usuario temporal ${employeeNo}: ${userErr.message}`);
@@ -3286,7 +3287,7 @@ export class ControlAccesoService implements OnModuleInit {
 
     try {
       // Paso 2: Registrar el token_qr como tarjeta (cardNo)
-      await this.registrarTarjetaEnHardware(ip, employeeNo, tokenQr);
+      await this.registrarTarjetaEnHardware(ip, employeeNo, tokenQr, device.id);
       this.logger.log(`✅ [VISITA-HW] Tarjeta QR (${tokenQr.slice(0, 8)}...) registrada para ${employeeNo} en ${ip}`);
     } catch (cardErr) {
       this.logger.error(`❌ [VISITA-HW] Error registrando tarjeta QR: ${cardErr.message}`);
@@ -3312,7 +3313,7 @@ export class ControlAccesoService implements OnModuleInit {
     const employeeNo = `V${visita.id.replace(/-/g, '').slice(0, 15)}`;
 
     try {
-      await this.eliminarUsuarioDeHardware(device.ip_direccion, employeeNo);
+      await this.eliminarUsuarioDeHardware(device.ip_direccion, employeeNo, device.id);
       this.logger.log(`🗑️ [VISITA-HW] Visitante temporal ${employeeNo} eliminado del dispositivo ${device.ip_direccion}`);
     } catch (err) {
       this.logger.warn(`⚠️ [VISITA-HW] No se pudo eliminar visitante ${employeeNo} del hardware: ${err.message}`);
@@ -3347,10 +3348,10 @@ export class ControlAccesoService implements OnModuleInit {
       throw new Error(`Dispositivo ${dispositivoId} no tiene IP asignada`);
     }
 
-    await this.crearUsuarioEnHardware(ip, persona.documento_identidad, persona.nombre_completo);
+    await this.crearUsuarioEnHardware(ip, persona.documento_identidad, persona.nombre_completo, dispositivoId);
 
     if (persona.codigo_tarjeta) {
-      await this.registrarTarjetaEnHardware(ip, persona.documento_identidad, persona.codigo_tarjeta);
+      await this.registrarTarjetaEnHardware(ip, persona.documento_identidad, persona.codigo_tarjeta, dispositivoId);
     }
 
     const { data: facial } = await admin
@@ -3698,7 +3699,7 @@ export class ControlAccesoService implements OnModuleInit {
       const ip = p.dispositivo?.ip_direccion;
       if (ip) {
         try {
-          await this.eliminarUsuarioDeHardware(ip, persona.documento_identidad);
+          await this.eliminarUsuarioDeHardware(ip, persona.documento_identidad, p.dispositivo_id);
         } catch (err) {
           this.logger.warn(`⚠️ [HARDWARE SYNC] No se pudo eliminar usuario ${persona.documento_identidad} de ${ip}: ${err.message}`);
         }
