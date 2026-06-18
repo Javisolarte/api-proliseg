@@ -2754,9 +2754,66 @@ export class ControlAccesoService implements OnModuleInit {
     }
   }
 
+  private async compressImageBuffer(inputBuffer: Buffer, maxSizeBytes: number = 150000): Promise<Buffer> {
+    if (inputBuffer.length <= maxSizeBytes) {
+      return inputBuffer;
+    }
+
+    this.logger.log(`🔄 [IMAGE-COMPRESS] Comprimiendo imagen de rostro pesada (${(inputBuffer.length / 1024).toFixed(1)} KB)...`);
+    
+    return new Promise((resolve) => {
+      const { spawn } = require('child_process');
+      const ffmpeg = spawn('ffmpeg', [
+        '-i', 'pipe:0',             // Leer de stdin
+        '-vf', 'scale=640:-1',      // Escalar ancho a máximo 640px (mantiene ratio)
+        '-q:v', '5',                // Calidad JPEG (2 a 31, 5 es muy buena relación compresión/calidad)
+        '-f', 'image2',             // Forzar formato de imagen
+        '-c:v', 'mjpeg',            // Codec MJPEG (compatible con JPG)
+        'pipe:1'                    // Escribir a stdout
+      ]);
+
+      const chunks: Buffer[] = [];
+      const errLogs: string[] = [];
+
+      ffmpeg.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+      ffmpeg.stderr.on('data', (chunk: Buffer) => errLogs.push(chunk.toString()));
+
+      ffmpeg.on('close', (code: number) => {
+        if (code === 0 && chunks.length > 0) {
+          const outputBuffer = Buffer.concat(chunks);
+          this.logger.log(`✅ [IMAGE-COMPRESS] Imagen comprimida con éxito: de ${(inputBuffer.length / 1024).toFixed(1)} KB a ${(outputBuffer.length / 1024).toFixed(1)} KB`);
+          resolve(outputBuffer);
+        } else {
+          const errMsg = errLogs.join('') || `FFmpeg process closed with code ${code}`;
+          this.logger.warn(`⚠️ [IMAGE-COMPRESS] Error de FFmpeg, usando imagen original: ${errMsg}`);
+          resolve(inputBuffer); // Fallback: retornar buffer original en caso de error
+        }
+      });
+
+      ffmpeg.on('error', (err: any) => {
+        this.logger.warn(`⚠️ [IMAGE-COMPRESS] No se pudo ejecutar FFmpeg (posiblemente no instalado en este entorno), usando imagen original: ${err.message}`);
+        resolve(inputBuffer); // Fallback: retornar buffer original si no se puede ejecutar
+      });
+
+      try {
+        ffmpeg.stdin.write(inputBuffer);
+        ffmpeg.stdin.end();
+      } catch (writeErr) {
+        this.logger.warn(`⚠️ [IMAGE-COMPRESS] Error escribiendo a FFmpeg: ${writeErr.message}`);
+        resolve(inputBuffer);
+      }
+    });
+  }
+
   async uploadRostro(ip: string, userId: string, faceData: string, deviceId?: string): Promise<any> {
     const isapiPath = `/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json`;
-    const imgBuffer = Buffer.from(faceData, 'base64');
+    let imgBuffer: any = Buffer.from(faceData, 'base64');
+
+    try {
+      imgBuffer = await this.compressImageBuffer(imgBuffer);
+    } catch (compressErr) {
+      this.logger.warn(`⚠️ [IMAGE-COMPRESS] Error inesperado en flujo de compresión: ${compressErr.message}`);
+    }
 
     const cleanUserId = /^\d+$/.test(userId) ? Number(userId) : userId;
     const userIds = [userId];
@@ -3409,13 +3466,15 @@ export class ControlAccesoService implements OnModuleInit {
     }
 
     if (dispositivoIds && dispositivoIds.length > 0) {
-      for (const devId of dispositivoIds) {
-        try {
-          await this.pushPersonaToDevice(persona.id, devId);
-        } catch (syncErr) {
-          this.logger.error(`❌ [HARDWARE SYNC ERROR] No se pudo empujar persona ${persona.id} al dispositivo ${devId}: ${syncErr.message}`);
-        }
-      }
+      await Promise.all(
+        dispositivoIds.map(async (devId) => {
+          try {
+            await this.pushPersonaToDevice(persona.id, devId);
+          } catch (syncErr) {
+            this.logger.error(`❌ [HARDWARE SYNC ERROR] No se pudo empujar persona ${persona.id} al dispositivo ${devId}: ${syncErr.message}`);
+          }
+        })
+      );
     }
 
     return {
@@ -3456,14 +3515,20 @@ export class ControlAccesoService implements OnModuleInit {
     }
 
     const resultados: any[] = [];
-    for (const id of uniqueIds) {
-      try {
-        const res = await this.syncRecopilacionRegistro(id, dispositivoIds);
-        resultados.push({ id, ok: true, persona_id: res.persona_id });
-      } catch (err) {
-        this.logger.error(`❌ [BATCH SYNC ERROR] No se pudo sincronizar registro ${id}: ${err.message}`);
-        resultados.push({ id, ok: false, error: err.message });
-      }
+    const chunkSize = 5; // Procesar de 5 en 5 registros en paralelo
+    for (let i = 0; i < uniqueIds.length; i += chunkSize) {
+      const chunk = uniqueIds.slice(i, i + chunkSize);
+      const promises = chunk.map(async (id) => {
+        try {
+          const res = await this.syncRecopilacionRegistro(id, dispositivoIds);
+          return { id, ok: true, persona_id: res.persona_id };
+        } catch (err) {
+          this.logger.error(`❌ [BATCH SYNC ERROR] No se pudo sincronizar registro ${id}: ${err.message}`);
+          return { id, ok: false, error: err.message };
+        }
+      });
+      const chunkResults = await Promise.all(promises);
+      resultados.push(...chunkResults);
     }
 
     // Agregar resultados para los omitidos
@@ -3970,7 +4035,19 @@ export class ControlAccesoService implements OnModuleInit {
       .eq('lugar_id', lugarId)
       .order('created_at', { ascending: false });
     if (error) throw error;
-    return data || [];
+
+    const seen = new Set<string>();
+    const uniqueRegistros = (data || []).filter(reg => {
+      const cedula = String(reg.cedula || '').trim();
+      if (!cedula) return true; // Si no tiene cédula, no la deduplicamos
+      if (seen.has(cedula)) {
+        return false;
+      }
+      seen.add(cedula);
+      return true;
+    });
+
+    return uniqueRegistros;
   }
 
   async getPublicForm(token: string) {

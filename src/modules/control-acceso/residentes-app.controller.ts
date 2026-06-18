@@ -40,68 +40,142 @@ export class ResidentesAppController {
   }
 
   @Get('visitas')
-  @ApiOperation({ summary: 'Obtener historial de visitas programadas por el residente' })
+  @ApiOperation({ summary: 'Obtener historial de visitas programadas por el residente desde visitas_acceso' })
   async getVisitas(@CurrentUser() user: any) {
     const resident = await this.getResidentFromUser(user);
     const admin = this.supabaseService.getSupabaseAdminClient();
 
-    const { data: visitas, error } = await admin
-      .from('visitas_registro')
-      .select('*')
-      .eq('residente_destino_id', resident.id)
-      .order('fecha_esperada', { ascending: false });
+    let { data: persona } = await admin
+      .from('personas_gestion_acceso')
+      .select('id')
+      .eq('entidad_tipo', 'residente')
+      .eq('entidad_id', resident.id)
+      .maybeSingle();
 
+    if (!persona && resident.documento) {
+      const { data: pByDoc } = await admin
+        .from('personas_gestion_acceso')
+        .select('id')
+        .eq('documento_identidad', resident.documento)
+        .maybeSingle();
+      persona = pByDoc;
+    }
+
+    let query = admin
+      .from('visitas_acceso')
+      .select('*')
+      .order('fecha_programada', { ascending: false });
+
+    if (persona) {
+      query = query.or(`residente_responsable_id.eq.${persona.id},residente_responsable_nombre.eq."${resident.nombre_completo}"`);
+    } else {
+      query = query.eq('residente_responsable_nombre', resident.nombre_completo);
+    }
+
+    const { data: visitas, error } = await query;
     if (error) {
       throw new BadRequestException(`Error al obtener visitas: ${error.message}`);
     }
 
-    return visitas || [];
+    // Adaptar campos para compatibilidad con la app Flutter
+    return (visitas || []).map(v => ({
+      ...v,
+      nombre_visitante_temporal: v.nombre_visitante,
+      fecha_esperada: v.fecha_programada,
+      observaciones: v.motivo,
+    }));
   }
 
   @Post('visitas')
-  @ApiOperation({ summary: 'Crear una visita y generar un código QR de 8 dígitos' })
+  @ApiOperation({ summary: 'Crear una visita en visitas_acceso y registrar en hardware' })
   async crearVisita(
     @Body() body: {
       nombre_visitante: string;
       documento_visitante?: string;
-      fecha_esperada: string;
-      observacion?: string;
+      telefono_visitante?: string;
+      motivo?: string;
+      fecha_programada?: string;
+      fecha_esperada?: string; // fallback
+      observacion?: string; // fallback
+      dispositivo_id?: string;
+      duracion_horas?: number;
     },
     @CurrentUser() user: any
   ) {
     const resident = await this.getResidentFromUser(user);
     const admin = this.supabaseService.getSupabaseAdminClient();
 
-    if (!body.nombre_visitante) {
+    const nombreVisitante = body.nombre_visitante;
+    if (!nombreVisitante) {
       throw new BadRequestException('El nombre del visitante es obligatorio');
     }
 
-    const token = Math.floor(10000000 + Math.random() * 90000000).toString();
+    const documentoVisitante = body.documento_visitante || '';
+    const telefonoVisitante = body.telefono_visitante || null;
+    const motivo = body.motivo || body.observacion || 'Visita programada';
+    const fechaProgramada = body.fecha_programada || body.fecha_esperada || new Date().toISOString();
+    const duracionHoras = body.duracion_horas || 2;
 
-    let visitanteId = null;
-    if (body.documento_visitante) {
-      const { data: v } = await admin
-        .from('visitantes')
+    let { data: persona } = await admin
+      .from('personas_gestion_acceso')
+      .select('id')
+      .eq('entidad_tipo', 'residente')
+      .eq('entidad_id', resident.id)
+      .maybeSingle();
+
+    if (!persona && resident.documento) {
+      const { data: pByDoc } = await admin
+        .from('personas_gestion_acceso')
         .select('id')
-        .eq('documento', body.documento_visitante)
+        .eq('documento_identidad', resident.documento)
         .maybeSingle();
-      if (v) visitanteId = v.id;
+      persona = pByDoc;
     }
 
+    let dispositivoId = body.dispositivo_id;
+    if (!dispositivoId) {
+      const { data: devices } = await admin
+        .from('dispositivos_iot')
+        .select('id')
+        .eq('puesto_id', resident.puesto_id)
+        .eq('activo', true);
+
+      if (devices && devices.length > 0) {
+        dispositivoId = devices[0].id;
+      }
+    }
+
+    // Auto-completar destino (apto/local y torre) si está registrado
+    const apto = resident.apto_casa || '';
+    const torre = resident.torre_bloque || '';
+    const destinoInfo = [
+      torre ? `Torre ${torre}` : '',
+      apto ? `Apto/Local ${apto}` : ''
+    ].filter(Boolean).join(' - ');
+
+    const finalMotivo = destinoInfo 
+      ? `${motivo} (Destino: ${destinoInfo})`
+      : motivo;
+
+    const token = Math.floor(100000000000 + Math.random() * 900000000000).toString();
+
+    const payload = {
+      nombre_visitante: nombreVisitante,
+      documento_visitante: documentoVisitante,
+      telefono_visitante: telefonoVisitante,
+      motivo: finalMotivo,
+      residente_responsable_id: persona?.id || null,
+      residente_responsable_nombre: resident.nombre_completo,
+      dispositivo_id: dispositivoId || null,
+      fecha_programada: fechaProgramada,
+      duracion_horas: duracionHoras,
+      token_qr: token,
+      estado: 'programada'
+    };
+
     const { data: newVisita, error } = await admin
-      .from('visitas_registro')
-      .insert({
-        puesto_id: resident.puesto_id,
-        residente_destino_id: resident.id,
-        visitante_id: visitanteId,
-        nombre_visitante_temporal: body.nombre_visitante,
-        fecha_entrada: null,
-        fecha_salida: null,
-        estado: 'programada',
-        token_qr: token,
-        fecha_esperada: body.fecha_esperada,
-        observaciones: body.observacion || null,
-      })
+      .from('visitas_acceso')
+      .insert(payload)
       .select()
       .single();
 
@@ -109,37 +183,81 @@ export class ResidentesAppController {
       throw new BadRequestException(`Error al crear visita: ${error.message}`);
     }
 
+    if (newVisita.dispositivo_id && newVisita.token_qr) {
+      this.controlAccesoService.registrarVisitaEnHardware(newVisita).catch(err =>
+        this.controlAccesoService['logger'].error(`❌ [VISITA-HW] Error al registrar visita desde App en hardware: ${err.message}`)
+      );
+    }
+
+    const responseVisita = {
+      ...newVisita,
+      nombre_visitante_temporal: newVisita.nombre_visitante,
+      fecha_esperada: newVisita.fecha_programada,
+      observaciones: newVisita.motivo,
+    };
+
     return {
       ok: true,
-      visita: newVisita,
+      visita: responseVisita,
       token_qr: token,
     };
   }
 
   @Delete('visitas/:id')
-  @ApiOperation({ summary: 'Cancelar una visita programada' })
+  @ApiOperation({ summary: 'Cancelar una visita programada en visitas_acceso y hardware' })
   async cancelarVisita(@Param('id') id: string, @CurrentUser() user: any) {
     const resident = await this.getResidentFromUser(user);
     const admin = this.supabaseService.getSupabaseAdminClient();
 
-    const { data: visita } = await admin
-      .from('visitas_registro')
-      .select('id')
+    const { data: visita, error: getErr } = await admin
+      .from('visitas_acceso')
+      .select('*')
       .eq('id', id)
-      .eq('residente_destino_id', resident.id)
       .maybeSingle();
 
-    if (!visita) {
-      throw new NotFoundException('Visita no encontrada o no pertenece a este residente');
+    if (getErr || !visita) {
+      throw new NotFoundException('Visita no encontrada');
     }
 
-    const { error } = await admin
-      .from('visitas_registro')
-      .update({ estado: 'cancelado' })
-      .eq('id', id);
+    let { data: persona } = await admin
+      .from('personas_gestion_acceso')
+      .select('id')
+      .eq('entidad_tipo', 'residente')
+      .eq('entidad_id', resident.id)
+      .maybeSingle();
 
-    if (error) {
-      throw new BadRequestException(`Error al cancelar visita: ${error.message}`);
+    if (!persona && resident.documento) {
+      const { data: pByDoc } = await admin
+        .from('personas_gestion_acceso')
+        .select('id')
+        .eq('documento_identidad', resident.documento)
+        .maybeSingle();
+      persona = pByDoc;
+    }
+
+    const isResponsible = 
+      (persona && visita.residente_responsable_id === persona.id) ||
+      visita.residente_responsable_nombre === resident.nombre_completo;
+
+    if (!isResponsible) {
+      throw new BadRequestException('Esta visita no pertenece a este residente');
+    }
+
+    const { data: updatedVisita, error: updErr } = await admin
+      .from('visitas_acceso')
+      .update({ estado: 'cancelada', updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (updErr) {
+      throw new BadRequestException(`Error al cancelar visita: ${updErr.message}`);
+    }
+
+    if (updatedVisita?.dispositivo_id) {
+      this.controlAccesoService.eliminarVisitaDeHardware(updatedVisita).catch(err =>
+        this.controlAccesoService['logger'].warn(`⚠️ [VISITA-HW] Limpieza al cancelar desde App falló: ${err.message}`)
+      );
     }
 
     return { ok: true, mensaje: 'Visita cancelada con éxito' };
@@ -151,22 +269,37 @@ export class ResidentesAppController {
     const resident = await this.getResidentFromUser(user);
     const admin = this.supabaseService.getSupabaseAdminClient();
 
-    const { data: visitas } = await admin
-      .from('visitas_registro')
-      .select('visitante_id, nombre_visitante_temporal')
-      .eq('residente_destino_id', resident.id);
+    let { data: persona } = await admin
+      .from('personas_gestion_acceso')
+      .select('id')
+      .eq('entidad_tipo', 'residente')
+      .eq('entidad_id', resident.id)
+      .maybeSingle();
+
+    if (!persona && resident.documento) {
+      const { data: pByDoc } = await admin
+        .from('personas_gestion_acceso')
+        .select('id')
+        .eq('documento_identidad', resident.documento)
+        .maybeSingle();
+      persona = pByDoc;
+    }
+
+    let queryVisitas = admin
+      .from('visitas_acceso')
+      .select('documento_visitante');
+
+    if (persona) {
+      queryVisitas = queryVisitas.or(`residente_responsable_id.eq.${persona.id},residente_responsable_nombre.eq."${resident.nombre_completo}"`);
+    } else {
+      queryVisitas = queryVisitas.eq('residente_responsable_nombre', resident.nombre_completo);
+    }
+
+    const { data: visitas } = await queryVisitas;
 
     const documents = [resident.documento].filter(Boolean);
-
-    const visitorIds = (visitas || []).map(v => v.visitante_id).filter(Boolean);
-    if (visitorIds.length > 0) {
-      const { data: vts } = await admin
-        .from('visitantes')
-        .select('documento')
-        .in('id', visitorIds);
-      if (vts) {
-        documents.push(...vts.map(v => v.documento).filter(Boolean));
-      }
+    if (visitas && visitas.length > 0) {
+      documents.push(...visitas.map(v => v.documento_visitante).filter(Boolean));
     }
 
     let query = admin
