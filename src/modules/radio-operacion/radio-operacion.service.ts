@@ -1011,4 +1011,314 @@ export class RadioOperacionService {
       }
     }
   }
+
+  async exportReportesPuestosPDF(fechaInicio: string, fechaFin: string, puestosIds: number[], res: Response) {
+    let browser: puppeteer.Browser | null = null;
+    try {
+      const supabase = this.supabaseService.getClient();
+      this.logger.debug(`🔍 Exportando reporte PDF de puestos en rango: ${fechaInicio} - ${fechaFin} para puestos: ${puestosIds.join(',')}`);
+
+      const sqlHeader = `
+        SELECT rpo.*,
+               ro.codigo_radio,
+               e.nombre_completo AS radio_operador_nombre,
+               e.cedula AS radio_operador_cedula,
+               u.nombre_completo AS creado_por_nombre
+        FROM reportes_puestos_operativos rpo
+        LEFT JOIN radio_operadores ro ON rpo.radio_operador_id = ro.id
+        LEFT JOIN empleados e ON ro.empleado_id = e.id
+        LEFT JOIN usuarios_externos u ON rpo.creado_por = u.id
+        WHERE rpo.fecha BETWEEN '${fechaInicio}' AND '${fechaFin}'
+        ORDER BY rpo.fecha ASC, rpo.turno ASC
+      `;
+
+      const { data: headerData, error: headerError } = await supabase.rpc('exec_sql', { query: sqlHeader });
+
+      if (headerError) {
+        this.logger.error(`❌ Error obteniendo encabezados de reportes: ${JSON.stringify(headerError)}`);
+        throw headerError;
+      }
+
+      const reportesRaw = Array.isArray(headerData) ? headerData : [];
+      if (!reportesRaw.length) {
+        throw new NotFoundException(`No se encontraron reportes en el rango de fechas especificado.`);
+      }
+
+      const reporteIds = reportesRaw.map(r => r.id);
+
+      const sqlDetalle = `
+        SELECT rpd.*,
+               pt.nombre AS puesto_nombre,
+               emp.nombre_completo AS empleado_nombre_completo
+        FROM reporte_puestos_detalle rpd
+        LEFT JOIN puestos_trabajo pt ON rpd.puesto_id = pt.id
+        LEFT JOIN empleados emp ON rpd.empleado_id = emp.id
+        WHERE rpd.reporte_id IN (${reporteIds.join(',')})
+          AND rpd.puesto_id IN (${puestosIds.join(',')})
+        ORDER BY rpd.orden ASC, rpd.id ASC
+      `;
+
+      const { data: detalleData, error: detalleError } = await supabase.rpc('exec_sql', { query: sqlDetalle });
+
+      if (detalleError) {
+        this.logger.error(`❌ Error obteniendo detalles de reportes: ${JSON.stringify(detalleError)}`);
+        throw detalleError;
+      }
+
+      const detallesRaw = Array.isArray(detalleData) ? detalleData : [];
+      if (!detallesRaw.length) {
+        throw new NotFoundException(`No se encontraron registros de chequeo para los puestos seleccionados en este rango de fechas.`);
+      }
+
+      const detalleIds = detallesRaw.map(d => d.id).filter(id => !!id);
+      let chequeosRaw: any[] = [];
+      if (detalleIds.length > 0) {
+        const sqlChequeos = `
+          SELECT * FROM reporte_puestos_chequeos
+          WHERE detalle_id IN (${detalleIds.join(',')})
+          ORDER BY hora_chequeo ASC
+        `;
+
+        const { data: chequeosData, error: chequeosError } = await supabase.rpc('exec_sql', { query: sqlChequeos });
+
+        if (chequeosError) {
+          this.logger.error(`❌ Error obteniendo chequeos: ${JSON.stringify(chequeosError)}`);
+          throw chequeosError;
+        }
+
+        chequeosRaw = Array.isArray(chequeosData) ? chequeosData : [];
+      }
+
+      // Agrupar detalles por reporte
+      const detallesPorReporte = new Map<number, any[]>();
+      for (const d of detallesRaw) {
+        d.chequeos = chequeosRaw.filter(c => c.detalle_id === d.id);
+        
+        let list = detallesPorReporte.get(d.reporte_id);
+        if (!list) {
+          list = [];
+          detallesPorReporte.set(d.reporte_id, list);
+        }
+        list.push(d);
+      }
+
+      // Armar la lista final de reportes a renderizar
+      const reportesList: any[] = [];
+      for (const r of reportesRaw) {
+        const detalles = detallesPorReporte.get(r.id);
+        if (detalles && detalles.length > 0) {
+          r.detalles = detalles;
+          r.horas_chequeo = this.generarHorasChequeo(r.turno, r.frecuencia_horas);
+          
+          reportesList.push({
+            titulo: 'FORMATO REPORTE PUESTOS OPERATIVOS',
+            empresa: 'PROLICONTROL',
+            codigo: r.codigo_formato || 'SIG-GO-F-09',
+            fecha_aprobacion: r.fecha_aprobacion || '7/04/2026',
+            version: '2',
+            pagina: r.pagina || '1 de 1',
+            fecha: r.fecha,
+            supervisor: r.supervisor_turno || '',
+            turno: r.turno === 'dia' ? 'DÍA' : 'NOCHE',
+            horas_dia: r.turno === 'dia' ? r.horas_chequeo : [],
+            horas_noche: r.turno === 'noche' ? r.horas_chequeo : [],
+            frecuencia_horas: r.frecuencia_horas,
+            estado: r.estado,
+            radio_operador: r.radio_operador_nombre || '',
+            puestos: r.detalles.map((d: any) => ({
+              codigo_puesto: d.codigo_puesto || d.puesto_id,
+              puesto_nombre: d.puesto_nombre,
+              guarda_turno: d.nombre_guarda || d.empleado_nombre_completo || 'Sin asignar',
+              cambio_turno: d.cambio_turno,
+              relevo_nombre: d.relevo_nombre || '',
+              observaciones: d.observaciones || '',
+              chequeos: d.chequeos.map((c: any) => ({
+                hora: c.hora_chequeo,
+                estado: c.estado,
+                nota: c.nota,
+              })),
+            })),
+            observaciones: r.observaciones || '',
+            firma_operador: r.firma_operador || '',
+            cerrado_en: r.cerrado_en,
+          });
+        }
+      }
+
+      if (reportesList.length === 0) {
+        throw new NotFoundException(`No se encontraron reportes con los puestos seleccionados en el rango de fechas.`);
+      }
+
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <style>
+             @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+             body { font-family: 'Inter', sans-serif; color: #333; margin: 0; padding: 0; font-size: 11px; }
+             .container { width: 100%; max-width: 1000px; margin: 0 auto; }
+             .report-header { display: flex; align-items: stretch; border: 1px solid #1e293b; margin-bottom: 10px; }
+             .logo-area { width: 25%; display: flex; justify-content: center; align-items: center; border-right: 1px solid #1e293b; padding: 10px; }
+             .logo-brand { text-align: center; line-height: 1; }
+             .brand-top { display: block; font-size: 16px; font-weight: 800; color: #4680ff; text-transform: lowercase; }
+             .brand-bottom { display: block; font-size: 11px; font-weight: 500; color: #4680ff; letter-spacing: 0.5px; }
+             .title-area { width: 50%; display: flex; justify-content: center; align-items: center; border-right: 1px solid #1e293b; padding: 10px; }
+             .title-area h1 { margin: 0; font-size: 14px; text-align: center; font-weight: 700; color: #1e293b; }
+             .meta-area { width: 25%; font-size: 9px; }
+             .meta-row { display: flex; border-bottom: 1px solid #1e293b; }
+             .meta-row:last-child { border-bottom: none; }
+             .meta-row span { width: 40%; border-right: 1px solid #1e293b; padding: 4px 6px; font-weight: 600; background: #f8fafc; }
+             .meta-row strong { width: 60%; padding: 4px 6px; }
+             
+             .info-grid { display: flex; border: 1px solid #1e293b; border-bottom: none; background: #f8fafc; }
+             .info-item { flex: 1; border-right: 1px solid #1e293b; padding: 6px 10px; font-size: 10px; }
+             .info-item:last-child { border-right: none; }
+             .info-item span { font-weight: 600; margin-right: 5px; }
+             
+             .control-table { width: 100%; border-collapse: collapse; border: 1px solid #1e293b; font-size: 9px; }
+             .control-table th, .control-table td { border: 1px solid #1e293b; padding: 4px; text-align: left; vertical-align: middle; }
+             .control-table th { background-color: #f1f5f9; font-weight: 700; text-align: center; }
+             .text-center { text-align: center; }
+             .col-puesto { width: 20%; }
+             .col-guarda { width: 22%; }
+             .col-dn { width: 4%; }
+             .col-hora { width: 3%; font-size: 8px; }
+             .col-relevo { width: 12%; }
+             .col-obs { width: 15%; }
+             
+             .p-code { font-weight: 700; color: #4680ff; font-size: 10px; display: block; }
+             .p-name { color: #475569; display: block; }
+             .change-badge { background: #fee2e2; color: #dc2626; padding: 1px 4px; border-radius: 4px; font-size: 8px; font-weight: 700; border: 1px solid #f87171; float: right; }
+             
+             .check-box { width: 12px; height: 12px; border: 1px solid #94a3b8; margin: 0 auto; display: flex; justify-content: center; align-items: center; }
+             .check-box.checked { background-color: #1e293b; border-color: #1e293b; color: white; }
+             
+             .report-footer { display: flex; margin-top: 15px; border: 1px solid #1e293b; page-break-inside: avoid; }
+             .footer-section { flex: 1; padding: 10px; border-right: 1px solid #1e293b; }
+             .footer-section label { font-size: 10px; font-weight: 700; display: block; margin-bottom: 5px; }
+             .footer-sign { width: 250px; padding: 10px; text-align: center; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; }
+             .signature-display img { max-height: 50px; margin-bottom: 5px; }
+             .sign-line { width: 80%; border-top: 1px solid #1e293b; margin: 5px 0; }
+             .footer-sign p { font-size: 9px; font-weight: 600; margin: 0; }
+               
+             tr { page-break-inside: avoid !important; }
+             .report-header, .info-grid { page-break-inside: avoid; }
+
+             .page-break { page-break-after: always; break-after: page; }
+             .page-break:last-child { page-break-after: avoid; break-after: avoid; }
+          </style>
+        </head>
+        <body>
+          ${reportesList.map((rep: any) => {
+            const horasHtml = rep.turno === 'DÍA' ? rep.horas_dia : rep.horas_noche;
+            return `
+              <div class="container page-break">
+                <div class="report-header">
+                  <div class="logo-area">
+                    <div class="logo-brand">
+                      <span class="brand-top">proliseg</span>
+                      <span class="brand-bottom">Prolicontrol</span>
+                    </div>
+                  </div>
+                  <div class="title-area">
+                    <h1>${rep.titulo}</h1>
+                  </div>
+                  <div class="meta-area">
+                    <div class="meta-row"><span>Código:</span> <strong>${rep.codigo}</strong></div>
+                    <div class="meta-row"><span>Versión:</span> <strong>${rep.version}</strong></div>
+                    <div class="meta-row"><span>Fecha Aprob:</span> <strong>${rep.fecha_aprobacion}</strong></div>
+                    <div class="meta-row"><span>Página:</span> <strong>${rep.pagina}</strong></div>
+                  </div>
+                </div>
+
+                <div class="info-grid">
+                  <div class="info-item"><span>FECHA:</span> <strong>${rep.fecha}</strong></div>
+                  <div class="info-item"><span>SUPERVISOR DE TURNO:</span> <strong>${rep.supervisor}</strong></div>
+                  <div class="info-item"><span>TURNO:</span> <strong>${rep.turno === 'DÍA' ? 'X DÍA / NOCHE' : 'DÍA / X NOCHE'}</strong></div>
+                </div>
+
+                <table class="control-table">
+                  <thead>
+                    <tr>
+                      <th rowspan="2" class="col-puesto">PUESTO</th>
+                      <th rowspan="2" class="col-guarda">GUARDA DE TURNO</th>
+                      <th rowspan="2" class="col-dn">D/N</th>
+                      <th colspan="${horasHtml?.length || 0}" class="text-center">REPORTE POR HORAS</th>
+                      <th rowspan="2" class="col-relevo">CAMBIO DE TURNO</th>
+                      <th rowspan="2" class="col-obs">OBSERVACIONES</th>
+                    </tr>
+                    <tr>
+                      ${(horasHtml || []).map((h: string) => `<th class="col-hora">${h}</th>`).join('')}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${(rep.puestos || []).map((p: any) => `
+                      <tr>
+                        <td>
+                          <span class="p-code">${p.codigo_puesto}</span>
+                          <span class="p-name">${p.puesto_nombre}</span>
+                        </td>
+                        <td>
+                          ${p.guarda_turno}
+                          ${p.cambio_turno ? '<span class="change-badge">C.T</span>' : ''}
+                        </td>
+                        <td class="text-center"><strong>${rep.turno.charAt(0)}</strong></td>
+                        ${(horasHtml || []).map((h: string) => {
+                          const c = (p.chequeos || []).find((chk: any) => chk.hora.startsWith(h));
+                          const isChecked = c && c.estado === 'sin_novedad';
+                          return `<td class="text-center"><div class="check-box ${isChecked ? 'checked' : ''}">${isChecked ? '✓' : ''}</div></td>`;
+                        }).join('')}
+                        <td>${p.relevo_nombre || ''}</td>
+                        <td>${p.observaciones || ''}</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+
+                <div class="report-footer">
+                  <div class="footer-section">
+                    <label>OBSERVACIONES GENERALES:</label>
+                    <div>${rep.observaciones || ''}</div>
+                  </div>
+                  <div class="footer-sign">
+                    ${rep.firma_operador ? `<div class="signature-display"><img src="${rep.firma_operador}" /></div>` : '<div style="height: 50px;"></div>'}
+                    <div class="sign-line"></div>
+                    <p>Firma Radio Operador: ${rep.radio_operador}</p>
+                  </div>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </body>
+        </html>
+      `;
+
+      browser = await this.getBrowser();
+      const page = await browser.newPage();
+      try {
+        await page.setContent(htmlContent, { 
+          waitUntil: 'domcontentloaded', 
+          timeout: 60000 
+        });
+        const pdfBuffer = await page.pdf({
+          format: 'Letter',
+          landscape: true,
+          printBackground: true,
+          margin: { top: '10mm', right: '10mm', bottom: '15mm', left: '10mm' }
+        });
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=Reporte_Puestos_${fechaInicio}_a_${fechaFin}.pdf`);
+        res.send(Buffer.from(pdfBuffer));
+      } finally {
+        await page.close();
+      }
+    } catch (error) {
+      this.logger.error('Error generando PDF consolidado de puestos:', error);
+      if (!res.headersSent) {
+        const statusCode = error instanceof NotFoundException ? 404 : 500;
+        res.status(statusCode).json({ message: error.message || 'Error al generar el PDF', error: error.message });
+      }
+    }
+  }
 }

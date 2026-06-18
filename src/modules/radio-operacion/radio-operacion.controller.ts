@@ -110,6 +110,22 @@ export class RadioOperacionController {
     return this.radioOperacionService.findAllReportes({ fecha, turno, estado });
   }
 
+  @Get('reportes/exportar/pdf-puestos')
+  @ApiOperation({ summary: 'Exportar reportes de puestos seleccionados en un rango de fechas' })
+  @ApiQuery({ name: 'fecha_inicio', required: true })
+  @ApiQuery({ name: 'fecha_fin', required: true })
+  @ApiQuery({ name: 'puestos_ids', required: true })
+  @ApiResponse({ status: 200, description: 'Archivo PDF consolidado generado' })
+  async downloadReportePuestosPdf(
+    @Query('fecha_inicio') fechaInicio: string,
+    @Query('fecha_fin') fechaFin: string,
+    @Query('puestos_ids') puestosIdsStr: string,
+    @Res() res: Response,
+  ) {
+    const puestosIds = puestosIdsStr.split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id));
+    return this.radioOperacionService.exportReportesPuestosPDF(fechaInicio, fechaFin, puestosIds, res);
+  }
+
   @Get('reportes/:id')
   @ApiOperation({ summary: 'Obtener reporte completo con detalle de puestos y chequeos' })
   @ApiResponse({ status: 200, description: 'Reporte con detalle completo' })
