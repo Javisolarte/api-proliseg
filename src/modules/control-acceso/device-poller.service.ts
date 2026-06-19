@@ -1065,8 +1065,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
       // Verificar vencimiento de fecha
       const ahora = new Date();
-      if (visitaAcc.fecha_vencimiento && ahora > new Date(visitaAcc.fecha_vencimiento)) {
-        this.logger.warn(`⚠️ [QR AUTO-OPEN] Intento de ingreso con QR vencido. ID Visita: ${visitaAcc.id}, Expiró: ${visitaAcc.fecha_vencimiento}`);
+      if (!visitaAcc.fecha_vencimiento || ahora > new Date(visitaAcc.fecha_vencimiento)) {
+        this.logger.warn(`⚠️ [QR AUTO-OPEN] Intento de ingreso con QR vencido o sin vigencia definida. ID Visita: ${visitaAcc.id}, Expiró: ${visitaAcc.fecha_vencimiento}`);
         await admin.from('visitas_acceso').update({ estado: 'vencida', updated_at: ahora.toISOString() }).eq('id', visitaAcc.id);
         return;
       }

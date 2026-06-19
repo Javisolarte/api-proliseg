@@ -158,6 +158,7 @@ export class ResidentesAppController {
       : motivo;
 
     const token = Math.floor(100000000000 + Math.random() * 900000000000).toString();
+    const fechaVencimiento = new Date(new Date(fechaProgramada).getTime() + duracionHoras * 60 * 60 * 1000).toISOString();
 
     const payload = {
       nombre_visitante: nombreVisitante,
@@ -168,6 +169,7 @@ export class ResidentesAppController {
       residente_responsable_nombre: resident.nombre_completo,
       dispositivo_id: dispositivoId || null,
       fecha_programada: fechaProgramada,
+      fecha_vencimiento: fechaVencimiento,
       duracion_horas: duracionHoras,
       token_qr: token,
       estado: 'programada'

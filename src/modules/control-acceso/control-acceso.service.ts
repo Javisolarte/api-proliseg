@@ -4299,6 +4299,10 @@ export class ControlAccesoService implements OnModuleInit {
     // Generar un token QR numérico de 12 dígitos para compatibilidad con controles de acceso Hikvision
     const randomNumericToken = Math.floor(100000000000 + Math.random() * 900000000000).toString();
 
+    const fechaProg = body.fecha_programada || new Date().toISOString();
+    const durHoras = body.duracion_horas || 2;
+    const fechaVencimiento = new Date(new Date(fechaProg).getTime() + durHoras * 60 * 60 * 1000).toISOString();
+
     const payload: any = {
       nombre_visitante: body.nombre_visitante,
       documento_visitante: body.documento_visitante,
@@ -4310,8 +4314,9 @@ export class ControlAccesoService implements OnModuleInit {
       operador_id: body.operador_id || null,
       operador_nombre: body.operador_nombre || null,
       dispositivo_id: body.dispositivo_id || null,
-      fecha_programada: body.fecha_programada,
-      duracion_horas: body.duracion_horas || 2,
+      fecha_programada: fechaProg,
+      fecha_vencimiento: fechaVencimiento,
+      duracion_horas: durHoras,
       foto_visitante_url: body.foto_visitante_url || null,
       estado: 'programada',
       token_qr: randomNumericToken,
@@ -4332,6 +4337,21 @@ export class ControlAccesoService implements OnModuleInit {
 
   async updateVisita(id: string, body: any) {
     const admin = this.supabase.getSupabaseAdminClient();
+
+    // Recalcular fecha_vencimiento si cambia la fecha programada o duracion
+    if (body.fecha_programada !== undefined || body.duracion_horas !== undefined) {
+      const { data: existing } = await admin
+        .from('visitas_acceso')
+        .select('fecha_programada, duracion_horas')
+        .eq('id', id)
+        .maybeSingle();
+      if (existing) {
+        const prog = body.fecha_programada !== undefined ? body.fecha_programada : existing.fecha_programada;
+        const dur = body.duracion_horas !== undefined ? body.duracion_horas : (existing.duracion_horas || 2);
+        body.fecha_vencimiento = new Date(new Date(prog).getTime() + dur * 60 * 60 * 1000).toISOString();
+      }
+    }
+
     const { data, error } = await admin
       .from('visitas_acceso')
       .update({ ...body, updated_at: new Date().toISOString() })
@@ -4397,7 +4417,7 @@ export class ControlAccesoService implements OnModuleInit {
     if (visita.estado !== 'programada') return { ok: false, mensaje: `Visita ya procesada (${visita.estado})`, visita };
 
     const ahora = new Date();
-    if (ahora > new Date(visita.fecha_vencimiento)) {
+    if (!visita.fecha_vencimiento || ahora > new Date(visita.fecha_vencimiento)) {
       await admin.from('visitas_acceso').update({ estado: 'vencida' }).eq('id', visita.id);
       return { ok: false, mensaje: 'El QR ha vencido', visita };
     }
