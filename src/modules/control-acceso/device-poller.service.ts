@@ -1080,10 +1080,28 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
       this.logger.log(`🔑 [QR AUTO-OPEN] Token QR de administración válido: ${token} para visitante ${visitaAcc.nombre_visitante}`);
 
+      // Inhabilitar el código QR de inmediato actualizando el estado a 'realizada'
+      const timestampIngreso = new Date().toISOString();
+      const { error: updAccErr } = await admin
+        .from('visitas_acceso')
+        .update({
+          estado: 'realizada',
+          timestamp_ingreso: timestampIngreso,
+          updated_at: timestampIngreso
+        })
+        .eq('id', visitaAcc.id);
+
+      if (updAccErr) {
+        this.logger.error(`❌ [QR AUTO-OPEN] Error al registrar inhabilitación inmediata del QR: ${updAccErr.message}`);
+        return;
+      }
+
+      this.logger.log(`🔒 [QR AUTO-OPEN] QR inhabilitado con éxito (estado = realizada) de inmediato para visita: ${visitaAcc.id}`);
+
       // Abrir la puerta inmediatamente
       await this.triggerDoorOpen(evento.dispositivo_id);
 
-      // Esperar 1.5 segundos para que la persona ingrese / mire la cámara y capturar su foto
+      // Esperar 1.5 segundos en segundo plano para capturar la foto y asociarla a la visita
       setTimeout(async () => {
         let fotoIngresoUrl: string | null = null;
         if (visitaAcc.dispositivo?.ip_direccion) {
@@ -1127,33 +1145,30 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
             const { data: urlData } = admin.storage.from('control-acceso').getPublicUrl(fileName);
             fotoIngresoUrl = urlData?.publicUrl || null;
             this.logger.log(`📸 [QR AUTO-OPEN] Foto de ingreso capturada y subida exitosamente: ${fotoIngresoUrl}`);
+
+            if (fotoIngresoUrl) {
+              const { error: photoUpdErr } = await admin
+                .from('visitas_acceso')
+                .update({
+                  foto_ingreso_url: fotoIngresoUrl,
+                  updated_at: new Date().toISOString()
+                })
+                .eq('id', visitaAcc.id);
+              
+              if (photoUpdErr) {
+                this.logger.error(`❌ [QR AUTO-OPEN] Error al guardar URL de foto en la visita: ${photoUpdErr.message}`);
+              }
+            }
           } catch (photoErr) {
             this.logger.warn(`⚠️ [QR AUTO-OPEN] No se pudo capturar la foto del dispositivo: ${photoErr.message}`);
           }
         }
 
-        // Actualizar estado de la visita a realizada (incluso si falla la captura de foto)
-        const { error: updAccErr } = await admin
-          .from('visitas_acceso')
-          .update({
-            estado: 'realizada',
-            timestamp_ingreso: new Date().toISOString(),
-            foto_ingreso_url: fotoIngresoUrl,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', visitaAcc.id);
-
-        if (updAccErr) {
-          this.logger.error(`❌ [QR AUTO-OPEN] Error al registrar ingreso en visitas_acceso: ${updAccErr.message}`);
-        } else {
-          this.logger.log(`✅ [QR AUTO-OPEN] Ingreso registrado con éxito para visitante ${visitaAcc.nombre_visitante}`);
-
-          // Limpiar visitante temporal del hardware Hikvision (ya no necesita acceso)
-          if (this.eliminarVisitaHwFn) {
-            this.eliminarVisitaHwFn(visitaAcc).catch(err =>
-              this.logger.warn(`⚠️ [QR AUTO-OPEN] No se pudo limpiar visitante del hardware: ${err.message}`)
-            );
-          }
+        // Limpiar visitante temporal del hardware Hikvision (ya no necesita acceso)
+        if (this.eliminarVisitaHwFn) {
+          this.eliminarVisitaHwFn(visitaAcc).catch(err =>
+            this.logger.warn(`⚠️ [QR AUTO-OPEN] No se pudo limpiar visitante del hardware: ${err.message}`)
+          );
         }
       }, 1500);
     }
