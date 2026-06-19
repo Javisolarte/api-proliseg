@@ -404,7 +404,7 @@ export class CotizacionesService {
             .from('cotizaciones')
             .select(`
                 *,
-                items:items_cotizacion(*, tipo_servicio:tipo_servicio(*)),
+                items:cotizaciones_items(*, tipo_servicio:tipo_servicio(*)),
                 cliente:clientes(nombre_empresa, nit, direccion, contacto, telefono)
             `)
             .eq('public_token', token)
