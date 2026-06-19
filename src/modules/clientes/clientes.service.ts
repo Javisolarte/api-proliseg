@@ -14,7 +14,10 @@ export class ClientesService {
 
   async findAll() {
     const supabase = this.supabaseService.getClient()
-    const { data, error } = await supabase.from("clientes").select("*").order("created_at", { ascending: false })
+    const { data, error } = await supabase
+      .from("clientes")
+      .select("*, contratos(id)")
+      .order("created_at", { ascending: false })
 
     if (error) throw error
     return data
@@ -58,23 +61,47 @@ export class ClientesService {
       }
     }
 
-    // 2. Crear el cliente vinculado al usuario (si se creó)
-    const { data, error } = await supabase
-      .from("clientes")
-      .insert({
-        ...clienteData,
-        usuario_id: createdUsuarioId || (clienteData as any).usuario_creador_id // Fallback al creador si no hay usuario propio
-      })
-      .select()
-      .single()
+    // 2. Crear o actualizar el cliente vinculado al usuario
+    let result;
 
-    if (error) {
-      // Si falla la creación del cliente y creamos un usuario, idealmente deberíamos revertir
-      // Pero el register ya hace limpieza interna si falla su parte.
-      throw error
+    if (createdUsuarioId) {
+      // Si se creó el usuario, el trigger 'trg_usuario_externo_insert' en la base de datos
+      // ya insertó automáticamente un registro en 'clientes'.
+      // Lo actualizamos con los datos detallados del cliente (dirección, contacto, email, etc.)
+      const { data, error } = await supabase
+        .from("clientes")
+        .update({
+          ...clienteData,
+          usuario_id: createdUsuarioId
+        })
+        .eq("usuario_id", createdUsuarioId)
+        .select()
+        .single();
+
+      if (error) {
+        this.logger.error(`Error al actualizar el cliente autocreado: ${error.message}`);
+        throw error;
+      }
+      result = data;
+    } else {
+      // Si no se proporcionaron credenciales, insertamos el cliente directamente
+      const { data, error } = await supabase
+        .from("clientes")
+        .insert({
+          ...clienteData,
+          usuario_id: (clienteData as any).usuario_creador_id || null // Fallback al creador si existe
+        })
+        .select()
+        .single();
+
+      if (error) {
+        this.logger.error(`Error al insertar el cliente: ${error.message}`);
+        throw error;
+      }
+      result = data;
     }
 
-    return data
+    return result;
   }
 
   async update(id: number, updateClienteDto: UpdateClienteDto) {

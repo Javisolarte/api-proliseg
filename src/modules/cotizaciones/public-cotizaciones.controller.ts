@@ -4,7 +4,7 @@ import { CotizacionesService } from './cotizaciones.service';
 import { Public } from '../auth/decorators/public.decorator';
 
 @ApiTags('Public')
-@Controller('api/public/cotizaciones')
+@Controller('public/cotizaciones')
 @Public()
 export class PublicCotizacionesController {
     constructor(private readonly cotizacionesService: CotizacionesService) { }

@@ -6,6 +6,7 @@ import {
   IsDateString,
   IsBoolean,
   Min,
+  IsString,
 } from 'class-validator';
 
 export class CreateContratoDto {
@@ -70,6 +71,51 @@ export class CreateContratoDto {
   @IsOptional()
   @IsBoolean()
   estado?: boolean;
+
+  @ApiProperty({
+    example: 1,
+    required: false,
+    description: 'ID del usuario creador del contrato',
+  })
+  @IsOptional()
+  @IsInt()
+  creado_por?: number;
+
+  @ApiProperty({
+    example: 'https://...',
+    required: false,
+    description: 'URL del RUT en storage',
+  })
+  @IsOptional()
+  @IsString()
+  rut_url?: string;
+
+  @ApiProperty({
+    example: 'https://...',
+    required: false,
+    description: 'URL de la Cámara de Comercio en storage',
+  })
+  @IsOptional()
+  @IsString()
+  camara_comercio_url?: string;
+
+  @ApiProperty({
+    example: 'https://...',
+    required: false,
+    description: 'URL de la Cédula del Representante en storage',
+  })
+  @IsOptional()
+  @IsString()
+  cedula_representante_url?: string;
+
+  @ApiProperty({
+    example: 'El cliente solicita atención especial los fines de semana.',
+    required: false,
+    description: 'Observaciones generales del contrato',
+  })
+  @IsOptional()
+  @IsString()
+  observaciones?: string;
 }
 
 export class UpdateContratoDto extends PartialType(CreateContratoDto) { }

@@ -58,7 +58,8 @@ export class ContratosService {
       .from('contratos')
       .select(`
         *,
-        clientes(id, nombre_empresa, nit, direccion, telefono, contacto)
+        clientes(id, nombre_empresa, nit, direccion, telefono, contacto),
+        creador:usuarios_externos!creado_por(id, nombre_completo, email)
       `)
       .eq('id', id);
 
@@ -141,6 +142,51 @@ export class ContratosService {
     }
 
     return { message: 'Contrato eliminado exitosamente', data };
+  }
+
+  /**
+   * Subir un documento legal opcional (RUT, Cámara de Comercio o Cédula)
+   */
+  async uploadDocumento(id: number, tipo: 'rut' | 'camara_comercio' | 'cedula', file: any) {
+    // Verificar que el contrato existe
+    await this.findOne(id);
+
+    const supabase = this.supabaseService.getClient();
+
+    // Generar nombre de archivo
+    const fileExt = file.originalname ? file.originalname.split('.').pop() : 'pdf';
+    const path = `contrato_${id}/${tipo}_${Date.now()}.${fileExt}`;
+
+    // Subir el archivo al bucket 'contratos'
+    const storagePath = await this.supabaseService.uploadFile('contratos', path, file.buffer, file.mimetype || 'application/pdf');
+
+    // Obtener la URL pública
+    const { data: publicUrlData } = supabase.storage.from('contratos').getPublicUrl(storagePath);
+    const publicUrl = publicUrlData.publicUrl;
+
+    // Actualizar base de datos
+    const updateData: any = {};
+    if (tipo === 'rut') {
+      updateData.rut_url = publicUrl;
+    } else if (tipo === 'camara_comercio') {
+      updateData.camara_comercio_url = publicUrl;
+    } else if (tipo === 'cedula') {
+      updateData.cedula_representante_url = publicUrl;
+    }
+
+    const { data, error } = await supabase
+      .from('contratos')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      this.logger.error(`Error al actualizar documento del contrato: ${error.message}`);
+      throw error;
+    }
+
+    return data;
   }
 
   /**

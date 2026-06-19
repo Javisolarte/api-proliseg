@@ -1,6 +1,7 @@
 import {
-  Controller, Get, Post, Put, Delete, Body, Param, UseGuards
+  Controller, Get, Post, Put, Delete, Body, Param, UseGuards, UseInterceptors, UploadedFile, BadRequestException
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiBody
 } from '@nestjs/swagger';
@@ -151,5 +152,24 @@ export class ContratosController {
   })
   async getResumenGuardas(@Param('id') id: number) {
     return this.contratosService.getResumenGuardas(id);
+  }
+
+  @Post(':id/documentos')
+  @RequirePermissions('contratos.write')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiOperation({ summary: 'Subir documento para el contrato (RUT, Cámara de Comercio o Cédula)' })
+  @ApiResponse({ status: 200, description: 'Documento subido exitosamente' })
+  async uploadDocumento(
+    @Param('id') id: number,
+    @Body('tipo') tipo: 'rut' | 'camara_comercio' | 'cedula',
+    @UploadedFile() file: any,
+  ) {
+    if (!file) {
+      throw new BadRequestException('Archivo no proporcionado');
+    }
+    if (!['rut', 'camara_comercio', 'cedula'].includes(tipo)) {
+      throw new BadRequestException('Tipo de documento inválido. Debe ser rut, camara_comercio o cedula');
+    }
+    return this.contratosService.uploadDocumento(id, tipo, file);
   }
 }
