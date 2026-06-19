@@ -329,7 +329,17 @@ export class ResidentesAppController {
 
   @Post('panico')
   @ApiOperation({ summary: 'Activar botón de pánico de emergencia' })
-  async activarPanico(@CurrentUser() user: any) {
+  async activarPanico(
+    @Body() body: {
+      latitud?: number;
+      longitud?: number;
+      precision_metros?: number;
+      dispositivo?: string;
+      version_app?: string;
+      mensaje?: string;
+    },
+    @CurrentUser() user: any
+  ) {
     const resident = await this.getResidentFromUser(user);
     const admin = this.supabaseService.getSupabaseAdminClient();
 
@@ -341,7 +351,6 @@ export class ResidentesAppController {
       .maybeSingle();
 
     const deviceId = device?.id || null;
-    const deviceName = device?.nombre_identificador || 'Dispositivo Central';
 
     const eventPayload = {
       dispositivo_id: deviceId,
@@ -356,6 +365,12 @@ export class ResidentesAppController {
         apto: resident.apto_casa,
         telefono: resident.telefono || resident.correo,
         residente_id: resident.id,
+        mensaje: body.mensaje || 'Alerta activada desde app móvil',
+        latitud: body.latitud || null,
+        longitud: body.longitud || null,
+        precision_metros: body.precision_metros || null,
+        dispositivo: body.dispositivo || 'app-movil',
+        version_app: body.version_app || null,
       },
     };
 
@@ -464,5 +479,24 @@ export class ResidentesAppController {
     }
 
     return { ok: true, mensaje: 'Persona removida de su lista con éxito' };
+  }
+
+  @Get('dispositivos')
+  @ApiOperation({ summary: 'Obtener los dispositivos de control de acceso asignados al puesto del residente' })
+  async getDispositivos(@CurrentUser() user: any) {
+    const resident = await this.getResidentFromUser(user);
+    const admin = this.supabaseService.getSupabaseAdminClient();
+
+    const { data: devices, error } = await admin
+      .from('dispositivos_iot')
+      .select('id, nombre_identificador, ip_direccion, activo')
+      .eq('puesto_id', resident.puesto_id)
+      .eq('activo', true);
+
+    if (error) {
+      throw new BadRequestException(`Error al obtener dispositivos: ${error.message}`);
+    }
+
+    return devices || [];
   }
 }
