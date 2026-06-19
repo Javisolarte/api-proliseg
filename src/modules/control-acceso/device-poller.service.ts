@@ -246,6 +246,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     
     const deviceIp = device.ip_direccion || ip;
     const isVpn = this.isVpnIp(deviceIp);
+    const serverPort = process.env.PORT || '3000';
     
     let ipAddressVal = '10.8.0.1';
     if (isVpn && deviceIp) {
@@ -254,10 +255,12 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         ipAddressVal = `${parts[0]}.${parts[1]}.${parts[2]}.1`;
       }
     }
-    let portNoVal = 80;
+    let portNoVal = isVpn ? parseInt(serverPort, 10) : 80;
     let protocolVal = 'HTTP';
     let addressingTypeVal = 'ipaddress';
-    let webhookUrl = `http://${ipAddressVal}/api/control-acceso/webhook/evento/hik/${device.id}`;
+    let webhookUrl = isVpn
+      ? `http://${ipAddressVal}:${serverPort}/api/control-acceso/webhook/evento/hik/${device.id}`
+      : `http://${ipAddressVal}/api/control-acceso/webhook/evento/hik/${device.id}`;
     
     if (!isVpn) {
       ipAddressVal = 'servidor.proliseg.com';
@@ -322,6 +325,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     
     const deviceIp = device.ip_direccion || ip;
     const isVpn = this.isVpnIp(deviceIp);
+    const serverPort = process.env.PORT || '3000';
     
     let gatewayIp = '10.8.0.1';
     if (isVpn && deviceIp) {
@@ -331,7 +335,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       }
     }
     let webhookUrl = isVpn
-      ? `http://${gatewayIp}/api/control-acceso/webhook/evento/dahua/${device.id}`
+      ? `http://${gatewayIp}:${serverPort}/api/control-acceso/webhook/evento/dahua/${device.id}`
       : `${webhookBase.replace(/^http:/i, 'https:')}/dahua/${device.id}`;
 
     // Permitir personalizar el webhook desde configuracion_tecnica
