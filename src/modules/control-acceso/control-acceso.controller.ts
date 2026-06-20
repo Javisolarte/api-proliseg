@@ -264,6 +264,18 @@ export class ControlAccesoController {
     return this.controlAccesoService.getRegistrosRecopilacion(Number(lugarId));
   }
 
+  @Put('recopilacion/registros/:id')
+  @ApiOperation({ summary: 'Actualiza los datos personales y de vehículo de un registro recopilado' })
+  async updateRegistroRecopilacion(@Param('id') id: string, @Body() body: any) {
+    return this.controlAccesoService.updateRegistroRecopilacion(Number(id), body);
+  }
+
+  @Delete('recopilacion/registros/:id')
+  @ApiOperation({ summary: 'Elimina un registro de recopilación' })
+  async deleteRegistroRecopilacion(@Param('id') id: string) {
+    return this.controlAccesoService.deleteRegistroRecopilacion(Number(id));
+  }
+
   @Public()
   @Get('recopilacion/public/:token')
   @ApiOperation({ summary: 'Obtiene metadata publica del formulario por token' })

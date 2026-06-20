@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Body, Param, Req, UseGuards, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Param, Req, UseGuards, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { ControlAccesoService } from './control-acceso.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -9,6 +9,8 @@ import axios from 'axios';
 @ApiBearerAuth('JWT-auth')
 @Controller('residentes-app')
 export class ResidentesAppController {
+  private readonly logger = new Logger(ResidentesAppController.name);
+
   constructor(
     private readonly supabaseService: SupabaseService,
     private readonly controlAccesoService: ControlAccesoService,
@@ -32,9 +34,33 @@ export class ResidentesAppController {
   @ApiOperation({ summary: 'Obtener datos del apartamento, torre y perfil del residente logueado' })
   async getPerfil(@CurrentUser() user: any) {
     const resident = await this.getResidentFromUser(user);
+    const admin = this.supabaseService.getSupabaseAdminClient();
+
+    // Consultar si tiene vehículo
+    const { data: recopilacionReg } = await admin
+      .from('control_acceso_recoleccion_registros')
+      .select('tiene_vehiculo, placa_vehiculo')
+      .eq('cedula', resident.documento)
+      .maybeSingle();
+
+    const { data: vehiculoReg } = await admin
+      .from('vehiculos')
+      .select('id')
+      .eq('tarjeta_propietario', resident.documento)
+      .limit(1);
+
+    const tieneVehiculo = 
+      !!recopilacionReg?.tiene_vehiculo || 
+      !!recopilacionReg?.placa_vehiculo || 
+      (vehiculoReg && vehiculoReg.length > 0);
+
     return {
       ok: true,
-      residente: resident,
+      residente: {
+        ...resident,
+        tiene_vehiculo: tieneVehiculo,
+        placa_vehiculo: recopilacionReg?.placa_vehiculo || null
+      },
       usuario: user,
     };
   }
@@ -487,10 +513,36 @@ export class ResidentesAppController {
     const resident = await this.getResidentFromUser(user);
     const admin = this.supabaseService.getSupabaseAdminClient();
 
+    // 1. Obtener persona vinculada al residente
+    const { data: persona } = await admin
+      .from('personas_gestion_acceso')
+      .select('id')
+      .eq('documento_identidad', resident.documento)
+      .eq('activo', true)
+      .maybeSingle();
+
+    if (!persona) {
+      return [];
+    }
+
+    // 2. Obtener permisos de acceso del residente
+    const { data: permisos } = await admin
+      .from('acceso_permisos_dispositivos')
+      .select('dispositivo_id')
+      .eq('persona_id', persona.id)
+      .eq('activo', true);
+
+    if (!permisos || permisos.length === 0) {
+      return [];
+    }
+
+    const deviceIds = permisos.map(p => p.dispositivo_id);
+
+    // 3. Consultar los dispositivos autorizados y activos
     const { data: devices, error } = await admin
       .from('dispositivos_iot')
-      .select('id, nombre_identificador, ip_direccion, activo')
-      .eq('puesto_id', resident.puesto_id)
+      .select('id, nombre_identificador, ip_direccion, activo, apertura_desde_app, apertura_latitud, apertura_longitud, apertura_radio, apertura_automatica, apertura_auto_vehiculo_only, apertura_velocidad_minima, configuracion_tecnica')
+      .in('id', deviceIds)
       .eq('activo', true);
 
     if (error) {
@@ -498,5 +550,112 @@ export class ResidentesAppController {
     }
 
     return devices || [];
+  }
+
+  @Post('dispositivo/:deviceId/puerta')
+  @ApiOperation({ summary: 'Apertura/cierre remota de puerta desde la app para residentes autorizados con vehículo' })
+  async controlPuertaResidente(
+    @Param('deviceId') deviceId: string,
+    @Body() body: { command?: 'abrir' | 'cerrar' },
+    @CurrentUser() user: any
+  ) {
+    const command = body?.command || 'abrir';
+    if (command !== 'abrir' && command !== 'cerrar') {
+      throw new BadRequestException('Comando inválido. Debe ser abrir o cerrar');
+    }
+
+    const resident = await this.getResidentFromUser(user);
+    const admin = this.supabaseService.getSupabaseAdminClient();
+
+    // 1. Obtener dispositivo y verificar si permite apertura desde el app
+    const { data: device, error: devErr } = await admin
+      .from('dispositivos_iot')
+      .select('*')
+      .eq('id', deviceId)
+      .maybeSingle();
+
+    if (devErr || !device) {
+      throw new NotFoundException('Dispositivo no encontrado');
+    }
+
+    if (!device.apertura_desde_app) {
+      throw new BadRequestException('La apertura desde el app no está habilitada para este dispositivo');
+    }
+
+    // 2. Verificar si el residente tiene vehículo
+    const { data: recopilacionReg } = await admin
+      .from('control_acceso_recoleccion_registros')
+      .select('tiene_vehiculo, placa_vehiculo')
+      .eq('cedula', resident.documento)
+      .maybeSingle();
+
+    const { data: vehiculoReg } = await admin
+      .from('vehiculos')
+      .select('id')
+      .eq('tarjeta_propietario', resident.documento)
+      .limit(1);
+
+    const tieneVehiculo = 
+      !!recopilacionReg?.tiene_vehiculo || 
+      !!recopilacionReg?.placa_vehiculo || 
+      (vehiculoReg && vehiculoReg.length > 0);
+
+    if (!tieneVehiculo) {
+      throw new BadRequestException('Acceso denegado: El residente no tiene un vehículo registrado');
+    }
+
+    // 3. Verificar si el residente está sincronizado a este dispositivo
+    const { data: persona } = await admin
+      .from('personas_gestion_acceso')
+      .select('id')
+      .eq('documento_identidad', resident.documento)
+      .eq('activo', true)
+      .maybeSingle();
+
+    if (!persona) {
+      throw new BadRequestException('Acceso denegado: No se encontró una persona activa para este residente');
+    }
+
+    const { data: permiso } = await admin
+      .from('acceso_permisos_dispositivos')
+      .select('id')
+      .eq('persona_id', persona.id)
+      .eq('dispositivo_id', deviceId)
+      .eq('activo', true)
+      .maybeSingle();
+
+    if (!permiso) {
+      throw new BadRequestException('Acceso denegado: El residente no está sincronizado a este dispositivo');
+    }
+
+    // 4. Ejecutar el comando de puerta
+    this.logger.log(`🚪 [APERTURA REMOTA APP] Residente ${resident.nombre_completo} (CC ${resident.documento}) ejecutando "${command}" en dispositivo ${device.nombre_identificador} (${device.ip_direccion})`);
+    
+    const result = await this.controlAccesoService.controlPuerta(
+      device.ip_direccion,
+      1,
+      command,
+      {
+        deviceId: device.id,
+        user: device.credencial_usuario,
+        pass: device.credencial_password,
+        port: device.configuracion_tecnica?.puerto,
+        marca: device.configuracion_tecnica?.marca,
+        operator: {
+          id: user.id,
+          nombre_completo: `RESIDENTE: ${resident.nombre_completo}`,
+        }
+      }
+    );
+
+    if (!result.ok) {
+      throw new BadRequestException(result.mensaje || 'Error al ejecutar el comando en el dispositivo');
+    }
+
+    return {
+      ok: true,
+      mensaje: `Comando ${command} enviado con éxito al dispositivo`,
+      detalle: result.detalle || null
+    };
   }
 }

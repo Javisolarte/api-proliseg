@@ -216,6 +216,7 @@ export class ControlAccesoService implements OnModuleInit {
       credencial_usuario: insertData.dispositivo_usuario || 'admin',
       credencial_password: insertData.dispositivo_password || '',
       estado: insertData.estado || 'operativo',
+      apertura_desde_app: insertData.apertura_desde_app ?? false,
       configuracion_tecnica: {
         marca: insertData.configuracion_tecnica?.marca || insertData.marca || 'Hikvision',
         modelo: insertData.configuracion_tecnica?.modelo || insertData.modelo || '',
@@ -252,7 +253,7 @@ export class ControlAccesoService implements OnModuleInit {
     const { data: current } = await this.supabase
       .getClient()
       .from('dispositivos_iot')
-      .select('configuracion_tecnica')
+      .select('configuracion_tecnica, apertura_desde_app, apertura_latitud, apertura_longitud, apertura_radio, apertura_automatica, apertura_auto_vehiculo_only, apertura_velocidad_minima')
       .eq('id', id)
       .maybeSingle();
 
@@ -267,6 +268,13 @@ export class ControlAccesoService implements OnModuleInit {
       credencial_usuario: dto.dispositivo_usuario || dto.credencial_usuario || 'admin',
       credencial_password: dto.dispositivo_password || dto.credencial_password || '',
       estado: dto.estado || 'operativo',
+      apertura_desde_app: dto.apertura_desde_app ?? current?.apertura_desde_app ?? false,
+      apertura_latitud: dto.apertura_latitud !== undefined ? dto.apertura_latitud : (current as any)?.apertura_latitud,
+      apertura_longitud: dto.apertura_longitud !== undefined ? dto.apertura_longitud : (current as any)?.apertura_longitud,
+      apertura_radio: dto.apertura_radio !== undefined ? dto.apertura_radio : (current as any)?.apertura_radio,
+      apertura_automatica: dto.apertura_automatica !== undefined ? dto.apertura_automatica : (current as any)?.apertura_automatica,
+      apertura_auto_vehiculo_only: dto.apertura_auto_vehiculo_only !== undefined ? dto.apertura_auto_vehiculo_only : (current as any)?.apertura_auto_vehiculo_only,
+      apertura_velocidad_minima: dto.apertura_velocidad_minima !== undefined ? dto.apertura_velocidad_minima : (current as any)?.apertura_velocidad_minima,
       configuracion_tecnica: {
         ...currentConfig,
         ...incomingConfig,
@@ -3460,6 +3468,47 @@ export class ControlAccesoService implements OnModuleInit {
             .from('personas_gestion_acceso')
             .update({ entidad_tipo: 'residente', entidad_id: residentResult.residente.id })
             .eq('id', persona.id);
+
+          // Sincronizar información del vehículo si aplica
+          if (rec.tiene_vehiculo && rec.placa_vehiculo) {
+            try {
+              const placaUpper = String(rec.placa_vehiculo).trim().toUpperCase();
+              const { data: existingVeh } = await admin
+                .from('vehiculos')
+                .select('id')
+                .eq('placa', placaUpper)
+                .maybeSingle();
+
+              const vehPayload = {
+                tipo: 'carro',
+                placa: placaUpper,
+                marca: 'Genérico',
+                modelo: 'Genérico',
+                color: rec.color_vehiculo || null,
+                tarjeta_propietario: rec.cedula,
+                activo: true
+              };
+
+              if (!existingVeh) {
+                await admin
+                  .from('vehiculos')
+                  .insert(vehPayload);
+                this.logger.log(`🚗 [VEHICULO SYNC] Creado vehículo ${placaUpper} para residente ${rec.cedula}`);
+              } else {
+                await admin
+                  .from('vehiculos')
+                  .update({
+                    color: rec.color_vehiculo || null,
+                    tarjeta_propietario: rec.cedula,
+                    activo: true
+                  })
+                  .eq('placa', placaUpper);
+                this.logger.log(`🚗 [VEHICULO SYNC] Actualizado vehículo ${placaUpper} para residente ${rec.cedula}`);
+              }
+            } catch (vehErr) {
+              this.logger.error(`❌ [VEHICULO SYNC ERROR] No se pudo sincronizar vehículo: ${vehErr.message}`);
+            }
+          }
         }
       } catch (authErr) {
         this.logger.warn(`⚠️ [RESIDENT AUTO-PROVISION] FAILED for ${rec.cedula}: ${authErr.message}`);
@@ -4156,6 +4205,7 @@ export class ControlAccesoService implements OnModuleInit {
       correo_electronico: body.correo_electronico || null,
       apartamento: body.apartamento || null,
       torre: body.torre || null,
+      tiene_vehiculo: !!body.tiene_vehiculo,
       placa_vehiculo: body.placa_vehiculo || null,
       color_vehiculo: body.color_vehiculo || null,
       foto_rostro_url: fotoUrl,
@@ -4477,5 +4527,41 @@ export class ControlAccesoService implements OnModuleInit {
 
   async registrarEgresoVisita(id: string) {
     throw new Error('El registro de egreso ha sido deshabilitado ya que no se cuenta con control de salida.');
+  }
+
+  async updateRegistroRecopilacion(id: number, input: any) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const payload = {
+      nombre_completo: input.nombre_completo,
+      cedula: input.cedula,
+      telefono: input.telefono,
+      telefono2: input.telefono2 || null,
+      correo_electronico: input.correo_electronico || null,
+      apartamento: input.apartamento || null,
+      torre: input.torre || null,
+      tiene_vehiculo: !!input.tiene_vehiculo,
+      placa_vehiculo: input.tiene_vehiculo ? (input.placa_vehiculo || null) : null,
+      color_vehiculo: input.tiene_vehiculo ? (input.color_vehiculo || null) : null,
+    };
+    const { data, error } = await admin
+      .from('control_acceso_recoleccion_registros')
+      .update(payload)
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  async deleteRegistroRecopilacion(id: number) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const { data, error } = await admin
+      .from('control_acceso_recoleccion_registros')
+      .delete()
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
   }
 }
