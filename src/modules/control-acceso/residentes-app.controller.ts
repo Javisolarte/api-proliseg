@@ -164,7 +164,7 @@ export class ResidentesAppController {
         .from('dispositivos_iot')
         .select('id')
         .eq('puesto_id', resident.puesto_id)
-        .eq('activo', true);
+        .eq('estado', 'operativo');
 
       if (devices && devices.length > 0) {
         dispositivoId = devices[0].id;
@@ -539,9 +539,9 @@ export class ResidentesAppController {
     // 3. Consultar todos los dispositivos activos asignados al puesto del residente
     const { data: devices, error } = await admin
       .from('dispositivos_iot')
-      .select('id, nombre_identificador, ip_direccion, activo, apertura_desde_app, apertura_latitud, apertura_longitud, apertura_radio, apertura_automatica, apertura_auto_vehiculo_only, apertura_velocidad_minima, configuracion_tecnica')
+      .select('id, nombre_identificador, ip_direccion, apertura_desde_app, apertura_latitud, apertura_longitud, apertura_radio, apertura_automatica, apertura_auto_vehiculo_only, apertura_velocidad_minima, configuracion_tecnica')
       .eq('puesto_id', resident.puesto_id)
-      .eq('activo', true);
+      .eq('estado', 'operativo');
 
     if (error) {
       throw new BadRequestException(`Error al obtener dispositivos: ${error.message}`);
