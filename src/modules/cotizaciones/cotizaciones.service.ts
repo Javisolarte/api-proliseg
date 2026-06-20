@@ -430,7 +430,7 @@ export class CotizacionesService {
     async aceptarPublico(token: string) {
         const cotizacion = await this.findByToken(token);
 
-        if (cotizacion.estado !== 'enviada' && cotizacion.estado !== 'en_proceso') {
+        if (cotizacion.estado !== 'enviada' && cotizacion.estado !== 'en_proceso' && cotizacion.estado !== 'aprobada') {
             throw new BadRequestException('Esta cotización no puede ser aceptada en su estado actual');
         }
 
@@ -455,7 +455,7 @@ export class CotizacionesService {
     async rechazarPublico(token: string, motivo: string, detalle?: string) {
         const cotizacion = await this.findByToken(token);
 
-        if (cotizacion.estado !== 'enviada' && cotizacion.estado !== 'en_proceso') {
+        if (cotizacion.estado !== 'enviada' && cotizacion.estado !== 'en_proceso' && cotizacion.estado !== 'aprobada') {
             throw new BadRequestException('Esta cotización no puede ser rechazada en su estado actual');
         }
 
