@@ -513,7 +513,7 @@ export class ResidentesAppController {
     const resident = await this.getResidentFromUser(user);
     const admin = this.supabaseService.getSupabaseAdminClient();
 
-    // 1. Obtener persona vinculada al residente
+    // 1. Obtener persona vinculada al residente (si existe) para buscar sus permisos específicos
     const { data: persona } = await admin
       .from('personas_gestion_acceso')
       .select('id')
@@ -521,35 +521,39 @@ export class ResidentesAppController {
       .eq('activo', true)
       .maybeSingle();
 
-    if (!persona) {
-      return [];
+    let permittedDeviceIds: string[] = [];
+
+    if (persona) {
+      // 2. Obtener permisos de acceso del residente
+      const { data: permisos } = await admin
+        .from('acceso_permisos_dispositivos')
+        .select('dispositivo_id')
+        .eq('persona_id', persona.id)
+        .eq('activo', true);
+
+      if (permisos && permisos.length > 0) {
+        permittedDeviceIds = permisos.map(p => p.dispositivo_id);
+      }
     }
 
-    // 2. Obtener permisos de acceso del residente
-    const { data: permisos } = await admin
-      .from('acceso_permisos_dispositivos')
-      .select('dispositivo_id')
-      .eq('persona_id', persona.id)
-      .eq('activo', true);
-
-    if (!permisos || permisos.length === 0) {
-      return [];
-    }
-
-    const deviceIds = permisos.map(p => p.dispositivo_id);
-
-    // 3. Consultar los dispositivos autorizados y activos
+    // 3. Consultar todos los dispositivos activos asignados al puesto del residente
     const { data: devices, error } = await admin
       .from('dispositivos_iot')
       .select('id, nombre_identificador, ip_direccion, activo, apertura_desde_app, apertura_latitud, apertura_longitud, apertura_radio, apertura_automatica, apertura_auto_vehiculo_only, apertura_velocidad_minima, configuracion_tecnica')
-      .in('id', deviceIds)
+      .eq('puesto_id', resident.puesto_id)
       .eq('activo', true);
 
     if (error) {
       throw new BadRequestException(`Error al obtener dispositivos: ${error.message}`);
     }
 
-    return devices || [];
+    // 4. Mapear agregando la propiedad 'vinculado'
+    const devicesMapped = (devices || []).map(device => ({
+      ...device,
+      vinculado: permittedDeviceIds.includes(device.id),
+    }));
+
+    return devicesMapped;
   }
 
   @Post('dispositivo/:deviceId/puerta')
