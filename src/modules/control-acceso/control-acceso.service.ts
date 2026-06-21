@@ -253,7 +253,7 @@ export class ControlAccesoService implements OnModuleInit {
     const { data: current } = await this.supabase
       .getClient()
       .from('dispositivos_iot')
-      .select('configuracion_tecnica, apertura_desde_app, apertura_latitud, apertura_longitud, apertura_radio, apertura_automatica, apertura_auto_vehiculo_only, apertura_velocidad_minima')
+      .select('configuracion_tecnica, credencial_password, apertura_desde_app, apertura_latitud, apertura_longitud, apertura_radio, apertura_automatica, apertura_auto_vehiculo_only, apertura_velocidad_minima')
       .eq('id', id)
       .maybeSingle();
 
@@ -266,7 +266,7 @@ export class ControlAccesoService implements OnModuleInit {
       ip_direccion: dto.ip_direccion || dto.ip,
       sn_serie: dto.sn_serie || dto.sn_serial,
       credencial_usuario: dto.dispositivo_usuario || dto.credencial_usuario || 'admin',
-      credencial_password: dto.dispositivo_password || dto.credencial_password || '',
+      credencial_password: dto.dispositivo_password || dto.credencial_password || current?.credencial_password || '',
       estado: dto.estado || 'operativo',
       apertura_desde_app: dto.apertura_desde_app ?? current?.apertura_desde_app ?? false,
       apertura_latitud: dto.apertura_latitud !== undefined ? dto.apertura_latitud : (current as any)?.apertura_latitud,

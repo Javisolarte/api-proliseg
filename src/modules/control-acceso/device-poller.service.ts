@@ -179,7 +179,11 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     this.fallbackTimers.forEach(t => clearInterval(t));
     this.fallbackTimers.clear();
     this.devicesMap.clear();
-    await this.setupAllDevices();
+    
+    // Ejecutar en segundo plano sin await para no bloquear la respuesta HTTP
+    this.setupAllDevices().catch(err => {
+      this.logger.error(`❌ [EventSystem] Error en setup en segundo plano: ${err.message}`);
+    });
   }
 
   // ─── Setup inicial: registro de webhooks en cámaras ──────────────────────
@@ -204,7 +208,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     // URL pública donde las cámaras deben mandar sus eventos
     const webhookBase = 'http://servidor.proliseg.com/api/control-acceso/webhook/evento';
 
-    for (const device of devices as DeviceInfo[]) {
+    // Iniciar el registro de todos los dispositivos en paralelo para no bloquearse entre sí
+    const setupPromises = (devices as DeviceInfo[]).map(async (device) => {
       const marca = (device.configuracion_tecnica?.marca || 'hikvision').toLowerCase();
       const port = device.configuracion_tecnica?.puertos_mapeados?.mapped_http
         || device.configuracion_tecnica?.puerto
@@ -233,7 +238,9 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         await this.registerHikvisionWebhook(device, ip, port, user, pass, webhookBase).catch(() => {});
         this.startFallbackPolling(device, ip, port, user, pass, 'hikvision');
       }
-    }
+    });
+
+    await Promise.allSettled(setupPromises);
   }
 
   // ─── Registro de webhook en Hikvision ISAPI ───────────────────────────────
