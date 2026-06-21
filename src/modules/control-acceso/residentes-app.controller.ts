@@ -49,17 +49,27 @@ export class ResidentesAppController {
       .eq('tarjeta_propietario', resident.documento)
       .limit(1);
 
+    const { data: resVehiculoReg } = await admin
+      .from('residentes_vehiculos')
+      .select('id, placa')
+      .eq('residente_id', resident.id)
+      .eq('activo', true)
+      .limit(1);
+
     const tieneVehiculo = 
       !!recopilacionReg?.tiene_vehiculo || 
       !!recopilacionReg?.placa_vehiculo || 
-      (vehiculoReg && vehiculoReg.length > 0);
+      (vehiculoReg && vehiculoReg.length > 0) ||
+      (resVehiculoReg && resVehiculoReg.length > 0);
+
+    const placaVehiculo = recopilacionReg?.placa_vehiculo || (resVehiculoReg && resVehiculoReg.length > 0 ? resVehiculoReg[0].placa : null);
 
     return {
       ok: true,
       residente: {
         ...resident,
         tiene_vehiculo: tieneVehiculo,
-        placa_vehiculo: recopilacionReg?.placa_vehiculo || null
+        placa_vehiculo: placaVehiculo
       },
       usuario: user,
     };
@@ -638,13 +648,24 @@ export class ResidentesAppController {
       .eq('tarjeta_propietario', resident.documento)
       .limit(1);
 
+    const { data: resVehiculoReg } = await admin
+      .from('residentes_vehiculos')
+      .select('id')
+      .eq('residente_id', resident.id)
+      .eq('activo', true)
+      .limit(1);
+
     const tieneVehiculo = 
       !!recopilacionReg?.tiene_vehiculo || 
       !!recopilacionReg?.placa_vehiculo || 
-      (vehiculoReg && vehiculoReg.length > 0);
+      (vehiculoReg && vehiculoReg.length > 0) ||
+      (resVehiculoReg && resVehiculoReg.length > 0);
 
-    if (!tieneVehiculo) {
-      throw new BadRequestException('Acceso denegado: El residente no tiene un vehículo registrado');
+    const config = device.configuracion_tecnica || {};
+    const tipoAcceso = config.tipo_acceso || 'vehicular';
+
+    if (tipoAcceso === 'vehicular' && !tieneVehiculo) {
+      throw new BadRequestException('Acceso denegado: El residente no tiene un vehículo registrado para operar este acceso vehicular');
     }
 
     // 3. Verificar si el residente está sincronizado a este dispositivo
