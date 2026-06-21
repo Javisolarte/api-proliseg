@@ -160,14 +160,33 @@ export class ResidentesAppController {
 
     let dispositivoId = body.dispositivo_id;
     if (!dispositivoId) {
-      const { data: devices } = await admin
-        .from('dispositivos_iot')
-        .select('id')
-        .eq('puesto_id', resident.puesto_id)
-        .eq('estado', 'operativo');
+      // Intentar obtener el primer dispositivo permitido para el residente
+      let permittedDeviceIds: string[] = [];
+      if (persona) {
+        const { data: permisos } = await admin
+          .from('acceso_permisos_dispositivos')
+          .select('dispositivo_id')
+          .eq('persona_id', persona.id)
+          .eq('activo', true);
 
-      if (devices && devices.length > 0) {
-        dispositivoId = devices[0].id;
+        if (permisos && permisos.length > 0) {
+          permittedDeviceIds = permisos.map(p => p.dispositivo_id);
+        }
+      }
+
+      if (permittedDeviceIds.length > 0) {
+        dispositivoId = permittedDeviceIds[0];
+      } else {
+        // Fallback por puesto_id
+        const { data: devices } = await admin
+          .from('dispositivos_iot')
+          .select('id')
+          .eq('puesto_id', resident.puesto_id)
+          .eq('estado', 'operativo');
+
+        if (devices && devices.length > 0) {
+          dispositivoId = devices[0].id;
+        }
       }
     }
 
@@ -536,23 +555,43 @@ export class ResidentesAppController {
       }
     }
 
-    // 3. Consultar todos los dispositivos activos asignados al puesto del residente
-    const { data: devices, error } = await admin
-      .from('dispositivos_iot')
-      .select('id, nombre_identificador, ip_direccion, apertura_desde_app, apertura_latitud, apertura_longitud, apertura_radio, apertura_automatica, apertura_auto_vehiculo_only, apertura_velocidad_minima, configuracion_tecnica')
-      .eq('puesto_id', resident.puesto_id)
-      .eq('estado', 'operativo');
-
-    if (error) {
-      throw new BadRequestException(`Error al obtener dispositivos: ${error.message}`);
+    // 3. Consultar dispositivos
+    // Query A: por IDs permitidos (si hay alguno)
+    let devicesA: any[] = [];
+    if (permittedDeviceIds.length > 0) {
+      const { data, error: errA } = await admin
+        .from('dispositivos_iot')
+        .select('id, nombre_identificador, ip_direccion, apertura_desde_app, apertura_latitud, apertura_longitud, apertura_radio, apertura_automatica, apertura_auto_vehiculo_only, apertura_velocidad_minima, configuracion_tecnica')
+        .in('id', permittedDeviceIds)
+        .eq('estado', 'operativo');
+      if (errA) throw new BadRequestException(`Error al obtener dispositivos vinculados: ${errA.message}`);
+      devicesA = data || [];
     }
 
-    // 4. Mapear agregando la propiedad 'vinculado'
-    const devicesMapped = (devices || []).map(device => ({
-      ...device,
-      vinculado: permittedDeviceIds.includes(device.id),
-    }));
+    // Query B: por puesto_id (si resident.puesto_id no es nulo)
+    let devicesB: any[] = [];
+    if (resident.puesto_id) {
+      const { data, error: errB } = await admin
+        .from('dispositivos_iot')
+        .select('id, nombre_identificador, ip_direccion, apertura_desde_app, apertura_latitud, apertura_longitud, apertura_radio, apertura_automatica, apertura_auto_vehiculo_only, apertura_velocidad_minima, configuracion_tecnica')
+        .eq('puesto_id', resident.puesto_id)
+        .eq('estado', 'operativo');
+      if (errB) throw new BadRequestException(`Error al obtener dispositivos del puesto: ${errB.message}`);
+      devicesB = data || [];
+    }
 
+    // Combinar los dos conjuntos de dispositivos (evitando duplicados)
+    const deviceMap = new Map<string, any>();
+    for (const d of devicesA) {
+      deviceMap.set(d.id, { ...d, vinculado: true });
+    }
+    for (const d of devicesB) {
+      if (!deviceMap.has(d.id)) {
+        deviceMap.set(d.id, { ...d, vinculado: permittedDeviceIds.includes(d.id) });
+      }
+    }
+
+    const devicesMapped = Array.from(deviceMap.values());
     return devicesMapped;
   }
 
