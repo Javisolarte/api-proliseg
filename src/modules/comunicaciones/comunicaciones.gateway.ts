@@ -238,10 +238,29 @@ export class ComunicacionesGateway implements OnGatewayInit, OnGatewayConnection
 
         const user = client.data.user;
         let empleadoNombre = user?.nombre_completo || user?.full_name;
+        const supabaseClient = this.supabaseService.getClient();
 
-        if (!empleadoNombre && data.empleado_id) {
+        if (data.es_residente) {
             try {
-                const supabaseClient = this.supabaseService.getClient();
+                const { data: res } = await supabaseClient
+                    .from('residentes')
+                    .select('nombre_completo, apto_casa, torre_bloque')
+                    .eq('usuario_id', user.user_id)
+                    .maybeSingle();
+                if (res) {
+                    const apto = res.apto_casa || '';
+                    const torre = res.torre_bloque || '';
+                    const ubicacion = [torre ? `Torre ${torre}` : '', apto ? `Apto ${apto}` : ''].filter(Boolean).join(' ');
+                    empleadoNombre = `RESIDENTE: ${res.nombre_completo} (${ubicacion})`;
+                } else {
+                    empleadoNombre = `RESIDENTE: ${user.email}`;
+                }
+            } catch (err) {
+                this.logger.warn(`⚠️ No se pudo obtener nombre de residente desde Supabase: ${err.message}`);
+                empleadoNombre = `RESIDENTE: ${user.email}`;
+            }
+        } else if (!empleadoNombre && data.empleado_id) {
+            try {
                 const { data: emp } = await supabaseClient
                     .from('empleados')
                     .select('nombre_completo')
@@ -256,7 +275,7 @@ export class ComunicacionesGateway implements OnGatewayInit, OnGatewayConnection
         }
 
         if (!empleadoNombre) {
-            empleadoNombre = `Guardia-${data.empleado_id}`;
+            empleadoNombre = data.es_residente ? `Residente-${data.empleado_id}` : `Guardia-${data.empleado_id}`;
         }
         
         // 🆔 GENERACIÓN DE NOMBRE TÁCTICO DE CANAL

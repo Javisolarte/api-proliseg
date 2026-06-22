@@ -74,6 +74,11 @@ export class IniciarComunicacionDto {
     @IsString()
     @IsOptional()
     version_app?: string;
+
+    @ApiPropertyOptional({ description: 'Indica si es llamada de un residente' })
+    @IsBoolean()
+    @IsOptional()
+    es_residente?: boolean;
 }
 
 /**

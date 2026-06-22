@@ -632,6 +632,13 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    if (evento.tipo_evento === 'puerta_abierta' || evento.tipo_evento === 'puerta_cerrada') {
+      const estadoPuerta = evento.tipo_evento === 'puerta_abierta' ? 'abierta' : 'cerrada';
+      this.updatePuertaEstado(evento.dispositivo_id, estadoPuerta).catch(err => {
+        this.logger.warn(`⚠️ [EventSystem] Error actualizando puerta_estado: ${err.message}`);
+      });
+    }
+
     const persistirEvento = async () => {
       let persona: any = null;
       if (evento.tipo_evento === 'llamada') {
@@ -1178,6 +1185,38 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           );
         }
       }, 1500);
+    }
+  }
+
+  private async updatePuertaEstado(dispositivoId: string, estadoPuerta: 'abierta' | 'cerrada') {
+    const admin = this.supabase.getSupabaseAdminClient();
+    try {
+      const { data: dev, error: fetchError } = await admin
+        .from('dispositivos_iot')
+        .select('configuracion_tecnica')
+        .eq('id', dispositivoId)
+        .maybeSingle();
+
+      if (fetchError || !dev) {
+        this.logger.warn(`⚠️ [updatePuertaEstado] Error fetching device ${dispositivoId}: ${fetchError?.message}`);
+        return;
+      }
+
+      const config = dev.configuracion_tecnica || {};
+      config.puerta_estado = estadoPuerta;
+
+      const { error: updateError } = await admin
+        .from('dispositivos_iot')
+        .update({ configuracion_tecnica: config })
+        .eq('id', dispositivoId);
+
+      if (updateError) {
+        this.logger.warn(`⚠️ [updatePuertaEstado] Error updating device ${dispositivoId}: ${updateError.message}`);
+      } else {
+        this.logger.log(`🚪 [updatePuertaEstado] Device ${dispositivoId} set to ${estadoPuerta}`);
+      }
+    } catch (e) {
+      this.logger.error(`❌ [updatePuertaEstado] Exception: ${e.message}`);
     }
   }
 }
