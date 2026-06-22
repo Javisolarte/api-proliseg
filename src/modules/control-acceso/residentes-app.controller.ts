@@ -326,39 +326,6 @@ export class ResidentesAppController {
     const resident = await this.getResidentFromUser(user);
     const admin = this.supabaseService.getSupabaseAdminClient();
 
-    let { data: persona } = await admin
-      .from('personas_gestion_acceso')
-      .select('id')
-      .eq('entidad_tipo', 'residente')
-      .eq('entidad_id', resident.id)
-      .maybeSingle();
-
-    if (!persona && resident.documento) {
-      const { data: pByDoc } = await admin
-        .from('personas_gestion_acceso')
-        .select('id')
-        .eq('documento_identidad', resident.documento)
-        .maybeSingle();
-      persona = pByDoc;
-    }
-
-    let queryVisitas = admin
-      .from('visitas_acceso')
-      .select('documento_visitante');
-
-    if (persona) {
-      queryVisitas = queryVisitas.or(`residente_responsable_id.eq.${persona.id},residente_responsable_nombre.eq."${resident.nombre_completo}"`);
-    } else {
-      queryVisitas = queryVisitas.eq('residente_responsable_nombre', resident.nombre_completo);
-    }
-
-    const { data: visitas } = await queryVisitas;
-
-    const documents = [resident.documento].filter(Boolean);
-    if (visitas && visitas.length > 0) {
-      documents.push(...visitas.map(v => v.documento_visitante).filter(Boolean));
-    }
-
     let query = admin
       .from('dispositivos_eventos_historico')
       .select(`
@@ -368,10 +335,10 @@ export class ResidentesAppController {
       .order('timestamp', { ascending: false })
       .limit(100);
 
-    if (documents.length > 0) {
-      query = query.in('documento_persona', documents);
-    } else {
+    if (resident.documento) {
       query = query.eq('documento_persona', resident.documento);
+    } else {
+      query = query.eq('documento_persona', 'unknown-non-existent-doc');
     }
 
     const { data: logs, error } = await query;
@@ -708,6 +675,7 @@ export class ResidentesAppController {
         operator: {
           id: user.id,
           nombre_completo: `RESIDENTE: ${resident.nombre_completo}`,
+          cedula: resident.documento,
         }
       }
     );
