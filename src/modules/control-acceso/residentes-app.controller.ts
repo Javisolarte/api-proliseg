@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Body, Param, Req, UseGuards, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Req, UseGuards, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { ControlAccesoService } from './control-acceso.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -722,4 +722,67 @@ export class ResidentesAppController {
       detalle: result.detalle || null
     };
   }
+
+  @Patch('perfil')
+  @ApiOperation({ summary: 'Actualizar perfil del residente (nombre y teléfono)' })
+  async actualizarPerfil(
+    @Body() body: { nombre_completo?: string; telefono?: string },
+    @CurrentUser() user: any
+  ) {
+    const resident = await this.getResidentFromUser(user);
+    const admin = this.supabaseService.getSupabaseAdminClient();
+
+    const updateData: any = {};
+    if (body.nombre_completo !== undefined) {
+      updateData.nombre_completo = body.nombre_completo;
+    }
+    if (body.telefono !== undefined) {
+      updateData.telefono = body.telefono;
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      throw new BadRequestException('No se proporcionaron datos para actualizar');
+    }
+
+    // 1. Actualizar la tabla residentes
+    const { error: resError } = await admin
+      .from('residentes')
+      .update(updateData)
+      .eq('id', resident.id);
+
+    if (resError) {
+      this.logger.error(`❌ Error actualizando residentes: ${resError.message}`);
+      throw new BadRequestException(`Error al actualizar residentes: ${resError.message}`);
+    }
+
+    // 2. Actualizar la tabla usuarios_externos
+    const { error: userError } = await admin
+      .from('usuarios_externos')
+      .update(updateData)
+      .eq('id', user.id);
+
+    if (userError) {
+      this.logger.error(`❌ Error actualizando usuarios_externos: ${userError.message}`);
+      throw new BadRequestException(`Error al actualizar usuario externo: ${userError.message}`);
+    }
+
+    // 3. Actualizar la tabla personas_gestion_acceso (solo nombre_completo)
+    if (body.nombre_completo !== undefined) {
+      const { error: personaError } = await admin
+        .from('personas_gestion_acceso')
+        .update({ nombre_completo: body.nombre_completo })
+        .eq('entidad_tipo', 'residente')
+        .eq('entidad_id', resident.id);
+
+      if (personaError) {
+        this.logger.warn(`⚠️ Error actualizando personas_gestion_acceso: ${personaError.message}`);
+      }
+    }
+
+    return {
+      ok: true,
+      mensaje: 'Perfil actualizado correctamente',
+    };
+  }
 }
+
