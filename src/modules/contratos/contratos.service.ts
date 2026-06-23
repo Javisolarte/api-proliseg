@@ -59,7 +59,7 @@ export class ContratosService {
       .select(`
         *,
         clientes(id, nombre_empresa, nit, direccion, telefono, contacto),
-        creador:usuarios_externos!creado_por(id, nombre_completo, email)
+        creador:usuarios_externos!creado_por(id, nombre_completo, email:correo)
       `)
       .eq('id', id);
 
