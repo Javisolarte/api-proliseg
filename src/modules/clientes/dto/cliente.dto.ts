@@ -41,6 +41,11 @@ export class CreateClienteDto {
   @IsBoolean()
   activo?: boolean
 
+  @ApiProperty({ example: "juridica", required: false, description: "Tipo de persona: 'natural' o 'juridica'" })
+  @IsOptional()
+  @IsString()
+  tipo_persona?: string;
+
   // Campos para la creación automática de usuario
   @ApiProperty({ example: "login@empresa.com", required: false })
   @IsOptional()

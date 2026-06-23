@@ -59,7 +59,8 @@ export class ContratosService {
       .select(`
         *,
         clientes(id, nombre_empresa, nit, direccion, telefono, contacto),
-        creador:usuarios_externos!creado_por(id, nombre_completo, email:correo)
+        creador:usuarios_externos!creado_por(id, nombre_completo, email:correo),
+        items:contratos_items(*, tipo_servicio:tipo_servicio(*))
       `)
       .eq('id', id);
 
@@ -82,15 +83,32 @@ export class ContratosService {
    */
   async create(createContratoDto: CreateContratoDto) {
     const supabase = this.supabaseService.getClient();
+    const { items, ...contratoData } = createContratoDto;
+
     const { data, error } = await supabase
       .from('contratos')
-      .insert(createContratoDto)
+      .insert(contratoData)
       .select()
       .single();
 
     if (error) {
       this.logger.error(`Error al crear contrato: ${error.message}`);
       throw error;
+    }
+
+    if (items && items.length > 0) {
+      const itemsToInsert = items.map(item => ({
+        contrato_id: data.id,
+        tipo_servicio_id: item.tipo_servicio_id,
+        descripcion: item.descripcion,
+        cantidad: item.cantidad,
+        valor_unitario: item.valor_unitario,
+        total_linea: item.cantidad * item.valor_unitario
+      }));
+      const { error: itemsError } = await supabase.from('contratos_items').insert(itemsToInsert);
+      if (itemsError) {
+        this.logger.error(`Error al crear items del contrato: ${itemsError.message}`);
+      }
     }
 
     return data;
@@ -106,15 +124,39 @@ export class ContratosService {
     }
 
     const supabase = this.supabaseService.getClient();
+    const { items, ...contratoData } = updateContratoDto;
+
     const { data, error } = await supabase
       .from('contratos')
-      .update(updateContratoDto)
+      .update(contratoData)
       .eq('id', id)
       .select()
       .single();
 
     if (error || !data) {
       throw new NotFoundException(`Contrato con ID ${id} no encontrado`);
+    }
+
+    if (items !== undefined) {
+      const { error: deleteError } = await supabase.from('contratos_items').delete().eq('contrato_id', id);
+      if (deleteError) {
+        this.logger.error(`Error al eliminar items anteriores del contrato: ${deleteError.message}`);
+      }
+
+      if (items && items.length > 0) {
+        const itemsToInsert = items.map(item => ({
+          contrato_id: id,
+          tipo_servicio_id: item.tipo_servicio_id,
+          descripcion: item.descripcion,
+          cantidad: item.cantidad,
+          valor_unitario: item.valor_unitario,
+          total_linea: item.cantidad * item.valor_unitario
+        }));
+        const { error: insertError } = await supabase.from('contratos_items').insert(itemsToInsert);
+        if (insertError) {
+          this.logger.error(`Error al insertar nuevos items del contrato: ${insertError.message}`);
+        }
+      }
     }
 
     return data;

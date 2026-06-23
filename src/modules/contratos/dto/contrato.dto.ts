@@ -7,7 +7,38 @@ import {
   IsBoolean,
   Min,
   IsString,
+  IsArray,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class CreateContratoItemDto {
+  @ApiProperty({ example: 1, required: false })
+  @IsOptional()
+  @IsInt()
+  contrato_id?: number;
+
+  @ApiProperty({ example: 10, required: false })
+  @IsOptional()
+  @IsInt()
+  tipo_servicio_id?: number;
+
+  @ApiProperty({ example: 'Servicio de vigilancia diurna' })
+  @IsString()
+  descripcion: string;
+
+  @ApiProperty({ example: 2 })
+  @IsNumber()
+  cantidad: number;
+
+  @ApiProperty({ example: 2500000 })
+  @IsNumber()
+  valor_unitario: number;
+
+  @ApiProperty({ example: 5000000 })
+  @IsNumber()
+  total_linea: number;
+}
 
 export class CreateContratoDto {
   @ApiProperty({
@@ -19,11 +50,13 @@ export class CreateContratoDto {
 
   @ApiProperty({
     example: 10,
+    required: false,
     description:
       'ID del tipo de servicio asociado (tabla tipo_servicio).\nEjemplos: 10=Vigilancia 24/7, 11=Vigilancia diurna, 12=Vigilancia nocturna, 13=Rondas, 14=Reacción motorizada, 15=Escolta ejecutiva, 16=Escolta de carga, 17=Control de acceso, 18=Monitoreo CCTV',
   })
+  @IsOptional()
   @IsInt()
-  tipo_servicio_id: number;
+  tipo_servicio_id?: number;
 
   @ApiProperty({
     example: 50000000,
@@ -116,6 +149,13 @@ export class CreateContratoDto {
   @IsOptional()
   @IsString()
   observaciones?: string;
+
+  @ApiProperty({ type: () => [CreateContratoItemDto], required: false, description: "Items del contrato" })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateContratoItemDto)
+  items?: CreateContratoItemDto[];
 }
 
 export class UpdateContratoDto extends PartialType(CreateContratoDto) { }
