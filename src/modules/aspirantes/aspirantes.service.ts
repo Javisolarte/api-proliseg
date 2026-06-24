@@ -554,7 +554,7 @@ export class AspirantesService {
         const db = this.supabase.getClient();
         const { data, error } = await db
             .from('aspirantes_preguntas')
-            .select('*, aspirantes_preguntas_opciones(*)')
+            .select('*, opciones:aspirantes_preguntas_opciones(*)')
             .eq('prueba_id', pruebaId)
             .order('orden', { ascending: true });
 
