@@ -532,18 +532,60 @@ export class AspirantesService {
         if (error) throw new InternalServerErrorException(error.message);
 
         // Si hay opciones para actualizar
-        if (dto.opciones && dto.opciones.length > 0) {
-            // Eliminar opciones existentes y crear nuevas (más simple que update individual)
-            await db.from('aspirantes_preguntas_opciones').delete().eq('pregunta_id', id);
+        if (dto.opciones) {
+            // 1. Obtener opciones actuales de la base de datos para esta pregunta
+            const { data: currentDbOptions, error: fetchErr } = await db
+                .from('aspirantes_preguntas_opciones')
+                .select('id')
+                .eq('pregunta_id', id);
+            
+            if (fetchErr) throw new InternalServerErrorException(fetchErr.message);
 
-            const opcionesToInsert = dto.opciones.map((op: any) => ({
-                pregunta_id: id,
-                texto: op.texto,
-                es_correcta: op.es_correcta,
-                orden: op.orden
-            }));
+            const dbOptionIds = (currentDbOptions || []).map(o => o.id);
+            const inputOptionIds = dto.opciones.filter((op: any) => op.id).map((op: any) => op.id);
 
-            await db.from('aspirantes_preguntas_opciones').insert(opcionesToInsert);
+            // Determinar cuáles eliminar (existen en DB pero no en el input)
+            const idsToDelete = dbOptionIds.filter(dbId => !inputOptionIds.includes(dbId));
+
+            if (idsToDelete.length > 0) {
+                const { error: deleteErr } = await db
+                    .from('aspirantes_preguntas_opciones')
+                    .delete()
+                    .in('id', idsToDelete);
+                if (deleteErr) {
+                    if (deleteErr.code === '23503') {
+                        throw new BadRequestException('No se pueden eliminar opciones de respuesta que ya han sido seleccionadas por candidatos en sus intentos.');
+                    }
+                    throw new InternalServerErrorException(deleteErr.message);
+                }
+            }
+
+            // Procesar actualizaciones e inserciones
+            for (const op of dto.opciones) {
+                if (op.id && dbOptionIds.includes(op.id)) {
+                    // Actualizar opción existente
+                    const { error: updateErr } = await db
+                        .from('aspirantes_preguntas_opciones')
+                        .update({
+                            texto: op.texto,
+                            es_correcta: op.es_correcta,
+                            orden: op.orden
+                        })
+                        .eq('id', op.id);
+                    if (updateErr) throw new InternalServerErrorException(updateErr.message);
+                } else {
+                    // Insertar nueva opción
+                    const { error: insertErr } = await db
+                        .from('aspirantes_preguntas_opciones')
+                        .insert({
+                            pregunta_id: id,
+                            texto: op.texto,
+                            es_correcta: op.es_correcta,
+                            orden: op.orden
+                        });
+                    if (insertErr) throw new InternalServerErrorException(insertErr.message);
+                }
+            }
         }
 
         return pregunta;
