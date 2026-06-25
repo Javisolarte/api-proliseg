@@ -401,10 +401,11 @@ export class AspirantesService {
         if (!intento || !intento.presentado) throw new BadRequestException('Prueba no finalizada o no encontrada');
 
         // Obtener retroalimentación de las incorrectas
-        // 1. Obtener todas las preguntas de la prueba
+        // 1. Obtener todas las preguntas de la prueba ordenadas
         const { data: preguntas } = await db.from('aspirantes_preguntas')
             .select('id, pregunta, retroalimentacion')
-            .eq('prueba_id', intento.prueba_id);
+            .eq('prueba_id', intento.prueba_id)
+            .order('orden', { ascending: true });
 
         // 2. Obtener respuestas del usuario
         const { data: respuestas } = await db.from('aspirantes_respuestas')
@@ -416,6 +417,7 @@ export class AspirantesService {
             const resp = (respuestas || []).find(r => r.pregunta_id === p.id);
             const fueCorrecta = resp?.es_correcta || false;
             return {
+                pregunta_id: p.id,
                 pregunta: p.pregunta,
                 correcta: fueCorrecta,
                 retroalimentacion: fueCorrecta ? null : p.retroalimentacion // Solo mostrar retro si falló
