@@ -120,6 +120,26 @@ export class AspirantesService {
         return { message: 'Aspirante eliminado' };
     }
 
+    async updateAspirante(id: number, dto: Partial<CreateAspiranteDto>) {
+        const db = this.supabase.getClient();
+        
+        // Verificar si la cédula ya la tiene otro aspirante (si se está cambiando la cédula)
+        if (dto.cedula) {
+            const { data: existing } = await db.from('aspirantes')
+                .select('id')
+                .eq('cedula', dto.cedula)
+                .neq('id', id)
+                .maybeSingle();
+            if (existing) {
+                throw new BadRequestException('Ya existe otro aspirante con esa cédula.');
+            }
+        }
+
+        const { data, error } = await db.from('aspirantes').update(dto).eq('id', id).select().single();
+        if (error) throw new InternalServerErrorException(error.message);
+        return data;
+    }
+
     // ==========================================
     // 4. GESTIÓN DE INTENTOS (PROGRAMACIÓN)
     // ==========================================

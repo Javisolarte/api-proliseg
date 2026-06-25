@@ -79,6 +79,13 @@ export class AspirantesController {
         return this.aspirantesService.findOneAspirante(+id);
     }
 
+    @Patch('candidatos/:id')
+    @ApiOperation({ summary: 'Actualizar datos de un aspirante' })
+    @ApiResponse({ status: 200, description: 'Aspirante actualizado correctamente' })
+    updateAspirante(@Param('id') id: string, @Body() dto: Partial<CreateAspiranteDto>) {
+        return this.aspirantesService.updateAspirante(+id, dto);
+    }
+
     @Delete('candidatos/:id')
     @ApiOperation({ summary: 'Eliminar un aspirante' })
     deleteAspirante(@Param('id') id: string) {
