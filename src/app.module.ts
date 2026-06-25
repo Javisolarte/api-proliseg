@@ -127,6 +127,7 @@ import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { ComplianceModule } from './modules/compliance/compliance.module';
 import { RadioOperacionModule } from './modules/radio-operacion/radio-operacion.module';
 import { ControlAccesoModule } from './modules/control-acceso/control-acceso.module';
+import { AlarmasReceptorModule } from './modules/alarmas-receptor/alarmas-receptor.module';
 import { ControlRondasModule } from './modules/control-rondas/control-rondas.module';
 import { FacturacionModule } from './modules/facturacion/facturacion.module';
 
@@ -273,6 +274,7 @@ import { FacturacionModule } from './modules/facturacion/facturacion.module';
     // 🆕 Radio Operación
     RadioOperacionModule,
     ControlAccesoModule,
+    AlarmasReceptorModule,
     ControlRondasModule,
     FacturacionModule,
   ],
