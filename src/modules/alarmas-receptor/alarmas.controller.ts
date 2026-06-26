@@ -1,16 +1,20 @@
 import { Controller, Get, Post, Put, Delete, Patch, Body, Param, UseGuards, Query, Request } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AlarmasService } from './alarmas.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
+import { DevicePollerService } from '../control-acceso/device-poller.service';
 
 @ApiTags('Monitoreo de Alarmas')
 @Controller('alarmas')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth('JWT-auth')
 export class AlarmasController {
-  constructor(private readonly alarmasService: AlarmasService) { }
+  constructor(
+    private readonly alarmasService: AlarmasService,
+    private readonly devicePoller: DevicePollerService,
+  ) { }
 
   // ─── PANELES DE ALARMA ────────────────────────────────────────────────────
 
@@ -238,5 +242,47 @@ export class AlarmasController {
       detalle_resultado: body.detalle_resultado,
       operador_id: operadorId,
     });
+  }
+
+  // ─── TEST / DEBUG ──────────────────────────────────────────────────────────
+
+  @Post('test-ws-signal')
+  @RequirePermissions('monitoreo')
+  @ApiOperation({ summary: '[TEST] Emite un evento de alarma falso por WebSocket para probar el frontend sin TCP' })
+  async testWsSignal(
+    @Body() body: { cuenta?: string; lugar?: string; prioridad?: string },
+  ) {
+    const cuenta = body.cuenta || '8844';
+    const lugar = body.lugar || 'Bodega de Pruebas';
+    const prioridad = body.prioridad || 'critica';
+
+    const evento = {
+      dispositivo_id: `test-device-${cuenta}`,
+      nombre_dispositivo: lugar,
+      tipo_evento: 'alarma',
+      metodo_acceso: 'remoto',
+      nombre_persona: `Alarma de Robo en Zona 001`,
+      documento_persona: 'ALARMA',
+      codigo_tarjeta: '130',
+      face_id_ref: 'ZONA_001',
+      timestamp: new Date().toISOString(),
+      detalles_raw: {
+        cuenta,
+        evento: '130',
+        particion: '01',
+        zona_usuario: '001',
+        calificador: '1',
+        trama_original: `[TEST#${cuenta}|18113001001]`,
+        prioridad,
+      },
+    };
+
+    this.devicePoller.saveAndEmit(evento as any);
+
+    return {
+      ok: true,
+      message: `Evento de alarma TEST emitido por WebSocket para cuenta ${cuenta}`,
+      evento,
+    };
   }
 }

@@ -294,30 +294,31 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(`💾 [Receptora Alarma] Guardado en historial de alarmas (ID: ${alarmEvent?.id || '?'})`);
       }
 
-      // 9. Emitir a través del poller general (para no romper web sockets ni vistas tradicionales de control de acceso)
-      if (deviceId) {
-        const eventoCompat: EventoAcceso = {
-          dispositivo_id: deviceId,
-          nombre_dispositivo: deviceName,
-          tipo_evento: dbTipoEvento === 'alarma' ? 'alarma' : (esRestablecimiento ? 'evento' : dbTipoEvento),
-          metodo_acceso: 'remoto',
-          nombre_persona: descripcionFinal,
-          documento_persona: esRestablecimiento ? 'RESTABLECIMIENTO' : (dbTipoEvento === 'alarma' ? 'ALARMA' : 'EVENTO'),
-          codigo_tarjeta: eventCode,
-          face_id_ref: `ZONA_${zoneOrUser}`,
-          timestamp: new Date().toISOString(),
-          detalles_raw: {
-            cuenta: account,
-            evento: eventCode,
-            particion: partition,
-            zona_usuario: zoneOrUser,
-            calificador: qualifier,
-            trama_original: tramaRaw,
-            alarma_evento_id: alarmEvent?.id || null
-          },
-        };
-        this.devicePoller.saveAndEmit(eventoCompat);
-      }
+      // 9. Emitir SIEMPRE por WebSocket (con o sin dispositivo_id vinculado)
+      // El deviceId puede ser null si el panel no tiene dispositivo IoT vinculado,
+      // pero el evento WebSocket se emite de todas formas para activar el modal en frontend.
+      const eventoCompat: EventoAcceso = {
+        dispositivo_id: deviceId || `alarma-panel-${account}`,
+        nombre_dispositivo: deviceName,
+        tipo_evento: dbTipoEvento === 'alarma' ? 'alarma' : (esRestablecimiento ? 'evento' : dbTipoEvento),
+        metodo_acceso: 'remoto',
+        nombre_persona: descripcionFinal,
+        documento_persona: esRestablecimiento ? 'RESTABLECIMIENTO' : (dbTipoEvento === 'alarma' ? 'ALARMA' : 'EVENTO'),
+        codigo_tarjeta: eventCode,
+        face_id_ref: `ZONA_${zoneOrUser}`,
+        timestamp: new Date().toISOString(),
+        detalles_raw: {
+          cuenta: account,
+          evento: eventCode,
+          particion: partition,
+          zona_usuario: zoneOrUser,
+          calificador: qualifier,
+          trama_original: tramaRaw,
+          alarma_evento_id: alarmEvent?.id || null
+        },
+      };
+      this.devicePoller.saveAndEmit(eventoCompat);
+
 
     } catch (err) {
       this.logger.error(`❌ [Receptora Alarma] Error al procesar trama: ${err.message}`);
