@@ -10,7 +10,7 @@ import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth('JWT-auth')
 export class AlarmasController {
-  constructor(private readonly alarmasService: AlarmasService) {}
+  constructor(private readonly alarmasService: AlarmasService) { }
 
   // ─── PANELES DE ALARMA ────────────────────────────────────────────────────
 
@@ -29,21 +29,21 @@ export class AlarmasController {
   }
 
   @Post('paneles')
-  @RequirePermissions('monitoreo', 'crear')
+  @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Registrar un nuevo panel de alarma' })
   async createPanel(@Body() body: any) {
     return this.alarmasService.createPanel(body);
   }
 
   @Put('paneles/:id')
-  @RequirePermissions('monitoreo', 'actualizar')
+  @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Actualizar la configuración de un panel de alarma' })
   async updatePanel(@Param('id') id: string, @Body() body: any) {
     return this.alarmasService.updatePanel(id, body);
   }
 
   @Delete('paneles/:id')
-  @RequirePermissions('monitoreo', 'eliminar')
+  @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Eliminar un panel de alarma' })
   async deletePanel(@Param('id') id: string) {
     return this.alarmasService.deletePanel(id);
@@ -59,21 +59,21 @@ export class AlarmasController {
   }
 
   @Post('zonas')
-  @RequirePermissions('monitoreo', 'crear')
+  @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Registrar una zona en un panel de alarma' })
   async createZona(@Body() body: any) {
     return this.alarmasService.createZone(body);
   }
 
   @Put('zonas/:id')
-  @RequirePermissions('monitoreo', 'actualizar')
+  @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Actualizar una zona de alarma' })
   async updateZona(@Param('id') id: string, @Body() body: any) {
     return this.alarmasService.updateZone(id, body);
   }
 
   @Delete('zonas/:id')
-  @RequirePermissions('monitoreo', 'eliminar')
+  @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Eliminar una zona de alarma' })
   async deleteZona(@Param('id') id: string) {
     return this.alarmasService.deleteZone(id);
@@ -89,21 +89,21 @@ export class AlarmasController {
   }
 
   @Post('particiones')
-  @RequirePermissions('monitoreo', 'crear')
+  @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Registrar una partición en un panel de alarma' })
   async createParticion(@Body() body: any) {
     return this.alarmasService.createPartition(body);
   }
 
   @Put('particiones/:id')
-  @RequirePermissions('monitoreo', 'actualizar')
+  @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Actualizar una partición de alarma' })
   async updateParticion(@Param('id') id: string, @Body() body: any) {
     return this.alarmasService.updatePartition(id, body);
   }
 
   @Delete('particiones/:id')
-  @RequirePermissions('monitoreo', 'eliminar')
+  @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Eliminar una partición de alarma' })
   async deleteParticion(@Param('id') id: string) {
     return this.alarmasService.deletePartition(id);
@@ -119,21 +119,21 @@ export class AlarmasController {
   }
 
   @Post('usuarios')
-  @RequirePermissions('monitoreo', 'crear')
+  @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Registrar un usuario de panel' })
   async createUsuarioPanel(@Body() body: any) {
     return this.alarmasService.createUser(body);
   }
 
   @Put('usuarios/:id')
-  @RequirePermissions('monitoreo', 'actualizar')
+  @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Actualizar un usuario de panel' })
   async updateUsuarioPanel(@Param('id') id: string, @Body() body: any) {
     return this.alarmasService.updateUser(id, body);
   }
 
   @Delete('usuarios/:id')
-  @RequirePermissions('monitoreo', 'eliminar')
+  @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Eliminar un usuario de panel' })
   async deleteUsuarioPanel(@Param('id') id: string) {
     return this.alarmasService.deleteUser(id);
@@ -149,21 +149,21 @@ export class AlarmasController {
   }
 
   @Post('contactos')
-  @RequirePermissions('monitoreo', 'crear')
+  @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Registrar contacto telefónico de emergencia' })
   async createContacto(@Body() body: any) {
     return this.alarmasService.createContact(body);
   }
 
   @Put('contactos/:id')
-  @RequirePermissions('monitoreo', 'actualizar')
+  @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Actualizar contacto telefónico de emergencia' })
   async updateContacto(@Param('id') id: string, @Body() body: any) {
     return this.alarmasService.updateContact(id, body);
   }
 
   @Delete('contactos/:id')
-  @RequirePermissions('monitoreo', 'eliminar')
+  @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Eliminar contacto de emergencia' })
   async deleteContacto(@Param('id') id: string) {
     return this.alarmasService.deleteContact(id);
@@ -194,7 +194,7 @@ export class AlarmasController {
   // ─── ACCIONES DE GESTIÓN OPERATIVA ────────────────────────────────────────
 
   @Patch('eventos/:id/atender')
-  @RequirePermissions('monitoreo', 'actualizar')
+  @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Marcar una alarma como "En Proceso" y asignarla al operador logueado' })
   async atenderAlarma(@Param('id') id: string, @Request() req: any) {
     const operadorId = req.user?.id;
@@ -202,7 +202,7 @@ export class AlarmasController {
   }
 
   @Patch('eventos/:id/cerrar')
-  @RequirePermissions('monitoreo', 'actualizar')
+  @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Marcar una alarma como resuelta ("atendido", "falsa_alarma") y registrar notas' })
   async cerrarAlarma(
     @Param('id') id: string,
@@ -225,7 +225,7 @@ export class AlarmasController {
   }
 
   @Post('eventos/:id/bitacora')
-  @RequirePermissions('monitoreo', 'crear')
+  @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Registrar llamada o paso de protocolo en la bitácora de atención' })
   async registrarPaso(
     @Param('id') id: string,

@@ -76,7 +76,76 @@ export class AlarmasService {
     };
   }
 
+  private async syncDeviceForPanel(cuentaMonitoreo: string, nombreLugar: string): Promise<string | null> {
+    if (!cuentaMonitoreo) return null;
+    try {
+      const db = this.supabase.getClient();
+      
+      const { data: devices, error: devErr } = await db
+        .from('dispositivos_iot')
+        .select('*');
+      
+      if (devErr) {
+        this.logger.error(`Error fetching devices: ${devErr.message}`);
+        return null;
+      }
+
+      const matchingDevice = (devices || []).find((d: any) => {
+        const cuentaConfig = d.configuracion_tecnica?.cuenta || d.configuracion_tecnica?.account;
+        return String(cuentaConfig) === String(cuentaMonitoreo) || String(d.id) === String(cuentaMonitoreo);
+      });
+
+      if (matchingDevice) {
+        if (matchingDevice.nombre_identificador !== nombreLugar) {
+          await db
+            .from('dispositivos_iot')
+            .update({ nombre_identificador: nombreLugar })
+            .eq('id', matchingDevice.id);
+        }
+        return matchingDevice.id;
+      }
+
+      const newDevicePayload = {
+        nombre_identificador: nombreLugar || `Panel Alarma ${cuentaMonitoreo}`,
+        puesto_id: null,
+        ip_direccion: '127.0.0.1',
+        sn_serie: `SN-ALARM-${cuentaMonitoreo}`,
+        credencial_usuario: 'admin',
+        credencial_password: '',
+        estado: 'operativo',
+        configuracion_tecnica: {
+          tipo: 'control_acceso',
+          cuenta: cuentaMonitoreo,
+          marca: 'Generic',
+          modelo: 'Alarm Panel',
+        }
+      };
+
+      const { data: createdDev, error: createDevErr } = await db
+        .from('dispositivos_iot')
+        .insert(newDevicePayload)
+        .select('*')
+        .maybeSingle();
+
+      if (createDevErr) {
+        this.logger.error(`Error creating device for panel: ${createDevErr.message}`);
+        return null;
+      }
+
+      return createdDev?.id || null;
+    } catch (err) {
+      this.logger.error(`Exception in syncDeviceForPanel: ${err.message}`);
+      return null;
+    }
+  }
+
   async createPanel(body: any) {
+    if (body.cuenta_monitoreo) {
+      const dispositivo_id = await this.syncDeviceForPanel(body.cuenta_monitoreo, body.nombre_lugar);
+      if (dispositivo_id) {
+        body.dispositivo_id = dispositivo_id;
+      }
+    }
     const { data, error } = await this.supabase
       .getClient()
       .from('alarmas_paneles')
@@ -88,6 +157,12 @@ export class AlarmasService {
   }
 
   async updatePanel(id: string, body: any) {
+    if (body.cuenta_monitoreo) {
+      const dispositivo_id = await this.syncDeviceForPanel(body.cuenta_monitoreo, body.nombre_lugar);
+      if (dispositivo_id) {
+        body.dispositivo_id = dispositivo_id;
+      }
+    }
     const { data, error } = await this.supabase
       .getClient()
       .from('alarmas_paneles')
