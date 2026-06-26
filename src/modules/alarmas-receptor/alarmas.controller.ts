@@ -285,4 +285,56 @@ export class AlarmasController {
       evento,
     };
   }
+
+  // ─── CONTROL BIDIRECCIONAL REMOTO ─────────────────────────────────────────
+
+  @Post('paneles/:id/armar')
+  @RequirePermissions('monitoreo')
+  @ApiOperation({ summary: 'Armar una partición específica del panel de alarma físicamente' })
+  async armarPanel(
+    @Param('id') id: string,
+    @Body() body: { particion: number; pin: string }
+  ) {
+    return this.alarmasService.armarPanel(id, body);
+  }
+
+  @Post('paneles/:id/desarmar')
+  @RequirePermissions('monitoreo')
+  @ApiOperation({ summary: 'Desarmar una partición específica del panel de alarma físicamente' })
+  async desarmarPanel(
+    @Param('id') id: string,
+    @Body() body: { particion: number; pin: string }
+  ) {
+    return this.alarmasService.desarmarPanel(id, body);
+  }
+
+  @Post('paneles/:id/sirena')
+  @RequirePermissions('monitoreo')
+  @ApiOperation({ summary: 'Encender o apagar la sirena del panel físicamente' })
+  async controlarSirena(
+    @Param('id') id: string,
+    @Body() body: { accion: 'encender' | 'apagar' }
+  ) {
+    return this.alarmasService.controlarSirena(id, body);
+  }
+
+  @Post('paneles/:id/sincronizar-usuario')
+  @RequirePermissions('monitoreo')
+  @ApiOperation({ summary: 'Sincronizar una clave/PIN de usuario con el teclado del panel físico' })
+  async sincronizarUsuario(
+    @Param('id') id: string,
+    @Body() body: { numero_usuario: number; nombre: string; pin_codigo: string }
+  ) {
+    return this.alarmasService.sincronizarUsuarioPanel(id, body);
+  }
+
+  @Delete('paneles/:id/eliminar-usuario/:numero_usuario')
+  @RequirePermissions('monitoreo')
+  @ApiOperation({ summary: 'Eliminar un usuario de la memoria del teclado del panel físico' })
+  async eliminarUsuario(
+    @Param('id') id: string,
+    @Param('numero_usuario') numeroUsuario: string
+  ) {
+    return this.alarmasService.eliminarUsuarioPanel(id, parseInt(numeroUsuario, 10));
+  }
 }

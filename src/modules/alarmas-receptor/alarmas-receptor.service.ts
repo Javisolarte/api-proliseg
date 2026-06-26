@@ -125,52 +125,24 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
 
       if (panelErr) throw panelErr;
 
-      let deviceId = null;
-      let deviceName = `Cuenta ${account}`;
-
-      // Si no existe el panel registrado en alarmas_paneles, buscamos si hay un dispositivo IoT asociado
+      // Si no existe el panel registrado en alarmas_paneles, lo auto-registramos directamente
       if (!panel) {
-        const { data: devices, error: devErr } = await db
-          .from('dispositivos_iot')
+        const { data: newPanel, error: createErr } = await db
+          .from('alarmas_paneles')
+          .insert({
+            cuenta_monitoreo: account,
+            nombre_lugar: `Panel Autoregistrado ${account}`,
+            estado_panel: 'activo',
+          })
           .select('*')
-          .in('estado', ['operativo', 'mantenimiento']);
+          .maybeSingle();
 
-        if (!devErr && devices) {
-          const matchingDevice = devices.find((d: any) => {
-            const cuentaConfig = d.configuracion_tecnica?.cuenta || d.configuracion_tecnica?.account;
-            return String(cuentaConfig) === String(account) || String(d.id) === String(account);
-          });
-
-          if (matchingDevice) {
-            deviceId = matchingDevice.id;
-            deviceName = matchingDevice.nombre_identificador;
-
-            // Auto-registrar el panel en la nueva tabla
-            const { data: newPanel, error: createErr } = await db
-              .from('alarmas_paneles')
-              .insert({
-                dispositivo_id: deviceId,
-                cuenta_monitoreo: account,
-                nombre_lugar: matchingDevice.nombre_identificador || `Panel Alarma ${account}`,
-                estado_panel: 'activo',
-              })
-              .select('*')
-              .maybeSingle();
-
-            if (!createErr && newPanel) {
-              panel = newPanel;
-              this.logger.log(`🆕 [Receptora Alarma] Panel auto-registrado para la cuenta ${account}`);
-            }
-          }
+        if (!createErr && newPanel) {
+          panel = newPanel;
+          this.logger.log(`🆕 [Receptora Alarma] Panel auto-registrado para la cuenta ${account}`);
+        } else if (createErr) {
+          this.logger.error(`❌ Error al auto-registrar panel para cuenta ${account}: ${createErr.message}`);
         }
-      } else {
-        deviceId = panel.dispositivo_id;
-        deviceName = panel.nombre_lugar;
-      }
-
-      // Si definitivamente no hay panel ni dispositivo IoT, logueamos la advertencia pero guardamos el log huérfano
-      if (!panel) {
-        this.logger.warn(`⚠️ [Receptora Alarma] Señal de cuenta desconocida: ${account}`);
       }
 
       // 4. Buscar definición de Contact ID en el catálogo
@@ -295,11 +267,10 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
       }
 
       // 9. Emitir SIEMPRE por WebSocket (con o sin dispositivo_id vinculado)
-      // El deviceId puede ser null si el panel no tiene dispositivo IoT vinculado,
-      // pero el evento WebSocket se emite de todas formas para activar el modal en frontend.
+      // El dispositivo_id se emite usando el panel.id o la cuenta para activar el modal en frontend.
       const eventoCompat: EventoAcceso = {
-        dispositivo_id: deviceId || `alarma-panel-${account}`,
-        nombre_dispositivo: deviceName,
+        dispositivo_id: panel?.id || `alarma-panel-${account}`,
+        nombre_dispositivo: panel?.nombre_lugar || `Panel Alarma ${account}`,
         tipo_evento: dbTipoEvento === 'alarma' ? 'alarma' : (esRestablecimiento ? 'evento' : dbTipoEvento),
         metodo_acceso: 'remoto',
         nombre_persona: descripcionFinal,
@@ -314,6 +285,7 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
           zona_usuario: zoneOrUser,
           calificador: qualifier,
           trama_original: tramaRaw,
+          panel_id: panel?.id || null,
           alarma_evento_id: alarmEvent?.id || null
         },
       };

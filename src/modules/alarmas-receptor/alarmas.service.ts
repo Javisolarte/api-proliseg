@@ -1,11 +1,17 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { AlarmStrategyFactory } from './strategies/alarm-strategy.factory';
+import { AlarmasGatewayService } from './alarmas-gateway.service';
 
 @Injectable()
 export class AlarmasService {
   private readonly logger = new Logger(AlarmasService.name);
 
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(
+    private readonly supabase: SupabaseService,
+    private readonly strategyFactory: AlarmStrategyFactory,
+    private readonly gatewayService: AlarmasGatewayService,
+  ) {}
 
   // ─── PANELES DE ALARMA (CUENTAS) ──────────────────────────────────────────
 
@@ -13,7 +19,7 @@ export class AlarmasService {
     const { data, error } = await this.supabase
       .getClient()
       .from('alarmas_paneles')
-      .select('*, dispositivo:dispositivos_iot(id, nombre_identificador, ip_direccion, estado), cliente:clientes(id, nombre_empresa, nit)');
+      .select('*, cliente:clientes(id, nombre_empresa, nit)');
     if (error) throw error;
     return data;
   }
@@ -24,12 +30,14 @@ export class AlarmasService {
     // Panel básico
     const { data: panel, error: panelErr } = await db
       .from('alarmas_paneles')
-      .select('*, dispositivo:dispositivos_iot(*), cliente:clientes(*)')
+      .select('*, cliente:clientes(*)')
       .eq('id', id)
       .maybeSingle();
 
     if (panelErr) throw panelErr;
     if (!panel) throw new NotFoundException(`Panel con ID ${id} no encontrado`);
+
+    const conectado = this.gatewayService.isPanelConnected(panel.cuenta_monitoreo);
 
     // Zonas
     const { data: zonas, error: zonasErr } = await db
@@ -69,6 +77,7 @@ export class AlarmasService {
 
     return {
       ...panel,
+      conectado: conectado || false,
       zonas: zonas || [],
       particiones: particiones || [],
       usuariosPanel: usuarios || [],
@@ -76,76 +85,7 @@ export class AlarmasService {
     };
   }
 
-  private async syncDeviceForPanel(cuentaMonitoreo: string, nombreLugar: string): Promise<string | null> {
-    if (!cuentaMonitoreo) return null;
-    try {
-      const db = this.supabase.getClient();
-      
-      const { data: devices, error: devErr } = await db
-        .from('dispositivos_iot')
-        .select('*');
-      
-      if (devErr) {
-        this.logger.error(`Error fetching devices: ${devErr.message}`);
-        return null;
-      }
-
-      const matchingDevice = (devices || []).find((d: any) => {
-        const cuentaConfig = d.configuracion_tecnica?.cuenta || d.configuracion_tecnica?.account;
-        return String(cuentaConfig) === String(cuentaMonitoreo) || String(d.id) === String(cuentaMonitoreo);
-      });
-
-      if (matchingDevice) {
-        if (matchingDevice.nombre_identificador !== nombreLugar) {
-          await db
-            .from('dispositivos_iot')
-            .update({ nombre_identificador: nombreLugar })
-            .eq('id', matchingDevice.id);
-        }
-        return matchingDevice.id;
-      }
-
-      const newDevicePayload = {
-        nombre_identificador: nombreLugar || `Panel Alarma ${cuentaMonitoreo}`,
-        puesto_id: null,
-        ip_direccion: '127.0.0.1',
-        sn_serie: `SN-ALARM-${cuentaMonitoreo}`,
-        credencial_usuario: 'admin',
-        credencial_password: '',
-        estado: 'operativo',
-        configuracion_tecnica: {
-          tipo: 'control_acceso',
-          cuenta: cuentaMonitoreo,
-          marca: 'Generic',
-          modelo: 'Alarm Panel',
-        }
-      };
-
-      const { data: createdDev, error: createDevErr } = await db
-        .from('dispositivos_iot')
-        .insert(newDevicePayload)
-        .select('*')
-        .maybeSingle();
-
-      if (createDevErr) {
-        this.logger.error(`Error creating device for panel: ${createDevErr.message}`);
-        return null;
-      }
-
-      return createdDev?.id || null;
-    } catch (err) {
-      this.logger.error(`Exception in syncDeviceForPanel: ${err.message}`);
-      return null;
-    }
-  }
-
   async createPanel(body: any) {
-    if (body.cuenta_monitoreo) {
-      const dispositivo_id = await this.syncDeviceForPanel(body.cuenta_monitoreo, body.nombre_lugar);
-      if (dispositivo_id) {
-        body.dispositivo_id = dispositivo_id;
-      }
-    }
     const { data, error } = await this.supabase
       .getClient()
       .from('alarmas_paneles')
@@ -157,12 +97,6 @@ export class AlarmasService {
   }
 
   async updatePanel(id: string, body: any) {
-    if (body.cuenta_monitoreo) {
-      const dispositivo_id = await this.syncDeviceForPanel(body.cuenta_monitoreo, body.nombre_lugar);
-      if (dispositivo_id) {
-        body.dispositivo_id = dispositivo_id;
-      }
-    }
     const { data, error } = await this.supabase
       .getClient()
       .from('alarmas_paneles')
@@ -521,5 +455,107 @@ export class AlarmasService {
       .maybeSingle();
     if (error) throw error;
     return data;
+  }
+
+  // ─── COMANDOS BIDIRECCIONALES (ARMADO / DESARMADO / SIRENA) ───────────────
+
+  async armarPanel(id: string, payload: { particion: number; pin: string }) {
+    const panel = await this.findOnePanel(id);
+    const strategy = this.strategyFactory.getStrategy(panel.marca_modelo);
+    const result = await strategy.arm(panel, payload.particion, payload.pin);
+
+    if (result.success) {
+      // Registrar evento de armado remoto en el histórico
+      await this.supabase
+        .getClient()
+        .from('alarmas_eventos_historico')
+        .insert({
+          panel_id: panel.id,
+          cuenta: panel.cuenta_monitoreo,
+          codigo_evento_cid: '400', // C01. 400 = Armado del sistema
+          calificador: '1', // 1 = Nuevo evento
+          particion: payload.particion.toString().padStart(2, '0'),
+          zona_o_usuario: '000', // Canal virtual / Remoto
+          tipo_evento: 'cmd_usuario',
+          descripcion_evento: `Armado remoto (Partición ${payload.particion}) vía Web`,
+          timestamp_evento: new Date().toISOString(),
+          trama_original: `[CMD#${panel.cuenta_monitoreo}|ARM_PART_${payload.particion}]`,
+          prioridad: 'informativa',
+          estado_gestion: 'atendido',
+        });
+    }
+
+    return result;
+  }
+
+  async desarmarPanel(id: string, payload: { particion: number; pin: string }) {
+    const panel = await this.findOnePanel(id);
+    const strategy = this.strategyFactory.getStrategy(panel.marca_modelo);
+    const result = await strategy.disarm(panel, payload.particion, payload.pin);
+
+    if (result.success) {
+      // Registrar evento de desarmado remoto en el histórico
+      await this.supabase
+        .getClient()
+        .from('alarmas_eventos_historico')
+        .insert({
+          panel_id: panel.id,
+          cuenta: panel.cuenta_monitoreo,
+          codigo_evento_cid: '401', // C01. 401 = Desarmado del sistema
+          calificador: '1',
+          particion: payload.particion.toString().padStart(2, '0'),
+          zona_o_usuario: '000',
+          tipo_evento: 'cmd_usuario',
+          descripcion_evento: `Desarmado remoto (Partición ${payload.particion}) vía Web`,
+          timestamp_evento: new Date().toISOString(),
+          trama_original: `[CMD#${panel.cuenta_monitoreo}|DISARM_PART_${payload.particion}]`,
+          prioridad: 'informativa',
+          estado_gestion: 'atendido',
+        });
+    }
+
+    return result;
+  }
+
+  async controlarSirena(id: string, payload: { accion: 'encender' | 'apagar' }) {
+    const panel = await this.findOnePanel(id);
+    const strategy = this.strategyFactory.getStrategy(panel.marca_modelo);
+    const state = payload.accion === 'encender' ? 'on' : 'off';
+    const result = await strategy.toggleSiren(panel, state);
+
+    if (result.success) {
+      // Registrar evento en el histórico
+      await this.supabase
+        .getClient()
+        .from('alarmas_eventos_historico')
+        .insert({
+          panel_id: panel.id,
+          cuenta: panel.cuenta_monitoreo,
+          codigo_evento_cid: payload.accion === 'encender' ? '320' : '321', // 320 = Sirena, 321 = Restablecimiento de Sirena
+          calificador: payload.accion === 'encender' ? '1' : '3',
+          particion: '01',
+          zona_o_usuario: '000',
+          tipo_evento: 'cmd_usuario',
+          descripcion_evento: `Sirena remota ${payload.accion === 'encender' ? 'ACTIVADA' : 'DESACTIVADA'} vía Web`,
+          timestamp_evento: new Date().toISOString(),
+          trama_original: `[CMD#${panel.cuenta_monitoreo}|SIREN_${payload.accion.toUpperCase()}]`,
+          prioridad: payload.accion === 'encender' ? 'alta' : 'informativa',
+          estado_gestion: 'atendido',
+        });
+    }
+
+    return result;
+  }
+
+  async sincronizarUsuarioPanel(panelId: string, payload: { numero_usuario: number; nombre: string; pin_codigo: string }) {
+    const panel = await this.findOnePanel(panelId);
+    const strategy = this.strategyFactory.getStrategy(panel.marca_modelo);
+    return strategy.syncUser(panel, payload.numero_usuario, payload.nombre, payload.pin_codigo);
+  }
+
+  async eliminarUsuarioPanel(panelId: string, userNumber: number) {
+    const panel = await this.findOnePanel(panelId);
+    const strategy = this.strategyFactory.getStrategy(panel.marca_modelo);
+    return strategy.deleteUser(panel, userNumber);
   }
 }
