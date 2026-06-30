@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { AlarmStrategyFactory } from './strategies/alarm-strategy.factory';
 import { AlarmasGatewayService } from './alarmas-gateway.service';
+import { DevicePollerService } from '../control-acceso/device-poller.service';
 
 @Injectable()
 export class AlarmasService {
@@ -11,6 +12,7 @@ export class AlarmasService {
     private readonly supabase: SupabaseService,
     private readonly strategyFactory: AlarmStrategyFactory,
     private readonly gatewayService: AlarmasGatewayService,
+    private readonly devicePoller: DevicePollerService,
   ) {}
 
   // ─── PANELES DE ALARMA (CUENTAS) ──────────────────────────────────────────
@@ -86,10 +88,20 @@ export class AlarmasService {
   }
 
   async createPanel(body: any) {
+    const {
+      monitoreo_activo,
+      sirena_habilitada,
+      modo_silencioso,
+      notificacion_sms,
+      notificacion_llamada,
+      prioridad,
+      ...cleanedBody
+    } = body;
+
     const { data, error } = await this.supabase
       .getClient()
       .from('alarmas_paneles')
-      .insert(body)
+      .insert(cleanedBody)
       .select('*')
       .maybeSingle();
     if (error) throw error;
@@ -97,14 +109,31 @@ export class AlarmasService {
   }
 
   async updatePanel(id: string, body: any) {
+    const {
+      monitoreo_activo,
+      sirena_habilitada,
+      modo_silencioso,
+      notificacion_sms,
+      notificacion_llamada,
+      prioridad,
+      ...cleanedBody
+    } = body;
+
+    // Convert empty strings to null for relations
+    if (cleanedBody.cliente_id === '') cleanedBody.cliente_id = null;
+
     const { data, error } = await this.supabase
       .getClient()
       .from('alarmas_paneles')
-      .update(body)
+      .update(cleanedBody)
       .eq('id', id)
       .select('*')
       .maybeSingle();
-    if (error) throw error;
+      
+    if (error) {
+      this.logger.error(`Error updating panel ${id}:`, error);
+      throw new Error(`DB Error: ${error.message} (Code: ${error.code})`);
+    }
     return data;
   }
 
@@ -382,6 +411,39 @@ export class AlarmasService {
       this.logger.warn(`⚠️ [Monitoreo] Error al registrar bitácora de inicio: ${logErr.message}`);
     }
 
+    // 4. Emitir evento vía WebSocket
+    if (event.panel_id) {
+      try {
+        const { data: pData } = await db
+          .from('alarmas_paneles')
+          .select('cuenta_monitoreo, nombre_lugar')
+          .eq('id', event.panel_id)
+          .maybeSingle();
+
+        const cuenta = pData?.cuenta_monitoreo || event.cuenta || '0000';
+        const nombreLugar = pData?.nombre_lugar || `Panel ${cuenta}`;
+
+        this.devicePoller.saveAndEmit({
+          dispositivo_id: event.panel_id,
+          nombre_dispositivo: nombreLugar,
+          tipo_evento: 'panel_status',
+          metodo_acceso: 'remoto',
+          nombre_persona: 'Alarma en Atención',
+          documento_persona: 'GESTION',
+          codigo_tarjeta: 'ATENCION',
+          timestamp: new Date().toISOString(),
+          detalles_raw: {
+            cuenta,
+            panel_id: event.panel_id,
+            evento_id: eventoId,
+            estado_gestion: 'en_proceso'
+          }
+        });
+      } catch (err: any) {
+        this.logger.error(`Error al emitir WebSocket de atención: ${err.message}`);
+      }
+    }
+
     return updatedEvent;
   }
 
@@ -425,6 +487,39 @@ export class AlarmasService {
 
     if (logErr) {
       this.logger.warn(`⚠️ [Monitoreo] Error al registrar bitácora de cierre: ${logErr.message}`);
+    }
+
+    // 4. Emitir evento vía WebSocket
+    if (event.panel_id) {
+      try {
+        const { data: pData } = await db
+          .from('alarmas_paneles')
+          .select('cuenta_monitoreo, nombre_lugar')
+          .eq('id', event.panel_id)
+          .maybeSingle();
+
+        const cuenta = pData?.cuenta_monitoreo || event.cuenta || '0000';
+        const nombreLugar = pData?.nombre_lugar || `Panel ${cuenta}`;
+
+        this.devicePoller.saveAndEmit({
+          dispositivo_id: event.panel_id,
+          nombre_dispositivo: nombreLugar,
+          tipo_evento: 'panel_status',
+          metodo_acceso: 'remoto',
+          nombre_persona: 'Alarma Cerrada',
+          documento_persona: 'GESTION',
+          codigo_tarjeta: 'CERRADA',
+          timestamp: new Date().toISOString(),
+          detalles_raw: {
+            cuenta,
+            panel_id: event.panel_id,
+            evento_id: eventoId,
+            estado_gestion: payload.estado_gestion
+          }
+        });
+      } catch (err: any) {
+        this.logger.error(`Error al emitir WebSocket de cierre: ${err.message}`);
+      }
     }
 
     return updatedEvent;

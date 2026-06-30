@@ -240,6 +240,48 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
         dbTipoEvento = 'entrada';
       }
 
+      // Auto-clear existing pending alarms on restoration or disarm
+      if (panel) {
+        if (esRestablecimiento) {
+          // Auto-close any pending alarm for this zone on this panel
+          const { error: autoCloseErr } = await db
+            .from('alarmas_eventos_historico')
+            .update({
+              estado_gestion: 'atendido',
+              comentarios_operador: `Restablecimiento recibido en zona ${zoneOrUser}. Cerrado automáticamente.`,
+              fecha_fin_gestion: new Date().toISOString(),
+            })
+            .eq('panel_id', panel.id)
+            .eq('zona_o_usuario', zoneOrUser)
+            .eq('tipo_evento', 'alarma')
+            .in('estado_gestion', ['pendiente', 'en_proceso']);
+          
+          if (autoCloseErr) {
+            this.logger.error(`❌ [Receptora Alarma] Error al auto-cerrar alarma por restablecimiento: ${autoCloseErr.message}`);
+          } else {
+            this.logger.log(`✅ [Receptora Alarma] Alarmas pendientes auto-cerradas para panel ${account} zona ${zoneOrUser}`);
+          }
+        } else if (eventCode === '401') {
+          // Auto-close ALL pending alarms on this panel because the system has been disarmed
+          const { error: autoCloseErr } = await db
+            .from('alarmas_eventos_historico')
+            .update({
+              estado_gestion: 'atendido',
+              comentarios_operador: `Desarmado recibido del sistema. Cerrado automáticamente.`,
+              fecha_fin_gestion: new Date().toISOString(),
+            })
+            .eq('panel_id', panel.id)
+            .eq('tipo_evento', 'alarma')
+            .in('estado_gestion', ['pendiente', 'en_proceso']);
+          
+          if (autoCloseErr) {
+            this.logger.error(`❌ [Receptora Alarma] Error al auto-cerrar alarmas por desarmado: ${autoCloseErr.message}`);
+          } else {
+            this.logger.log(`✅ [Receptora Alarma] Todas las alarmas pendientes auto-cerradas por desarmado del panel ${account}`);
+          }
+        }
+      }
+
       // 8. Registrar en la tabla profesional alarmas_eventos_historico
       const { data: alarmEvent, error: insertErr } = await db
         .from('alarmas_eventos_historico')
