@@ -3656,11 +3656,15 @@ export class ControlAccesoService implements OnModuleInit {
     puesto_id?: number;
   }): Promise<any> {
     const admin = this.supabase.getSupabaseAdminClient();
+    
+    const cleanCedula = input.cedula ? String(input.cedula).trim() : '';
+    const cleanCorreo = input.correo ? String(input.correo).trim().toLowerCase() : '';
+    const cleanNombre = input.nombre_completo ? String(input.nombre_completo).trim() : '';
 
     let { data: usuarioExt, error: uError } = await admin
       .from('usuarios_externos')
       .select('*')
-      .eq('cedula', input.cedula)
+      .eq('cedula', cleanCedula)
       .maybeSingle();
 
     if (uError) {
@@ -3669,10 +3673,10 @@ export class ControlAccesoService implements OnModuleInit {
 
     if (!usuarioExt) {
       const authResponse = await admin.auth.admin.createUser({
-        email: input.correo,
-        password: input.cedula,
+        email: cleanCorreo,
+        password: cleanCedula,
         email_confirm: true,
-        user_metadata: { nombre_completo: input.nombre_completo },
+        user_metadata: { nombre_completo: cleanNombre },
       });
 
       if (authResponse.error) {
@@ -3685,10 +3689,10 @@ export class ControlAccesoService implements OnModuleInit {
         .from('usuarios_externos')
         .insert({
           user_id: authUser.id,
-          nombre_completo: input.nombre_completo,
-          cedula: input.cedula,
-          correo: input.correo,
-          telefono: input.telefono || null,
+          nombre_completo: cleanNombre,
+          cedula: cleanCedula,
+          correo: cleanCorreo,
+          telefono: input.telefono ? String(input.telefono).trim() : null,
           rol: 'residente',
           estado: true,
         })
