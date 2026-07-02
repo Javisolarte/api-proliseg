@@ -1508,6 +1508,8 @@ export class ControlAccesoService implements OnModuleInit {
       placa_vehiculo, 
       color_vehiculo, 
       dispositivos_ids,
+      crear_usuario,
+      tipo_residente,
       ...personaFields 
     } = body;
 
