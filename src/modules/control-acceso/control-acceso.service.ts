@@ -3408,13 +3408,59 @@ export class ControlAccesoService implements OnModuleInit {
       throw new Error(`Registro de recopilación ${registroId} no encontrado: ${recErr?.message}`);
     }
 
-    const personaInput = {
+    const personaInput: any = {
       nombre_completo: rec.nombre_completo,
       documento_identidad: rec.cedula,
       lista_estado: 'blanca',
       entidad_tipo: 'residente',
       activo: true,
     };
+
+    if (rec.correo_electronico) {
+      try {
+        const residentResult = await this.asegurarCuentaResidente({
+          cedula: rec.cedula,
+          nombre_completo: rec.nombre_completo,
+          correo: rec.correo_electronico,
+          telefono: rec.telefono || null,
+          telefono2: rec.telefono2 || null,
+          torre: rec.torre || null,
+          apartamento: rec.apartamento || null,
+        });
+
+        if (residentResult?.residente?.id) {
+          personaInput.entidad_tipo = 'residente';
+          personaInput.entidad_id = residentResult.residente.id;
+
+          if (rec.placa_vehiculo) {
+            try {
+              const placaNormal = String(rec.placa_vehiculo).toUpperCase().trim();
+              const { data: existingVeh } = await admin
+                .from('residentes_vehiculos')
+                .select('id')
+                .eq('residente_id', residentResult.residente.id)
+                .eq('placa', placaNormal)
+                .maybeSingle();
+
+              if (!existingVeh) {
+                await admin
+                  .from('residentes_vehiculos')
+                  .insert({
+                    residente_id: residentResult.residente.id,
+                    placa: placaNormal,
+                    color: rec.color_vehiculo || null,
+                    tipo_vehiculo: 'carro'
+                  });
+              }
+            } catch (vehErr) {
+              this.logger.warn(`⚠️ [VEHICULO AUTO-CREATION] FAILED in sync: ${vehErr.message}`);
+            }
+          }
+        }
+      } catch (authErr) {
+        this.logger.warn(`⚠️ [RESIDENT AUTO-PROVISION IN SYNC] FAILED for ${rec.cedula}: ${authErr.message}`);
+      }
+    }
 
     const { data: persona, error: pErr } = await admin
       .from('personas_gestion_acceso')
