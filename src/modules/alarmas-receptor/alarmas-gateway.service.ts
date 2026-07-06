@@ -130,7 +130,7 @@ export class AlarmasGatewayService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Si no está en el Gateway 9008, pedir el socket unificado del puerto 10300 (Intelbras Nativo)
-    const receptorSocket = this.alarmasReceptor.getIntelbrasSocket();
+    const receptorSocket = this.alarmasReceptor.getIntelbrasSocket(account);
     if (receptorSocket) {
       // Como el comando puede venir en Hexadecimal (para Intelbras), comprobamos si parece Hex
       if (/^[0-9a-fA-F]+$/.test(commandString)) {

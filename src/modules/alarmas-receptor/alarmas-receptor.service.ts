@@ -43,14 +43,12 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
         
         // 1. Manejo nativo de Intelbras (Protocolo Binario IsecNet)
         if (hexString === 'f7') {
-           this.activeIntelbrasSocket = socket;
            socket.write(Buffer.from([0xfe])); // ACK de Intelbras
            // No loguear cada latido f7 para no spamear la consola
            return;
         }
 
         if (hexString.startsWith('0794')) {
-           this.activeIntelbrasSocket = socket;
            this.logger.log(`📥 [Receptora Alarma] [Intelbras] Keep-Alive con MAC recibido: ${hexString}`);
            socket.write(Buffer.from([0xfe])); // ACK
            return;
