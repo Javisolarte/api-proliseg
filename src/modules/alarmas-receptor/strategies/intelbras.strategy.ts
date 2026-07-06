@@ -87,12 +87,12 @@ export class IntelbrasStrategy implements AlarmPanelStrategy {
   async toggleSiren(panel: any, state: 'on' | 'off'): Promise<{ success: boolean; message: string }> {
     this.logger.log(`📢 [IntelbrasStrategy] Controlando sirena en panel Cuenta: ${panel.cuenta_monitoreo}. Estado solicitado: ${state}`);
     
-    // Comando 4C = Activación de Salida Programable (PGM)
-    // Nota: El panel físico debe estar configurado para que esta PGM encienda la sirena.
+    // Comando 40 = Pánico de Policía / Sirena Audible
+    // Anteriormente usamos 4C (Pánico Silencioso / PGM) y 4D con estructura rota.
     const header = '1C';
     const cuentaHex = parseInt(panel.cuenta_monitoreo, 10).toString(16).padStart(4, '0');
-    const comando = '4C'; 
-    const estadoHex = state === 'on' ? '01' : '00'; // 01 = Encender PGM, 00 = Apagar PGM
+    const comando = '40'; 
+    const estadoHex = state === 'on' ? '01' : '00'; // 01 = Encender Sirena, 00 = Apagar Sirena
     
     // Si la función en el futuro recibe PIN, lo usaremos. Por ahora usamos uno dummy de 4 dígitos.
     const pinStr = '1234';
