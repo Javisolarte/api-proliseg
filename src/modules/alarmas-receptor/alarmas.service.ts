@@ -335,11 +335,21 @@ export class AlarmasService {
 
   async getColaMonitoreo() {
     const { data, error } = await this.supabase
-      .getClient()
-      .from('v_alarmas_cola_monitoreo')
-      .select('*');
+      .getSupabaseAdminClient()
+      .from('alarmas_eventos_historico')
+      .select('*, alarmas_paneles(nombre_lugar, cuenta_monitoreo)')
+      .eq('estado_gestion', 'pendiente')
+      .order('timestamp_evento', { ascending: false });
+
     if (error) throw error;
-    return data;
+
+    // Mapear la respuesta para compatibilidad con la vista original
+    return data.map((item: any) => ({
+      ...item,
+      creado_en: item.timestamp_evento || item.created_at,
+      nombre_lugar: item.alarmas_paneles?.nombre_lugar || 'Desconocido',
+      cuenta_monitoreo: item.alarmas_paneles?.cuenta_monitoreo || item.cuenta,
+    }));
   }
 
   async getHistorial(query: { limit?: number; offset?: number; panel_id?: string; tipo_evento?: string; estado_gestion?: string }) {
@@ -347,7 +357,7 @@ export class AlarmasService {
     const offset = query.offset || 0;
     
     let dbQuery = this.supabase
-      .getClient()
+      .getSupabaseAdminClient()
       .from('alarmas_eventos_historico')
       .select('*, alarmas_paneles(nombre_lugar, cuenta_monitoreo)', { count: 'exact' })
       .order('timestamp_evento', { ascending: false });
