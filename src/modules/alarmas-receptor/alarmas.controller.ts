@@ -4,6 +4,7 @@ import { AlarmasService } from './alarmas.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
+import { Public } from '../auth/decorators/public.decorator';
 import { DevicePollerService } from '../control-acceso/device-poller.service';
 
 @ApiTags('Monitoreo de Alarmas')
@@ -247,7 +248,7 @@ export class AlarmasController {
   // ─── TEST / DEBUG ──────────────────────────────────────────────────────────
 
   @Post('test-ws-signal')
-  @RequirePermissions('monitoreo')
+  @Public()
   @ApiOperation({ summary: '[TEST] Emite un evento de alarma falso por WebSocket para probar el frontend sin TCP' })
   async testWsSignal(
     @Body() body: { cuenta?: string; lugar?: string; prioridad?: string },
