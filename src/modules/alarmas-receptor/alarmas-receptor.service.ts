@@ -405,8 +405,7 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
           alarma_evento_id: alarmEvent?.id || null
         },
       };
-      this.devicePoller.saveAndEmit(eventoCompat);
-
+      this.devicePoller.emitRawEvent(eventoCompat);
 
     } catch (err) {
       this.logger.error(`❌ [Receptora Alarma] Error al procesar trama: ${err.message}`);

@@ -76,8 +76,9 @@ export class IntelbrasStrategy implements AlarmPanelStrategy {
   async toggleSiren(panel: any, state: 'on' | 'off'): Promise<{ success: boolean; message: string }> {
     this.logger.log(`📢 [IntelbrasStrategy] Controlando sirena en panel Cuenta: ${panel.cuenta_monitoreo}. Estado solicitado: ${state}`);
     
-    // Comando 4C = Sirena / PGM
-    const comando = '4C'; 
+    // Comando 4D = Pánico Audible (Sirena Normal Altavoz)
+    // (4C es Pánico Silencioso)
+    const comando = '4D'; 
     const estadoHex = state === 'on' ? '01' : '00';
     // Enviamos la clave por seguridad
     const pinHex = Buffer.from('814626').toString('hex').padStart(12, '0');
