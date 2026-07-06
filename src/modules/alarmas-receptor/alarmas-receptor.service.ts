@@ -9,16 +9,21 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
   private server: net.Server | null = null;
   private readonly port = 10300;
 
-  // Mapa para guardar la conexión física (Hack temporal: guardaremos el último socket Intelbras)
-  private activeIntelbrasSocket: net.Socket | null = null;
+  // Mapa para guardar las conexiones físicas asociadas a cada cuenta de monitoreo
+  private activeIntelbrasSockets = new Map<string, net.Socket>();
 
   constructor(
     private readonly supabase: SupabaseService,
     private readonly devicePoller: DevicePollerService,
   ) {}
 
-  public getIntelbrasSocket(): net.Socket | null {
-    return this.activeIntelbrasSocket;
+  public getIntelbrasSocket(account: string): net.Socket | null {
+    return this.activeIntelbrasSockets.get(account) || null;
+  }
+
+  public registerIntelbrasSocket(account: string, socket: net.Socket) {
+    this.activeIntelbrasSockets.set(account, socket);
+    this.logger.log(`🔗 [Receptora Alarma] Socket enlazado exitosamente a la cuenta: ${account}`);
   }
 
   onModuleInit() {
@@ -75,7 +80,7 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
         }
 
         for (const trama of tramas) {
-          await this.procesarTrama(trama);
+          await this.procesarTrama(trama, socket);
         }
       });
 
@@ -101,7 +106,7 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async procesarTrama(tramaRaw: string) {
+  private async procesarTrama(tramaRaw: string, socket?: net.Socket) {
     try {
       // Remover los corchetes
       const trama = tramaRaw.replace(/[\[\]]/g, '').trim();
@@ -144,6 +149,11 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
           account = 'DESCONOCIDA';
           eventCode = trama;
         }
+      }
+
+      if (account !== 'DESCONOCIDA' && account !== '' && socket) {
+         // Si la trama trajo una cuenta válida, registramos/actualizamos el mapa de sockets
+         this.registerIntelbrasSocket(account, socket);
       }
 
       this.logger.log(`🔔 [Receptora Alarma] Evento decodificado → Cuenta: ${account}, Evento: ${eventCode}, Zona/Usuario: ${zoneOrUser}, Tipo: ${qualifier}`);
