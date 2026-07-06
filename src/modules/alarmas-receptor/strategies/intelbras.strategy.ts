@@ -14,20 +14,24 @@ export class IntelbrasStrategy implements AlarmPanelStrategy {
   async arm(panel: any, partition: number, code: string): Promise<{ success: boolean; message: string }> {
     this.logger.log(`🔐 [IntelbrasStrategy] Intentando armar panel Cuenta: ${panel.cuenta_monitoreo}, Partición: ${partition}`);
     
-    // Comando 3F = Armar
-    const comando = '3F'; 
+    const header = '1C';
+    const cuentaHex = parseInt(panel.cuenta_monitoreo, 10).toString(16).padStart(4, '0');
+    const comando = '3F'; // Armar
     const particionHex = partition.toString(16).padStart(2, '0');
-    // Usamos la contraseña de acceso remoto que el usuario especificó (814626) para que el panel acepte el comando
-    // Opcionalmente, la podemos convertir a BCD o dejarla tal cual si es texto. Intelbras usa BCD o Hex para contraseñas.
-    // Asumiremos formato ASCII Hexadecimal simple por ahora.
-    const pinHex = Buffer.from('814626').toString('hex').padStart(12, '0');
     
-    // Trama binaria simulada (Header + Length + Comando + Partición + Pin)
-    const rawTramaHex = `1C0A${comando}${particionHex}${pinHex}`;
+    // Si la clave es 6 dígitos, la rellenamos. Si es 4, la rellenamos a 4 (8 hex) o 6 (12 hex). Intelbras suele usar 4 o 6.
+    // Usaremos la original que el usuario mande desde el frontend (code).
+    const pinStr = code || '1234';
+    const pinHex = Buffer.from(pinStr).toString('hex').padStart(pinStr.length * 2, '0');
+    
+    // Calcular longitud (cuenta + comando + particion + pin) en bytes. 2 + 1 + 1 + (pinStr.length)
+    const len = 2 + 1 + 1 + pinStr.length;
+    const lenHex = len.toString(16).padStart(2, '0');
+
+    const rawTramaHex = `${header}${lenHex}${cuentaHex}${comando}${particionHex}${pinHex}`;
 
     this.logger.log(`📡 [Intelbras AMT Hex] Trama binaria generada: [${rawTramaHex}]`);
     
-    // Lo enviamos como String Hexadecimal, el Gateway se encargará de convertirlo a Buffer Binario
     const socketSent = await this.gatewayService.sendRawCommand(panel.cuenta_monitoreo, rawTramaHex);
 
     await new Promise(resolve => setTimeout(resolve, 300));
@@ -40,7 +44,7 @@ export class IntelbrasStrategy implements AlarmPanelStrategy {
     } else {
       return {
         success: true,
-        message: `Comando enviado (Simulación). El panel físico cuenta ${panel.cuenta_monitoreo} no tiene una conexión TCP activa en puerto 9008 ni en 10300.`,
+        message: `Comando enviado (Simulación). El panel físico cuenta ${panel.cuenta_monitoreo} no tiene una conexión TCP activa en puerto 10300.`,
       };
     }
   }
@@ -48,11 +52,18 @@ export class IntelbrasStrategy implements AlarmPanelStrategy {
   async disarm(panel: any, partition: number, code: string): Promise<{ success: boolean; message: string }> {
     this.logger.log(`🔓 [IntelbrasStrategy] Intentando desarmar panel Cuenta: ${panel.cuenta_monitoreo}, Partición: ${partition}`);
     
+    const header = '1C';
+    const cuentaHex = parseInt(panel.cuenta_monitoreo, 10).toString(16).padStart(4, '0');
     const comando = '3E'; // Desarmar
     const particionHex = partition.toString(16).padStart(2, '0');
-    const pinHex = Buffer.from('814626').toString('hex').padStart(12, '0');
     
-    const rawTramaHex = `1C0A${comando}${particionHex}${pinHex}`;
+    const pinStr = code || '1234';
+    const pinHex = Buffer.from(pinStr).toString('hex').padStart(pinStr.length * 2, '0');
+    
+    const len = 2 + 1 + 1 + pinStr.length;
+    const lenHex = len.toString(16).padStart(2, '0');
+
+    const rawTramaHex = `${header}${lenHex}${cuentaHex}${comando}${particionHex}${pinHex}`;
 
     this.logger.log(`📡 [Intelbras AMT Hex] Trama binaria generada: [${rawTramaHex}]`);
 
@@ -68,7 +79,7 @@ export class IntelbrasStrategy implements AlarmPanelStrategy {
     } else {
       return {
         success: true,
-        message: `Comando enviado (Simulación). El panel físico cuenta ${panel.cuenta_monitoreo} no tiene una conexión TCP activa en puerto 9008 ni en 10300.`,
+        message: `Comando enviado (Simulación). El panel físico cuenta ${panel.cuenta_monitoreo} no tiene una conexión TCP activa en puerto 10300.`,
       };
     }
   }
@@ -77,14 +88,20 @@ export class IntelbrasStrategy implements AlarmPanelStrategy {
     this.logger.log(`📢 [IntelbrasStrategy] Controlando sirena en panel Cuenta: ${panel.cuenta_monitoreo}. Estado solicitado: ${state}`);
     
     // Comando 4D = Pánico Audible (Sirena Normal Altavoz)
-    // (4C es Pánico Silencioso)
+    const header = '1C';
+    const cuentaHex = parseInt(panel.cuenta_monitoreo, 10).toString(16).padStart(4, '0');
     const comando = '4D'; 
-    const estadoHex = state === 'on' ? '01' : '00';
-    // Enviamos la clave por seguridad
-    const pinHex = Buffer.from('814626').toString('hex').padStart(12, '0');
+    const estadoHex = state === 'on' ? '01' : '00'; // Aunque para Pánico, el estado usualmente se ignora, lo enviamos igual.
     
-    // Trama binaria simulada
-    const rawTramaHex = `1C0A${comando}${estadoHex}${pinHex}`;
+    // Si la función en el futuro recibe PIN, lo usaremos. Por ahora usamos uno dummy de 4 dígitos.
+    const pinStr = '1234';
+    const pinHex = Buffer.from(pinStr).toString('hex').padStart(pinStr.length * 2, '0');
+    
+    // Longitud: cuenta (2) + comando (1) + estado (1) + pin
+    const len = 2 + 1 + 1 + pinStr.length;
+    const lenHex = len.toString(16).padStart(2, '0');
+    
+    const rawTramaHex = `${header}${lenHex}${cuentaHex}${comando}${estadoHex}${pinHex}`;
 
     this.logger.log(`📡 [Intelbras AMT Hex] Trama binaria de Sirena generada: [${rawTramaHex}]`);
 
