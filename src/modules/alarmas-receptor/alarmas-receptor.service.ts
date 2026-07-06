@@ -9,10 +9,17 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
   private server: net.Server | null = null;
   private readonly port = 10300;
 
+  // Mapa para guardar la conexión física (Hack temporal: guardaremos el último socket Intelbras)
+  private activeIntelbrasSocket: net.Socket | null = null;
+
   constructor(
     private readonly supabase: SupabaseService,
     private readonly devicePoller: DevicePollerService,
   ) {}
+
+  public getIntelbrasSocket(): net.Socket | null {
+    return this.activeIntelbrasSocket;
+  }
 
   onModuleInit() {
     this.startServer();
@@ -27,14 +34,38 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(`📡 [Receptora Alarma] Conexión establecida desde ${socket.remoteAddress}:${socket.remotePort}`);
 
       socket.on('data', async (data) => {
+        const hexString = data.toString('hex').toLowerCase();
+        
+        // 1. Manejo nativo de Intelbras (Protocolo Binario IsecNet)
+        if (hexString === 'f7') {
+           this.activeIntelbrasSocket = socket;
+           socket.write(Buffer.from([0xfe])); // ACK de Intelbras
+           // No loguear cada latido f7 para no spamear la consola
+           return;
+        }
+
+        if (hexString.startsWith('0794')) {
+           this.activeIntelbrasSocket = socket;
+           this.logger.log(`📥 [Receptora Alarma] [Intelbras] Keep-Alive con MAC recibido: ${hexString}`);
+           socket.write(Buffer.from([0xfe])); // ACK
+           return;
+        }
+
+        if (hexString.includes('b0') || hexString.startsWith('07b0')) {
+           this.logger.log(`📥 [Receptora Alarma] [Intelbras] EVENTO RECIBIDO (HEX): ${hexString}`);
+           socket.write(Buffer.from([0xfe])); // ACK
+           // Aquí decodificaremos el evento luego
+           return;
+        }
+
+        // Si no es un formato binario conocido, intentar texto puro (Contact ID)
         const rawString = data.toString('utf-8');
-        const hexString = data.toString('hex');
         this.logger.log(`📥 [Receptora Alarma] Paquete recibido (Texto): ${rawString}`);
         this.logger.log(`📥 [Receptora Alarma] Paquete recibido (HEX): ${hexString}`);
 
-        // 1. Responder con ACK (Hex 06) para que el comunicador no reporte falla
+        // Responder con ACK (Hex 06) para Contact ID puro
         socket.write(Buffer.from([0x06]));
-        this.logger.log(`📤 [Receptora Alarma] ACK enviado.`);
+        this.logger.log(`📤 [Receptora Alarma] ACK (06) enviado.`);
 
         // 2. Procesar las tramas en el paquete (en caso de que vengan encoladas en corchetes)
         const tramas = rawString.match(/\[([^\]]+)\]/g);

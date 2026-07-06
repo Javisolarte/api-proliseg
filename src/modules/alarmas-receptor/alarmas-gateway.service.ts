@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit, OnModuleDestroy, Inject, forwardRef }
 import * as net from 'net';
 import { DevicePollerService } from '../control-acceso/device-poller.service';
 import { SupabaseService } from '../supabase/supabase.service';
+import { AlarmasReceptorService } from './alarmas-receptor.service';
 
 @Injectable()
 export class AlarmasGatewayService implements OnModuleInit, OnModuleDestroy {
@@ -18,6 +19,8 @@ export class AlarmasGatewayService implements OnModuleInit, OnModuleDestroy {
     private readonly supabase: SupabaseService,
     @Inject(forwardRef(() => DevicePollerService))
     private readonly devicePoller: DevicePollerService,
+    @Inject(forwardRef(() => AlarmasReceptorService))
+    private readonly alarmasReceptor: AlarmasReceptorService,
   ) {}
 
   onModuleInit() {
@@ -118,21 +121,30 @@ export class AlarmasGatewayService implements OnModuleInit, OnModuleDestroy {
   /**
    * Envía un comando en bruto (bytes/string) al panel físico
    */
-  async sendRawCommand(cuenta: string, data: string | Buffer): Promise<boolean> {
-    const socket = this.activeSockets.get(cuenta);
-    if (!socket) {
-      this.logger.warn(`❌ [Gateway TCP] No se pudo enviar comando: Panel cuenta ${cuenta} no está conectado.`);
-      return false;
+  public async sendRawCommand(account: string, commandString: string): Promise<boolean> {
+    const localSocket = this.activeSockets.get(account);
+    if (localSocket) {
+      localSocket.write(commandString);
+      this.logger.log(`📤 [Gateway TCP] Comando enviado a cuenta ${account} vía Gateway Local (9008): ${commandString}`);
+      return true;
     }
 
-    try {
-      socket.write(data);
-      this.logger.log(`📤 [Gateway TCP] Comando enviado con éxito a cuenta ${cuenta}`);
+    // Si no está en el Gateway 9008, pedir el socket unificado del puerto 10300 (Intelbras Nativo)
+    const receptorSocket = this.alarmasReceptor.getIntelbrasSocket();
+    if (receptorSocket) {
+      // Como el comando puede venir en Hexadecimal (para Intelbras), comprobamos si parece Hex
+      if (/^[0-9a-fA-F]+$/.test(commandString)) {
+        receptorSocket.write(Buffer.from(commandString, 'hex'));
+        this.logger.log(`📤 [Gateway TCP -> Receptora] Comando Binario enviado a cuenta ${account} vía Receptora (10300): [${commandString}]`);
+      } else {
+        receptorSocket.write(commandString);
+        this.logger.log(`📤 [Gateway TCP -> Receptora] Comando ASCII enviado a cuenta ${account} vía Receptora (10300): ${commandString}`);
+      }
       return true;
-    } catch (err) {
-      this.logger.error(`❌ [Gateway TCP] Error escribiendo en socket cuenta ${cuenta}: ${err.message}`);
-      return false;
     }
+
+    this.logger.warn(`⚠️ [Gateway TCP] Intento de comando a cuenta ${account} fallido. No hay socket local ni en receptora.`);
+    return false;
   }
 
   /**

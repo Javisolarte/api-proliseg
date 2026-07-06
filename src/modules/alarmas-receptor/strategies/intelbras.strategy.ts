@@ -14,20 +14,21 @@ export class IntelbrasStrategy implements AlarmPanelStrategy {
   async arm(panel: any, partition: number, code: string): Promise<{ success: boolean; message: string }> {
     this.logger.log(`🔐 [IntelbrasStrategy] Intentando armar panel Cuenta: ${panel.cuenta_monitoreo}, Partición: ${partition}`);
     
-    // Comando legible para testing en consola/netcat
-    const textCommand = `[ARM_PART_${partition}#${code}]`;
-    const socketSent = await this.gatewayService.sendRawCommand(panel.cuenta_monitoreo, textCommand);
-    
-    // Trama hexadecimal binaria del protocolo AMT (para uso real posterior)
-    const header = '1C';
-    const cuentaHex = parseInt(panel.cuenta_monitoreo, 10).toString(16).padStart(4, '0');
-    const comando = '3F'; // Armar
+    // Comando 3F = Armar
+    const comando = '3F'; 
     const particionHex = partition.toString(16).padStart(2, '0');
-    const pinHex = Buffer.from(code || '1234').toString('hex').padStart(8, '0');
-    const rawTrama = `${header}08${cuentaHex}${comando}${particionHex}${pinHex}`;
+    // Usamos la contraseña de acceso remoto que el usuario especificó (814626) para que el panel acepte el comando
+    // Opcionalmente, la podemos convertir a BCD o dejarla tal cual si es texto. Intelbras usa BCD o Hex para contraseñas.
+    // Asumiremos formato ASCII Hexadecimal simple por ahora.
+    const pinHex = Buffer.from('814626').toString('hex').padStart(12, '0');
+    
+    // Trama binaria simulada (Header + Length + Comando + Partición + Pin)
+    const rawTramaHex = `1C0A${comando}${particionHex}${pinHex}`;
 
-    this.logger.log(`📡 [Intelbras AMT Hex] Trama binaria generada: [${rawTrama}]`);
-    this.logger.log(`⚡ [Intelbras Cloud API] Simulación: POST https://api.sgp.intelbras.com.br/v1/panels/${panel.cuenta_monitoreo}/state (Armar)`);
+    this.logger.log(`📡 [Intelbras AMT Hex] Trama binaria generada: [${rawTramaHex}]`);
+    
+    // Lo enviamos como String Hexadecimal, el Gateway se encargará de convertirlo a Buffer Binario
+    const socketSent = await this.gatewayService.sendRawCommand(panel.cuenta_monitoreo, rawTramaHex);
 
     await new Promise(resolve => setTimeout(resolve, 300));
 
@@ -39,7 +40,7 @@ export class IntelbrasStrategy implements AlarmPanelStrategy {
     } else {
       return {
         success: true,
-        message: `Comando enviado (Simulación). El panel físico cuenta ${panel.cuenta_monitoreo} no tiene una conexión TCP activa en puerto 9008.`,
+        message: `Comando enviado (Simulación). El panel físico cuenta ${panel.cuenta_monitoreo} no tiene una conexión TCP activa en puerto 9008 ni en 10300.`,
       };
     }
   }
@@ -47,17 +48,15 @@ export class IntelbrasStrategy implements AlarmPanelStrategy {
   async disarm(panel: any, partition: number, code: string): Promise<{ success: boolean; message: string }> {
     this.logger.log(`🔓 [IntelbrasStrategy] Intentando desarmar panel Cuenta: ${panel.cuenta_monitoreo}, Partición: ${partition}`);
     
-    const textCommand = `[DISARM_PART_${partition}#${code}]`;
-    const socketSent = await this.gatewayService.sendRawCommand(panel.cuenta_monitoreo, textCommand);
-    
-    const header = '1C';
-    const cuentaHex = parseInt(panel.cuenta_monitoreo, 10).toString(16).padStart(4, '0');
     const comando = '3E'; // Desarmar
     const particionHex = partition.toString(16).padStart(2, '0');
-    const pinHex = Buffer.from(code || '1234').toString('hex').padStart(8, '0');
-    const rawTrama = `${header}08${cuentaHex}${comando}${particionHex}${pinHex}`;
+    const pinHex = Buffer.from('814626').toString('hex').padStart(12, '0');
+    
+    const rawTramaHex = `1C0A${comando}${particionHex}${pinHex}`;
 
-    this.logger.log(`📡 [Intelbras AMT Hex] Trama binaria generada: [${rawTrama}]`);
+    this.logger.log(`📡 [Intelbras AMT Hex] Trama binaria generada: [${rawTramaHex}]`);
+
+    const socketSent = await this.gatewayService.sendRawCommand(panel.cuenta_monitoreo, rawTramaHex);
 
     await new Promise(resolve => setTimeout(resolve, 300));
 
@@ -69,7 +68,7 @@ export class IntelbrasStrategy implements AlarmPanelStrategy {
     } else {
       return {
         success: true,
-        message: `Comando enviado (Simulación). El panel físico cuenta ${panel.cuenta_monitoreo} no tiene una conexión TCP activa en puerto 9008.`,
+        message: `Comando enviado (Simulación). El panel físico cuenta ${panel.cuenta_monitoreo} no tiene una conexión TCP activa en puerto 9008 ni en 10300.`,
       };
     }
   }
