@@ -73,12 +73,17 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
            return;
         }
 
-        if (hexString.includes('b0') || hexString.startsWith('07b0')) {
+        if (hexString.includes('b0') || hexString.startsWith('07b0') || hexString.length > 4 && !hexString.startsWith('0794')) {
            this.anonymousSockets.add(socket);
            this.logger.log(`📥 [Receptora Alarma] [Intelbras] EVENTO RECIBIDO (HEX): ${hexString}`);
            socket.write(Buffer.from([0xfe])); // ACK
-           // Aquí decodificaremos el evento luego
-           return;
+           
+           // HACK: Como nos pidieron que "Cualquier cosa que llegue debe sonar", 
+           // si recibimos un paquete de evento binario que no sea Keep-Alive, 
+           // emulamos una alarma genérica (Robo 130) para la cuenta 2002.
+           if (hexString !== '01807e') { // Evitar doble proceso si es pánico silencioso
+             await this.procesarTrama(`[18113001000#2002]`, socket);
+           }
         }
 
         // HACK: Si llega la trama de alarma silenciosa en binario (01807e)
