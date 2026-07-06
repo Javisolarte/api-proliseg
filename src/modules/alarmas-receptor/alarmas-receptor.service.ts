@@ -81,6 +81,19 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
            return;
         }
 
+        // HACK: Si llega la trama de alarma silenciosa en binario (01807e)
+        if (hexString === '01807e') {
+           this.anonymousSockets.add(socket);
+           this.logger.log(`📥 [Receptora Alarma] [Intelbras] ALARMA SILENCIOSA (Pánico) RECIBIDA: ${hexString}`);
+           socket.write(Buffer.from([0xfe])); // ACK
+           
+           // Emulamos el procesamiento de Contact ID puro como si hubiera sido texto
+           // Asumiremos la cuenta 2002 para este único panel. 
+           // 122 = Silent Panic
+           await this.procesarTrama(`[18112201000#2002]`, socket);
+           return;
+        }
+
         // Si no es un formato binario conocido, intentar texto puro (Contact ID)
         const rawString = data.toString('utf-8');
         this.logger.log(`📥 [Receptora Alarma] Paquete recibido (Texto): ${rawString}`);
