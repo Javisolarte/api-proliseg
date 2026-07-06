@@ -578,6 +578,15 @@ export class AlarmasService {
           prioridad: 'informativa',
           estado_gestion: 'atendido',
         });
+        
+      // 🔥 Emitir al frontend para que el Live Feed se actualice al instante
+      this.devicePoller.emitRawEvent({
+        dispositivo_id: panel.id,
+        nombre_dispositivo: panel.nombre_lugar,
+        tipo_evento: 'cmd_usuario',
+        timestamp: new Date().toISOString(),
+        detalles_raw: { cuenta: panel.cuenta_monitoreo, panel_id: panel.id }
+      });
     }
 
     return result;
@@ -607,6 +616,15 @@ export class AlarmasService {
           prioridad: 'informativa',
           estado_gestion: 'atendido',
         });
+        
+      // 🔥 Emitir al frontend para que el Live Feed se actualice al instante
+      this.devicePoller.emitRawEvent({
+        dispositivo_id: panel.id,
+        nombre_dispositivo: panel.nombre_lugar,
+        tipo_evento: 'cmd_usuario',
+        timestamp: new Date().toISOString(),
+        detalles_raw: { cuenta: panel.cuenta_monitoreo, panel_id: panel.id }
+      });
     }
 
     return result;
@@ -637,6 +655,15 @@ export class AlarmasService {
           prioridad: payload.accion === 'encender' ? 'alta' : 'informativa',
           estado_gestion: 'atendido',
         });
+
+      // 🔥 Emitir al frontend para que el Live Feed se actualice al instante
+      this.devicePoller.emitRawEvent({
+        dispositivo_id: panel.id,
+        nombre_dispositivo: panel.nombre_lugar,
+        tipo_evento: 'cmd_usuario',
+        timestamp: new Date().toISOString(),
+        detalles_raw: { cuenta: panel.cuenta_monitoreo, panel_id: panel.id }
+      });
     }
 
     return result;

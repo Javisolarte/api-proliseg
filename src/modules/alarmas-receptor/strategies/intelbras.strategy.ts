@@ -76,28 +76,30 @@ export class IntelbrasStrategy implements AlarmPanelStrategy {
   async toggleSiren(panel: any, state: 'on' | 'off'): Promise<{ success: boolean; message: string }> {
     this.logger.log(`📢 [IntelbrasStrategy] Controlando sirena en panel Cuenta: ${panel.cuenta_monitoreo}. Estado solicitado: ${state}`);
     
-    const textCommand = `[SIREN_${state.toUpperCase()}]`;
-    const socketSent = await this.gatewayService.sendRawCommand(panel.cuenta_monitoreo, textCommand);
-    
-    const header = '1C';
-    const cuentaHex = parseInt(panel.cuenta_monitoreo, 10).toString(16).padStart(4, '0');
-    const comando = '4C'; // Sirena / PGM
+    // Comando 4C = Sirena / PGM
+    const comando = '4C'; 
     const estadoHex = state === 'on' ? '01' : '00';
-    const rawTrama = `${header}04${cuentaHex}${comando}${estadoHex}`;
+    // Enviamos la clave por seguridad
+    const pinHex = Buffer.from('814626').toString('hex').padStart(12, '0');
+    
+    // Trama binaria simulada
+    const rawTramaHex = `1C0A${comando}${estadoHex}${pinHex}`;
 
-    this.logger.log(`📡 [Intelbras AMT Hex] Trama binaria generada: [${rawTrama}]`);
+    this.logger.log(`📡 [Intelbras AMT Hex] Trama binaria de Sirena generada: [${rawTramaHex}]`);
+
+    const socketSent = await this.gatewayService.sendRawCommand(panel.cuenta_monitoreo, rawTramaHex);
 
     await new Promise(resolve => setTimeout(resolve, 300));
 
     if (socketSent) {
       return {
         success: true,
-        message: `Sirena de panel Intelbras cuenta ${panel.cuenta_monitoreo} configurada en ${state === 'on' ? 'ENCENDIDA' : 'APAGADA'} vía canal TCP`,
+        message: `Sirena de panel Intelbras cuenta ${panel.cuenta_monitoreo} configurada en ${state === 'on' ? 'ENCENDIDA' : 'APAGADA'} vía canal TCP directo`,
       };
     } else {
       return {
         success: true,
-        message: `Comando de Sirena enviado (Simulación). Panel cuenta ${panel.cuenta_monitoreo} no está en línea en puerto 9008.`,
+        message: `Comando de Sirena enviado (Simulación). Panel cuenta ${panel.cuenta_monitoreo} no está en línea en el servidor unificado.`,
       };
     }
   }

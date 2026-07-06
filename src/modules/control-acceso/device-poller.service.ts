@@ -624,6 +624,12 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
   // ─── Guardar en BD y Emitir por WebSocket (fire & forget) ─────────────────
 
+  public emitRawEvent(evento: any) {
+    if (this.emitFn) {
+      try { this.emitFn(evento as EventoAcceso); } catch {}
+    }
+  }
+
   saveAndEmit(evento: EventoAcceso) {
     if (evento.timestamp) {
       const currentLatest = this.latestDbTimestamp.get(evento.dispositivo_id);
@@ -638,6 +644,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(`⚠️ [EventSystem] Error actualizando puerta_estado: ${err.message}`);
       });
     }
+
+    this.emitRawEvent(evento);
 
     const persistirEvento = async () => {
       let persona: any = null;
