@@ -18,11 +18,28 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   public getIntelbrasSocket(account: string): net.Socket | null {
-    return this.activeIntelbrasSockets.get(account) || null;
+    const socket = this.activeIntelbrasSockets.get(account);
+    if (socket) return socket;
+
+    // Si hay sockets registrados para otra cuenta, devolvemos el primero (asumiendo que es el único panel real)
+    if (this.activeIntelbrasSockets.size > 0) {
+      return Array.from(this.activeIntelbrasSockets.values())[0];
+    }
+    
+    // Si NO hay NINGÚN socket registrado con cuenta, devolvemos el primer socket "anónimo" (el que envió f7)
+    if (this.anonymousSockets.size > 0) {
+      return Array.from(this.anonymousSockets)[0];
+    }
+
+    return null;
   }
+
+  // Mapa extra para sockets "anónimos" (que solo envían keep-alive pero aún no han enviado evento)
+  private anonymousSockets = new Set<net.Socket>();
 
   public registerIntelbrasSocket(account: string, socket: net.Socket) {
     this.activeIntelbrasSockets.set(account, socket);
+    this.anonymousSockets.delete(socket); // Lo removemos de anónimos porque ya tiene identidad
     this.logger.log(`🔗 [Receptora Alarma] Socket enlazado exitosamente a la cuenta: ${account}`);
   }
 
@@ -43,18 +60,21 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
         
         // 1. Manejo nativo de Intelbras (Protocolo Binario IsecNet)
         if (hexString === 'f7') {
+           this.anonymousSockets.add(socket);
            socket.write(Buffer.from([0xfe])); // ACK de Intelbras
            // No loguear cada latido f7 para no spamear la consola
            return;
         }
 
         if (hexString.startsWith('0794')) {
+           this.anonymousSockets.add(socket);
            this.logger.log(`📥 [Receptora Alarma] [Intelbras] Keep-Alive con MAC recibido: ${hexString}`);
            socket.write(Buffer.from([0xfe])); // ACK
            return;
         }
 
         if (hexString.includes('b0') || hexString.startsWith('07b0')) {
+           this.anonymousSockets.add(socket);
            this.logger.log(`📥 [Receptora Alarma] [Intelbras] EVENTO RECIBIDO (HEX): ${hexString}`);
            socket.write(Buffer.from([0xfe])); // ACK
            // Aquí decodificaremos el evento luego
