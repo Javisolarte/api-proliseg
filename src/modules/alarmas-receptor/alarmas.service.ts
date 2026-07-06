@@ -348,8 +348,9 @@ export class AlarmasService {
     
     let dbQuery = this.supabase
       .getClient()
-      .from('v_alarmas_historial_completo')
-      .select('*', { count: 'exact' });
+      .from('alarmas_eventos_historico')
+      .select('*, alarmas_paneles(nombre_lugar, cuenta_monitoreo)', { count: 'exact' })
+      .order('timestamp_evento', { ascending: false });
 
     if (query.panel_id) {
       dbQuery = dbQuery.eq('panel_id', query.panel_id);
@@ -365,7 +366,16 @@ export class AlarmasService {
       .range(offset, offset + limit - 1);
 
     if (error) throw error;
-    return { data, total: count };
+
+    // Mapear para coincidir con la vista que el frontend espera (creado_en, nombre_lugar)
+    const mappedData = data.map((item: any) => ({
+      ...item,
+      creado_en: item.timestamp_evento || item.created_at,
+      nombre_lugar: item.alarmas_paneles?.nombre_lugar || 'Desconocido',
+      cuenta_monitoreo: item.alarmas_paneles?.cuenta_monitoreo || item.cuenta,
+    }));
+
+    return { data: mappedData, total: count };
   }
 
   // ─── CONTROL DE GESTIÓN (OPERADOR CENTRAL DE MONITOREO) ──────────────────────
