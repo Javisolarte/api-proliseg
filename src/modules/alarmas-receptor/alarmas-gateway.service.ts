@@ -36,6 +36,8 @@ export class AlarmasGatewayService implements OnModuleInit, OnModuleDestroy {
 
       socket.on('data', async (data) => {
         const rawString = data.toString('utf-8').trim();
+        const hexString = data.toString('hex');
+        this.logger.log(`📥 [Gateway TCP] Datos recibidos (HEX): ${hexString}`);
         
         // 1. Decodificar Login de Intelbras AMT / Simulador
         // Formato estándar de prueba: [LOGIN#2002] o trama binaria de Intelbras conteniendo la cuenta

@@ -28,7 +28,9 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
 
       socket.on('data', async (data) => {
         const rawString = data.toString('utf-8');
-        this.logger.log(`📥 [Receptora Alarma] Paquete recibido: ${rawString}`);
+        const hexString = data.toString('hex');
+        this.logger.log(`📥 [Receptora Alarma] Paquete recibido (Texto): ${rawString}`);
+        this.logger.log(`📥 [Receptora Alarma] Paquete recibido (HEX): ${hexString}`);
 
         // 1. Responder con ACK (Hex 06) para que el comunicador no reporte falla
         socket.write(Buffer.from([0x06]));
