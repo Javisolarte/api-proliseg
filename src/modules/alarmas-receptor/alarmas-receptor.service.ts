@@ -195,7 +195,7 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(`🔔 [Receptora Alarma] Evento decodificado → Cuenta: ${account}, Evento: ${eventCode}, Zona/Usuario: ${zoneOrUser}, Tipo: ${qualifier}`);
 
       // 3. Buscar el panel de alarma registrado en Supabase
-      const db = this.supabase.getClient();
+      const db = this.supabase.getSupabaseAdminClient();
       let { data: panel, error: panelErr } = await db
         .from('alarmas_paneles')
         .select('*')
