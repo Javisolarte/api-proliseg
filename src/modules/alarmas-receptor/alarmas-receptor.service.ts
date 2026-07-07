@@ -229,6 +229,10 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
       const defaultMapping: { [code: string]: { descripcion: string; categoria_defecto: string; prioridad_defecto: string } } = {
         '130': { descripcion: 'Alarma de Robo', categoria_defecto: 'alarma', prioridad_defecto: 'critica' },
         '137': { descripcion: 'Alarma de Sabotaje (Tamper)', categoria_defecto: 'alarma', prioridad_defecto: 'alta' },
+        '120': { descripcion: 'Pánico', categoria_defecto: 'alarma', prioridad_defecto: 'critica' },
+        '122': { descripcion: 'Pánico Silencioso', categoria_defecto: 'alarma', prioridad_defecto: 'critica' },
+        '110': { descripcion: 'Alarma de Fuego', categoria_defecto: 'alarma', prioridad_defecto: 'critica' },
+        '100': { descripcion: 'Alarma Médica', categoria_defecto: 'alarma', prioridad_defecto: 'critica' },
         '401': { descripcion: 'Desarmado del Sistema', categoria_defecto: 'apertura', prioridad_defecto: 'informativa' },
         '400': { descripcion: 'Armado del Sistema', categoria_defecto: 'cierre', prioridad_defecto: 'informativa' },
         '602': { descripcion: 'Test Periódico de Comunicación', categoria_defecto: 'test', prioridad_defecto: 'baja' },
@@ -236,11 +240,20 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
         '302': { descripcion: 'Batería Baja del Panel', categoria_defecto: 'fallo', prioridad_defecto: 'alta' },
       };
 
-      const cid = cidInfo || defaultMapping[eventCode] || {
-        descripcion: `Evento Contact ID ${eventCode}`,
-        categoria_defecto: 'evento',
-        prioridad_defecto: 'media',
-      };
+      let cid = cidInfo || defaultMapping[eventCode];
+      
+      // Si no existe, usamos una regla general basada en el primer dígito (Contact ID Standard)
+      if (!cid) {
+        if (eventCode.startsWith('1')) {
+           cid = { descripcion: `Alarma Desconocida (${eventCode})`, categoria_defecto: 'alarma', prioridad_defecto: 'critica' };
+        } else if (eventCode.startsWith('3')) {
+           cid = { descripcion: `Fallo del Sistema (${eventCode})`, categoria_defecto: 'fallo', prioridad_defecto: 'media' };
+        } else if (eventCode.startsWith('4')) {
+           cid = { descripcion: `Apertura/Cierre (${eventCode})`, categoria_defecto: 'evento', prioridad_defecto: 'informativa' };
+        } else {
+           cid = { descripcion: `Evento Contact ID ${eventCode}`, categoria_defecto: 'evento', prioridad_defecto: 'media' };
+        }
+      }
 
       const esRestablecimiento = qualifier === '3';
       const categoriaCid = esRestablecimiento ? 'restablecimiento' : cid.categoria_defecto;
