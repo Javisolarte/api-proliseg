@@ -73,7 +73,7 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
            return;
         }
 
-        if (hexString.includes('b0') || hexString.startsWith('07b0') || hexString.startsWith('07b1')) {
+        if (hexString.startsWith('07b0') || hexString.startsWith('07b1')) {
            // Si es algún evento binario propio de Intelbras, lo reconocemos para que deje de molestar,
            // pero como no lo sabemos decodificar, no enviamos falsas alarmas.
            this.anonymousSockets.add(socket);
@@ -88,8 +88,17 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
            this.logger.log(`📥 [Receptora Alarma] [Intelbras] ALARMA SILENCIOSA (Pánico) RECIBIDA: ${hexString}`);
            socket.write(Buffer.from([0xfe])); // ACK
            
-           // Emulamos el procesamiento de Contact ID puro como si hubiera sido texto
-           await this.procesarTrama(`[18112201000#8844]`, socket);
+           // Buscar a qué cuenta pertenece este socket
+           let foundAccount = '1054'; // Fallback a 1054 por defecto
+           for (const [acc, s] of this.activeSockets.entries()) {
+             if (s === socket) {
+               foundAccount = acc;
+               break;
+             }
+           }
+           
+           // Emulamos el procesamiento de Contact ID con formato Sur-Gard válido
+           await this.procesarTrama(`[0000L000000#${foundAccount}|18112201000]`, socket);
            return;
         }
 
