@@ -253,6 +253,22 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
         } else {
            cid = { descripcion: `Evento Contact ID ${eventCode}`, categoria_defecto: 'evento', prioridad_defecto: 'media' };
         }
+
+        // AUTO-REGISTRAR EL CÓDIGO EN EL CATÁLOGO PARA EVITAR ERROR DE FOREIGN KEY
+        await db.from('alarmas_contact_id_catalogo').insert({
+           codigo_evento: eventCode,
+           descripcion: cid.descripcion,
+           categoria_defecto: cid.categoria_defecto,
+           prioridad_defecto: cid.prioridad_defecto
+        });
+      } else if (!cidInfo && cid) {
+        // Estaba en defaultMapping pero no en BD, también lo insertamos
+        await db.from('alarmas_contact_id_catalogo').insert({
+           codigo_evento: eventCode,
+           descripcion: cid.descripcion,
+           categoria_defecto: cid.categoria_defecto,
+           prioridad_defecto: cid.prioridad_defecto
+        });
       }
 
       const esRestablecimiento = qualifier === '3';
