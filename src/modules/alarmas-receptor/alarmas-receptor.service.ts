@@ -90,7 +90,7 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
            
            // Buscar a qué cuenta pertenece este socket
            let foundAccount = '1054'; // Fallback a 1054 por defecto
-           for (const [acc, s] of this.activeSockets.entries()) {
+           for (const [acc, s] of this.activeIntelbrasSockets.entries()) {
              if (s === socket) {
                foundAccount = acc;
                break;
