@@ -15,20 +15,19 @@ export class IntelbrasStrategy implements AlarmPanelStrategy {
     this.logger.log(`🔐 [IntelbrasStrategy] Intentando armar panel Cuenta: ${panel.cuenta_monitoreo}, Partición: ${partition}`);
     
     const header = '1C';
-    const cuentaHex = parseInt(panel.cuenta_monitoreo, 10).toString(16).padStart(4, '0');
+    const cuentaHex = panel.cuenta_monitoreo.toString().padStart(4, '0');
     const comando = '3F'; // Armar
     const particionHex = partition.toString(16).padStart(2, '0');
     
-    // Si la clave es 6 dígitos, la rellenamos. Si es 4, la rellenamos a 4 (8 hex) o 6 (12 hex). Intelbras suele usar 4 o 6.
-    // Usaremos la original que el usuario mande desde el frontend (code).
     const pinStr = code || '1234';
     const pinHex = Buffer.from(pinStr).toString('hex').padStart(pinStr.length * 2, '0');
     
-    // Calcular longitud (cuenta + comando + particion + pin) en bytes. 2 + 1 + 1 + (pinStr.length)
-    const len = 2 + 1 + 1 + pinStr.length;
+    // Longitud: cuenta (2) + comando (1) + particion (1) + pin (N) + checksum (1)
+    const len = 2 + 1 + 1 + pinStr.length + 1;
     const lenHex = len.toString(16).padStart(2, '0');
 
-    const rawTramaHex = `${header}${lenHex}${cuentaHex}${comando}${particionHex}${pinHex}`;
+    const tramaSinChecksum = `${header}${lenHex}${cuentaHex}${comando}${particionHex}${pinHex}`;
+    const rawTramaHex = this.appendIntelbrasChecksum(tramaSinChecksum);
 
     this.logger.log(`📡 [Intelbras AMT Hex] Trama binaria generada: [${rawTramaHex}]`);
     
@@ -53,17 +52,19 @@ export class IntelbrasStrategy implements AlarmPanelStrategy {
     this.logger.log(`🔓 [IntelbrasStrategy] Intentando desarmar panel Cuenta: ${panel.cuenta_monitoreo}, Partición: ${partition}`);
     
     const header = '1C';
-    const cuentaHex = parseInt(panel.cuenta_monitoreo, 10).toString(16).padStart(4, '0');
+    const cuentaHex = panel.cuenta_monitoreo.toString().padStart(4, '0');
     const comando = '3E'; // Desarmar
     const particionHex = partition.toString(16).padStart(2, '0');
     
     const pinStr = code || '1234';
     const pinHex = Buffer.from(pinStr).toString('hex').padStart(pinStr.length * 2, '0');
     
-    const len = 2 + 1 + 1 + pinStr.length;
+    // Longitud: cuenta (2) + comando (1) + particion (1) + pin (N) + checksum (1)
+    const len = 2 + 1 + 1 + pinStr.length + 1;
     const lenHex = len.toString(16).padStart(2, '0');
 
-    const rawTramaHex = `${header}${lenHex}${cuentaHex}${comando}${particionHex}${pinHex}`;
+    const tramaSinChecksum = `${header}${lenHex}${cuentaHex}${comando}${particionHex}${pinHex}`;
+    const rawTramaHex = this.appendIntelbrasChecksum(tramaSinChecksum);
 
     this.logger.log(`📡 [Intelbras AMT Hex] Trama binaria generada: [${rawTramaHex}]`);
 
@@ -90,7 +91,7 @@ export class IntelbrasStrategy implements AlarmPanelStrategy {
     // Comando 4C = Activación de Salida Programable (PGM)
     // Este es el ÚNICO comando soportado por el puerto de monitoreo (10300) para activar dispositivos.
     const header = '1C';
-    const cuentaHex = parseInt(panel.cuenta_monitoreo, 10).toString(16).padStart(4, '0');
+    const cuentaHex = panel.cuenta_monitoreo.toString().padStart(4, '0');
     const comando = '4C'; 
     const estadoHex = state === 'on' ? '01' : '00'; // 01 = Encender PGM 1, 00 = Apagar PGM 1
     
@@ -98,11 +99,12 @@ export class IntelbrasStrategy implements AlarmPanelStrategy {
     const pinStr = '1234';
     const pinHex = Buffer.from(pinStr).toString('hex').padStart(pinStr.length * 2, '0');
     
-    // Longitud: cuenta (2) + comando (1) + estado (1) + pin
-    const len = 2 + 1 + 1 + pinStr.length;
+    // Longitud: cuenta (2) + comando (1) + estado (1) + pin (N) + checksum (1)
+    const len = 2 + 1 + 1 + pinStr.length + 1;
     const lenHex = len.toString(16).padStart(2, '0');
     
-    const rawTramaHex = `${header}${lenHex}${cuentaHex}${comando}${estadoHex}${pinHex}`;
+    const tramaSinChecksum = `${header}${lenHex}${cuentaHex}${comando}${estadoHex}${pinHex}`;
+    const rawTramaHex = this.appendIntelbrasChecksum(tramaSinChecksum);
 
     this.logger.log(`📡 [Intelbras AMT Hex] Trama binaria de Sirena generada: [${rawTramaHex}]`);
 
@@ -163,5 +165,16 @@ export class IntelbrasStrategy implements AlarmPanelStrategy {
         message: `Usuario ${userNumber} eliminado localmente. Remoción física emulada (panel fuera de línea).`,
       };
     }
+  }
+
+  private appendIntelbrasChecksum(tramaHex: string): string {
+    const buffer = Buffer.from(tramaHex, 'hex');
+    let xor = 0;
+    for (let i = 0; i < buffer.length; i++) {
+      xor ^= buffer[i];
+    }
+    const checksumByte = xor ^ 0xFF;
+    const checksumHex = checksumByte.toString(16).padStart(2, '0');
+    return `${tramaHex}${checksumHex}`;
   }
 }
