@@ -7,7 +7,7 @@ import { DevicePollerService, EventoAcceso } from '../control-acceso/device-poll
 export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AlarmasReceptorService.name);
   private server: net.Server | null = null;
-  private readonly port = 10300;
+  private readonly port = parseInt(process.env.ALARM_RECEIVER_PORT || '10300', 10);
 
   // Mapa para guardar las conexiones físicas asociadas a cada cuenta de monitoreo
   private activeIntelbrasSockets = new Map<string, net.Socket>();
@@ -19,28 +19,47 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
 
   public getIntelbrasSocket(account: string): net.Socket | null {
     const socket = this.activeIntelbrasSockets.get(account);
-    if (socket) return socket;
-
-    // Si hay sockets registrados para otra cuenta, devolvemos el primero (asumiendo que es el único panel real)
-    if (this.activeIntelbrasSockets.size > 0) {
-      return Array.from(this.activeIntelbrasSockets.values())[0];
+    if (!socket) return null;
+    if (socket.destroyed || !socket.writable) {
+      this.activeIntelbrasSockets.delete(account);
+      return null;
     }
-    
-    // Si NO hay NINGÚN socket registrado con cuenta, devolvemos el primer socket "anónimo" (el que envió f7)
-    if (this.anonymousSockets.size > 0) {
-      return Array.from(this.anonymousSockets)[0];
-    }
-
-    return null;
+    return socket;
   }
 
   // Mapa extra para sockets "anónimos" (que solo envían keep-alive pero aún no han enviado evento)
   private anonymousSockets = new Set<net.Socket>();
 
   public registerIntelbrasSocket(account: string, socket: net.Socket) {
+    if (!account) return;
     this.activeIntelbrasSockets.set(account, socket);
     this.anonymousSockets.delete(socket); // Lo removemos de anónimos porque ya tiene identidad
     this.logger.log(`🔗 [Receptora Alarma] Socket enlazado exitosamente a la cuenta: ${account}`);
+  }
+
+  public isAccountConnected(account: string): boolean {
+    return this.getIntelbrasSocket(account) !== null;
+  }
+
+  public getStatus() {
+    const connectedAccounts = Array.from(this.activeIntelbrasSockets.keys())
+      .filter((account) => this.isAccountConnected(account));
+
+    return {
+      port: this.port,
+      listening: this.server?.listening ?? false,
+      connectedAccounts,
+    };
+  }
+
+  private unregisterSocket(socket: net.Socket) {
+    this.anonymousSockets.delete(socket);
+    for (const [account, activeSocket] of this.activeIntelbrasSockets.entries()) {
+      if (activeSocket === socket) {
+        this.activeIntelbrasSockets.delete(account);
+        this.logger.log(`Socket desvinculado de la cuenta: ${account}`);
+      }
+    }
   }
 
   onModuleInit() {
@@ -82,23 +101,11 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
            return; // <- MUY IMPORTANTE RETORNAR PARA NO CAER EN CONTACT ID
         }
 
-        // HACK: Si llega la trama de alarma silenciosa en binario (01807e)
+        // Trama binaria sin cuenta. No se puede asociar de forma segura a un panel.
         if (hexString === '01807e') {
            this.anonymousSockets.add(socket);
-           this.logger.log(`📥 [Receptora Alarma] [Intelbras] ALARMA SILENCIOSA (Pánico) RECIBIDA: ${hexString}`);
+           this.logger.warn(`[Receptora Alarma] Trama binaria sin cuenta recibida: ${hexString}. No se enruta para evitar asociarla al panel equivocado.`);
            socket.write(Buffer.from([0xfe])); // ACK
-           
-           // Buscar a qué cuenta pertenece este socket
-           let foundAccount = '1054'; // Fallback a 1054 por defecto
-           for (const [acc, s] of this.activeIntelbrasSockets.entries()) {
-             if (s === socket) {
-               foundAccount = acc;
-               break;
-             }
-           }
-           
-           // Emulamos el procesamiento de Contact ID con formato Sur-Gard válido
-           await this.procesarTrama(`[0000L000000#${foundAccount}|18112201000]`, socket);
            return;
         }
 
@@ -126,6 +133,8 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
       socket.on('end', () => {
         this.logger.log(`🔌 [Receptora Alarma] Conexión cerrada por el comunicador.`);
       });
+
+      socket.on('close', () => this.unregisterSocket(socket));
 
       socket.on('error', (err) => {
         this.logger.error(`⚠️ [Receptora Alarma] Error en socket: ${err.message}`);
@@ -160,14 +169,14 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
       if (trama.includes('#') && trama.includes('|')) {
         const parts = trama.split('|');
         const headerPart = parts[0];
-        const payloadPart = parts[1];
+        const payloadPart = parts[1]?.trim() || '';
 
         // Extraer la cuenta después del '#'
         const hashIdx = headerPart.indexOf('#');
         account = headerPart.substring(hashIdx + 1).trim();
 
         // Parsear el payload (ej: 18113001004)
-        if (payloadPart.startsWith('18')) {
+        if (payloadPart.startsWith('18') && payloadPart.length >= 11) {
           qualifier = payloadPart.charAt(2);       // '1' o '3'
           eventCode = payloadPart.substring(3, 6);  // '130'
           partition = payloadPart.substring(6, 8);  // '01'
@@ -177,20 +186,29 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
         }
       } else {
         // Formato compacto sin pipe: e.g. 884418113001004
-        const idx18 = trama.indexOf('18');
-        if (idx18 !== -1 && trama.length >= idx18 + 11) {
-          account = trama.substring(0, idx18).trim();
-          qualifier = trama.charAt(idx18 + 2);
-          eventCode = trama.substring(idx18 + 3, idx18 + 6);
-          partition = trama.substring(idx18 + 6, idx18 + 8);
-          zoneOrUser = trama.substring(idx18 + 8, idx18 + 11);
+        const accountAtEnd = trama.match(/^(.*)#([0-9A-F]{1,20})$/i);
+        const contactIdPayload = accountAtEnd ? accountAtEnd[1].trim() : trama;
+        if (accountAtEnd) account = accountAtEnd[2].toUpperCase();
+
+        const idx18 = contactIdPayload.indexOf('18');
+        if (idx18 !== -1 && contactIdPayload.length >= idx18 + 11) {
+          if (!account) account = contactIdPayload.substring(0, idx18).trim().toUpperCase();
+          qualifier = contactIdPayload.charAt(idx18 + 2);
+          eventCode = contactIdPayload.substring(idx18 + 3, idx18 + 6).toUpperCase();
+          partition = contactIdPayload.substring(idx18 + 6, idx18 + 8).toUpperCase();
+          zoneOrUser = contactIdPayload.substring(idx18 + 8, idx18 + 11).toUpperCase();
         } else {
-          account = 'DESCONOCIDA';
+          account = '';
           eventCode = trama;
         }
       }
 
-      if (account !== 'DESCONOCIDA' && account !== '' && socket) {
+      if (!account || !/^[0-9A-F]{1,20}$/i.test(account) || !/^[0-9A-F]{3,4}$/i.test(eventCode) || !['1', '3'].includes(qualifier)) {
+        this.logger.warn(`[Receptora Alarma] Trama Contact ID no enrutable; se descarta para evitar eventos sin cuenta: ${tramaRaw}`);
+        return;
+      }
+
+      if (socket) {
          // Si la trama trajo una cuenta válida, registramos/actualizamos el mapa de sockets
          this.registerIntelbrasSocket(account, socket);
       }
@@ -208,13 +226,18 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
       if (panelErr) throw panelErr;
 
       // Si no existe el panel registrado en alarmas_paneles, lo auto-registramos directamente
+      if (!panel && process.env.ALARM_AUTO_REGISTER_PANELS !== 'true') {
+        this.logger.warn(`[Receptora Alarma] Señal recibida de cuenta no registrada (${account}); no se crea ni notifica hasta que la cuenta sea dada de alta.`);
+        return;
+      }
+
       if (!panel) {
         const { data: newPanel, error: createErr } = await db
           .from('alarmas_paneles')
           .insert({
             cuenta_monitoreo: account,
             nombre_lugar: `Panel Autoregistrado ${account}`,
-            estado_panel: 'activo',
+            estado_panel: 'en_pruebas',
           })
           .select('*')
           .maybeSingle();
@@ -223,7 +246,7 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
           panel = newPanel;
           this.logger.log(`🆕 [Receptora Alarma] Panel auto-registrado para la cuenta ${account}`);
         } else if (createErr) {
-          this.logger.error(`❌ Error al auto-registrar panel para cuenta ${account}: ${createErr.message}`);
+          throw createErr;
         }
       }
 
@@ -264,20 +287,22 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
         }
 
         // AUTO-REGISTRAR EL CÓDIGO EN EL CATÁLOGO PARA EVITAR ERROR DE FOREIGN KEY
-        await db.from('alarmas_contact_id_catalogo').insert({
-           codigo_evento: eventCode,
+        const { error: catalogError } = await db.from('alarmas_contact_id_catalogo').upsert({
+           codigo: eventCode,
            descripcion: cid.descripcion,
            categoria_defecto: cid.categoria_defecto,
            prioridad_defecto: cid.prioridad_defecto
         });
+        if (catalogError) throw catalogError;
       } else if (!cidInfo && cid) {
         // Estaba en defaultMapping pero no en BD, también lo insertamos
-        await db.from('alarmas_contact_id_catalogo').insert({
-           codigo_evento: eventCode,
+        const { error: catalogError } = await db.from('alarmas_contact_id_catalogo').upsert({
+           codigo: eventCode,
            descripcion: cid.descripcion,
            categoria_defecto: cid.categoria_defecto,
            prioridad_defecto: cid.prioridad_defecto
         });
+        if (catalogError) throw catalogError;
       }
 
       const esRestablecimiento = qualifier === '3';
@@ -349,6 +374,28 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
         dbTipoEvento = 'salida';
       } else if (categoriaCid === 'cierre') {
         dbTipoEvento = 'entrada';
+      }
+
+      // Algunos comunicadores retransmiten una alarma hasta recibir el ciclo de
+      // restauración. Mantener una sola alerta activa evita saturar la cola y
+      // repetir la sirena del operador, sin perder el evento inicial.
+      if (panel && estadoGestion === 'pendiente') {
+        const { data: activeDuplicate, error: duplicateErr } = await db
+          .from('alarmas_eventos_historico')
+          .select('id')
+          .eq('panel_id', panel.id)
+          .eq('codigo_evento_cid', eventCode)
+          .eq('calificador', qualifier)
+          .eq('zona_o_usuario', zoneOrUser)
+          .in('estado_gestion', ['pendiente', 'en_proceso'])
+          .limit(1)
+          .maybeSingle();
+
+        if (duplicateErr) throw duplicateErr;
+        if (activeDuplicate) {
+          this.logger.warn(`[Receptora Alarma] Señal duplicada ignorada para cuenta ${account}, evento ${eventCode}, zona ${zoneOrUser}.`);
+          return;
+        }
       }
 
       // Auto-clear existing pending alarms on restoration or disarm
@@ -439,7 +486,10 @@ export class AlarmasReceptorService implements OnModuleInit, OnModuleDestroy {
           calificador: qualifier,
           trama_original: tramaRaw,
           panel_id: panel?.id || null,
-          alarma_evento_id: alarmEvent?.id || null
+          alarma_evento_id: alarmEvent?.id || null,
+          evento_id: alarmEvent?.id || null,
+          prioridad: prioridadFinal,
+          zona_nombre: nombreElemento,
         },
       };
       this.devicePoller.emitRawEvent(eventoCompat);

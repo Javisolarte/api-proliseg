@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { AlarmStrategyFactory } from './strategies/alarm-strategy.factory';
 import { AlarmasGatewayService } from './alarmas-gateway.service';
@@ -24,6 +24,10 @@ export class AlarmasService {
       .select('*, cliente:clientes(id, nombre_empresa, nit)');
     if (error) throw error;
     return data;
+  }
+
+  getEstadoReceptora() {
+    return this.gatewayService.getStatus();
   }
 
   async findOnePanel(id: string) {
@@ -338,7 +342,9 @@ export class AlarmasService {
       .getSupabaseAdminClient()
       .from('alarmas_eventos_historico')
       .select('*, alarmas_paneles(nombre_lugar, cuenta_monitoreo)')
-      .eq('estado_gestion', 'pendiente')
+      // Keep incidents visible while an operator is working on them so they
+      // can be resolved from the same map panel.
+      .in('estado_gestion', ['pendiente', 'en_proceso'])
       .order('timestamp_evento', { ascending: false });
 
     if (error) throw error;
@@ -402,20 +408,48 @@ export class AlarmasService {
 
     if (fetchErr) throw fetchErr;
     if (!event) throw new NotFoundException(`Alarma con ID ${eventoId} no encontrada`);
+    if (event.estado_gestion !== 'pendiente') {
+      throw new BadRequestException('La alarma ya fue tomada o cerrada por un operador');
+    }
 
-    // 2. Cambiar estado a 'en_proceso'
-    const { data: updatedEvent, error: updateErr } = await db
+    // 2. Una alarma puede retransmitirse mientras el panel espera acuse. Al
+    // atenderla se toma el grupo pendiente equivalente, no una copia aislada.
+    const cambiosGestion = {
+      estado_gestion: 'en_proceso',
+      operador_id: operadorId,
+      fecha_inicio_gestion: new Date().toISOString(),
+    };
+    let query = db
       .from('alarmas_eventos_historico')
-      .update({
-        estado_gestion: 'en_proceso',
-        operador_id: operadorId,
-        fecha_inicio_gestion: new Date().toISOString(),
-      })
+      .update(cambiosGestion)
       .eq('id', eventoId)
-      .select('*')
-      .maybeSingle();
+      .select('id');
+
+    if (this.esEventoAgrupable(event)) {
+      query = db
+        .from('alarmas_eventos_historico')
+        .update(cambiosGestion)
+        .eq('panel_id', event.panel_id)
+        .eq('tipo_evento', event.tipo_evento)
+        .eq('codigo_evento_cid', event.codigo_evento_cid)
+        .eq('calificador', event.calificador)
+        .eq('zona_o_usuario', event.zona_o_usuario)
+        .eq('estado_gestion', 'pendiente')
+        .select('id');
+    }
+
+    const { data: eventosAgrupados, error: updateErr } = await query;
 
     if (updateErr) throw updateErr;
+
+    const { data: updatedEvent, error: updatedFetchErr } = await db
+      .from('alarmas_eventos_historico')
+      .select('*')
+      .eq('id', eventoId)
+      .maybeSingle();
+
+    if (updatedFetchErr) throw updatedFetchErr;
+    const cantidadAgrupada = eventosAgrupados?.length || 1;
 
     // 3. Registrar bitácora de inicio de gestión
     const { error: logErr } = await db
@@ -464,7 +498,7 @@ export class AlarmasService {
       }
     }
 
-    return updatedEvent;
+    return { ...updatedEvent, eventos_agrupados: cantidadAgrupada };
   }
 
   async cerrarAlarma(eventoId: string, payload: { estado_gestion: string; comentarios_operador: string; operador_id: number }) {
@@ -479,21 +513,49 @@ export class AlarmasService {
 
     if (fetchErr) throw fetchErr;
     if (!event) throw new NotFoundException(`Alarma con ID ${eventoId} no encontrada`);
+    if (!['pendiente', 'en_proceso'].includes(event.estado_gestion)) {
+      throw new BadRequestException('La alarma ya se encuentra cerrada');
+    }
 
-    // 2. Cerrar evento en base de datos
-    const { data: updatedEvent, error: updateErr } = await db
+    // 2. Also close the active retransmissions of the same incident so that
+    // an old copy cannot reappear as a new alarm.
+    const cierreGestion = {
+      estado_gestion: payload.estado_gestion,
+      comentarios_operador: payload.comentarios_operador,
+      fecha_fin_gestion: new Date().toISOString(),
+      operador_id: payload.operador_id,
+    };
+    let query = db
       .from('alarmas_eventos_historico')
-      .update({
-        estado_gestion: payload.estado_gestion,
-        comentarios_operador: payload.comentarios_operador,
-        fecha_fin_gestion: new Date().toISOString(),
-        operador_id: payload.operador_id,
-      })
+      .update(cierreGestion)
       .eq('id', eventoId)
-      .select('*')
-      .maybeSingle();
+      .select('id');
+
+    if (this.esEventoAgrupable(event)) {
+      query = db
+        .from('alarmas_eventos_historico')
+        .update(cierreGestion)
+        .eq('panel_id', event.panel_id)
+        .eq('tipo_evento', event.tipo_evento)
+        .eq('codigo_evento_cid', event.codigo_evento_cid)
+        .eq('calificador', event.calificador)
+        .eq('zona_o_usuario', event.zona_o_usuario)
+        .in('estado_gestion', ['pendiente', 'en_proceso'])
+        .select('id');
+    }
+
+    const { data: eventosAgrupados, error: updateErr } = await query;
 
     if (updateErr) throw updateErr;
+
+    const { data: updatedEvent, error: updatedFetchErr } = await db
+      .from('alarmas_eventos_historico')
+      .select('*')
+      .eq('id', eventoId)
+      .maybeSingle();
+
+    if (updatedFetchErr) throw updatedFetchErr;
+    const cantidadAgrupada = eventosAgrupados?.length || 1;
 
     // 3. Registrar bitácora de cierre
     const { error: logErr } = await db
@@ -542,7 +604,18 @@ export class AlarmasService {
       }
     }
 
-    return updatedEvent;
+    return { ...updatedEvent, eventos_agrupados: cantidadAgrupada };
+  }
+
+  /** Groups only unambiguous copies of a real alarm signal. */
+  private esEventoAgrupable(event: any): boolean {
+    return Boolean(
+      event.panel_id &&
+      event.tipo_evento === 'alarma' &&
+      event.codigo_evento_cid &&
+      event.calificador !== null && event.calificador !== undefined &&
+      event.zona_o_usuario !== null && event.zona_o_usuario !== undefined,
+    );
   }
 
   async getBitacora(eventoId: string) {
@@ -578,6 +651,8 @@ export class AlarmasService {
     const panel = await this.findOnePanel(id);
     const strategy = this.strategyFactory.getStrategy(panel.marca_modelo);
     const result = await strategy.arm(panel, payload.particion, payload.pin);
+
+    if (!result.success) throw new BadRequestException(result.message);
 
     if (result.success) {
       // Registrar evento de armado remoto en el histórico
@@ -617,6 +692,8 @@ export class AlarmasService {
     const strategy = this.strategyFactory.getStrategy(panel.marca_modelo);
     const result = await strategy.disarm(panel, payload.particion, payload.pin);
 
+    if (!result.success) throw new BadRequestException(result.message);
+
     if (result.success) {
       // Registrar evento de desarmado remoto en el histórico
       await this.supabase
@@ -655,6 +732,8 @@ export class AlarmasService {
     const strategy = this.strategyFactory.getStrategy(panel.marca_modelo);
     const state = payload.accion === 'encender' ? 'on' : 'off';
     const result = await strategy.toggleSiren(panel, state);
+
+    if (!result.success) throw new BadRequestException(result.message);
 
     if (result.success) {
       // Registrar evento en el histórico

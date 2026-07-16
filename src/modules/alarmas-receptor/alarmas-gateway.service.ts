@@ -8,7 +8,7 @@ import { AlarmasReceptorService } from './alarmas-receptor.service';
 export class AlarmasGatewayService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AlarmasGatewayService.name);
   private server: net.Server | null = null;
-  private readonly port = 9008;
+  private readonly port = parseInt(process.env.ALARM_GATEWAY_PORT || '9008', 10);
 
   // Mapa en memoria para almacenar los sockets activos asociados a la cuenta de monitoreo
   private activeSockets = new Map<string, net.Socket>();
@@ -115,7 +115,27 @@ export class AlarmasGatewayService implements OnModuleInit, OnModuleDestroy {
    * Retorna si la cuenta de alarma tiene un socket TCP activo
    */
   isPanelConnected(cuenta: string): boolean {
-    return this.activeSockets.has(cuenta);
+    const localSocket = this.activeSockets.get(cuenta);
+    if (localSocket && !localSocket.destroyed && localSocket.writable) {
+      return true;
+    }
+    if (localSocket) this.activeSockets.delete(cuenta);
+    return this.alarmasReceptor.isAccountConnected(cuenta);
+  }
+
+  public getStatus() {
+    const connectedAccounts = Array.from(this.activeSockets.entries())
+      .filter(([, socket]) => !socket.destroyed && socket.writable)
+      .map(([account]) => account);
+
+    return {
+      gateway: {
+        port: this.port,
+        listening: this.server?.listening ?? false,
+        connectedAccounts,
+      },
+      receiver: this.alarmasReceptor.getStatus(),
+    };
   }
 
   /**
@@ -123,21 +143,23 @@ export class AlarmasGatewayService implements OnModuleInit, OnModuleDestroy {
    */
   public async sendRawCommand(account: string, commandString: string): Promise<boolean> {
     const localSocket = this.activeSockets.get(account);
-    if (localSocket) {
-      localSocket.write(commandString);
+    if (localSocket && !localSocket.destroyed && localSocket.writable) {
+      if (!await this.writeCommand(localSocket, commandString)) return false;
       this.logger.log(`📤 [Gateway TCP] Comando enviado a cuenta ${account} vía Gateway Local (9008): ${commandString}`);
       return true;
     }
 
     // Si no está en el Gateway 9008, pedir el socket unificado del puerto 10300 (Intelbras Nativo)
+    if (localSocket) this.activeSockets.delete(account);
+
     const receptorSocket = this.alarmasReceptor.getIntelbrasSocket(account);
     if (receptorSocket) {
       // Como el comando puede venir en Hexadecimal (para Intelbras), comprobamos si parece Hex
       if (/^[0-9a-fA-F]+$/.test(commandString)) {
-        receptorSocket.write(Buffer.from(commandString, 'hex'));
+        if (!await this.writeCommand(receptorSocket, Buffer.from(commandString, 'hex'))) return false;
         this.logger.log(`📤 [Gateway TCP -> Receptora] Comando Binario enviado a cuenta ${account} vía Receptora (10300): [${commandString}]`);
       } else {
-        receptorSocket.write(commandString);
+        if (!await this.writeCommand(receptorSocket, commandString)) return false;
         this.logger.log(`📤 [Gateway TCP -> Receptora] Comando ASCII enviado a cuenta ${account} vía Receptora (10300): ${commandString}`);
       }
       return true;
@@ -150,6 +172,31 @@ export class AlarmasGatewayService implements OnModuleInit, OnModuleDestroy {
   /**
    * Sincroniza y emite el estado de conexión del panel en tiempo real
    */
+  private writeCommand(socket: net.Socket, command: string | Buffer): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (socket.destroyed || !socket.writable) {
+        resolve(false);
+        return;
+      }
+
+      const onError = () => {
+        socket.off('error', onError);
+        resolve(false);
+      };
+
+      socket.once('error', onError);
+      try {
+        socket.write(command, () => {
+          socket.off('error', onError);
+          resolve(true);
+        });
+      } catch {
+        socket.off('error', onError);
+        resolve(false);
+      }
+    });
+  }
+
   private async syncPanelConnectionState(cuenta: string, conectado: boolean) {
     try {
       const db = this.supabase.getClient();

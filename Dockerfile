@@ -50,8 +50,10 @@ COPY package.json *-firebase-adminsdk-*.json ./
 # Configurar NODE_ENV a producción para el tiempo de ejecución
 ENV NODE_ENV=production
 
-# Exponer puerto
-EXPOSE 3000
+# API HTTP/WebSocket and the two TCP listeners used by the alarm receiver.
+# Publishing them on the VPS still requires the deployment platform to map these
+# ports to this container (EXPOSE alone does not publish a Docker port).
+EXPOSE 3000 10300 9008
 
 # Healthcheck para Coolify
 HEALTHCHECK --interval=10s --timeout=5s --start-period=180s --retries=12 CMD curl -f http://127.0.0.1:10000/ || curl -f http://127.0.0.1:3000/ || exit 1

@@ -19,6 +19,13 @@ export class AlarmasController {
 
   // ─── PANELES DE ALARMA ────────────────────────────────────────────────────
 
+  @Get('estado-receptora')
+  @RequirePermissions('monitoreo')
+  @ApiOperation({ summary: 'Consultar estado de los listeners TCP y las cuentas de alarma conectadas' })
+  async getEstadoReceptora() {
+    return this.alarmasService.getEstadoReceptora();
+  }
+
   @Get('paneles')
   @RequirePermissions('monitoreo')
   @ApiOperation({ summary: 'Listar todos los paneles de alarma registrados' })
