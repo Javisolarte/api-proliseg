@@ -870,6 +870,12 @@ export class AspirantesService {
         }
     }
 
+    private normalizarFirmaParaPdf(firma?: string): string {
+        const valor = firma?.trim() || '';
+        if (!valor || valor.startsWith('data:image') || /^https?:\/\//i.test(valor)) return valor;
+        return `data:image/png;base64,${valor}`;
+    }
+
     async generateTestReportPdfBuffer(intentoId: number): Promise<{ buffer: Buffer; data: any }> {
         const db = this.supabase.getClient();
 
@@ -886,12 +892,27 @@ export class AspirantesService {
             (prueba.nombre && (prueba.nombre.toUpperCase().includes('BUSS') || prueba.nombre.toUpperCase().includes('PSICO')));
 
         const { data: respuestas } = await db.from('aspirantes_respuestas')
-            .select('*, aspirantes_preguntas(pregunta, orden), aspirantes_preguntas_opciones(texto)')
+            .select('pregunta_id, opcion_id, es_correcta')
             .eq('intento_id', intentoId);
 
-        const respuestasOrdenadas = (respuestas || []).sort((a: any, b: any) => 
-            (a.aspirantes_preguntas?.orden || 0) - (b.aspirantes_preguntas?.orden || 0)
+        // The technical report needs every option to identify the selected one.
+        const { data: preguntas } = await db.from('aspirantes_preguntas')
+            .select('id, pregunta, orden, opciones:aspirantes_preguntas_opciones(id, texto, orden)')
+            .eq('prueba_id', intento.prueba_id)
+            .eq('activa', true)
+            .order('orden', { ascending: true });
+
+        const preguntasOrdenadas = (preguntas || []).sort((a: any, b: any) =>
+            (a.orden || 0) - (b.orden || 0)
         );
+        const respuestasPorPregunta = new Map<number, any>(
+            (respuestas || []).map((respuesta: any) => [respuesta.pregunta_id, respuesta])
+        );
+        const respuestasCorrectas = (respuestas || []).filter((respuesta: any) => respuesta.es_correcta === true).length;
+        const totalPreguntas = preguntasOrdenadas.length;
+        const respuestasIncorrectas = Math.max(totalPreguntas - respuestasCorrectas, 0);
+        const porcentajeNumerico = Number(intento.porcentaje ?? 0);
+        const firmaEvaluador = this.normalizarFirmaParaPdf(intento.evaluador_firma_url || '');
 
         const dataReporte = {
             nombre_completo: aspirante.nombre_completo || 'Aspirante',
@@ -899,18 +920,29 @@ export class AspirantesService {
             prueba_nombre: prueba.nombre || 'Prueba de Selección',
             es_psicotecnica: esPsicotecnica,
             fecha_presentacion: intento.fecha_fin_real ? new Date(intento.fecha_fin_real).toLocaleDateString('es-CO') : new Date().toLocaleDateString('es-CO'),
-            porcentaje: intento.porcentaje != null ? intento.porcentaje.toFixed(1) : 'N/A',
+            porcentaje: Number.isFinite(porcentajeNumerico) ? porcentajeNumerico.toFixed(0) : '0',
             aprobado: intento.aprobado,
-            dictamen: intento.dictamen_psicologico || (esPsicotecnica ? 'PENDIENTE' : (intento.aprobado ? 'APROBADO' : 'NO APROBADO')),
+            dictamen: intento.dictamen_psicologico || (esPsicotecnica ? 'PENDIENTE' : (intento.aprobado ? 'APROBADO' : 'REPROBADO')),
             observaciones_evaluacion: intento.observaciones_evaluacion || '',
             evaluado_por_nombre: intento.evaluado_por_nombre || '',
-            evaluador_firma_url: intento.evaluador_firma_url || '',
+            evaluador_firma_url: firmaEvaluador,
             fecha_evaluacion: intento.fecha_evaluacion ? new Date(intento.fecha_evaluacion).toLocaleDateString('es-CO') : '',
-            respuestas: respuestasOrdenadas.map((r: any) => ({
-                orden: r.aspirantes_preguntas?.orden || '-',
-                pregunta: r.aspirantes_preguntas?.pregunta || 'Pregunta',
-                respuesta: r.aspirantes_preguntas_opciones?.texto || 'Sin respuesta'
-            }))
+            codigo: esPsicotecnica ? 'SIG-GH-F-03' : 'SIG-GH-F-05',
+            titulo: esPsicotecnica ? 'CUESTIONARIO MODIFICADO BUSS-DURKEE' : 'PRUEBA TÉCNICA',
+            total_preguntas: totalPreguntas,
+            respuestas_correctas: respuestasCorrectas,
+            respuestas_incorrectas: respuestasIncorrectas,
+            preguntas: preguntasOrdenadas.map((pregunta: any) => {
+                const respuesta = respuestasPorPregunta.get(pregunta.id);
+                return {
+                    orden: pregunta.orden || '-',
+                    pregunta: pregunta.pregunta || 'Pregunta',
+                    opcion_seleccionada_id: respuesta?.opcion_id || null,
+                    opciones: (pregunta.opciones || [])
+                        .sort((a: any, b: any) => (a.orden || 0) - (b.orden || 0))
+                        .map((opcion: any) => ({ id: opcion.id, texto: opcion.texto || '' }))
+                };
+            })
         };
 
         const htmlContent = `
@@ -946,12 +978,32 @@ export class AspirantesService {
      .badge-danger { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
      .badge-warning { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
 
-     .resp-table { width: 100%; border-collapse: collapse; border: 1px solid #1e293b; font-size: 8.5px; }
-     .resp-table th, .resp-table td { border: 1px solid #1e293b; padding: 4px; vertical-align: middle; }
-     .resp-table th { background-color: #f8fafc; font-weight: 700; text-align: center; }
+     .score-summary { display: flex; border: 1px solid #1e293b; margin: 10px 0; page-break-inside: avoid; }
+     .score-main { width: 34%; padding: 9px 10px; text-align: center; color: #fff; background: #2563eb; }
+     .score-main.score-pass { background: #15803d; }
+     .score-main.score-fail { background: #b91c1c; }
+     .score-label { display: block; font-size: 8px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase; }
+     .score-main strong { display: block; margin-top: 1px; font-size: 25px; line-height: 1; }
+     .score-main small { display: block; margin-top: 4px; font-size: 9px; font-weight: 700; }
+     .score-item { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 7px 5px; text-align: center; border-left: 1px solid #1e293b; }
+     .score-item .score-value { margin-top: 2px; font-size: 18px; font-weight: 700; color: #0f172a; }
+
+     .questions-section { border: 1px solid #1e293b; border-top: none; }
+     .question-card { padding: 8px 10px; border-bottom: 1px solid #cbd5e1; page-break-inside: avoid; }
+     .question-card:last-child { border-bottom: none; }
+     .question-heading { display: flex; gap: 4px; font-size: 10px; font-weight: 700; color: #0f172a; }
+     .question-number { min-width: 15px; }
+     .options-list { margin: 5px 0 0 20px; }
+     .option-row { display: flex; gap: 7px; margin: 2px 0; color: #1e293b; }
+     .option-letter { width: 11px; flex: 0 0 11px; }
+     .option-row.selected { font-weight: 700; color: #0f172a; }
+     .option-row.selected .option-text { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+     .no-answer { margin: 5px 0 0 20px; font-style: italic; color: #64748b; }
 
      .evaluator-box { border: 1px solid #1e293b; background: #fafafa; padding: 10px; margin-top: 10px; page-break-inside: avoid; }
-     .evaluator-signature img { max-height: 45px; display: block; margin: 5px 0; }
+     .evaluator-signature { width: 260px; margin: 20px 0 0 auto; text-align: center; page-break-inside: avoid; }
+     .evaluator-signature img { max-width: 190px; max-height: 55px; display: block; margin: 0 auto 4px; object-fit: contain; }
+     .signature-line { border-top: 1px solid #1e293b; padding-top: 4px; font-size: 9px; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -964,15 +1016,37 @@ export class AspirantesService {
         </div>
       </div>
       <div class="title-area">
-        <h1>REPORTE DE EVALUACIÓN - ${dataReporte.prueba_nombre}</h1>
+        <h1>REPORTE DE EVALUACIÓN - ${dataReporte.titulo}</h1>
       </div>
       <div class="meta-area">
-        <div class="meta-row"><span>Código:</span> <strong>SIG-GH-F-05-TEST</strong></div>
+        <div class="meta-row"><span>Código:</span> <strong>${dataReporte.codigo}</strong></div>
         <div class="meta-row"><span>Versión:</span> <strong>2</strong></div>
         <div class="meta-row"><span>Fecha Aprob:</span> <strong>1/04/2026</strong></div>
         <div class="meta-row"><span>Página:</span> <strong>1 de 1</strong></div>
       </div>
     </div>
+
+    ${!dataReporte.es_psicotecnica ? `
+    <div class="score-summary">
+      <div class="score-main ${dataReporte.aprobado ? 'score-pass' : 'score-fail'}">
+        <span class="score-label">Calificación final</span>
+        <strong>${dataReporte.porcentaje}%</strong>
+        <small>${dataReporte.aprobado ? 'APROBADO' : 'REPROBADO'}</small>
+      </div>
+      <div class="score-item">
+        <span class="score-label">Respuestas buenas</span>
+        <span class="score-value">${dataReporte.respuestas_correctas}</span>
+      </div>
+      <div class="score-item">
+        <span class="score-label">Respuestas malas</span>
+        <span class="score-value">${dataReporte.respuestas_incorrectas}</span>
+      </div>
+      <div class="score-item">
+        <span class="score-label">Total preguntas</span>
+        <span class="score-value">${dataReporte.total_preguntas}</span>
+      </div>
+    </div>
+    ` : ''}
 
     <div class="section-title">1. DATOS DEL ASPIRANTE Y DETALLES DE LA PRUEBA</div>
     <table class="info-table">
@@ -1001,7 +1075,7 @@ export class AspirantesService {
     </table>
 
     ${dataReporte.es_psicotecnica ? `
-    <div class="section-title">2. EVALUACIÓN Y DICTAMEN PSICOLÓGICO MANUAL</div>
+    <div class="section-title">2. EVALUACIÓN Y DICTAMEN PSICOLÓGICO</div>
     <div class="evaluator-box">
       <p style="margin: 0 0 5px 0;"><strong>Dictamen Final:</strong> 
         <span class="badge ${dataReporte.dictamen === 'APTO' ? 'badge-success' : (dataReporte.dictamen === 'PENDIENTE' ? 'badge-warning' : 'badge-danger')}">
@@ -1013,31 +1087,37 @@ export class AspirantesService {
       <div style="margin-top: 10px; border-top: 1px solid #cbd5e1; padding-top: 5px;">
         <p style="margin: 2px 0;"><strong>Evaluado por:</strong> ${dataReporte.evaluado_por_nombre}</p>
         <p style="margin: 2px 0;"><strong>Fecha Evaluación:</strong> ${dataReporte.fecha_evaluacion}</p>
-        ${dataReporte.evaluador_firma_url ? `<div class="evaluator-signature"><img src="${dataReporte.evaluador_firma_url}" alt="Firma Evaluador"></div>` : ''}
       </div>
       ` : '<p style="margin: 5px 0; color: #64748b;"><em>Pendiente por evaluar por el/la profesional de Psicología.</em></p>'}
     </div>
+    ${dataReporte.evaluado_por_nombre ? `
+      <div class="evaluator-signature">
+        ${dataReporte.evaluador_firma_url ? `<img src="${dataReporte.evaluador_firma_url}" alt="Firma del evaluador">` : '<div style="height: 55px;"></div>'}
+        <div class="signature-line">Firma del profesional evaluador(a)</div>
+        <div style="font-size: 9px; margin-top: 2px;">${dataReporte.evaluado_por_nombre}</div>
+      </div>
+    ` : ''}
     ` : ''}
 
-    <div class="section-title">RESPUESTAS DEL ASPIRANTE</div>
-    <table class="resp-table">
-      <thead>
-        <tr>
-          <th style="width: 8%;">#</th>
-          <th style="width: 72%;">Pregunta / Reactivo</th>
-          <th style="width: 20%;">Respuesta Seleccionada</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${dataReporte.respuestas.map((r: any) => `
-          <tr>
-            <td style="text-align: center;"><strong>${r.orden}</strong></td>
-            <td>${r.pregunta}</td>
-            <td style="text-align: center; font-weight: 600;">${r.respuesta}</td>
-          </tr>
-        `).join('')}
-      </tbody>
-    </table>
+    <div class="section-title">${dataReporte.es_psicotecnica ? 'RESPUESTAS DEL ASPIRANTE' : 'CUESTIONARIO Y RESPUESTAS DEL ASPIRANTE'}</div>
+    <div class="questions-section">
+      ${dataReporte.preguntas.map((pregunta: any) => `
+        <div class="question-card">
+          <div class="question-heading"><span class="question-number">${pregunta.orden}.</span><span>${pregunta.pregunta}</span></div>
+          ${pregunta.opciones.length ? `
+            <div class="options-list">
+              ${pregunta.opciones.map((opcion: any, indice: number) => `
+                <div class="option-row ${opcion.id === pregunta.opcion_seleccionada_id ? 'selected' : ''}">
+                  <span class="option-letter">${String.fromCharCode(97 + indice)}.</span>
+                  <span class="option-text">${opcion.texto}</span>
+                </div>
+              `).join('')}
+            </div>
+          ` : '<div class="no-answer">Sin opciones registradas.</div>'}
+          ${pregunta.opcion_seleccionada_id ? '' : '<div class="no-answer">Sin respuesta seleccionada.</div>'}
+        </div>
+      `).join('')}
+    </div>
   </div>
 </body>
 </html>
