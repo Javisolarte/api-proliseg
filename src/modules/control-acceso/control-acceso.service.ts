@@ -3575,6 +3575,15 @@ export class ControlAccesoService implements OnModuleInit {
       );
     }
 
+    try {
+      await admin
+        .from('control_acceso_recoleccion_registros')
+        .update({ sincronizado: true, fecha_sincronizacion: new Date().toISOString() })
+        .eq('id', registroId);
+    } catch (uErr) {
+      this.logger.warn(`⚠️ No se pudo marcar sincronizado en registro ${registroId}: ${uErr.message}`);
+    }
+
     return {
       ok: true,
       persona_id: persona.id,

@@ -12,6 +12,7 @@ import {
   BadRequestException,
   UseInterceptors,
   UploadedFiles,
+  UploadedFile,
   Query,
 } from "@nestjs/common";
 import {
@@ -23,14 +24,13 @@ import {
   ApiConsumes,
   ApiQuery,
 } from "@nestjs/swagger";
-import { FileFieldsInterceptor } from "@nestjs/platform-express";
+import { FileFieldsInterceptor, FileInterceptor } from "@nestjs/platform-express";
 import { EmpleadosService } from "./empleados.service";
 import { CreateEmpleadoDto, UpdateEmpleadoDto } from "./dto/empleado.dto";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { PermissionsGuard } from "../auth/guards/permissions.guard";
 import { RequirePermissions } from "../auth/decorators/permissions.decorator";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
-import type { Request } from "express";
 
 @ApiTags("Empleados")
 @Controller("empleados")
@@ -379,5 +379,25 @@ Todos los archivos se guardan directamente en sus respectivos buckets de Supabas
   })
   async updateOrder(@Body("orders") orders: { id: number; orden: number }[]) {
     return this.empleadosService.updateOrder(orders);
+  }
+
+  /**
+   * 🔹 Subir documento individual a carpeta estructurada (EMPLEADOS/NOMBRE/categoria/subclave-cedula.pdf)
+   */
+  @Post(":id/documentos-carpetas/upload")
+  @RequirePermissions("empleados")
+  @ApiOperation({ summary: "Subir documento individual a carpeta estructurada de lista de chequeo" })
+  @ApiConsumes("multipart/form-data")
+  @UseInterceptors(FileInterceptor("file"))
+  async uploadDocumentoCarpeta(
+    @Param("id", ParseIntPipe) id: number,
+    @Body("categoria") categoria: string,
+    @Body("subclave") subclave: string,
+    @UploadedFile() file: any
+  ) {
+    if (!categoria || !subclave) {
+      throw new BadRequestException("categoria y subclave son obligatorios");
+    }
+    return this.empleadosService.uploadDocumentoCarpeta(id, categoria, subclave, file);
   }
 }

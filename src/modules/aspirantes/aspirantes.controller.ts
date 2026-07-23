@@ -163,6 +163,18 @@ export class AspirantesController {
         return this.aspirantesService.evaluarPruebaPsicotecnica(id, dto, user);
     }
 
+    @Get('intentos-pendientes-calificar')
+    @ApiOperation({ summary: 'Obtener lista de pruebas psicotécnicas pendientes por evaluar/calificar' })
+    listarPendientesCalificar() {
+        return this.aspirantesService.listarPendientesCalificar();
+    }
+
+    @Post('intentos/:id/generar-pdf')
+    @ApiOperation({ summary: 'Generar o regenerar el PDF del reporte de prueba para un intento' })
+    generarPdfIntento(@Param('id', ParseIntPipe) id: number) {
+        return this.aspirantesService.generarPdfIntento(id);
+    }
+
     // ==========================================
     // NUEVOS ENDPOINTS
     // ==========================================

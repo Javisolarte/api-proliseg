@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, Logger } from "@nestjs/common";
+import { Injectable, NotFoundException, BadRequestException, Logger } from "@nestjs/common";
 import { SupabaseService } from "../supabase/supabase.service";
 import type { CreateEmpleadoDto, UpdateEmpleadoDto } from "./dto/empleado.dto";
 
@@ -550,5 +550,102 @@ export class EmpleadosService {
 
     this.logger.debug(`✅ Orden actualizado exitosamente para ${orders.length} empleados`);
     return { message: "Orden actualizado correctamente" };
+  }
+
+  // 🔹 Subir un documento específico a las carpetas estructuradas del empleado
+  async uploadDocumentoCarpeta(
+    empleadoId: number,
+    categoria: string,
+    subclave: string,
+    file: any
+  ) {
+    if (!file) {
+      throw new BadRequestException('El archivo PDF o documento es obligatorio');
+    }
+
+    const supabase = this.supabaseService.getClient();
+    const admin = this.supabaseService.getSupabaseAdminClient();
+
+    const { data: emp, error: empErr } = await supabase
+      .from('empleados')
+      .select('id, cedula, nombre_completo, documentos_carpetas')
+      .eq('id', empleadoId)
+      .single();
+
+    if (empErr || !emp) {
+      throw new NotFoundException(`Empleado ID ${empleadoId} no encontrado`);
+    }
+
+    const nombreFolder = (emp.nombre_completo || `EMPLEADO_${emp.id}`).trim().toUpperCase();
+    const cedula = (emp.cedula || String(emp.id)).trim();
+    const ext = file.originalname ? file.originalname.split('.').pop() : 'pdf';
+
+    // Estructura de Storage: EMPLEADOS/[NOMBRE_COMPLETO]/[categoria]/[subclave]-[cedula].pdf
+    const storagePath = `EMPLEADOS/${nombreFolder}/${categoria}/${subclave}-${cedula}.${ext}`;
+
+    this.logger.log(`📂 [CARPETAS] Subiendo documento: ${storagePath}`);
+
+    const { data: upData, error: upErr } = await admin.storage
+      .from('empleados')
+      .upload(storagePath, file.buffer, {
+        contentType: file.mimetype || 'application/pdf',
+        upsert: true,
+      });
+
+    if (upErr) {
+      this.logger.error(`❌ Error al subir documento a bucket empleados: ${upErr.message}`);
+      throw upErr;
+    }
+
+    const { data: pubData } = admin.storage.from('empleados').getPublicUrl(storagePath);
+    const fileUrl = pubData?.publicUrl;
+
+    // Actualizar campo JSONB documentos_carpetas en Supabase DB
+    const docsCarpetas: any = emp.documentos_carpetas || {};
+
+    if (categoria === 'hoja-vida') {
+      docsCarpetas.hoja_vida = [fileUrl];
+    } else if (categoria === 'curso-vigilancia') {
+      docsCarpetas.curso_vigilancia = [fileUrl];
+    } else if (categoria === 'pruebas') {
+      if (!docsCarpetas.pruebas) docsCarpetas.pruebas = {};
+      docsCarpetas.pruebas[subclave] = fileUrl;
+    } else if (categoria === 'afiliaciones') {
+      if (!docsCarpetas.afiliaciones) docsCarpetas.afiliaciones = {};
+      docsCarpetas.afiliaciones[subclave] = fileUrl;
+    } else if (categoria === 'certificados') {
+      if (!docsCarpetas.certificados) docsCarpetas.certificados = {};
+      docsCarpetas.certificados[subclave] = fileUrl;
+    } else if (categoria === 'documentos-empresa') {
+      if (!docsCarpetas.documentos_empresa) docsCarpetas.documentos_empresa = {};
+      docsCarpetas.documentos_empresa[subclave] = fileUrl;
+    } else if (categoria === 'documentos-varios') {
+      if (!Array.isArray(docsCarpetas.documentos_varios)) docsCarpetas.documentos_varios = [];
+      if (!docsCarpetas.documentos_varios.includes(fileUrl)) {
+        docsCarpetas.documentos_varios.push(fileUrl);
+      }
+    }
+
+    const { data: updated, error: updateErr } = await supabase
+      .from('empleados')
+      .update({
+        documentos_carpetas: docsCarpetas,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', empleadoId)
+      .select()
+      .single();
+
+    if (updateErr) {
+      this.logger.error(`❌ Error al actualizar documentos_carpetas: ${updateErr.message}`);
+      throw updateErr;
+    }
+
+    this.logger.log(`✅ Documento guardado y actualizado en carpeta ${categoria}/${subclave}`);
+    return {
+      ok: true,
+      file_url: fileUrl,
+      documentos_carpetas: updated.documentos_carpetas
+    };
   }
 }

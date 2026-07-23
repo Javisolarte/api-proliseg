@@ -104,9 +104,104 @@ export class AspirantesService {
 
     async findAllAspirantes() {
         const db = this.supabase.getClient();
-        const { data, error } = await db.from('aspirantes').select('*').order('created_at', { ascending: false });
+        const { data: aspirantes, error } = await db.from('aspirantes')
+            .select('*')
+            .order('created_at', { ascending: false });
         if (error) throw new InternalServerErrorException(error.message);
-        return data;
+
+        const { data: todosIntentos } = await db.from('aspirantes_intentos_prueba')
+            .select('*, aspirantes_pruebas(*)');
+
+        const result = (aspirantes || []).map((asp: any) => {
+            const aspIntentos = (todosIntentos || []).filter((i: any) => String(i.aspirante_id) === String(asp.id));
+            let pruebaTecnica: any = null;
+            let pruebaPsicotecnica: any = null;
+
+            for (const item of aspIntentos) {
+                const esPresentado = item.presentado === true || item.presentado === 1 || item.presentado === 'true' || !!item.fecha_fin_real || item.porcentaje != null;
+                if (!esPresentado) continue;
+
+                const pruebaObj = Array.isArray(item.aspirantes_pruebas) ? item.aspirantes_pruebas[0] : item.aspirantes_pruebas;
+                const tipo = pruebaObj?.tipo;
+                const nombre = (pruebaObj?.nombre || '').toUpperCase();
+
+                if (tipo === 'psicotecnica' || nombre.includes('BUSS') || nombre.includes('PSICO')) {
+                    pruebaPsicotecnica = {
+                        id: item.id,
+                        dictamen: item.dictamen_psicologico || 'PENDIENTE',
+                        aprobado: item.aprobado,
+                        pdf_url: item.pdf_prueba_url
+                    };
+                } else {
+                    pruebaTecnica = {
+                        id: item.id,
+                        porcentaje: item.porcentaje != null ? Math.round(item.porcentaje) : Math.round(item.puntaje_obtenido || 0),
+                        aprobado: item.aprobado,
+                        pdf_url: item.pdf_prueba_url
+                    };
+                }
+            }
+
+            let estadoGlobal = asp.estado;
+            if (pruebaTecnica && pruebaPsicotecnica) {
+                if (pruebaTecnica.aprobado && pruebaPsicotecnica.dictamen === 'APTO') {
+                    if (asp.estado !== 'contratado') estadoGlobal = 'aprobado';
+                } else if (!pruebaTecnica.aprobado || pruebaPsicotecnica.dictamen === 'NO APTO') {
+                    if (asp.estado !== 'contratado') estadoGlobal = 'no_apto';
+                }
+            } else if (pruebaTecnica && pruebaTecnica.aprobado) {
+                if (asp.estado !== 'contratado') estadoGlobal = 'aprobado';
+            }
+
+            return {
+                ...asp,
+                estado: estadoGlobal,
+                prueba_tecnica: pruebaTecnica,
+                prueba_psicotecnica: pruebaPsicotecnica
+            };
+        });
+
+        return result;
+    }
+
+    async generarPdfIntento(id: number) {
+        const db = this.supabase.getClient();
+        const { buffer } = await this.generateTestReportPdfBuffer(id);
+        const adminSupabase = this.supabase.getSupabaseAdminClient();
+
+        const { data: intento } = await db.from('aspirantes_intentos_prueba').select('aspirante_id').eq('id', id).single();
+        const aspiranteId = intento?.aspirante_id || '0';
+        const fileName = `prueba-${aspiranteId}-${id}.pdf`;
+
+        await adminSupabase.storage.from('pruebas').upload(fileName, buffer, { contentType: 'application/pdf', upsert: true });
+        const { data: urlData } = adminSupabase.storage.from('pruebas').getPublicUrl(fileName);
+
+        const publicUrl = urlData?.publicUrl || '';
+        if (publicUrl) {
+            await db.from('aspirantes_intentos_prueba').update({ pdf_prueba_url: publicUrl }).eq('id', id);
+        }
+
+        return { pdf_prueba_url: publicUrl };
+    }
+
+    async listarPendientesCalificar() {
+        const db = this.supabase.getClient();
+        const { data, error } = await db.from('aspirantes_intentos_prueba')
+            .select('*, aspirantes(*), aspirantes_pruebas(*)')
+            .eq('presentado', true)
+            .order('fecha_fin_real', { ascending: false });
+
+        if (error) throw new InternalServerErrorException(error.message);
+
+        const pendientes = (data || []).filter((item: any) => {
+            const tipo = item.aspirantes_pruebas?.tipo;
+            const nombre = (item.aspirantes_pruebas?.nombre || '').toUpperCase();
+            const esPsicotecnica = tipo === 'psicotecnica' || nombre.includes('BUSS') || nombre.includes('PSICO');
+            const dictamen = item.dictamen_psicologico;
+            return esPsicotecnica && (!dictamen || dictamen === 'PENDIENTE');
+        });
+
+        return pendientes;
     }
 
     async findOneAspirante(id: number) {
@@ -392,7 +487,7 @@ export class AspirantesService {
 
         const total = totalPreguntas || 0;
         const correctas = respuestasCorrectas || 0;
-        const porcentaje = total > 0 ? (correctas / total) * 100 : 0;
+        const porcentaje = total > 0 ? Math.round((correctas / total) * 100) : 0;
         const minScore = prueba.puntaje_minimo || 70;
 
         let aprobado: boolean | null = porcentaje >= minScore;
@@ -445,22 +540,27 @@ export class AspirantesService {
 
     async getResults(token: string) {
         const db = this.supabase.getClient();
-        const { data: intento } = await db.from('aspirantes_intentos_prueba').select('*').eq('token', token).single();
+        const { data: intento } = await db.from('aspirantes_intentos_prueba')
+            .select('*, aspirantes_pruebas(*)')
+            .eq('token', token)
+            .single();
         if (!intento || !intento.presentado) throw new BadRequestException('Prueba no finalizada o no encontrada');
 
+        const prueba = intento.aspirantes_pruebas || {};
+        const esPsicotecnica = prueba.tipo === 'psicotecnica' || 
+            (prueba.nombre && (prueba.nombre.toUpperCase().includes('BUSS') || prueba.nombre.toUpperCase().includes('PSICO')));
+
         // Obtener retroalimentación de las incorrectas
-        // 1. Obtener todas las preguntas de la prueba ordenadas
         const { data: preguntas } = await db.from('aspirantes_preguntas')
             .select('id, pregunta, retroalimentacion')
             .eq('prueba_id', intento.prueba_id)
             .order('orden', { ascending: true });
 
-        // 2. Obtener respuestas del usuario
+        // Obtener respuestas del usuario
         const { data: respuestas } = await db.from('aspirantes_respuestas')
             .select('pregunta_id, es_correcta, opcion_id')
             .eq('intento_id', intento.id);
 
-        // Cruzar info
         const detalle = (preguntas || []).map(p => {
             const resp = (respuestas || []).find(r => r.pregunta_id === p.id);
             const fueCorrecta = resp?.es_correcta || false;
@@ -468,13 +568,15 @@ export class AspirantesService {
                 pregunta_id: p.id,
                 pregunta: p.pregunta,
                 correcta: fueCorrecta,
-                retroalimentacion: fueCorrecta ? null : p.retroalimentacion // Solo mostrar retro si falló
+                retroalimentacion: fueCorrecta ? null : p.retroalimentacion
             };
         });
 
         return {
             aprobado: intento.aprobado,
             porcentaje: intento.porcentaje,
+            dictamen_psicologico: intento.dictamen_psicologico,
+            es_psicotecnica: esPsicotecnica,
             detalle
         };
     }
