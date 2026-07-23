@@ -69,6 +69,11 @@ export class EmpleadosService {
              e.tiene_discapacidad,
              e.tiene_curso_vigilancia,
              e.fecha_vencimiento_curso,
+             e.fecha_proximas_vacaciones,
+             e.dias_vacaciones_disponibles,
+             e.fecha_salida,
+             e.motivo_salida,
+             e.observacion_salida,
              cp.fecha_inicio AS fecha_ingreso,
              (SELECT puesto_id FROM asignacion_guardas_puesto WHERE empleado_id = e.id AND activo = true LIMIT 1) AS puesto_id,
              e.sede_id,
@@ -81,6 +86,7 @@ export class EmpleadosService {
              fp.nombre AS fondo_pension_nombre,
              cp.tipo_contrato AS contrato_personal_nombre,
              u.nombre_completo AS creado_por_nombre,
+             uv.nombre_completo AS actualizado_por_nombre,
              tcv.nombre AS tipo_curso_vigilancia_nombre,
              s.nombre AS sede_nombre
     `;
@@ -94,6 +100,7 @@ export class EmpleadosService {
       LEFT JOIN fondos_pension fp ON e.fondo_pension_id = fp.id
       LEFT JOIN contratos_personal cp ON e.contrato_personal_id = cp.id
       LEFT JOIN usuarios_externos u ON e.creado_por = u.id
+      LEFT JOIN usuarios_externos uv ON e.actualizado_por = uv.id
       LEFT JOIN tipos_curso_vigilancia tcv ON e.tipo_curso_vigilancia_id = tcv.id
       LEFT JOIN sedes s ON e.sede_id = s.id
     `;
@@ -401,6 +408,46 @@ export class EmpleadosService {
 
     this.logger.debug(`✅ Soft delete completado: ${JSON.stringify(data, null, 2)}`);
     return { message: "Empleado eliminado (soft delete) exitosamente", data };
+  }
+
+  // 🔹 Retirar Empleado (Dar de Baja)
+  async retirarEmpleado(id: number, dto: { fecha_salida: string; motivo_salida: string; observacion_salida?: string }, userId?: number) {
+    const supabase = this.supabaseService.getClient();
+    this.logger.debug(`🚪 Retirando empleado ID ${id}: ${JSON.stringify(dto)}`);
+
+    const { data: existing, error: findError } = await supabase
+      .from("empleados")
+      .select("id, activo")
+      .eq("id", id)
+      .single();
+
+    if (findError || !existing) {
+      throw new NotFoundException(`Empleado con ID ${id} no encontrado`);
+    }
+
+    const updatePayload: any = {
+      activo: false,
+      fecha_salida: dto.fecha_salida || new Date().toISOString().split('T')[0],
+      motivo_salida: dto.motivo_salida,
+      observacion_salida: dto.observacion_salida || null,
+      updated_at: new Date().toISOString(),
+    };
+    if (userId) updatePayload.actualizado_por = userId;
+
+    const { data, error } = await supabase
+      .from("empleados")
+      .update(updatePayload)
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (error) {
+      this.logger.error(`❌ Error en retiro de empleado: ${JSON.stringify(error, null, 2)}`);
+      throw error;
+    }
+
+    this.logger.debug(`✅ Empleado retirado exitosamente: ${JSON.stringify(data, null, 2)}`);
+    return { message: "Empleado retirado exitosamente", data };
   }
 
   // 🔹 Capacitaciones
