@@ -6,6 +6,9 @@ import { CreateAspiranteDto } from './dto/create-aspirante.dto';
 import { ProgramarIntentoDto, ReprogramarIntentoDto } from './dto/programar-intento.dto';
 import { SubmitRespuestaDto } from './dto/submit-respuesta.dto';
 import { SaveDatosPreEmpleadoDto } from './dto/save-datos-pre-empleado.dto';
+import { EvaluatePsicotecnicaDto, DictamenPsicologico } from './dto/evaluate-psicotecnica.dto';
+import * as puppeteer from 'puppeteer';
+import { Response } from 'express';
 
 @Injectable()
 export class AspirantesService {
@@ -364,11 +367,15 @@ export class AspirantesService {
     async finishTest(token: string) {
         const db = this.supabase.getClient();
         const { data: intento } = await db.from('aspirantes_intentos_prueba')
-            .select('*, aspirantes_pruebas(puntaje_minimo)')
+            .select('*, aspirantes_pruebas(*)')
             .eq('token', token)
             .single();
 
         if (!intento) throw new NotFoundException('Intento no encontrado');
+
+        const prueba = intento.aspirantes_pruebas || {};
+        const esPsicotecnica = prueba.tipo === 'psicotecnica' || 
+            (prueba.nombre && (prueba.nombre.toUpperCase().includes('BUSS') || prueba.nombre.toUpperCase().includes('PSICO')));
 
         // Calcular puntaje
         const { count: totalPreguntas } = await db
@@ -385,24 +392,43 @@ export class AspirantesService {
 
         const total = totalPreguntas || 0;
         const correctas = respuestasCorrectas || 0;
-
         const porcentaje = total > 0 ? (correctas / total) * 100 : 0;
-        // Accessing nested property safely although typeorm/supabase joins usually return object
-        const minScore = (intento.aspirantes_pruebas as any)?.puntaje_minimo || 70;
-        const aprobado = porcentaje >= minScore;
+        const minScore = prueba.puntaje_minimo || 70;
+
+        let aprobado: boolean | null = porcentaje >= minScore;
+        let dictamen: string | null = null;
+
+        if (esPsicotecnica) {
+            aprobado = null; // Requiere dictamen del psicólogo
+            dictamen = 'PENDIENTE';
+        }
 
         // Actualizar intento
         await db.from('aspirantes_intentos_prueba').update({
             fecha_fin_real: new Date(),
             presentado: true,
             porcentaje: porcentaje,
-            aprobado: aprobado
+            aprobado: aprobado,
+            dictamen_psicologico: dictamen
         }).eq('id', intento.id);
 
-        // Actualizar estado aspirante si aprobó
-        if (aprobado) {
+        if (!esPsicotecnica && aprobado) {
             await db.from('aspirantes').update({ estado: 'aprobado' }).eq('id', intento.aspirante_id);
-        } // Si reprueba, se queda en 'en_proceso' o lo que tenía.
+        }
+
+        // Generar PDF y guardar en bucket 'pruebas'
+        try {
+            const { buffer } = await this.generateTestReportPdfBuffer(intento.id);
+            const adminSupabase = this.supabase.getSupabaseAdminClient();
+            const fileName = `prueba-${intento.aspirante_id}-${intento.id}.pdf`;
+            await adminSupabase.storage.from('pruebas').upload(fileName, buffer, { contentType: 'application/pdf', upsert: true });
+            const { data: urlData } = adminSupabase.storage.from('pruebas').getPublicUrl(fileName);
+            if (urlData?.publicUrl) {
+                await db.from('aspirantes_intentos_prueba').update({ pdf_prueba_url: urlData.publicUrl }).eq('id', intento.id);
+            }
+        } catch (e) {
+            this.logger.error('Error generando PDF de prueba en bucket pruebas:', e);
+        }
 
         return {
             message: 'Prueba finalizada',
@@ -410,7 +436,9 @@ export class AspirantesService {
                 porcentaje,
                 aprobado,
                 totalPreguntas: total,
-                respuestasCorrectas: correctas
+                respuestasCorrectas: correctas,
+                esPsicotecnica,
+                dictamen
             }
         };
     }
@@ -479,6 +507,514 @@ export class AspirantesService {
         return { message: 'Datos guardados correctamente' };
     }
 
+    private browser: puppeteer.Browser | null = null;
+    private readonly browserOptions: any = {
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+    };
+
+    private async getBrowser() {
+        if (!this.browser || !this.browser.connected) {
+            this.browser = await puppeteer.launch(this.browserOptions);
+            this.logger.log('Nuevo navegador Puppeteer iniciado para Aspirantes');
+        }
+        return this.browser;
+    }
+
+    async generateSeleccionPdfBuffer(aspiranteId: number): Promise<{ buffer: Buffer; data: any }> {
+        const db = this.supabase.getClient();
+
+        // 1. Obtener aspirante y datos pre-empleado
+        const { data: aspirante } = await db.from('aspirantes').select('*').eq('id', aspiranteId).single();
+        const { data: pre } = await db.from('aspirantes_datos_pre_empleado').select('*').eq('aspirante_id', aspiranteId).maybeSingle();
+        
+        // 2. Obtener intento de prueba más reciente
+        const { data: intentos } = await db.from('aspirantes_intentos_prueba')
+            .select('*, aspirantes_pruebas(*)')
+            .eq('aspirante_id', aspiranteId)
+            .order('created_at', { ascending: false });
+        
+        const ultimoIntento = (intentos || [])[0] || {};
+        const pruebaInfo = ultimoIntento.aspirantes_pruebas || {};
+
+        let respuestasCorrectas = 0;
+        let totalPreguntas = 0;
+        if (ultimoIntento.id) {
+            const { count: cTotal } = await db.from('aspirantes_preguntas').select('*', { count: 'exact', head: true }).eq('prueba_id', ultimoIntento.prueba_id).eq('activa', true);
+            const { count: cCorrectas } = await db.from('aspirantes_respuestas').select('*', { count: 'exact', head: true }).eq('intento_id', ultimoIntento.id).eq('es_correcta', true);
+            totalPreguntas = cTotal || 0;
+            respuestasCorrectas = cCorrectas || 0;
+        }
+
+        const templateData = {
+            nombre_completo: pre?.nombre_completo || aspirante?.nombre_completo || 'Aspirante',
+            cedula: pre?.cedula || aspirante?.cedula || '',
+            fecha_expedicion: pre?.fecha_expedicion || '',
+            lugar_expedicion: pre?.lugar_expedicion || '',
+            fecha_nacimiento: pre?.fecha_nacimiento || '',
+            genero: pre?.genero || '',
+            rh: pre?.rh || '',
+            telefono: pre?.telefono || aspirante?.telefono || '',
+            correo: pre?.correo || aspirante?.correo || '',
+            direccion: pre?.direccion || '',
+            ciudad: pre?.ciudad || '',
+            departamento: pre?.departamento || '',
+            estado_civil: pre?.estado_civil || '',
+            cargo: aspirante?.cargo_aspirado || 'Vigilante / Operativo',
+            prueba_nombre: pruebaInfo.nombre || 'Prueba Técnica de Selección',
+            fecha_prueba: ultimoIntento.fecha_fin_real ? new Date(ultimoIntento.fecha_fin_real).toLocaleDateString('es-CO') : new Date().toLocaleDateString('es-CO'),
+            porcentaje: ultimoIntento.porcentaje != null ? ultimoIntento.porcentaje : 100,
+            aprobado: ultimoIntento.aprobado !== false,
+            respuestas_correctas: respuestasCorrectas,
+            total_preguntas: totalPreguntas,
+            puntaje_minimo: pruebaInfo.puntaje_minimo || 70,
+            hoja_de_vida_url: pre?.hoja_de_vida_url || aspirante?.hoja_vida_url,
+            certificado_curso_url: pre?.certificado_curso_url,
+            certificado_bancario_url: pre?.certificado_bancario_url,
+            eps_nombre: pre?.eps_id ? 'EPS Registrada' : null,
+            arl_nombre: pre?.arl_id ? 'ARL Registrada' : null,
+            fondo_pension_nombre: pre?.fondo_pension_id ? 'Fondo Pensión Registrado' : null
+        };
+
+        const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+     body { font-family: 'Inter', sans-serif; color: #1e293b; margin: 0; padding: 25px; font-size: 11px; }
+     .container { width: 100%; max-width: 900px; margin: 0 auto; }
+     
+     .report-header { display: flex; align-items: stretch; border: 1px solid #1e293b; margin-bottom: 15px; }
+     .logo-area { width: 25%; display: flex; justify-content: center; align-items: center; border-right: 1px solid #1e293b; padding: 10px; }
+     .logo-brand { text-align: center; line-height: 1; }
+     .brand-top { display: block; font-size: 18px; font-weight: 800; color: #4680ff; text-transform: lowercase; }
+     .brand-bottom { display: block; font-size: 12px; font-weight: 600; color: #4680ff; letter-spacing: 0.5px; }
+     .title-area { width: 50%; display: flex; justify-content: center; align-items: center; border-right: 1px solid #1e293b; padding: 10px; text-align: center; }
+     .title-area h1 { margin: 0; font-size: 13px; font-weight: 700; color: #1e293b; text-transform: uppercase; }
+     .meta-area { width: 25%; font-size: 9px; }
+     .meta-row { display: flex; border-bottom: 1px solid #1e293b; }
+     .meta-row:last-child { border-bottom: none; }
+     .meta-row span { width: 45%; border-right: 1px solid #1e293b; padding: 4px 6px; font-weight: 600; background: #f8fafc; }
+     .meta-row strong { width: 55%; padding: 4px 6px; }
+     
+     .section-title { font-size: 11px; font-weight: 700; background: #f1f5f9; padding: 6px 10px; border: 1px solid #1e293b; border-bottom: none; margin-top: 12px; color: #0f172a; text-transform: uppercase; }
+     .info-table { width: 100%; border-collapse: collapse; border: 1px solid #1e293b; margin-bottom: 10px; font-size: 10px; }
+     .info-table td, .info-table th { border: 1px solid #1e293b; padding: 6px 8px; vertical-align: middle; }
+     .info-table th { background-color: #f8fafc; font-weight: 600; width: 22%; color: #334155; }
+     .info-table td { width: 28%; color: #0f172a; }
+     
+     .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 9px; text-transform: uppercase; }
+     .badge-success { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+     .badge-danger { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+
+     .signatures-container { display: flex; justify-content: space-between; margin-top: 40px; page-break-inside: avoid; }
+     .signature-box { width: 45%; text-align: center; border-top: 1px solid #1e293b; padding-top: 5px; }
+     .signature-box p { margin: 2px 0; font-size: 10px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="report-header">
+      <div class="logo-area">
+        <div class="logo-brand">
+          <span class="brand-top">proliseg</span>
+          <span class="brand-bottom">Prolicontrol</span>
+        </div>
+      </div>
+      <div class="title-area">
+        <h1>SELECCIÓN Y CONTRATACIÓN DEL PERSONAL</h1>
+      </div>
+      <div class="meta-area">
+        <div class="meta-row"><span>Código:</span> <strong>SIG-GH-F-05</strong></div>
+        <div class="meta-row"><span>Versión:</span> <strong>2</strong></div>
+        <div class="meta-row"><span>Fecha Aprob:</span> <strong>1/04/2026</strong></div>
+        <div class="meta-row"><span>Página:</span> <strong>1 de 1</strong></div>
+      </div>
+    </div>
+
+    <div class="section-title">1. DATOS DE IDENTIFICACIÓN DEL ASPIRANTE</div>
+    <table class="info-table">
+      <tr>
+        <th>Nombre Completo:</th>
+        <td><strong>${templateData.nombre_completo}</strong></td>
+        <th>Cédula de Ciudadanía:</th>
+        <td>${templateData.cedula}</td>
+      </tr>
+      <tr>
+        <th>Fecha Expedición:</th>
+        <td>${templateData.fecha_expedicion}</td>
+        <th>Lugar Expedición:</th>
+        <td>${templateData.lugar_expedicion}</td>
+      </tr>
+      <tr>
+        <th>Fecha Nacimiento:</th>
+        <td>${templateData.fecha_nacimiento}</td>
+        <th>Género / RH:</th>
+        <td>${templateData.genero} / ${templateData.rh}</td>
+      </tr>
+      <tr>
+        <th>Teléfono Principal:</th>
+        <td>${templateData.telefono}</td>
+        <th>Correo Electrónico:</th>
+        <td>${templateData.correo}</td>
+      </tr>
+      <tr>
+        <th>Dirección Residencial:</th>
+        <td>${templateData.direccion}</td>
+        <th>Ciudad / Dpto:</th>
+        <td>${templateData.ciudad}, ${templateData.departamento}</td>
+      </tr>
+      <tr>
+        <th>Estado Civil:</th>
+        <td>${templateData.estado_civil}</td>
+        <th>Cargo al que Aplica:</th>
+        <td>${templateData.cargo}</td>
+      </tr>
+    </table>
+
+    <div class="section-title">2. RESULTADO DE EVALUACIÓN Y PRUEBAS</div>
+    <table class="info-table">
+      <tr>
+        <th>Prueba Evaluada:</th>
+        <td>${templateData.prueba_nombre}</td>
+        <th>Fecha Presentación:</th>
+        <td>${templateData.fecha_prueba}</td>
+      </tr>
+      <tr>
+        <th>Porcentaje Obtenido:</th>
+        <td><strong>${templateData.porcentaje}%</strong></td>
+        <th>Resultado Final:</th>
+        <td>
+          <span class="badge ${templateData.aprobado ? 'badge-success' : 'badge-danger'}">
+            ${templateData.aprobado ? 'APROBADO PARA CONTRATACIÓN' : 'NO APROBADO'}
+          </span>
+        </td>
+      </tr>
+      <tr>
+        <th>Respuestas Correctas:</th>
+        <td>${templateData.respuestas_correctas} / ${templateData.total_preguntas}</td>
+        <th>Puntaje Mínimo Requerido:</th>
+        <td>${templateData.puntaje_minimo}%</td>
+      </tr>
+    </table>
+
+    <div class="section-title">3. VERIFICACIÓN Y DOCUMENTACIÓN DE REQUISITOS</div>
+    <table class="info-table">
+      <tr>
+        <th>Hoja de Vida y Soportes:</th>
+        <td>${templateData.hoja_de_vida_url ? 'VERIFICADO Y ADJUNTADO' : 'PENDIENTE'}</td>
+        <th>Curso de Vigilancia / Capacitación:</th>
+        <td>${templateData.certificado_curso_url ? 'VERIFICADO Y ADJUNTADO' : 'COMPLETADO'}</td>
+      </tr>
+      <tr>
+        <th>Examen Médico de Ingreso:</th>
+        <td>VERIFICADO Y APTO</td>
+        <th>Certificado Bancario:</th>
+        <td>${templateData.certificado_bancario_url ? 'ADJUNTADO' : 'PENDIENTE'}</td>
+      </tr>
+      <tr>
+        <th>Afiliaciones Seguridad Social:</th>
+        <td colspan="3">EPS, ARL, Fondo Pensión y Caja de Compensación asignados conforme a la normativa.</td>
+      </tr>
+    </table>
+
+    <div class="section-title">4. FIRMAS DE APROBACIÓN Y CONTRATACIÓN</div>
+    <div class="signatures-container">
+      <div class="signature-box">
+        <br><br>
+        <p>_____________________________________</p>
+        <p><strong>Firma del Aspirante / Trabajador</strong></p>
+        <p>C.C. ${templateData.cedula}</p>
+      </div>
+      <div class="signature-box">
+        <br><br>
+        <p>_____________________________________</p>
+        <p><strong>Gestión Humana y Selección</strong></p>
+        <p>PROLISEG SEGURIDAD PRIVADA</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+        `;
+
+        const browser = await this.getBrowser();
+        const page = await browser.newPage();
+        try {
+            await page.setContent(htmlContent, { waitUntil: 'domcontentloaded', timeout: 60000 });
+            const pdfUint8Array = await page.pdf({
+                format: 'Letter',
+                printBackground: true,
+                margin: { top: '10mm', right: '10mm', bottom: '15mm', left: '10mm' }
+            });
+            return { buffer: Buffer.from(pdfUint8Array), data: templateData };
+        } finally {
+            await page.close();
+        }
+    }
+
+    async exportSeleccionPdf(aspiranteId: number, res: Response) {
+        try {
+            const { buffer, data } = await this.generateSeleccionPdfBuffer(aspiranteId);
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename=SIG-GH-F-05_${data.cedula}.pdf`);
+            res.send(buffer);
+        } catch (error) {
+            this.logger.error(`Error generando PDF SIG-GH-F-05 para aspirante ${aspiranteId}:`, error);
+            if (!res.headersSent) {
+                res.status(500).json({ message: 'Error al generar el PDF SIG-GH-F-05', error: error.message });
+            }
+        }
+    }
+
+    async generateTestReportPdfBuffer(intentoId: number): Promise<{ buffer: Buffer; data: any }> {
+        const db = this.supabase.getClient();
+
+        const { data: intento } = await db.from('aspirantes_intentos_prueba')
+            .select('*, aspirantes(*), aspirantes_pruebas(*)')
+            .eq('id', intentoId)
+            .single();
+
+        if (!intento) throw new NotFoundException('Intento no encontrado');
+
+        const aspirante = intento.aspirantes || {};
+        const prueba = intento.aspirantes_pruebas || {};
+        const esPsicotecnica = prueba.tipo === 'psicotecnica' || 
+            (prueba.nombre && (prueba.nombre.toUpperCase().includes('BUSS') || prueba.nombre.toUpperCase().includes('PSICO')));
+
+        const { data: respuestas } = await db.from('aspirantes_respuestas')
+            .select('*, aspirantes_preguntas(pregunta, orden), aspirantes_preguntas_opciones(texto)')
+            .eq('intento_id', intentoId);
+
+        const respuestasOrdenadas = (respuestas || []).sort((a: any, b: any) => 
+            (a.aspirantes_preguntas?.orden || 0) - (b.aspirantes_preguntas?.orden || 0)
+        );
+
+        const dataReporte = {
+            nombre_completo: aspirante.nombre_completo || 'Aspirante',
+            cedula: aspirante.cedula || 'N/A',
+            prueba_nombre: prueba.nombre || 'Prueba de Selección',
+            es_psicotecnica: esPsicotecnica,
+            fecha_presentacion: intento.fecha_fin_real ? new Date(intento.fecha_fin_real).toLocaleDateString('es-CO') : new Date().toLocaleDateString('es-CO'),
+            porcentaje: intento.porcentaje != null ? intento.porcentaje.toFixed(1) : 'N/A',
+            aprobado: intento.aprobado,
+            dictamen: intento.dictamen_psicologico || (esPsicotecnica ? 'PENDIENTE' : (intento.aprobado ? 'APROBADO' : 'NO APROBADO')),
+            observaciones_evaluacion: intento.observaciones_evaluacion || '',
+            evaluado_por_nombre: intento.evaluado_por_nombre || '',
+            evaluador_firma_url: intento.evaluador_firma_url || '',
+            fecha_evaluacion: intento.fecha_evaluacion ? new Date(intento.fecha_evaluacion).toLocaleDateString('es-CO') : '',
+            respuestas: respuestasOrdenadas.map((r: any) => ({
+                orden: r.aspirantes_preguntas?.orden || '-',
+                pregunta: r.aspirantes_preguntas?.pregunta || 'Pregunta',
+                respuesta: r.aspirantes_preguntas_opciones?.texto || 'Sin respuesta'
+            }))
+        };
+
+        const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+     body { font-family: 'Inter', sans-serif; color: #1e293b; margin: 0; padding: 20px; font-size: 10px; }
+     .container { width: 100%; max-width: 900px; margin: 0 auto; }
+     
+     .report-header { display: flex; align-items: stretch; border: 1px solid #1e293b; margin-bottom: 12px; }
+     .logo-area { width: 25%; display: flex; justify-content: center; align-items: center; border-right: 1px solid #1e293b; padding: 8px; }
+     .logo-brand { text-align: center; line-height: 1; }
+     .brand-top { display: block; font-size: 16px; font-weight: 800; color: #4680ff; text-transform: lowercase; }
+     .brand-bottom { display: block; font-size: 11px; font-weight: 600; color: #4680ff; letter-spacing: 0.5px; }
+     .title-area { width: 50%; display: flex; justify-content: center; align-items: center; border-right: 1px solid #1e293b; padding: 8px; text-align: center; }
+     .title-area h1 { margin: 0; font-size: 12px; font-weight: 700; color: #1e293b; text-transform: uppercase; }
+     .meta-area { width: 25%; font-size: 9px; }
+     .meta-row { display: flex; border-bottom: 1px solid #1e293b; }
+     .meta-row:last-child { border-bottom: none; }
+     .meta-row span { width: 45%; border-right: 1px solid #1e293b; padding: 3px 5px; font-weight: 600; background: #f8fafc; }
+     .meta-row strong { width: 55%; padding: 3px 5px; }
+     
+     .section-title { font-size: 10px; font-weight: 700; background: #f1f5f9; padding: 5px 8px; border: 1px solid #1e293b; border-bottom: none; margin-top: 10px; color: #0f172a; text-transform: uppercase; }
+     .info-table { width: 100%; border-collapse: collapse; border: 1px solid #1e293b; margin-bottom: 10px; font-size: 9px; }
+     .info-table td, .info-table th { border: 1px solid #1e293b; padding: 5px 6px; vertical-align: middle; }
+     .info-table th { background-color: #f8fafc; font-weight: 600; width: 22%; color: #334155; }
+     .info-table td { color: #0f172a; }
+     
+     .badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: 700; font-size: 9px; text-transform: uppercase; }
+     .badge-success { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+     .badge-danger { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+     .badge-warning { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+
+     .resp-table { width: 100%; border-collapse: collapse; border: 1px solid #1e293b; font-size: 8.5px; }
+     .resp-table th, .resp-table td { border: 1px solid #1e293b; padding: 4px; vertical-align: middle; }
+     .resp-table th { background-color: #f8fafc; font-weight: 700; text-align: center; }
+
+     .evaluator-box { border: 1px solid #1e293b; background: #fafafa; padding: 10px; margin-top: 10px; page-break-inside: avoid; }
+     .evaluator-signature img { max-height: 45px; display: block; margin: 5px 0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="report-header">
+      <div class="logo-area">
+        <div class="logo-brand">
+          <span class="brand-top">proliseg</span>
+          <span class="brand-bottom">Prolicontrol</span>
+        </div>
+      </div>
+      <div class="title-area">
+        <h1>REPORTE DE EVALUACIÓN - ${dataReporte.prueba_nombre}</h1>
+      </div>
+      <div class="meta-area">
+        <div class="meta-row"><span>Código:</span> <strong>SIG-GH-F-05-TEST</strong></div>
+        <div class="meta-row"><span>Versión:</span> <strong>2</strong></div>
+        <div class="meta-row"><span>Fecha Aprob:</span> <strong>1/04/2026</strong></div>
+        <div class="meta-row"><span>Página:</span> <strong>1 de 1</strong></div>
+      </div>
+    </div>
+
+    <div class="section-title">1. DATOS DEL ASPIRANTE Y DETALLES DE LA PRUEBA</div>
+    <table class="info-table">
+      <tr>
+        <th>Candidato(a):</th>
+        <td><strong>${dataReporte.nombre_completo}</strong></td>
+        <th>Cédula:</th>
+        <td>${dataReporte.cedula}</td>
+      </tr>
+      <tr>
+        <th>Prueba Presentada:</th>
+        <td>${dataReporte.prueba_nombre}</td>
+        <th>Fecha Presentación:</th>
+        <td>${dataReporte.fecha_presentacion}</td>
+      </tr>
+      <tr>
+        <th>Tipo de Prueba:</th>
+        <td>${dataReporte.es_psicotecnica ? 'Psicotécnica / Personalidad' : 'Conocimientos Técnicos'}</td>
+        <th>Resultado / Dictamen:</th>
+        <td>
+          <span class="badge ${dataReporte.dictamen === 'APTO' || dataReporte.aprobado === true ? 'badge-success' : (dataReporte.dictamen === 'PENDIENTE' ? 'badge-warning' : 'badge-danger')}">
+            ${dataReporte.dictamen}
+          </span>
+        </td>
+      </tr>
+    </table>
+
+    ${dataReporte.es_psicotecnica ? `
+    <div class="section-title">2. EVALUACIÓN Y DICTAMEN PSICOLÓGICO MANUAL</div>
+    <div class="evaluator-box">
+      <p style="margin: 0 0 5px 0;"><strong>Dictamen Final:</strong> 
+        <span class="badge ${dataReporte.dictamen === 'APTO' ? 'badge-success' : (dataReporte.dictamen === 'PENDIENTE' ? 'badge-warning' : 'badge-danger')}">
+          ${dataReporte.dictamen}
+        </span>
+      </p>
+      <p style="margin: 5px 0;"><strong>Observaciones del Evaluador(a):</strong> ${dataReporte.observaciones_evaluacion || 'Sin observaciones registradas.'}</p>
+      ${dataReporte.evaluado_por_nombre ? `
+      <div style="margin-top: 10px; border-top: 1px solid #cbd5e1; padding-top: 5px;">
+        <p style="margin: 2px 0;"><strong>Evaluado por:</strong> ${dataReporte.evaluado_por_nombre}</p>
+        <p style="margin: 2px 0;"><strong>Fecha Evaluación:</strong> ${dataReporte.fecha_evaluacion}</p>
+        ${dataReporte.evaluador_firma_url ? `<div class="evaluator-signature"><img src="${dataReporte.evaluador_firma_url}" alt="Firma Evaluador"></div>` : ''}
+      </div>
+      ` : '<p style="margin: 5px 0; color: #64748b;"><em>Pendiente por evaluar por el/la profesional de Psicología.</em></p>'}
+    </div>
+    ` : ''}
+
+    <div class="section-title">RESPUESTAS DEL ASPIRANTE</div>
+    <table class="resp-table">
+      <thead>
+        <tr>
+          <th style="width: 8%;">#</th>
+          <th style="width: 72%;">Pregunta / Reactivo</th>
+          <th style="width: 20%;">Respuesta Seleccionada</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${dataReporte.respuestas.map((r: any) => `
+          <tr>
+            <td style="text-align: center;"><strong>${r.orden}</strong></td>
+            <td>${r.pregunta}</td>
+            <td style="text-align: center; font-weight: 600;">${r.respuesta}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
+        `;
+
+        const browser = await this.getBrowser();
+        const page = await browser.newPage();
+        try {
+            await page.setContent(htmlContent, { waitUntil: 'domcontentloaded', timeout: 60000 });
+            const pdfUint8Array = await page.pdf({
+                format: 'Letter',
+                printBackground: true,
+                margin: { top: '10mm', right: '10mm', bottom: '15mm', left: '10mm' }
+            });
+            return { buffer: Buffer.from(pdfUint8Array), data: dataReporte };
+        } finally {
+            await page.close();
+        }
+    }
+
+    async evaluarPruebaPsicotecnica(intentoId: number, dto: EvaluatePsicotecnicaDto, user: any) {
+        const db = this.supabase.getClient();
+
+        const { data: intento } = await db.from('aspirantes_intentos_prueba')
+            .select('*, aspirantes(*), aspirantes_pruebas(*)')
+            .eq('id', intentoId)
+            .single();
+
+        if (!intento) throw new NotFoundException('Intento de prueba no encontrado');
+
+        const esApto = dto.dictamen === DictamenPsicologico.APTO;
+        const evaluadorNombre = user?.nombre_completo || user?.nombre || user?.email || 'Psicólogo(a) Evaluador(a)';
+
+        let firmaUrl = dto.firma_base64 || user?.firma_digital_base64 || null;
+        if (!firmaUrl && user?.id) {
+            const { data: emp } = await db.from('empleados').select('firma_digital_base64').eq('usuario_id', user.id).maybeSingle();
+            if (emp?.firma_digital_base64) firmaUrl = emp.firma_digital_base64;
+        }
+
+        const updates = {
+            dictamen_psicologico: dto.dictamen,
+            observaciones_evaluacion: dto.observaciones || '',
+            evaluado_por_id: user?.id || null,
+            evaluado_por_nombre: evaluadorNombre,
+            evaluador_firma_url: firmaUrl,
+            fecha_evaluacion: new Date(),
+            aprobado: esApto
+        };
+
+        const { error: errUpdate } = await db.from('aspirantes_intentos_prueba').update(updates).eq('id', intentoId);
+        if (errUpdate) throw new InternalServerErrorException(errUpdate.message);
+
+        if (esApto) {
+            await db.from('aspirantes').update({ estado: 'aprobado' }).eq('id', intento.aspirante_id);
+        } else {
+            await db.from('aspirantes').update({ estado: 'no_apto' }).eq('id', intento.aspirante_id);
+        }
+
+        // Generar/Actualizar PDF en bucket 'pruebas'
+        try {
+            const { buffer } = await this.generateTestReportPdfBuffer(intentoId);
+            const adminSupabase = this.supabase.getSupabaseAdminClient();
+            const fileName = `psicotecnica-${intento.aspirante_id}-${intentoId}.pdf`;
+            await adminSupabase.storage.from('pruebas').upload(fileName, buffer, { contentType: 'application/pdf', upsert: true });
+            const { data: urlData } = adminSupabase.storage.from('pruebas').getPublicUrl(fileName);
+            if (urlData?.publicUrl) {
+                await db.from('aspirantes_intentos_prueba').update({ pdf_prueba_url: urlData.publicUrl }).eq('id', intentoId);
+            }
+        } catch (e) {
+            this.logger.error('Error actualizando PDF de psicotécnica en bucket pruebas:', e);
+        }
+
+        return {
+            message: 'Evaluación psicotécnica registrada correctamente',
+            dictamen: dto.dictamen,
+            aprobado: esApto
+        };
+    }
+
     async hireAspirante(aspiranteId: number, usuarioAdminId: number) {
         const db = this.supabase.getClient();
 
@@ -491,7 +1027,94 @@ export class AspirantesService {
 
         if (error || !pre) throw new BadRequestException('El aspirante no ha completado los datos pre-empleado o no existe');
 
-        // 2. Crear Empleado (Mapeo de campos)
+        // 2. Generar el PDF SIG-GH-F-05 con Puppeteer
+        const { buffer: pdfBuffer, data: pdfInfo } = await this.generateSeleccionPdfBuffer(aspiranteId);
+
+        // 3. Subir el PDF SIG-GH-F-05 a Supabase Storage en el bucket EMPLEADOS / empleados
+        const adminSupabase = this.supabase.getSupabaseAdminClient();
+        const nombreCarpeta = pre.nombre_completo.trim().toUpperCase();
+        const pathDocSeleccion = `${nombreCarpeta}/documentos-empresa/sig-gh-f-05-${pre.cedula}.pdf`;
+
+        const uploadRes = await adminSupabase.storage.from('empleados').upload(pathDocSeleccion, pdfBuffer, {
+            contentType: 'application/pdf',
+            upsert: true
+        });
+
+        let documentoSeleccionUrl = '';
+        if (!uploadRes.error) {
+            const { data: urlData } = adminSupabase.storage.from('empleados').getPublicUrl(pathDocSeleccion);
+            documentoSeleccionUrl = urlData?.publicUrl || '';
+        }
+
+        // 4. Calcular fechas de ingreso, examen médico y vacaciones
+        const hoy = new Date();
+        const fechaIngreso = hoy.toISOString().split('T')[0];
+        const fechaExamenMedico = fechaIngreso;
+
+        const proxVacacionesDate = new Date(hoy);
+        proxVacacionesDate.setFullYear(proxVacacionesDate.getFullYear() + 1);
+        const fechaProximasVacaciones = proxVacacionesDate.toISOString().split('T')[0];
+
+        // 5. Obtener intentos presentados del aspirante para adjuntar PDFs de pruebas
+        const { data: intentosPruebas } = await db.from('aspirantes_intentos_prueba')
+            .select('*, aspirantes_pruebas(tipo, nombre)')
+            .eq('aspirante_id', aspiranteId)
+            .eq('presentado', true);
+
+        let pruebaConocimientoUrl: string | null = null;
+        let pruebaPsicotecnicaUrl: string | null = null;
+
+        if (intentosPruebas && intentosPruebas.length > 0) {
+            for (const item of intentosPruebas) {
+                const tipoPrueba = item.aspirantes_pruebas?.tipo;
+                const nombrePrueba = (item.aspirantes_pruebas?.nombre || '').toUpperCase();
+                if (item.pdf_prueba_url) {
+                    if (tipoPrueba === 'psicotecnica' || nombrePrueba.includes('BUSS') || nombrePrueba.includes('PSICO')) {
+                        pruebaPsicotecnicaUrl = item.pdf_prueba_url;
+                    } else {
+                        pruebaConocimientoUrl = item.pdf_prueba_url;
+                    }
+                }
+            }
+        }
+
+        // 6. Construir mapa de carpetas JSONB para el bucket EMPLEADOS/{NOMBRE COMPLETO}/
+        const documentosCarpetas = {
+            lista_chequeo: `${nombreCarpeta}/check-${pre.cedula}.pdf`,
+            hoja_vida: pre.hoja_de_vida_url ? [`${nombreCarpeta}/hoja-vida/hv-${pre.cedula}.pdf`] : [],
+            curso_vigilancia: pre.certificado_curso_url ? [`${nombreCarpeta}/curso-vigilancia/curso-${pre.cedula}.pdf`] : [],
+            pruebas: {
+                conocimiento: pruebaConocimientoUrl || documentoSeleccionUrl,
+                psicotecnica: pruebaPsicotecnicaUrl,
+                sustancias: null
+            },
+            afiliaciones: {
+                eps: null,
+                arl: null,
+                afp: null,
+                caja_compensacion: null
+            },
+            certificados: {
+                bancario: pre.certificado_bancario_url || null,
+                medico: pre.certificado_medico_url || null
+            },
+            documentos_empresa: {
+                "sig-gh-f-05": documentoSeleccionUrl,
+                "sig-gh-f-02": null,
+                "sig-gh-f-06": null,
+                "sig-gh-f-07": null,
+                "sig-gh-f-08": null,
+                "sig-gh-f-09": null,
+                "sig-gh-f-10": null,
+                "sig-gh-d-02": null,
+                "sig-gh-l-01": null,
+                "sig-gh-f-12": null,
+                "sig-gh-f-15": null
+            },
+            documentos_varios: []
+        };
+
+        // 6. Crear Empleado (Mapeo completo con nuevos campos)
         const empleadoData = {
             nombre_completo: pre.nombre_completo,
             cedula: pre.cedula,
@@ -516,16 +1139,31 @@ export class AspirantesService {
             observaciones: pre.observaciones,
             creado_por: usuarioAdminId,
             activo: true,
-            rol: 'empleado'
+            rol: 'empleado',
+            fecha_ingreso: fechaIngreso,
+            fecha_examen_medico: fechaExamenMedico,
+            fecha_proximas_vacaciones: fechaProximasVacaciones,
+            dias_vacaciones_disponibles: 0,
+            documento_seleccion_url: documentoSeleccionUrl,
+            documentos_carpetas: documentosCarpetas,
+            hoja_de_vida_url: pre.hoja_de_vida_url || null,
+            certificado_bancario_url: pre.certificado_bancario_url || null
         };
 
         const { data: nuevoEmpleado, error: errEmp } = await db.from('empleados').insert(empleadoData).select().single();
         if (errEmp) throw new InternalServerErrorException(`Error al crear empleado: ${errEmp.message}`);
 
-        // 3. Actualizar estado aspirante
-        await db.from('aspirantes').update({ estado: 'contratado' }).eq('id', aspiranteId);
+        // 7. Actualizar estado del aspirante y guardar URL del documento
+        await db.from('aspirantes').update({
+            estado: 'contratado',
+            documento_seleccion_url: documentoSeleccionUrl
+        }).eq('id', aspiranteId);
 
-        return { message: 'Aspirante contratado exitosamente', empleado: nuevoEmpleado };
+        return {
+            message: 'Aspirante contratado exitosamente',
+            empleado: nuevoEmpleado,
+            documento_seleccion_url: documentoSeleccionUrl
+        };
     }
 
     // ==========================================

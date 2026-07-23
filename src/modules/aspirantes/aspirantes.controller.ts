@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Put, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AspirantesService } from './aspirantes.service';
@@ -6,9 +6,11 @@ import { CreatePruebaDto } from './dto/create-prueba.dto';
 import { CreatePreguntaDto } from './dto/create-pregunta.dto';
 import { CreateAspiranteDto } from './dto/create-aspirante.dto';
 import { ProgramarIntentoDto, ReprogramarIntentoDto } from './dto/programar-intento.dto';
+import { EvaluatePsicotecnicaDto } from './dto/evaluate-psicotecnica.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
+import type { Response } from 'express';
 
 @ApiTags('Aspirantes (Admin)')
 @ApiBearerAuth()
@@ -143,6 +145,22 @@ export class AspirantesController {
         // CurrentUser returns row/object. We need ID.
         const userId = admin?.id || admin?.sub || 1; // Fallback or handling
         return this.aspirantesService.hireAspirante(+id, userId);
+    }
+
+    @Get('candidatos/:id/formato-seleccion-pdf')
+    @ApiOperation({ summary: 'Generar y descargar PDF del formato SIG-GH-F-05 para un aspirante' })
+    exportSeleccionPdf(@Param('id') id: string, @Res() res: Response) {
+        return this.aspirantesService.exportSeleccionPdf(+id, res);
+    }
+
+    @Post('intentos/:id/evaluar-psicotecnica')
+    @ApiOperation({ summary: 'Calificar manualmente una prueba psicotécnica con dictamen y observaciones' })
+    evaluarPsicotecnica(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: EvaluatePsicotecnicaDto,
+        @CurrentUser() user: any
+    ) {
+        return this.aspirantesService.evaluarPruebaPsicotecnica(id, dto, user);
     }
 
     // ==========================================

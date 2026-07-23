@@ -324,6 +324,36 @@ export class CreateEmpleadoDto {
   @IsInt()
   @Transform(({ value }) => parseInt(value))
   orden?: number;
+
+  @ApiProperty({ example: "2026-04-01", required: false, description: "Fecha del examen médico (ingreso o periódico)" })
+  @IsOptional()
+  @IsDateString()
+  fecha_examen_medico?: string;
+
+  @ApiProperty({ example: "2026-04-01", required: false, description: "Fecha de ingreso del empleado" })
+  @IsOptional()
+  @IsDateString()
+  fecha_ingreso?: string;
+
+  @ApiProperty({ example: "2027-04-01", required: false, description: "Fecha proyectada para próximas vacaciones" })
+  @IsOptional()
+  @IsDateString()
+  fecha_proximas_vacaciones?: string;
+
+  @ApiProperty({ example: 15, required: false, description: "Días de vacaciones disponibles" })
+  @IsOptional()
+  @IsNumber()
+  @Transform(({ value }) => parseFloat(value))
+  dias_vacaciones_disponibles?: number;
+
+  @ApiProperty({ required: false, description: "Mapa JSON de carpetas y archivos en bucket EMPLEADOS" })
+  @IsOptional()
+  documentos_carpetas?: any;
+
+  @ApiProperty({ example: "https://.../sig-gh-f-05.pdf", required: false, description: "URL del formato SIG-GH-F-05" })
+  @IsOptional()
+  @IsString()
+  documento_seleccion_url?: string;
 }
 
 export class UpdateEmpleadoDto extends PartialType(CreateEmpleadoDto) { }
