@@ -196,9 +196,7 @@ export class AspirantesService {
         const pendientes = (data || []).filter((item: any) => {
             const tipo = item.aspirantes_pruebas?.tipo;
             const nombre = (item.aspirantes_pruebas?.nombre || '').toUpperCase();
-            const esPsicotecnica = tipo === 'psicotecnica' || nombre.includes('BUSS') || nombre.includes('PSICO');
-            const dictamen = item.dictamen_psicologico;
-            return esPsicotecnica && (!dictamen || dictamen === 'PENDIENTE');
+            return tipo === 'psicotecnica' || nombre.includes('BUSS') || nombre.includes('PSICO');
         });
 
         return pendientes;
@@ -1237,11 +1235,12 @@ export class AspirantesService {
         proxVacacionesDate.setFullYear(proxVacacionesDate.getFullYear() + 1);
         const fechaProximasVacaciones = proxVacacionesDate.toISOString().split('T')[0];
 
-        // 5. Obtener intentos presentados del aspirante para adjuntar PDFs de pruebas
+        // 5. Obtener intentos presentados del aspirante para adjuntar únicamente PDFs de pruebas APROBADAS y APTAS
         const { data: intentosPruebas } = await db.from('aspirantes_intentos_prueba')
             .select('*, aspirantes_pruebas(tipo, nombre)')
             .eq('aspirante_id', aspiranteId)
-            .eq('presentado', true);
+            .eq('presentado', true)
+            .order('id', { ascending: false }); // El más reciente primero
 
         let pruebaConocimientoUrl: string | null = null;
         let pruebaPsicotecnicaUrl: string | null = null;
@@ -1250,17 +1249,85 @@ export class AspirantesService {
             for (const item of intentosPruebas) {
                 const tipoPrueba = item.aspirantes_pruebas?.tipo;
                 const nombrePrueba = (item.aspirantes_pruebas?.nombre || '').toUpperCase();
-                if (item.pdf_prueba_url) {
-                    if (tipoPrueba === 'psicotecnica' || nombrePrueba.includes('BUSS') || nombrePrueba.includes('PSICO')) {
-                        pruebaPsicotecnicaUrl = item.pdf_prueba_url;
-                    } else {
-                        pruebaConocimientoUrl = item.pdf_prueba_url;
+                const esPsicotecnica = tipoPrueba === 'psicotecnica' || nombrePrueba.includes('BUSS') || nombrePrueba.includes('PSICO');
+
+                // REGLA SOLICITADA: Solo se adjunta el PDF si la prueba técnica está APROBADA (aprobado === true) o la psicotécnica es APTO (dictamen === 'APTO')
+                const esAprobadaOApta = esPsicotecnica
+                    ? (item.dictamen_psicologico === 'APTO')
+                    : (item.aprobado === true);
+
+                if (esAprobadaOApta) {
+                    let urlPdf = item.pdf_prueba_url;
+
+                    // Si aún no se ha generado el PDF de este intento aprobado/apto, generarlo ahora
+                    if (!urlPdf) {
+                        try {
+                            const { buffer: bufPdf } = await this.generateTestReportPdfBuffer(item.id);
+                            const fileName = `reporte-prueba-${aspiranteId}-${item.id}.pdf`;
+                            await adminSupabase.storage.from('pruebas').upload(fileName, bufPdf, { contentType: 'application/pdf', upsert: true });
+                            const { data: urlData } = adminSupabase.storage.from('pruebas').getPublicUrl(fileName);
+                            if (urlData?.publicUrl) {
+                                urlPdf = urlData.publicUrl;
+                                await db.from('aspirantes_intentos_prueba').update({ pdf_prueba_url: urlPdf }).eq('id', item.id);
+                            }
+                        } catch (e) {
+                            this.logger.error(`Error generando PDF automático para intento ${item.id} en contratación:`, e);
+                        }
+                    }
+
+                    if (urlPdf) {
+                        if (esPsicotecnica && !pruebaPsicotecnicaUrl) {
+                            pruebaPsicotecnicaUrl = urlPdf;
+                        } else if (!esPsicotecnica && !pruebaConocimientoUrl) {
+                            pruebaConocimientoUrl = urlPdf;
+                        }
                     }
                 }
             }
         }
 
-        // 6. Construir mapa de carpetas JSONB para el bucket EMPLEADOS/{NOMBRE COMPLETO}/
+        // 6. Verificar si el empleado ya existe en la base de datos por su cédula
+        const { data: empExistente } = await db.from('empleados')
+            .select('*')
+            .eq('cedula', pre.cedula)
+            .maybeSingle();
+
+        if (empExistente) {
+            // Si el empleado ya existe, no intentamos duplicarlo; sincronizamos sus carpetas de documentos
+            const docCarpetasOriginal = empExistente.documentos_carpetas || {};
+            const carpetasActualizadas = {
+                ...docCarpetasOriginal,
+                pruebas: {
+                    ...(docCarpetasOriginal.pruebas || {}),
+                    conocimiento: pruebaConocimientoUrl || docCarpetasOriginal.pruebas?.conocimiento || documentoSeleccionUrl,
+                    psicotecnica: pruebaPsicotecnicaUrl || docCarpetasOriginal.pruebas?.psicotecnica
+                },
+                documentos_empresa: {
+                    ...(docCarpetasOriginal.documentos_empresa || {}),
+                    "sig-gh-f-05": documentoSeleccionUrl
+                }
+            };
+
+            await db.from('empleados').update({
+                documento_seleccion_url: documentoSeleccionUrl,
+                documentos_carpetas: carpetasActualizadas,
+                activo: true
+            }).eq('id', empExistente.id);
+
+            // Actualizar aspirante a contratado
+            await db.from('aspirantes').update({
+                estado: 'contratado',
+                documento_seleccion_url: documentoSeleccionUrl
+            }).eq('id', aspiranteId);
+
+            return {
+                message: 'Aspirante contratado exitosamente. El empleado ya existía con la misma cédula y sus documentos fueron actualizados en su hoja de vida.',
+                empleado: empExistente,
+                documento_seleccion_url: documentoSeleccionUrl
+            };
+        }
+
+        // 7. Construir mapa de carpetas JSONB para el bucket EMPLEADOS/{NOMBRE COMPLETO}/
         const documentosCarpetas = {
             lista_chequeo: `${nombreCarpeta}/check-${pre.cedula}.pdf`,
             hoja_vida: pre.hoja_de_vida_url ? [`${nombreCarpeta}/hoja-vida/hv-${pre.cedula}.pdf`] : [],
@@ -1296,7 +1363,7 @@ export class AspirantesService {
             documentos_varios: []
         };
 
-        // 6. Crear Empleado (Mapeo completo con nuevos campos)
+        // 8. Crear Empleado (Mapeo completo con nuevos campos)
         const empleadoData = {
             nombre_completo: pre.nombre_completo,
             cedula: pre.cedula,
@@ -1335,7 +1402,7 @@ export class AspirantesService {
         const { data: nuevoEmpleado, error: errEmp } = await db.from('empleados').insert(empleadoData).select().single();
         if (errEmp) throw new InternalServerErrorException(`Error al crear empleado: ${errEmp.message}`);
 
-        // 7. Actualizar estado del aspirante y guardar URL del documento
+        // 9. Actualizar estado del aspirante y guardar URL del documento
         await db.from('aspirantes').update({
             estado: 'contratado',
             documento_seleccion_url: documentoSeleccionUrl

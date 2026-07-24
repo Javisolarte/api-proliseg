@@ -239,7 +239,7 @@ export class EmpleadosController {
     @Param("id", ParseIntPipe) id: number,
     @Body("categoria") categoria: string,
     @Body("subclave") subclave: string,
-    @UploadedFile() file: Express.Multer.File
+    @UploadedFile() file: any
   ) {
     return this.empleadosService.uploadDocumentoCarpeta(id, categoria, subclave, file);
   }
