@@ -893,9 +893,9 @@ export class AspirantesService {
             .select('pregunta_id, opcion_id, es_correcta')
             .eq('intento_id', intentoId);
 
-        // The technical report needs every option to identify the selected one.
+        // The technical report needs every option to identify the selected one and correct answer.
         const { data: preguntas } = await db.from('aspirantes_preguntas')
-            .select('id, pregunta, orden, opciones:aspirantes_preguntas_opciones(id, texto, orden)')
+            .select('id, pregunta, orden, opciones:aspirantes_preguntas_opciones(id, texto, orden, es_correcta)')
             .eq('prueba_id', intento.prueba_id)
             .eq('activa', true)
             .order('orden', { ascending: true });
@@ -938,7 +938,7 @@ export class AspirantesService {
                     opcion_seleccionada_id: respuesta?.opcion_id || null,
                     opciones: (pregunta.opciones || [])
                         .sort((a: any, b: any) => (a.orden || 0) - (b.orden || 0))
-                        .map((opcion: any) => ({ id: opcion.id, texto: opcion.texto || '' }))
+                        .map((opcion: any) => ({ id: opcion.id, texto: opcion.texto || '', es_correcta: opcion.es_correcta }))
                 };
             })
         };
@@ -992,12 +992,12 @@ export class AspirantesService {
                     <tr>
                         <th style="width: 4%; text-align: center;">N°</th>
                         <th style="width: 38%;">Pregunta</th>
-                        <th style="width: 4%; background-color: #fef08a; color: #854d0e; text-align: center;">V</th>
-                        <th style="width: 4%; background-color: #a5f3fc; color: #0e7490; text-align: center;">F</th>
+                        <th style="width: 4%; background-color: #dcfce7; color: #166534; text-align: center;">V</th>
+                        <th style="width: 4%; background-color: #fee2e2; color: #991b1b; text-align: center;">F</th>
                         <th style="width: 4%; text-align: center; border-left: 2px solid #1e293b;">N°</th>
                         <th style="width: 38%;">Pregunta</th>
-                        <th style="width: 4%; background-color: #fef08a; color: #854d0e; text-align: center;">V</th>
-                        <th style="width: 4%; background-color: #a5f3fc; color: #0e7490; text-align: center;">F</th>
+                        <th style="width: 4%; background-color: #dcfce7; color: #166534; text-align: center;">V</th>
+                        <th style="width: 4%; background-color: #fee2e2; color: #991b1b; text-align: center;">F</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -1064,6 +1064,8 @@ export class AspirantesService {
      .options-list { margin: 5px 0 0 20px; }
      .option-row { display: flex; gap: 7px; margin: 3px 0; color: #1e293b; }
      .option-letter { width: 11px; flex: 0 0 11px; }
+     .option-row.selected-correct { font-weight: 700; color: #15803d; }
+     .option-row.selected-correct .option-text { text-decoration: underline; text-decoration-color: #22c55e; text-decoration-thickness: 2px; text-underline-offset: 3px; }
      .option-row.selected-incorrect { font-weight: 700; color: #b91c1c; }
      .option-row.selected-incorrect .option-text { text-decoration: underline; text-decoration-color: #ef4444; text-decoration-thickness: 2px; text-underline-offset: 3px; }
      .option-row.correct-answer { font-weight: 700; color: #15803d; }
@@ -1161,12 +1163,15 @@ export class AspirantesService {
                 let classRow = '';
                 let labelTag = '';
 
-                if (esSeleccionada && !esCorrecta) {
+                if (esSeleccionada && esCorrecta) {
+                    classRow = 'selected-correct';
+                    labelTag = ' <small style="color: #16a34a; font-weight: 700;">(Marcada por aspirante - Correcta)</small>';
+                } else if (esSeleccionada && !esCorrecta) {
                     classRow = 'selected-incorrect';
-                    labelTag = ' <small style="color: #dc2626;">(Marcada por aspirante - Incorrecta)</small>';
-                } else if (esCorrecta) {
+                    labelTag = ' <small style="color: #dc2626; font-weight: 700;">(Marcada por aspirante - Incorrecta)</small>';
+                } else if (!esSeleccionada && esCorrecta) {
                     classRow = 'correct-answer';
-                    labelTag = ' <small style="color: #16a34a;">(Respuesta Correcta)</small>';
+                    labelTag = ' <small style="color: #16a34a; font-weight: 700;">(Respuesta Correcta)</small>';
                 }
 
                 return `
