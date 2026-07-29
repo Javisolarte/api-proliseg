@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import {
     CreateArticuloDotacionDto,
@@ -9,6 +9,8 @@ import {
 
 @Injectable()
 export class ArticulosDotacionService {
+    private readonly logger = new Logger(ArticulosDotacionService.name);
+
     constructor(private readonly supabaseService: SupabaseService) { }
 
     // --- ARTICULOS ---
@@ -57,6 +59,29 @@ export class ArticulosDotacionService {
             .single();
 
         if (error) throw error;
+
+        // Crear automáticamente la variante ESTANDAR inicial para el artículo en inventario
+        try {
+            const { error: varianteError } = await supabase
+                .from('articulos_dotacion_variantes')
+                .insert({
+                    articulo_id: data.id,
+                    talla: 'ESTANDAR',
+                    stock_minimo: 5,
+                    stock_actual: 0,
+                    stock_nuevo: 0,
+                    stock_segunda: 0,
+                });
+
+            if (varianteError) {
+                this.logger.warn(`No se pudo crear la variante ESTANDAR automática para el artículo ${data.id}: ${varianteError.message}`);
+            } else {
+                this.logger.log(`✅ Variante ESTANDAR creada automáticamente para el artículo ID ${data.id}`);
+            }
+        } catch (vErr: any) {
+            this.logger.warn(`Error al generar variante estándar automática: ${vErr.message}`);
+        }
+
         return data;
     }
 
