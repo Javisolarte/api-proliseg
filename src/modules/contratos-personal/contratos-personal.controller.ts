@@ -106,12 +106,15 @@ export class ContratosPersonalController {
 
     @Put(':id')
     @ApiOperation({ summary: 'Actualizar contrato (datos no legales)' })
+    @ApiConsumes('multipart/form-data')
+    @UseInterceptors(FileInterceptor('contrato_pdf'))
     async update(
         @Param('id', ParseIntPipe) id: number,
         @Body() dto: UpdateContratoPersonalDto,
-        @CurrentUser() user: any
+        @CurrentUser() user: any,
+        @UploadedFile() file?: any,
     ) {
-        return this.contratosService.update(id, dto, user.id);
+        return this.contratosService.update(id, dto, user.id, file);
     }
 
     @Delete(':id')

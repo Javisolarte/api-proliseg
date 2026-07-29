@@ -8,7 +8,7 @@ export class EmpleadosService {
 
   constructor(private readonly supabaseService: SupabaseService) { }
 
-  // 🔹 Helper para parsear campos JSONB que vienen como strings desde exec_sql
+  // 🔹 Helper para parsear campos JSONB que vienen como strings desde exec_sql / Supabase
   private parseJsonbFields(empleado: any): any {
     if (!empleado) return empleado;
 
@@ -16,7 +16,7 @@ export class EmpleadosService {
     if (empleado.certificados_urls && typeof empleado.certificados_urls === 'string') {
       try {
         empleado.certificados_urls = JSON.parse(empleado.certificados_urls);
-      } catch (e) {
+      } catch (e: any) {
         this.logger.warn(`⚠️ Error parseando certificados_urls: ${e.message}`);
         empleado.certificados_urls = [];
       }
@@ -26,9 +26,19 @@ export class EmpleadosService {
     if (empleado.documentos_adicionales_urls && typeof empleado.documentos_adicionales_urls === 'string') {
       try {
         empleado.documentos_adicionales_urls = JSON.parse(empleado.documentos_adicionales_urls);
-      } catch (e) {
+      } catch (e: any) {
         this.logger.warn(`⚠️ Error parseando documentos_adicionales_urls: ${e.message}`);
         empleado.documentos_adicionales_urls = [];
+      }
+    }
+
+    // Parsear documentos_carpetas si es string
+    if (empleado.documentos_carpetas && typeof empleado.documentos_carpetas === 'string') {
+      try {
+        empleado.documentos_carpetas = JSON.parse(empleado.documentos_carpetas);
+      } catch (e: any) {
+        this.logger.warn(`⚠️ Error parseando documentos_carpetas: ${e.message}`);
+        empleado.documentos_carpetas = {};
       }
     }
 
@@ -127,10 +137,7 @@ export class EmpleadosService {
       throw error;
     }
 
-    // 🚫 Ya no parseamos JSON (Supabase devuelve un objeto)
     const empleados = Array.isArray(data) ? data : [];
-
-    // Parsear campos JSONB en cada empleado
     const empleadosParsed = empleados.map(emp => this.parseJsonbFields(emp));
 
     this.logger.debug(`✅ Resultado Supabase (findAll): ${empleadosParsed.length} registros`);
@@ -181,7 +188,6 @@ export class EmpleadosService {
       throw new NotFoundException(`Empleado con ID ${id} no encontrado`);
     }
 
-    // Parsear campos JSONB
     const empleadoParsed = this.parseJsonbFields(empleados[0]);
 
     this.logger.debug(`🟢 Empleado encontrado: ${JSON.stringify(empleadoParsed, null, 2)}`);
@@ -189,21 +195,34 @@ export class EmpleadosService {
   }
 
   // 🔹 Helper para subir archivos a Supabase Storage
-  private async uploadFile(file: any, bucket: string, path: string): Promise<string> {
+  private async uploadFile(file: any, targetBucketOrFolder: string, path: string): Promise<string> {
     const supabase = this.supabaseService.getSupabaseAdminClient();
+    let bucket = 'empleados';
+    let fullPath = path;
+
+    if (targetBucketOrFolder.includes('/')) {
+      const parts = targetBucketOrFolder.split('/');
+      bucket = parts[0];
+      const folder = parts.slice(1).join('/');
+      fullPath = `${folder}/${path}`;
+    } else if (targetBucketOrFolder !== 'empleados') {
+      bucket = 'empleados';
+      fullPath = `${targetBucketOrFolder}/${path}`;
+    }
+
     const { data, error } = await supabase.storage
       .from(bucket)
-      .upload(path, file.buffer, {
-        contentType: file.mimetype,
+      .upload(fullPath, file.buffer, {
+        contentType: file.mimetype || 'application/octet-stream',
         upsert: true,
       });
 
     if (error) {
-      this.logger.error(`❌ Error subiendo archivo a ${bucket}: ${JSON.stringify(error)}`);
+      this.logger.error(`❌ Error subiendo archivo a ${bucket}/${fullPath}: ${JSON.stringify(error)}`);
       throw error;
     }
 
-    const { data: publicUrlData } = supabase.storage.from(bucket).getPublicUrl(path);
+    const { data: publicUrlData } = supabase.storage.from(bucket).getPublicUrl(fullPath);
     return publicUrlData.publicUrl;
   }
 
@@ -218,7 +237,7 @@ export class EmpleadosService {
     if (files) {
       if (files.foto_perfil?.[0]) {
         const file = files.foto_perfil[0];
-        const ext = file.originalname.split('.').pop();
+        const ext = file.originalname ? file.originalname.split('.').pop() : 'jpg';
         const path = `${createEmpleadoDto.cedula}.${ext}`;
         fileUrls.foto_perfil_url = await this.uploadFile(file, 'empleados/fotos_perfil', path);
         fileUrls.fecha_ultima_actualizacion_foto = new Date().toISOString();
@@ -235,7 +254,7 @@ export class EmpleadosService {
       }
       if (files.certificado_bancario?.[0]) {
         const file = files.certificado_bancario[0];
-        const ext = file.originalname.split('.').pop();
+        const ext = file.originalname ? file.originalname.split('.').pop() : 'pdf';
         const path = `${createEmpleadoDto.cedula}_cert_bancario.${ext}`;
         fileUrls.certificado_bancario_url = await this.uploadFile(file, 'certificados_bancarios', path);
       }
@@ -266,7 +285,6 @@ export class EmpleadosService {
       .insert({
         ...createEmpleadoDto,
         ...fileUrls,
-        // Si no es vigilante, forzamos null en tipo_vigilante_id para mantener consistencia
         tipo_vigilante_id: createEmpleadoDto.rol === 'vigilante' ? createEmpleadoDto.tipo_vigilante_id : null,
         creado_por: userId,
         created_at: new Date().toISOString(),
@@ -289,23 +307,24 @@ export class EmpleadosService {
     const supabase = this.supabaseService.getClient();
     this.logger.debug(`🟡 Actualizando empleado ${id} con datos: ${JSON.stringify(updateEmpleadoDto)}`);
 
-    const { data: existing, error: findError } = await supabase
+    const { data: existingRaw, error: findError } = await supabase
       .from("empleados")
       .select("id, cedula, certificados_urls, documentos_adicionales_urls")
       .eq("id", id)
       .single();
 
-    if (findError || !existing) {
+    if (findError || !existingRaw) {
       throw new NotFoundException(`Empleado con ID ${id} no encontrado`);
     }
 
+    const existing = this.parseJsonbFields(existingRaw);
     const fileUrls: any = {};
 
     // Subir archivos si existen
     if (files) {
       if (files.foto_perfil?.[0]) {
         const file = files.foto_perfil[0];
-        const ext = file.originalname.split('.').pop();
+        const ext = file.originalname ? file.originalname.split('.').pop() : 'jpg';
         const path = `${existing.cedula}.${ext}`;
         fileUrls.foto_perfil_url = await this.uploadFile(file, 'empleados/fotos_perfil', path);
         fileUrls.fecha_ultima_actualizacion_foto = new Date().toISOString();
@@ -322,12 +341,12 @@ export class EmpleadosService {
       }
       if (files.certificado_bancario?.[0]) {
         const file = files.certificado_bancario[0];
-        const ext = file.originalname.split('.').pop();
+        const ext = file.originalname ? file.originalname.split('.').pop() : 'pdf';
         const path = `${existing.cedula}_cert_bancario.${ext}`;
         fileUrls.certificado_bancario_url = await this.uploadFile(file, 'certificados_bancarios', path);
       }
       if (files.certificados) {
-        const certificadosUrls: string[] = existing.certificados_urls || [];
+        const certificadosUrls: string[] = Array.isArray(existing.certificados_urls) ? existing.certificados_urls : [];
         const startIndex = certificadosUrls.length;
         for (let i = 0; i < files.certificados.length; i++) {
           const file = files.certificados[i];
@@ -338,7 +357,7 @@ export class EmpleadosService {
         fileUrls.certificados_urls = certificadosUrls;
       }
       if (files.documentos_adicionales) {
-        const docsUrls: string[] = existing.documentos_adicionales_urls || [];
+        const docsUrls: string[] = Array.isArray(existing.documentos_adicionales_urls) ? existing.documentos_adicionales_urls : [];
         const startIndex = docsUrls.length;
         for (let i = 0; i < files.documentos_adicionales.length; i++) {
           const file = files.documentos_adicionales[i];
@@ -350,17 +369,20 @@ export class EmpleadosService {
       }
     }
 
+    const payload: any = {
+      ...updateEmpleadoDto,
+      ...fileUrls,
+      actualizado_por: userId,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (updateEmpleadoDto.rol !== undefined) {
+      payload.tipo_vigilante_id = updateEmpleadoDto.rol === 'vigilante' ? updateEmpleadoDto.tipo_vigilante_id : null;
+    }
+
     const { data, error } = await supabase
       .from("empleados")
-      .update({
-        ...updateEmpleadoDto,
-        ...fileUrls,
-        // Si el rol cambia y ya no es vigilante, se debería limpiar, pero aquí solo tenemos el parcial.
-        // Se asume que si el frontend envía rol != vigilante, también debería enviar tipo_vigilante_id: null o lo manejamos aquí si viene el rol.
-        ...(updateEmpleadoDto.rol && updateEmpleadoDto.rol !== 'vigilante' ? { tipo_vigilante_id: null } : {}),
-        actualizado_por: userId,
-        updated_at: new Date().toISOString(),
-      })
+      .update(payload)
       .eq("id", id)
       .select()
       .single();
@@ -374,134 +396,94 @@ export class EmpleadosService {
     return data;
   }
 
-  // 🔹 Soft delete
-  async softDelete(id: number, userId: number) {
+  // 🔹 Retirar empleado
+  async retirarEmpleado(id: number, dto: { fecha_salida: string; motivo_salida: string; observacion_salida?: string }, userId: number) {
     const supabase = this.supabaseService.getClient();
-    this.logger.debug(`🗑️ Eliminando (soft) empleado con ID: ${id}`);
-
-    const { data: existing, error: findError } = await supabase
-      .from("empleados")
-      .select("id, activo")
-      .eq("id", id)
-      .single();
-
-    if (findError || !existing) {
-      throw new NotFoundException(`Empleado con ID ${id} no encontrado`);
-    }
 
     const { data, error } = await supabase
       .from("empleados")
       .update({
         activo: false,
-        fecha_salida: new Date().toISOString(),
+        fecha_salida: dto.fecha_salida,
+        motivo_salida: dto.motivo_salida,
+        observacion_salida: dto.observacion_salida || null,
         actualizado_por: userId,
-        updated_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
       })
       .eq("id", id)
       .select()
       .single();
 
-    if (error) {
-      this.logger.error(`❌ Error en soft delete: ${JSON.stringify(error, null, 2)}`);
-      throw error;
-    }
-
-    this.logger.debug(`✅ Soft delete completado: ${JSON.stringify(data, null, 2)}`);
-    return { message: "Empleado eliminado (soft delete) exitosamente", data };
+    if (error) throw error;
+    return data;
   }
 
-  // 🔹 Retirar Empleado (Dar de Baja)
-  async retirarEmpleado(id: number, dto: { fecha_salida: string; motivo_salida: string; observacion_salida?: string }, userId?: number) {
+  // 🔹 Eliminar empleado (soft delete)
+  async softDelete(id: number, userId: number) {
     const supabase = this.supabaseService.getClient();
-    this.logger.debug(`🚪 Retirando empleado ID ${id}: ${JSON.stringify(dto)}`);
-
-    const { data: existing, error: findError } = await supabase
-      .from("empleados")
-      .select("id, activo")
-      .eq("id", id)
-      .single();
-
-    if (findError || !existing) {
-      throw new NotFoundException(`Empleado con ID ${id} no encontrado`);
-    }
-
-    const updatePayload: any = {
-      activo: false,
-      fecha_salida: dto.fecha_salida || new Date().toISOString().split('T')[0],
-      motivo_salida: dto.motivo_salida,
-      observacion_salida: dto.observacion_salida || null,
-      updated_at: new Date().toISOString(),
-    };
-    if (userId) updatePayload.actualizado_por = userId;
 
     const { data, error } = await supabase
       .from("empleados")
-      .update(updatePayload)
+      .update({
+        activo: false,
+        actualizado_por: userId,
+        updated_at: new Date().toISOString()
+      })
       .eq("id", id)
       .select()
       .single();
 
-    if (error) {
-      this.logger.error(`❌ Error en retiro de empleado: ${JSON.stringify(error, null, 2)}`);
-      throw error;
-    }
-
-    this.logger.debug(`✅ Empleado retirado exitosamente: ${JSON.stringify(data, null, 2)}`);
-    return { message: "Empleado retirado exitosamente", data };
-  }
-
-  // 🔹 Capacitaciones
-  async getCapacitaciones(empleadoId: number) {
-    const supabase = this.supabaseService.getClient();
-    this.logger.debug(`📚 Consultando capacitaciones para empleado ID ${empleadoId}`);
-
-    const { data, error } = await supabase
-      .from("empleado_capacitaciones")
-      .select(`
-        *,
-        capacitaciones(id, nombre, descripcion, duracion_horas, obligatoria)
-      `)
-      .eq("empleado_id", empleadoId)
-      .order("fecha_realizacion", { ascending: false });
-
-    if (error) {
-      this.logger.error(`❌ Error obteniendo capacitaciones: ${JSON.stringify(error, null, 2)}`);
-      throw error;
-    }
-
-    this.logger.debug(`📦 Capacitaciones obtenidas: ${data.length}`);
+    if (error) throw error;
     return data;
   }
 
-  // 🔹 Utilidades Nuevas
-  async getSalario(id: number) {
+  // 🔹 Capacitaciones
+  async getCapacitaciones(id: number) {
     const supabase = this.supabaseService.getClient();
-    // Buscar salario a través del contrato personal activo
     const { data, error } = await supabase
-      .from('contratos_personal')
+      .from("capacitaciones_asistentes")
       .select(`
-        salarios (
-          id, nombre_salario, valor
+        capacitacion_id,
+        asistio,
+        calificacion,
+        observaciones,
+        capacitaciones (
+          id, titulo, descripcion, fecha, duracion_horas, estado
         )
       `)
-      .eq('empleado_id', id)
-      .eq('estado', 'activo')
-      .single();
+      .eq("empleado_id", id);
 
-    if (error) {
-      // Si no tiene contrato activo, retornamos null o error
-      this.logger.warn(`No se encontró salario/contrato activo para empleado ${id}: ${error.message}`);
-      return null;
-    }
-    return data?.salarios;
+    if (error) throw error;
+    return data;
   }
 
+  // 🔹 Salario
+  async getSalario(id: number) {
+    const supabase = this.supabaseService.getClient();
+    const { data, error } = await supabase
+      .from("empleados")
+      .select(`
+        contratos_personal (
+          salarios (
+            id, nombre_salario, valor, valor_hora, auxilio_transporte
+          )
+        )
+      `)
+      .eq("id", id)
+      .single();
+
+    if (error) throw error;
+    const cp = Array.isArray(data?.contratos_personal) ? data.contratos_personal[0] : data?.contratos_personal;
+    return cp?.salarios;
+  }
+
+  // 🔹 Rol
   async getRol(id: number) {
     const supabase = this.supabaseService.getClient();
     const { data, error } = await supabase
-      .from('empleados')
-      .select('rol')
-      .eq('id', id)
+      .from("empleados")
+      .select("rol")
+      .eq("id", id)
       .single();
 
     if (error) throw error;
@@ -510,19 +492,19 @@ export class EmpleadosService {
 
   async isVigilante(id: number) {
     const rolData = await this.getRol(id);
-    return { es_vigilante: rolData?.rol === 'vigilante' };
+    return { es_vigilante: rolData?.rol === "vigilante" };
   }
 
   async getTipoVigilante(id: number) {
     const supabase = this.supabaseService.getClient();
     const { data, error } = await supabase
-      .from('empleados')
+      .from("empleados")
       .select(`
         tipos_vigilante (
           id, nombre, descripcion
         )
       `)
-      .eq('id', id)
+      .eq("id", id)
       .single();
 
     if (error) throw error;
@@ -532,9 +514,9 @@ export class EmpleadosService {
   async checkAsignado(id: number) {
     const supabase = this.supabaseService.getClient();
     const { data, error } = await supabase
-      .from('empleados')
-      .select('asignado')
-      .eq('id', id)
+      .from("empleados")
+      .select("asignado")
+      .eq("id", id)
       .single();
 
     if (error) throw error;
@@ -578,8 +560,6 @@ export class EmpleadosService {
     const supabase = this.supabaseService.getClient();
     this.logger.debug(`🔢 Actualizando orden de ${orders.length} empleados`);
 
-    // Usamos un loop para actualizar cada empleado. 
-    // Supabase no soporta bulk updates con valores diferentes por fila de forma nativa fácilmente sin RPC complejo.
     const promises = orders.map(item =>
       supabase
         .from("empleados")
@@ -648,9 +628,16 @@ export class EmpleadosService {
     const fileUrl = pubData?.publicUrl;
 
     // Actualizar campo JSONB documentos_carpetas en Supabase DB
-    const docsCarpetas: any = emp.documentos_carpetas || {};
+    let docsCarpetas: any = emp.documentos_carpetas || {};
+    if (typeof docsCarpetas === 'string') {
+      try {
+        docsCarpetas = JSON.parse(docsCarpetas);
+      } catch (e: any) {
+        docsCarpetas = {};
+      }
+    }
 
-    if (categoria === 'hoja-vida') {
+    if (categoria === 'hoja-vida' || categoria === 'hoja_vida') {
       docsCarpetas.hoja_vida = [fileUrl];
     } else if (categoria === 'curso-vigilancia') {
       docsCarpetas.curso_vigilancia = [fileUrl];
@@ -673,12 +660,28 @@ export class EmpleadosService {
       }
     }
 
+    // Actualizar también carpetas genéricas
+    if (!docsCarpetas[categoria]) docsCarpetas[categoria] = {};
+    if (typeof docsCarpetas[categoria] === 'object' && !Array.isArray(docsCarpetas[categoria])) {
+      docsCarpetas[categoria][subclave] = fileUrl;
+    }
+
+    const updatePayload: any = {
+      documentos_carpetas: docsCarpetas,
+      updated_at: new Date().toISOString()
+    };
+
+    if (categoria === 'hoja-vida' || categoria === 'hoja_vida') {
+      updatePayload.hoja_de_vida_url = fileUrl;
+    } else if (subclave === 'certificado-bancario' || subclave === 'bancario') {
+      updatePayload.certificado_bancario_url = fileUrl;
+    } else if (categoria === 'cedula' || subclave === 'cedula') {
+      updatePayload.cedula_pdfurl = fileUrl;
+    }
+
     const { data: updated, error: updateErr } = await supabase
       .from('empleados')
-      .update({
-        documentos_carpetas: docsCarpetas,
-        updated_at: new Date().toISOString()
-      })
+      .update(updatePayload)
       .eq('id', empleadoId)
       .select()
       .single();

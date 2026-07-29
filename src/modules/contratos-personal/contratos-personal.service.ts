@@ -1,4 +1,4 @@
-﻿import {
+import {
     BadRequestException,
     Injectable,
     InternalServerErrorException,
@@ -88,8 +88,7 @@ export class ContratosPersonalService {
         return newContract;
     }
 
-
-    // ðŸ”¹ Terminar contrato
+    // 🔹 Terminar contrato
     async terminate(terminateDto: TerminateContratoPersonalDto, userId: number, file?: any) {
         const supabase = this.supabaseService.getClient();
 
@@ -101,7 +100,7 @@ export class ContratosPersonalService {
             .single();
 
         if (!contract) throw new NotFoundException('Contrato no encontrado');
-        if (contract.estado !== 'activo') throw new BadRequestException('El contrato no estÃ¡ activo');
+        if (contract.estado !== 'activo') throw new BadRequestException('El contrato no está activo');
 
         let terminacionPdfUrl: string | null = null;
 
@@ -155,7 +154,7 @@ export class ContratosPersonalService {
         return updatedContract;
     }
 
-    // ðŸ”¹ Helper Subida
+    // 🔹 Helper Subida
     private async uploadFile(file: any, bucket: string, path: string): Promise<string> {
         const supabase = this.supabaseService.getSupabaseAdminClient();
         const { error } = await supabase.storage
@@ -174,7 +173,7 @@ export class ContratosPersonalService {
         return data.publicUrl;
     }
 
-    // ðŸ”¹ Historial por empleado
+    // 🔹 Historial por empleado
     async getByEmpleado(empleadoId: number) {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase
@@ -190,7 +189,7 @@ export class ContratosPersonalService {
         return data;
     }
 
-    // ðŸ”¹ Obtener Contrato por ID
+    // 🔹 Obtener Contrato por ID
     async findOne(id: number) {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase
@@ -207,20 +206,34 @@ export class ContratosPersonalService {
         return data;
     }
 
-    // ðŸ”¹ Actualizar Contrato (Datos no sensibles/legales estrictos)
-    async update(id: number, dto: UpdateContratoPersonalDto, userId: number) {
+    // 🔹 Actualizar Contrato (Datos no sensibles/legales estrictos)
+    async update(id: number, dto: UpdateContratoPersonalDto, userId: number, file?: any) {
         const supabase = this.supabaseService.getClient();
         const { data: oldData } = await supabase.from('contratos_personal').select('*').eq('id', id).single();
         if (!oldData) throw new NotFoundException('Contrato no encontrado');
 
+        const updateData: any = { ...dto };
+
+        if (file) {
+            const { data: empleado } = await supabase.from('empleados').select('cedula').eq('id', oldData.empleado_id).single();
+            const cedula = empleado?.cedula || 'empleado';
+            const path = `contratos_empleados/${cedula}_actualizado_${id}.pdf`;
+            updateData.contrato_pdf_url = await this.uploadFile(file, 'empleados', path);
+        }
+
+        delete updateData.file;
+
         const { data, error } = await supabase
             .from('contratos_personal')
-            .update(dto)
+            .update(updateData)
             .eq('id', id)
             .select()
             .single();
 
-        if (error) throw new BadRequestException(error.message);
+        if (error) {
+            this.logger.error(`Error actualizando contrato: ${error.message}`);
+            throw new BadRequestException(error.message);
+        }
 
         await this.auditoriaService.create({
             tabla_afectada: 'contratos_personal',
@@ -234,7 +247,7 @@ export class ContratosPersonalService {
         return data;
     }
 
-    // ðŸ”¹ Renovar Contrato
+    // 🔹 Renovar Contrato
     async renew(dto: RenovarContratoDto, userId: number) {
         const supabase = this.supabaseService.getClient();
 
@@ -272,7 +285,7 @@ export class ContratosPersonalService {
             .update({ contrato_personal_id: newContract.id })
             .eq('id', oldContract.empleado_id);
 
-        // 5. Auditar renovaciÃ³n
+        // 5. Auditar renovación
         await this.auditoriaService.create({
             tabla_afectada: 'contratos_personal',
             registro_id: newContract.id,
@@ -284,7 +297,7 @@ export class ContratosPersonalService {
         return newContract;
     }
 
-    // ðŸ”¹ Contratos Activos
+    // 🔹 Contratos Activos
     async findActive() {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase
@@ -300,7 +313,7 @@ export class ContratosPersonalService {
         return data;
     }
 
-    // ðŸ”¹ Contratos Inactivos/Vencidos
+    // 🔹 Contratos Inactivos/Vencidos
     async findInactive() {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase
@@ -316,7 +329,7 @@ export class ContratosPersonalService {
         return data;
     }
 
-    // ðŸ”¹ Vencimientos PrÃ³ximos (30 dias)
+    // 🔹 Vencimientos Próximos (30 dias)
     async findExpiring(days: number = 30) {
         const supabase = this.supabaseService.getClient();
         const today = new Date();
@@ -338,7 +351,7 @@ export class ContratosPersonalService {
         return data;
     }
 
-    // ðŸ”¹ Validar Vencidos (Job/Manual)
+    // 🔹 Validar Vencidos (Job/Manual)
     async validateExpired(userId: number) {
         const supabase = this.supabaseService.getClient();
         const today = new Date().toISOString().split('T')[0];
@@ -371,7 +384,7 @@ export class ContratosPersonalService {
         return { message: `Se actualizaron ${ids.length} contratos a estado finalizado`, contratos: ids };
     }
 
-    // ðŸ”¹ Eliminar Contrato
+    // 🔹 Eliminar Contrato
     async remove(id: number, userId: number) {
         const supabase = this.supabaseService.getClient();
 
@@ -379,14 +392,14 @@ export class ContratosPersonalService {
         const { data: contract } = await supabase.from('contratos_personal').select('*').eq('id', id).single();
         if (!contract) throw new NotFoundException('Contrato no encontrado');
 
-        // 2. Verificar si estÃ¡ asignado a un empleado como activo
+        // 2. Verificar si está asignado a un empleado como activo
         const { data: empleado } = await supabase
             .from('empleados')
             .select('id, contrato_personal_id')
             .eq('contrato_personal_id', id)
             .single();
 
-        // 3. Si estÃ¡ asignado, desvincular
+        // 3. Si está asignado, desvincular
         if (empleado) {
             await supabase
                 .from('empleados')
@@ -402,7 +415,7 @@ export class ContratosPersonalService {
 
         if (error) throw new InternalServerErrorException('Error al eliminar el contrato');
 
-        // 5. AuditorÃ­a
+        // 5. Auditoría
         await this.auditoriaService.create({
             tabla_afectada: 'contratos_personal',
             registro_id: id,
@@ -414,9 +427,8 @@ export class ContratosPersonalService {
         return { message: 'Contrato eliminado correctamente' };
     }
 
-    // ðŸ”¹ Auditoria de Contrato
+    // 🔹 Auditoria de Contrato
     async getAudit(contratoId: number) {
         return this.auditoriaService.getByRegistro('contratos_personal', contratoId);
     }
 }
-
