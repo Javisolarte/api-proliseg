@@ -194,6 +194,16 @@ export class EmpleadosService {
     return empleadoParsed;
   }
 
+  // 🔹 Helper para sanitizar rutas de almacenamiento (compatibilidad S3/Supabase ASCII)
+  private sanitizeStoragePath(path: string): string {
+    return path
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/ñ/g, 'n')
+      .replace(/Ñ/g, 'N')
+      .replace(/[^a-zA-Z0-9/._-]/g, '_');
+  }
+
   // 🔹 Helper para subir archivos a Supabase Storage
   private async uploadFile(file: any, targetBucketOrFolder: string, path: string): Promise<string> {
     const supabase = this.supabaseService.getSupabaseAdminClient();
@@ -209,6 +219,8 @@ export class EmpleadosService {
       bucket = 'empleados';
       fullPath = `${targetBucketOrFolder}/${path}`;
     }
+
+    fullPath = this.sanitizeStoragePath(fullPath);
 
     const { data, error } = await supabase.storage
       .from(bucket)
@@ -608,7 +620,7 @@ export class EmpleadosService {
     const ext = file.originalname ? file.originalname.split('.').pop() : 'pdf';
 
     // Estructura de Storage: EMPLEADOS/[NOMBRE_COMPLETO]/[categoria]/[subclave]-[cedula].pdf
-    const storagePath = `EMPLEADOS/${nombreFolder}/${categoria}/${subclave}-${cedula}.${ext}`;
+    const storagePath = this.sanitizeStoragePath(`EMPLEADOS/${nombreFolder}/${categoria}/${subclave}-${cedula}.${ext}`);
 
     this.logger.log(`📂 [CARPETAS] Subiendo documento: ${storagePath}`);
 

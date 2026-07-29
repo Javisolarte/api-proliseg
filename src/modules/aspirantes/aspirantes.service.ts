@@ -1312,8 +1312,9 @@ export class AspirantesService {
 
         // 3. Subir el PDF SIG-GH-F-05 a Supabase Storage en el bucket EMPLEADOS / empleados
         const adminSupabase = this.supabase.getSupabaseAdminClient();
+        const sanitizePath = (p: string) => p.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ñ/g, 'n').replace(/Ñ/g, 'N').replace(/[^a-zA-Z0-9/._-]/g, '_');
         const nombreCarpeta = pre.nombre_completo.trim().toUpperCase();
-        const pathDocSeleccion = `${nombreCarpeta}/documentos-empresa/sig-gh-f-05-${pre.cedula}.pdf`;
+        const pathDocSeleccion = sanitizePath(`${nombreCarpeta}/documentos-empresa/sig-gh-f-05-${pre.cedula}.pdf`);
 
         const uploadRes = await adminSupabase.storage.from('empleados').upload(pathDocSeleccion, pdfBuffer, {
             contentType: 'application/pdf',
