@@ -81,6 +81,12 @@ export class CreateInventarioMovimientoDto {
     @IsOptional()
     empleado_id?: number;
 
+    @ApiProperty({ description: 'Costo unitario del movimiento', example: 15000, required: false })
+    @IsNumber()
+    @Min(0)
+    @IsOptional()
+    costo_unitario?: number;
+
     @ApiProperty({ description: 'Realizado por (ID Usuario)' })
     @IsInt()
     @IsOptional()

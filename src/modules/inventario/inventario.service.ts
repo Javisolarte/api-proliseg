@@ -20,10 +20,25 @@ export class InventarioService {
         const { data, error } = await supabase
             .from('inventario_documentos')
             .select(`
-        *,
-        proveedor:proveedores(id, nombre)
-      `)
-            .order('fecha', { ascending: false });
+                *,
+                proveedor:proveedores(id, nombre, nit),
+                usuario:usuarios_externos(id, nombre_completo),
+                movimientos:inventario_movimientos(
+                    id,
+                    tipo_movimiento,
+                    cantidad,
+                    costo_unitario,
+                    motivo,
+                    created_at,
+                    variante_id,
+                    variante:articulos_dotacion_variantes(
+                        id,
+                        talla,
+                        articulo:articulos_dotacion(id, nombre, codigo)
+                    )
+                )
+            `)
+            .order('created_at', { ascending: false });
 
         if (error) throw error;
         return data;
@@ -34,9 +49,24 @@ export class InventarioService {
         const { data, error } = await supabase
             .from('inventario_documentos')
             .select(`
-        *,
-        proveedor:proveedores(id, nombre)
-      `)
+                *,
+                proveedor:proveedores(id, nombre, nit),
+                usuario:usuarios_externos(id, nombre_completo),
+                movimientos:inventario_movimientos(
+                    id,
+                    tipo_movimiento,
+                    cantidad,
+                    costo_unitario,
+                    motivo,
+                    created_at,
+                    variante_id,
+                    variante:articulos_dotacion_variantes(
+                        id,
+                        talla,
+                        articulo:articulos_dotacion(id, nombre, codigo)
+                    )
+                )
+            `)
             .eq('id', id)
             .single();
 

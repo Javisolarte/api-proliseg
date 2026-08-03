@@ -1,4 +1,4 @@
-﻿import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { PqrsfService } from '../pqrsf/pqrsf.service';
 import { GeminiService } from '../ia/gemini.service';
@@ -806,62 +806,78 @@ export class AutoservicioService {
         const supabase = this.supabaseService.getClient();
 
         // 1. Obtener datos del empleado y verificar permiso
-        const { data: empBasic } = await supabase.from('empleados').select('id, nombre_completo').eq('usuario_id', userId).single();
+        const { data: empBasic } = await supabase.from('empleados').select('id, nombre_completo, rol, cargo_oficial, sede_id').eq('usuario_id', userId).single();
         if (!empBasic) throw new NotFoundException('Empleado no encontrado');
 
-        // 2. Verificar turno y subpuesto
-        const { data: turno, error: turnoError } = await supabase
-            .from('turnos')
-            .select(`
-                id, subpuesto_id, empleado_id, fecha, hora_inicio, hora_fin, tipo_turno
-            `)
-            .eq('id', dto.turno_id)
-            .single();
+        // 2. Verificar si existe turno id
+        let turno: any = null;
+        if (dto.turno_id && dto.turno_id > 0) {
+            const { data: tData } = await supabase
+                .from('turnos')
+                .select(`
+                    id, subpuesto_id, empleado_id, fecha, hora_inicio, hora_fin, tipo_turno
+                `)
+                .eq('id', dto.turno_id)
+                .maybeSingle();
 
-        if (turnoError || !turno) throw new NotFoundException('Turno no encontrado');
-        if (turno.empleado_id !== empBasic.id) throw new ForbiddenException('Este turno no te pertenece');
+            if (tData) {
+                if (tData.empleado_id !== empBasic.id) throw new ForbiddenException('Este turno no te pertenece');
+                turno = tData;
+            }
+        }
 
-        // 3. Verificar ventana de tiempo (20 minutos antes)
+        // 3. Verificar ventana de tiempo si tiene turno asignado
         const now = getColombiaTime();
-        const [h, m, s] = (turno.hora_inicio || '00:00:00').split(':');
-        const turnoFechaInicio = new Date(turno.fecha);
-        turnoFechaInicio.setHours(parseInt(h), parseInt(m), parseInt(s || '0'));
+        let observaciones_calculadas = 'Entrada Normal (Oficina/Administrativo/Técnico)';
 
-        const diffMinutos = (turnoFechaInicio.getTime() - now.getTime()) / (1000 * 60);
-        if (diffMinutos > 20) {
-            throw new ForbiddenException('AÃºn no puedes marcar entrada. Se habilita 20 minutos antes del inicio.');
+        if (turno) {
+            const [h, m, s] = (turno.hora_inicio || '00:00:00').split(':');
+            const turnoFechaInicio = new Date(turno.fecha);
+            turnoFechaInicio.setHours(parseInt(h), parseInt(m), parseInt(s || '0'));
+
+            const diffMinutos = (turnoFechaInicio.getTime() - now.getTime()) / (1000 * 60);
+            if (diffMinutos > 20) {
+                throw new ForbiddenException('Aún no puedes marcar entrada. Se habilita 20 minutos antes del inicio.');
+            }
+
+            const minutosTarde = Math.floor((now.getTime() - turnoFechaInicio.getTime()) / (1000 * 60));
+            if (minutosTarde > 0) {
+                observaciones_calculadas = `Llegada tarde: ${minutosTarde} min.`;
+            } else {
+                observaciones_calculadas = 'Entrada Normal.';
+            }
         }
 
         // 4. Validar distancia (1000m)
         let subpuesto: any = null;
-        if (turno.subpuesto_id) {
+        if (turno?.subpuesto_id) {
             const { data } = await supabase.from('subpuestos_trabajo').select('*, puesto:puesto_id(*)').eq('id', turno.subpuesto_id).maybeSingle();
             subpuesto = data;
         }
 
-        const puesto = subpuesto ? (Array.isArray(subpuesto.puesto) ? subpuesto.puesto[0] : subpuesto.puesto) : null;
+        let puesto = subpuesto ? (Array.isArray(subpuesto.puesto) ? subpuesto.puesto[0] : subpuesto.puesto) : null;
+        if (!puesto && empBasic.sede_id) {
+            const { data: sData } = await supabase.from('sedes').select('id, nombre, latitud, longitud').eq('id', empBasic.sede_id).maybeSingle();
+            if (sData) puesto = sData;
+        }
+
         let distancia = 0;
         if (puesto?.latitud && puesto?.longitud && dto.latitud && dto.longitud) {
             distancia = calcularDistancia(parseFloat(dto.latitud), parseFloat(dto.longitud), parseFloat(puesto.latitud), parseFloat(puesto.longitud));
         }
 
-        if (puesto && distancia > 1000) {
-            throw new ForbiddenException(`EstÃ¡s fuera del rango permitido (${Math.round(distancia)}m). MÃ¡ximo 1000m.`);
+        const rolNorm = (empBasic.rol || empBasic.cargo_oficial || '').toString().toLowerCase();
+        const esTecnico = rolNorm === 'tecnico' || rolNorm === 'técnico';
+
+        if (puesto && distancia > 1000 && !esTecnico) {
+            throw new ForbiddenException(`Estás fuera del rango permitido (${Math.round(distancia)}m). Máximo 1000m.`);
         }
 
-        // 5. Preparar observaciones e IA
-        let observaciones_calculadas = '';
-        const minutosTarde = Math.floor((now.getTime() - turnoFechaInicio.getTime()) / (1000 * 60));
-        if (minutosTarde > 0) {
-            observaciones_calculadas = `Llegada tarde: ${minutosTarde} min.`;
-        } else {
-            observaciones_calculadas = 'Entrada Normal.';
-        }
         if (dto.observaciones) observaciones_calculadas += ` Nota: ${dto.observaciones}`;
 
         try {
             const empleadoIA = { nombre: empBasic.nombre_completo };
-            const puestoIA = puesto || { nombre: 'Lugar no especificado' };
+            const puestoIA = puesto || { nombre: 'Itinerario Técnico / Móvil' };
             const iaRes = await analizarAsistenciaIA(this.gemini, empleadoIA, puestoIA, distancia, 'entrada', dto.foto_url);
             observaciones_calculadas += ` | IA: ${iaRes}`;
         } catch (e) {
@@ -870,7 +886,7 @@ export class AutoservicioService {
 
         // 6. Registrar en turnos_asistencia
         const { data: newAsis, error: errAsis } = await supabase.from('turnos_asistencia').insert({
-            turno_id: dto.turno_id,
+            turno_id: dto.turno_id || null,
             empleado_id: empBasic.id,
             hora_entrada: now.toISOString(),
             observaciones: observaciones_calculadas,
@@ -887,20 +903,21 @@ export class AutoservicioService {
         // 7. Insertar en log legacy 'asistencias'
         await supabase.from('asistencias').insert({
             empleado_id: empBasic.id,
-            turno_id: dto.turno_id,
+            turno_id: dto.turno_id || null,
             tipo_marca: 'entrada',
             timestamp: now.toISOString(),
             latitud_entrada: dto.latitud,
             longitud_entrada: dto.longitud,
             registrada_por: userId,
-            evidencia_foto_url: dto.foto_url // Guardar foto en histÃ³rico
+            evidencia_foto_url: dto.foto_url // Guardar foto en histórico
         });
 
-        // 8. Actualizar Turno
-        await supabase.from('turnos').update({ estado_turno: 'parcial' }).eq('id', dto.turno_id);
+        if (dto.turno_id) {
+            await supabase.from('turnos').update({ estado_turno: 'parcial' }).eq('id', dto.turno_id);
+        }
 
         return {
-            message: 'âœ… Entrada registrada con Ã©xito',
+            message: '✅ Entrada registrada con éxito',
             distancia_metros: distancia,
             asistencia_id: newAsis.id
         };
@@ -908,7 +925,7 @@ export class AutoservicioService {
 
     async marcarAsistenciaSalida(userId: number, dto: RegistrarMiAsistenciaSalidaDto) {
         dto.foto_url = await this.ensureAsistenciaFotoUrl(dto.foto_url, (dto as any).foto, userId, dto.turno_id, 'salida');
-        console.log(`ðŸ“¥ [AutoservicioService] Intentando registrar SALIDA para usuario ${userId}:`, {
+        console.log(`📥 [AutoservicioService] Intentando registrar SALIDA para usuario ${userId}:`, {
             turno_id: dto.turno_id,
             asistencia_id: dto.asistencia_id || (dto as any).id,
             lat: dto.latitud,
@@ -918,57 +935,89 @@ export class AutoservicioService {
         const supabase = this.supabaseService.getClient();
 
         // 1. Obtener datos del empleado
-        const { data: empBasic } = await supabase.from('empleados').select('id, nombre_completo').eq('usuario_id', userId).single();
+        const { data: empBasic } = await supabase.from('empleados').select('id, nombre_completo, rol, cargo_oficial, sede_id').eq('usuario_id', userId).single();
         if (!empBasic) throw new NotFoundException('Empleado no encontrado');
 
         // 2. Buscar registro de entrada previo
-        const asisId = dto.asistencia_id || dto.id;
-        if (!asisId) throw new BadRequestException('Debe proporcionar el ID de asistencia (asistencia_id o id)');
+        let asisId = dto.asistencia_id || dto.id;
+        let asistencia: any = null;
 
-        const { data: asistencia, error: asisError } = await supabase
-            .from('turnos_asistencia')
-            .select('*')
-            .eq('id', asisId)
-            .eq('empleado_id', empBasic.id)
-            .single();
-
-        if (asisError || !asistencia) throw new NotFoundException('No se encontrÃ³ registro de entrada para esta salida');
-        if (asistencia.hora_salida) throw new ForbiddenException('La salida ya fue registrada');
-
-        // 3. Verificar turno
-        const { data: turno } = await supabase.from('turnos').select('*').eq('id', dto.turno_id).single();
-        if (!turno) throw new NotFoundException('Turno no encontrado');
-
-        // 4. Validar ventana de salida (10 min antes del fin)
-        const now = getColombiaTime();
-        const [hFin, mFin, sFin] = (turno.hora_fin || '23:59:59').split(':');
-        const turnoFechaFin = new Date(turno.fecha);
-        turnoFechaFin.setHours(parseInt(hFin), parseInt(mFin), parseInt(sFin || '0'));
-        if (turno.hora_inicio && turno.hora_fin && turno.hora_fin < turno.hora_inicio) {
-            turnoFechaFin.setDate(turnoFechaFin.getDate() + 1);
+        if (asisId) {
+            const { data } = await supabase
+                .from('turnos_asistencia')
+                .select('*')
+                .eq('id', asisId)
+                .eq('empleado_id', empBasic.id)
+                .maybeSingle();
+            asistencia = data;
         }
 
-        const minutosParaFin = (turnoFechaFin.getTime() - now.getTime()) / (1000 * 60);
-        if (minutosParaFin > 10) {
-            throw new ForbiddenException('AÃºn es muy temprano para registrar la salida.');
+        if (!asistencia) {
+            const { data } = await supabase
+                .from('turnos_asistencia')
+                .select('*')
+                .eq('empleado_id', empBasic.id)
+                .is('hora_salida', null)
+                .order('hora_entrada', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+            asistencia = data;
+        }
+
+        if (!asistencia) throw new NotFoundException('No se encontró registro de entrada activo para esta salida');
+        if (asistencia.hora_salida) throw new ForbiddenException('La salida ya fue registrada');
+
+        asisId = asistencia.id;
+
+        // 3. Verificar turno si aplica
+        let turno: any = null;
+        const targetTurnoId = dto.turno_id || asistencia.turno_id;
+        if (targetTurnoId) {
+            const { data: tData } = await supabase.from('turnos').select('*').eq('id', targetTurnoId).maybeSingle();
+            turno = tData;
+        }
+
+        const now = getColombiaTime();
+        let obsSalida = 'Salida Normal.';
+
+        if (turno) {
+            const [hFin, mFin, sFin] = (turno.hora_fin || '23:59:59').split(':');
+            const turnoFechaFin = new Date(turno.fecha);
+            turnoFechaFin.setHours(parseInt(hFin), parseInt(mFin), parseInt(sFin || '0'));
+            if (turno.hora_inicio && turno.hora_fin && turno.hora_fin < turno.hora_inicio) {
+                turnoFechaFin.setDate(turnoFechaFin.getDate() + 1);
+            }
+
+            const minutosParaFin = (turnoFechaFin.getTime() - now.getTime()) / (1000 * 60);
+            if (minutosParaFin > 10) {
+                throw new ForbiddenException('Aún es muy temprano para registrar la salida.');
+            }
+            obsSalida = (now.getTime() - turnoFechaFin.getTime()) / (1000 * 60) >= 5 ? 'Salida Tarde.' : 'Salida Normal.';
         }
 
         // 5. Validar distancia
         let subpuesto: any = null;
-        if (turno.subpuesto_id) {
+        if (turno?.subpuesto_id) {
             const { data } = await supabase.from('subpuestos_trabajo').select('*, puesto:puesto_id(*)').eq('id', turno.subpuesto_id).maybeSingle();
             subpuesto = data;
         }
-        const puesto = subpuesto ? (Array.isArray(subpuesto.puesto) ? subpuesto.puesto[0] : subpuesto.puesto) : null;
+        let puesto = subpuesto ? (Array.isArray(subpuesto.puesto) ? subpuesto.puesto[0] : subpuesto.puesto) : null;
+        if (!puesto && empBasic.sede_id) {
+            const { data: sData } = await supabase.from('sedes').select('id, nombre, latitud, longitud').eq('id', empBasic.sede_id).maybeSingle();
+            if (sData) puesto = sData;
+        }
 
         let distancia = 0;
         if (puesto?.latitud && puesto?.longitud && dto.latitud && dto.longitud) {
             distancia = calcularDistancia(parseFloat(dto.latitud), parseFloat(dto.longitud), parseFloat(puesto.latitud), parseFloat(puesto.longitud));
         }
-        if (puesto && distancia > 1000) throw new ForbiddenException(`EstÃ¡s demasiado lejos (${Math.round(distancia)}m). MÃ¡ximo 1000m.`);
+
+        const rolNormSalida = (empBasic.rol || empBasic.cargo_oficial || '').toString().toLowerCase();
+        const esTecnicoSalida = rolNormSalida === 'tecnico' || rolNormSalida === 'técnico';
+
+        if (puesto && distancia > 1000 && !esTecnicoSalida) throw new ForbiddenException(`Estás demasiado lejos (${Math.round(distancia)}m). Máximo 1000m.`);
 
         // 6. Observaciones e IA
-        let obsSalida = (now.getTime() - turnoFechaFin.getTime()) / (1000 * 60) >= 5 ? 'Salida Tarde.' : 'Salida Normal.';
         let nuevasObservaciones = (asistencia.observaciones || '') + ' | Salida: ' + obsSalida;
         if (dto.observaciones) nuevasObservaciones += ` Nota: ${dto.observaciones}`;
 
@@ -994,19 +1043,20 @@ export class AutoservicioService {
         // 8. Log legacy
         await supabase.from('asistencias').insert({
             empleado_id: empBasic.id,
-            turno_id: dto.turno_id,
+            turno_id: targetTurnoId || null,
             tipo_marca: 'salida',
             timestamp: now.toISOString(),
             latitud_salida: dto.latitud,
             longitud_salida: dto.longitud,
             registrada_por: userId,
-            evidencia_foto_url: dto.foto_url // Guardar foto en histÃ³rico
+            evidencia_foto_url: dto.foto_url // Guardar foto en histórico
         });
 
-        // 9. Actualizar Turno
-        await supabase.from('turnos').update({ estado_turno: 'cumplido' }).eq('id', dto.turno_id);
+        if (targetTurnoId) {
+            await supabase.from('turnos').update({ estado_turno: 'cumplido' }).eq('id', targetTurnoId);
+        }
 
-        return { message: 'âœ… Salida registrada con Ã©xito. Turno finalizado.' };
+        return { message: '✅ Salida registrada con éxito.' };
     }
 
     // ------------------------------------------------------------------
