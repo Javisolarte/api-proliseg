@@ -297,11 +297,11 @@ export class EncuestasService {
 
         let puntajeObtenido = 0;
         let esCorrecta: boolean | null = null;
-        const valStr = typeof r.valor_respuesta === 'string' ? r.valor_respuesta : JSON.stringify(r.valor_respuesta);
+        const valStr = (r.valor_respuesta !== null && r.valor_respuesta !== undefined) ? String(r.valor_respuesta) : '';
 
         // Si es escala Likert (1 a 5)
         if (p.tipo_pregunta === 'likert_5') {
-          const match = valStr.match(/^(\d)/);
+          const match = valStr ? valStr.match(/^(\d)/) : null;
           const numVal = match ? parseInt(match[1], 10) : parseInt(valStr, 10) || 0;
           puntajeObtenido = numVal;
           maximoPuntajePosible += 5;
