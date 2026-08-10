@@ -29,6 +29,7 @@ export class EncuestasService {
     try {
       let sql = `
         SELECT e.*,
+               COALESCE(e.creado_por_nombre, 'Administrador SGG') as creado_por_nombre,
                COUNT(DISTINCT r.id)::int as total_respuestas,
                COALESCE(ROUND(AVG(r.porcentaje_favorabilidad), 1), 0)::float as favorabilidad_promedio,
                COALESCE(ROUND(AVG(r.puntaje_total), 1), 0)::float as puntaje_promedio,
@@ -97,6 +98,11 @@ export class EncuestasService {
         throw new BadRequestException('Esta encuesta ya no se encuentra activa.');
       }
 
+      // Verificación de Vigencia / Expiración por fecha o por horas
+      if (encuesta.fecha_cierre && new Date(encuesta.fecha_cierre) < new Date()) {
+        throw new BadRequestException('Esta encuesta ha caducado por vencimiento de vigencia.');
+      }
+
       const sqlPreguntas = `
         SELECT id, orden, dimension, texto_pregunta, tipo_pregunta, opciones, puntos, es_requerida
         FROM encuesta_preguntas 
@@ -126,21 +132,27 @@ export class EncuestasService {
       const requiereId = createDto.requiere_identificacion === true;
       const mostrarAviso = createDto.mostrar_aviso_privacidad !== false;
 
+      const tipoVigencia = createDto.tipo_vigencia || 'indefinido';
+      const horasVigencia = createDto.horas_vigencia || 24;
+      let fechaCierreSql = 'NULL';
+
+      if (tipoVigencia === 'horas') {
+        fechaCierreSql = `CURRENT_TIMESTAMP + INTERVAL '${horasVigencia} hour'`;
+      } else if (tipoVigencia === 'fecha_especifica' && createDto.fecha_cierre) {
+        fechaCierreSql = `'${createDto.fecha_cierre.replace(/'/g, "''")}'::timestamp with time zone`;
+      }
+
       const sqlInsert = `
         INSERT INTO encuestas (
           titulo, descripcion, tipo, token_publico, estado,
           permite_respuestas_anonimas, requiere_identificacion, mostrar_aviso_privacidad,
-          instrucciones, aviso_privacidad, creado_por
+          instrucciones, aviso_privacidad, tipo_vigencia, horas_vigencia, fecha_cierre, creado_por
         ) VALUES (
           '${tituloEsc}', '${descEsc}', '${tipo}', '${token}', 'activa',
           ${permiteAnonimas}, ${requiereId}, ${mostrarAviso},
-          '${instrat(instEsc)}', '${instrat(avisoEsc)}', ${usuarioId || 'NULL'}
+          '${instEsc}', '${avisoEsc}', '${tipoVigencia}', ${tipoVigencia === 'horas' ? horasVigencia : 'NULL'}, ${fechaCierreSql}, ${usuarioId || 'NULL'}
         ) RETURNING *
       `;
-
-      function instrat(str: string) {
-        return str || '';
-      }
 
       const resInsert = await this.execSql(sqlInsert);
       const nuevaEncuesta = resInsert[0];
@@ -169,6 +181,20 @@ export class EncuestasService {
       const estado = updateDto.estado || existente.estado;
       const tipo = updateDto.tipo || existente.tipo;
 
+      const tipoVigencia = updateDto.tipo_vigencia || existente.tipo_vigencia || 'indefinido';
+      const horasVigencia = updateDto.horas_vigencia || existente.horas_vigencia || 24;
+      let fechaCierreSql = 'NULL';
+
+      if (tipoVigencia === 'horas') {
+        fechaCierreSql = `CURRENT_TIMESTAMP + INTERVAL '${horasVigencia} hour'`;
+      } else if (tipoVigencia === 'fecha_especifica' && updateDto.fecha_cierre) {
+        fechaCierreSql = `'${updateDto.fecha_cierre.replace(/'/g, "''")}'::timestamp with time zone`;
+      } else if (tipoVigencia === 'indefinido') {
+        fechaCierreSql = 'NULL';
+      } else if (existente.fecha_cierre) {
+        fechaCierreSql = `'${new Date(existente.fecha_cierre).toISOString()}'::timestamp with time zone`;
+      }
+
       const sqlUpdate = `
         UPDATE encuestas SET
           titulo = '${tituloEsc}',
@@ -180,6 +206,9 @@ export class EncuestasService {
           mostrar_aviso_privacidad = ${updateDto.mostrar_aviso_privacidad !== undefined ? updateDto.mostrar_aviso_privacidad : existente.mostrar_aviso_privacidad},
           instrucciones = '${instEsc}',
           aviso_privacidad = '${avisoEsc}',
+          tipo_vigencia = '${tipoVigencia}',
+          horas_vigencia = ${tipoVigencia === 'horas' ? horasVigencia : 'NULL'},
+          fecha_cierre = ${fechaCierreSql},
           updated_at = CURRENT_TIMESTAMP
         WHERE id = ${id}
         RETURNING *
@@ -298,15 +327,21 @@ export class EncuestasService {
       const cargoEsc = (dto.cargo_respondiente || '').replace(/'/g, "''");
       const sedeEsc = (dto.sede_area || '').replace(/'/g, "''");
 
+      const latVal = (dto.latitud !== undefined && dto.latitud !== null && !isNaN(dto.latitud)) ? dto.latitud : 'NULL';
+      const lngVal = (dto.longitud !== undefined && dto.longitud !== null && !isNaN(dto.longitud)) ? dto.longitud : 'NULL';
+      const ciudadEsc = (dto.ubicacion_ciudad || '').replace(/'/g, "''");
+
       const sqlInsertRespuesta = `
         INSERT INTO encuesta_respuestas (
           encuesta_id, token_publico, nombre_respondiente, documento_respondiente,
           cargo_respondiente, sede_area, acepta_tratamiento_datos, puntaje_total,
-          porcentaje_favorabilidad, nivel_resultado, completada, duracion_segundos
+          porcentaje_favorabilidad, nivel_resultado, completada, duracion_segundos,
+          latitud, longitud, ubicacion_ciudad
         ) VALUES (
           ${encuesta.id}, '${token.replace(/'/g, "''")}', '${nombreEsc}', '${docEsc}',
           '${cargoEsc}', '${sedeEsc}', true, ${totalPuntaje},
-          ${pctFavorabilidad.toFixed(2)}, '${nivelResultado}', true, ${dto.duracion_segundos || 0}
+          ${pctFavorabilidad.toFixed(2)}, '${nivelResultado}', true, ${dto.duracion_segundos || 0},
+          ${latVal}, ${lngVal}, '${ciudadEsc}'
         ) RETURNING id
       `;
 
@@ -451,6 +486,7 @@ export class EncuestasService {
       // Detalle de respuestas recientes con las respuestas a cada pregunta
       const sqlRespuestasRecientes = `
         SELECT r.id, r.nombre_respondiente, r.documento_respondiente, r.cargo_respondiente, r.sede_area,
+               r.latitud, r.longitud, r.ubicacion_ciudad,
                r.puntaje_total, r.porcentaje_favorabilidad, r.nivel_resultado, r.created_at,
                COALESCE(
                  JSON_AGG(

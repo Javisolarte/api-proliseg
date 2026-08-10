@@ -70,6 +70,18 @@ export class CreateEncuestaDto {
   aviso_privacidad?: string;
 
   @IsOptional()
+  @IsString()
+  tipo_vigencia?: string; // 'indefinido', 'horas', 'fecha_especifica'
+
+  @IsOptional()
+  @IsNumber()
+  horas_vigencia?: number;
+
+  @IsOptional()
+  @IsString()
+  fecha_cierre?: string;
+
+  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => PreguntaDto)
@@ -112,6 +124,18 @@ export class SubmitRespuestaDto {
   @IsOptional()
   @IsNumber()
   duracion_segundos?: number;
+
+  @IsOptional()
+  @IsNumber()
+  latitud?: number;
+
+  @IsOptional()
+  @IsNumber()
+  longitud?: number;
+
+  @IsOptional()
+  @IsString()
+  ubicacion_ciudad?: string;
 
   @IsArray()
   @ValidateNested({ each: true })
