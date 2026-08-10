@@ -82,17 +82,17 @@ export class CreateEncuestaDto {
   fecha_cierre?: string;
 
   @IsOptional()
+  @IsString()
+  estado?: string; // 'borrador', 'activa', 'cerrada'
+
+  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => PreguntaDto)
   preguntas?: PreguntaDto[];
 }
 
-export class UpdateEncuestaDto extends CreateEncuestaDto {
-  @IsOptional()
-  @IsString()
-  estado?: string; // 'borrador', 'activa', 'cerrada'
-}
+export class UpdateEncuestaDto extends CreateEncuestaDto {}
 
 export class RespuestaDetalleDto {
   @IsNumber()

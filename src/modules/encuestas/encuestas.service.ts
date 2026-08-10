@@ -60,22 +60,25 @@ export class EncuestasService {
   // 🔹 OBTENER ENCUESTA INDIVIDUAL CON SUS PREGUNTAS
   async findOne(id: number) {
     try {
-      const sqlEncuesta = `SELECT * FROM encuestas WHERE id = ${id}`;
-      const resEncuesta = await this.execSql(sqlEncuesta);
-      if (!resEncuesta || resEncuesta.length === 0) {
+      const supabase = this.supabaseService.getSupabaseAdminClient();
+      const { data: encuesta, error } = await supabase
+        .from('encuestas')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (error || !encuesta) {
         throw new NotFoundException(`Encuesta con ID ${id} no encontrada`);
       }
 
-      const encuesta = resEncuesta[0];
+      const { data: preguntas } = await supabase
+        .from('encuesta_preguntas')
+        .select('*')
+        .eq('encuesta_id', id)
+        .order('orden', { ascending: true })
+        .order('id', { ascending: true });
 
-      const sqlPreguntas = `
-        SELECT * FROM encuesta_preguntas 
-        WHERE encuesta_id = ${id} 
-        ORDER BY orden ASC, id ASC
-      `;
-      const preguntas = await this.execSql(sqlPreguntas);
-      encuesta.preguntas = preguntas;
-
+      encuesta.preguntas = preguntas || [];
       return encuesta;
     } catch (error) {
       this.logger.error(`Error al buscar encuesta ${id}:`, error);
@@ -86,32 +89,25 @@ export class EncuestasService {
   // 🔹 OBTENER ENCUESTA PÚBLICA POR TOKEN (SIN AUTH)
   async findByToken(token: string) {
     try {
-      const tokenEscaped = token.replace(/'/g, "''");
-      const sqlEncuesta = `SELECT * FROM encuestas WHERE token_publico = '${tokenEscaped}'`;
-      const resEncuesta = await this.execSql(sqlEncuesta);
-      if (!resEncuesta || resEncuesta.length === 0) {
-        throw new NotFoundException('Encuesta no encontrada o el enlace ha caducado.');
+      const supabase = this.supabaseService.getSupabaseAdminClient();
+      const { data: encuesta, error } = await supabase
+        .from('encuestas')
+        .select('*')
+        .eq('token_publico', token)
+        .single();
+
+      if (error || !encuesta) {
+        throw new NotFoundException('Encuesta no encontrada o el enlace no es válido.');
       }
 
-      const encuesta = resEncuesta[0];
-      if (encuesta.estado !== 'activa') {
-        throw new BadRequestException('Esta encuesta ya no se encuentra activa.');
-      }
+      const { data: preguntas } = await supabase
+        .from('encuesta_preguntas')
+        .select('id, orden, dimension, texto_pregunta, tipo_pregunta, opciones, puntos, es_requerida')
+        .eq('encuesta_id', encuesta.id)
+        .order('orden', { ascending: true })
+        .order('id', { ascending: true });
 
-      // Verificación de Vigencia / Expiración por fecha o por horas
-      if (encuesta.fecha_cierre && new Date(encuesta.fecha_cierre) < new Date()) {
-        throw new BadRequestException('Esta encuesta ha caducado por vencimiento de vigencia.');
-      }
-
-      const sqlPreguntas = `
-        SELECT id, orden, dimension, texto_pregunta, tipo_pregunta, opciones, puntos, es_requerida
-        FROM encuesta_preguntas 
-        WHERE encuesta_id = ${encuesta.id} 
-        ORDER BY orden ASC, id ASC
-      `;
-      const preguntas = await this.execSql(sqlPreguntas);
-      encuesta.preguntas = preguntas;
-
+      encuesta.preguntas = preguntas || [];
       return encuesta;
     } catch (error) {
       this.logger.error(`Error al buscar encuesta pública por token ${token}:`, error);
@@ -122,40 +118,48 @@ export class EncuestasService {
   // 🔹 CREAR NUEVA ENCUESTA
   async create(createDto: CreateEncuestaDto, usuarioId?: number) {
     try {
+      const supabase = this.supabaseService.getSupabaseAdminClient();
       const token = this.generateToken();
-      const tituloEsc = (createDto.titulo || '').replace(/'/g, "''");
-      const descEsc = (createDto.descripcion || '').replace(/'/g, "''");
-      const instEsc = (createDto.instrucciones || '').replace(/'/g, "''");
-      const avisoEsc = (createDto.aviso_privacidad || '').replace(/'/g, "''");
-      const tipo = createDto.tipo || 'clima_laboral';
-      const permiteAnonimas = createDto.permite_respuestas_anonimas !== false;
-      const requiereId = createDto.requiere_identificacion === true;
-      const mostrarAviso = createDto.mostrar_aviso_privacidad !== false;
 
       const tipoVigencia = createDto.tipo_vigencia || 'indefinido';
       const horasVigencia = createDto.horas_vigencia || 24;
-      let fechaCierreSql = 'NULL';
+      let fechaCierre: string | null = null;
 
       if (tipoVigencia === 'horas') {
-        fechaCierreSql = `CURRENT_TIMESTAMP + INTERVAL '${horasVigencia} hour'`;
+        const d = new Date();
+        d.setHours(d.getHours() + horasVigencia);
+        fechaCierre = d.toISOString();
       } else if (tipoVigencia === 'fecha_especifica' && createDto.fecha_cierre) {
-        fechaCierreSql = `'${createDto.fecha_cierre.replace(/'/g, "''")}'::timestamp with time zone`;
+        fechaCierre = new Date(createDto.fecha_cierre).toISOString();
       }
 
-      const sqlInsert = `
-        INSERT INTO encuestas (
-          titulo, descripcion, tipo, token_publico, estado,
-          permite_respuestas_anonimas, requiere_identificacion, mostrar_aviso_privacidad,
-          instrucciones, aviso_privacidad, tipo_vigencia, horas_vigencia, fecha_cierre, creado_por
-        ) VALUES (
-          '${tituloEsc}', '${descEsc}', '${tipo}', '${token}', 'activa',
-          ${permiteAnonimas}, ${requiereId}, ${mostrarAviso},
-          '${instEsc}', '${avisoEsc}', '${tipoVigencia}', ${tipoVigencia === 'horas' ? horasVigencia : 'NULL'}, ${fechaCierreSql}, ${usuarioId || 'NULL'}
-        ) RETURNING *
-      `;
+      const payloadEncuesta: any = {
+        titulo: createDto.titulo,
+        descripcion: createDto.descripcion || '',
+        tipo: createDto.tipo || 'clima_laboral',
+        token_publico: token,
+        estado: createDto.estado || 'activa',
+        permite_respuestas_anonimas: createDto.permite_respuestas_anonimas !== false,
+        requiere_identificacion: createDto.requiere_identificacion === true,
+        mostrar_aviso_privacidad: createDto.mostrar_aviso_privacidad !== false,
+        instrucciones: createDto.instrucciones || '',
+        aviso_privacidad: createDto.aviso_privacidad || '',
+        tipo_vigencia: tipoVigencia,
+        horas_vigencia: tipoVigencia === 'horas' ? horasVigencia : null,
+        fecha_cierre: fechaCierre,
+        creado_por: usuarioId || null
+      };
 
-      const resInsert = await this.execSql(sqlInsert);
-      const nuevaEncuesta = resInsert[0];
+      const { data: nuevaEncuesta, error } = await supabase
+        .from('encuestas')
+        .insert(payloadEncuesta)
+        .select()
+        .single();
+
+      if (error) {
+        this.logger.error('Error insertando encuesta en Supabase:', error);
+        throw new BadRequestException(`Error de base de datos: ${error.message}`);
+      }
 
       if (createDto.preguntas && createDto.preguntas.length > 0) {
         await this.insertOrUpdatePreguntas(nuevaEncuesta.id, createDto.preguntas);
@@ -171,53 +175,54 @@ export class EncuestasService {
   // 🔹 ACTUALIZAR ENCUESTA
   async update(id: number, updateDto: UpdateEncuestaDto) {
     try {
+      const supabase = this.supabaseService.getSupabaseAdminClient();
       const existente = await this.findOne(id);
       if (!existente) throw new NotFoundException('Encuesta no encontrada');
 
-      const tituloEsc = updateDto.titulo ? updateDto.titulo.replace(/'/g, "''") : existente.titulo.replace(/'/g, "''");
-      const descEsc = updateDto.descripcion !== undefined ? updateDto.descripcion.replace(/'/g, "''") : (existente.descripcion || '').replace(/'/g, "''");
-      const instEsc = updateDto.instrucciones !== undefined ? updateDto.instrucciones.replace(/'/g, "''") : (existente.instrucciones || '').replace(/'/g, "''");
-      const avisoEsc = updateDto.aviso_privacidad !== undefined ? updateDto.aviso_privacidad.replace(/'/g, "''") : (existente.aviso_privacidad || '').replace(/'/g, "''");
-      const estado = updateDto.estado || existente.estado;
-      const tipo = updateDto.tipo || existente.tipo;
-
       const tipoVigencia = updateDto.tipo_vigencia || existente.tipo_vigencia || 'indefinido';
       const horasVigencia = updateDto.horas_vigencia || existente.horas_vigencia || 24;
-      let fechaCierreSql = 'NULL';
+      let fechaCierre: string | null = null;
 
       if (tipoVigencia === 'horas') {
-        fechaCierreSql = `CURRENT_TIMESTAMP + INTERVAL '${horasVigencia} hour'`;
+        const d = new Date();
+        d.setHours(d.getHours() + horasVigencia);
+        fechaCierre = d.toISOString();
       } else if (tipoVigencia === 'fecha_especifica' && updateDto.fecha_cierre) {
-        fechaCierreSql = `'${updateDto.fecha_cierre.replace(/'/g, "''")}'::timestamp with time zone`;
+        fechaCierre = new Date(updateDto.fecha_cierre).toISOString();
       } else if (tipoVigencia === 'indefinido') {
-        fechaCierreSql = 'NULL';
+        fechaCierre = null;
       } else if (existente.fecha_cierre) {
-        fechaCierreSql = `'${new Date(existente.fecha_cierre).toISOString()}'::timestamp with time zone`;
+        fechaCierre = new Date(existente.fecha_cierre).toISOString();
       }
 
-      const sqlUpdate = `
-        UPDATE encuestas SET
-          titulo = '${tituloEsc}',
-          descripcion = '${descEsc}',
-          tipo = '${tipo}',
-          estado = '${estado}',
-          permite_respuestas_anonimas = ${updateDto.permite_respuestas_anonimas !== undefined ? updateDto.permite_respuestas_anonimas : existente.permite_respuestas_anonimas},
-          requiere_identificacion = ${updateDto.requiere_identificacion !== undefined ? updateDto.requiere_identificacion : existente.requiere_identificacion},
-          mostrar_aviso_privacidad = ${updateDto.mostrar_aviso_privacidad !== undefined ? updateDto.mostrar_aviso_privacidad : existente.mostrar_aviso_privacidad},
-          instrucciones = '${instEsc}',
-          aviso_privacidad = '${avisoEsc}',
-          tipo_vigencia = '${tipoVigencia}',
-          horas_vigencia = ${tipoVigencia === 'horas' ? horasVigencia : 'NULL'},
-          fecha_cierre = ${fechaCierreSql},
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = ${id}
-        RETURNING *
-      `;
+      const payloadUpdate: any = {
+        titulo: updateDto.titulo !== undefined ? updateDto.titulo : existente.titulo,
+        descripcion: updateDto.descripcion !== undefined ? updateDto.descripcion : existente.descripcion,
+        tipo: updateDto.tipo !== undefined ? updateDto.tipo : existente.tipo,
+        estado: updateDto.estado !== undefined ? updateDto.estado : existente.estado,
+        permite_respuestas_anonimas: updateDto.permite_respuestas_anonimas !== undefined ? updateDto.permite_respuestas_anonimas : existente.permite_respuestas_anonimas,
+        requiere_identificacion: updateDto.requiere_identificacion !== undefined ? updateDto.requiere_identificacion : existente.requiere_identificacion,
+        mostrar_aviso_privacidad: updateDto.mostrar_aviso_privacidad !== undefined ? updateDto.mostrar_aviso_privacidad : existente.mostrar_aviso_privacidad,
+        instrucciones: updateDto.instrucciones !== undefined ? updateDto.instrucciones : existente.instrucciones,
+        aviso_privacidad: updateDto.aviso_privacidad !== undefined ? updateDto.aviso_privacidad : existente.aviso_privacidad,
+        tipo_vigencia: tipoVigencia,
+        horas_vigencia: tipoVigencia === 'horas' ? horasVigencia : null,
+        fecha_cierre: fechaCierre,
+        updated_at: new Date().toISOString()
+      };
 
-      await this.execSql(sqlUpdate);
+      const { error: errUpdate } = await supabase
+        .from('encuestas')
+        .update(payloadUpdate)
+        .eq('id', id);
+
+      if (errUpdate) {
+        this.logger.error(`Error actualizando encuesta ${id}:`, errUpdate);
+        throw new BadRequestException(`Error actualizando encuesta: ${errUpdate.message}`);
+      }
 
       if (updateDto.preguntas) {
-        await this.execSql(`DELETE FROM encuesta_preguntas WHERE encuesta_id = ${id} RETURNING *`);
+        await supabase.from('encuesta_preguntas').delete().eq('encuesta_id', id);
         await this.insertOrUpdatePreguntas(id, updateDto.preguntas);
       }
 
@@ -230,33 +235,36 @@ export class EncuestasService {
 
   // Helper para insertar preguntas
   private async insertOrUpdatePreguntas(encuestaId: number, preguntas: any[]) {
+    const supabase = this.supabaseService.getSupabaseAdminClient();
     let ordenCount = 1;
-    for (const p of preguntas) {
-      const orden = p.orden || ordenCount++;
-      const dimEsc = p.dimension ? p.dimension.replace(/'/g, "''") : '';
-      const textoEsc = (p.texto_pregunta || '').replace(/'/g, "''");
-      const tipoPreg = p.tipo_pregunta || 'likert_5';
-      const opcionesJson = p.opciones ? JSON.stringify(p.opciones).replace(/'/g, "''") : '[]';
-      const respuestaCorrJson = p.respuesta_correcta !== undefined ? JSON.stringify(p.respuesta_correcta).replace(/'/g, "''") : 'NULL';
-      const puntos = p.puntos || 1;
-      const esReq = p.es_requerida !== false;
+    const rowsToInsert = preguntas.map(p => ({
+      encuesta_id: encuestaId,
+      orden: p.orden || ordenCount++,
+      dimension: p.dimension || '',
+      texto_pregunta: p.texto_pregunta || '',
+      tipo_pregunta: p.tipo_pregunta || 'likert_5',
+      opciones: p.opciones || [],
+      respuesta_correcta: p.respuesta_correcta !== undefined ? p.respuesta_correcta : null,
+      puntos: p.puntos || 1,
+      es_requerida: p.es_requerida !== false
+    }));
 
-      const sql = `
-        INSERT INTO encuesta_preguntas (
-          encuesta_id, orden, dimension, texto_pregunta, tipo_pregunta, opciones, respuesta_correcta, puntos, es_requerida
-        ) VALUES (
-          ${encuestaId}, ${orden}, '${dimEsc}', '${textoEsc}', '${tipoPreg}', '${opcionesJson}'::jsonb, 
-          ${respuestaCorrJson === 'NULL' ? 'NULL' : `'${respuestaCorrJson}'::jsonb`}, ${puntos}, ${esReq}
-        ) RETURNING id
-      `;
-      await this.execSql(sql);
+    const { error } = await supabase.from('encuesta_preguntas').insert(rowsToInsert);
+    if (error) {
+      this.logger.error('Error insertando preguntas de encuesta:', error);
+      throw new BadRequestException(`Error insertando preguntas: ${error.message}`);
     }
   }
 
   // 🔹 ELIMINAR ENCUESTA
   async remove(id: number) {
     try {
-      await this.execSql(`DELETE FROM encuestas WHERE id = ${id} RETURNING id`);
+      const supabase = this.supabaseService.getSupabaseAdminClient();
+      const { error } = await supabase.from('encuestas').delete().eq('id', id);
+      if (error) {
+        this.logger.error(`Error eliminando encuesta ${id}:`, error);
+        throw new BadRequestException(`Error eliminando encuesta: ${error.message}`);
+      }
       return { success: true, message: `Encuesta ${id} eliminada correctamente` };
     } catch (error) {
       this.logger.error(`Error al eliminar encuesta ${id}:`, error);
@@ -267,6 +275,7 @@ export class EncuestasService {
   // 🔹 REGISTRAR RESPUESTA PÚBLICA DE ENCUESTA
   async submitRespuesta(token: string, dto: SubmitRespuestaDto) {
     try {
+      const supabase = this.supabaseService.getSupabaseAdminClient();
       if (!dto.acepta_tratamiento_datos) {
         throw new BadRequestException('Es obligatorio aceptar la Autorización de Tratamiento de Datos Personales para enviar la encuesta.');
       }
@@ -292,13 +301,11 @@ export class EncuestasService {
 
         // Si es escala Likert (1 a 5)
         if (p.tipo_pregunta === 'likert_5') {
-          // Extraer número de 1 a 5 si viene formateado como "4. De acuerdo" o simplemente 4
           const match = valStr.match(/^(\d)/);
           const numVal = match ? parseInt(match[1], 10) : parseInt(valStr, 10) || 0;
           puntajeObtenido = numVal;
           maximoPuntajePosible += 5;
         } else if (p.respuesta_correcta !== null && p.respuesta_correcta !== undefined) {
-          // Si es evaluativo / quiz con respuesta correcta
           const respCorrStr = typeof p.respuesta_correcta === 'string' ? p.respuesta_correcta : JSON.stringify(p.respuesta_correcta);
           esCorrecta = valStr.trim().toLowerCase() === respCorrStr.trim().toLowerCase();
           puntajeObtenido = esCorrecta ? (p.puntos || 1) : 0;
@@ -316,49 +323,55 @@ export class EncuestasService {
         });
       }
 
-      // Calcular % de favorabilidad o aprobación
       const pctFavorabilidad = maximoPuntajePosible > 0 ? (totalPuntaje / maximoPuntajePosible) * 100 : 0;
       let nivelResultado = 'promedio';
       if (pctFavorabilidad >= 85) nivelResultado = 'alto';
       else if (pctFavorabilidad < 70) nivelResultado = 'bajo';
 
-      const nombreEsc = (dto.nombre_respondiente || '').replace(/'/g, "''");
-      const docEsc = (dto.documento_respondiente || '').replace(/'/g, "''");
-      const cargoEsc = (dto.cargo_respondiente || '').replace(/'/g, "''");
-      const sedeEsc = (dto.sede_area || '').replace(/'/g, "''");
+      const payloadRespuesta: any = {
+        encuesta_id: encuesta.id,
+        token_publico: token,
+        nombre_respondiente: dto.nombre_respondiente || '',
+        documento_respondiente: dto.documento_respondiente || '',
+        cargo_respondiente: dto.cargo_respondiente || '',
+        sede_area: dto.sede_area || '',
+        acepta_tratamiento_datos: true,
+        puntaje_total: totalPuntaje,
+        porcentaje_favorabilidad: parseFloat(pctFavorabilidad.toFixed(2)),
+        nivel_resultado: nivelResultado,
+        completada: true,
+        duracion_segundos: dto.duracion_segundos || 0,
+        latitud: dto.latitud !== undefined && dto.latitud !== null && !isNaN(dto.latitud) ? dto.latitud : null,
+        longitud: dto.longitud !== undefined && dto.longitud !== null && !isNaN(dto.longitud) ? dto.longitud : null,
+        ubicacion_ciudad: dto.ubicacion_ciudad || ''
+      };
 
-      const latVal = (dto.latitud !== undefined && dto.latitud !== null && !isNaN(dto.latitud)) ? dto.latitud : 'NULL';
-      const lngVal = (dto.longitud !== undefined && dto.longitud !== null && !isNaN(dto.longitud)) ? dto.longitud : 'NULL';
-      const ciudadEsc = (dto.ubicacion_ciudad || '').replace(/'/g, "''");
+      const { data: resRespuesta, error: errResp } = await supabase
+        .from('encuesta_respuestas')
+        .insert(payloadRespuesta)
+        .select('id')
+        .single();
 
-      const sqlInsertRespuesta = `
-        INSERT INTO encuesta_respuestas (
-          encuesta_id, token_publico, nombre_respondiente, documento_respondiente,
-          cargo_respondiente, sede_area, acepta_tratamiento_datos, puntaje_total,
-          porcentaje_favorabilidad, nivel_resultado, completada, duracion_segundos,
-          latitud, longitud, ubicacion_ciudad
-        ) VALUES (
-          ${encuesta.id}, '${token.replace(/'/g, "''")}', '${nombreEsc}', '${docEsc}',
-          '${cargoEsc}', '${sedeEsc}', true, ${totalPuntaje},
-          ${pctFavorabilidad.toFixed(2)}, '${nivelResultado}', true, ${dto.duracion_segundos || 0},
-          ${latVal}, ${lngVal}, '${ciudadEsc}'
-        ) RETURNING id
-      `;
+      if (errResp) {
+        this.logger.error('Error insertando respuesta de encuesta:', errResp);
+        throw new BadRequestException(`Error registrando respuesta: ${errResp.message}`);
+      }
 
-      const resRespuesta = await this.execSql(sqlInsertRespuesta);
-      const respuestaId = resRespuesta[0].id;
+      const respuestaId = resRespuesta.id;
 
       // Insertar detalles
-      for (const d of respuestasDetalle) {
-        const valJson = JSON.stringify(d.valor_respuesta).replace(/'/g, "''");
-        const sqlDet = `
-          INSERT INTO encuesta_respuesta_detalles (
-            respuesta_id, pregunta_id, valor_respuesta, puntaje_obtenido, es_correcta
-          ) VALUES (
-            ${respuestaId}, ${d.pregunta_id}, '${valJson}'::jsonb, ${d.puntaje_obtenido}, ${d.es_correcta === null ? 'NULL' : d.es_correcta}
-          ) RETURNING id
-        `;
-        await this.execSql(sqlDet);
+      if (respuestasDetalle.length > 0) {
+        const rowsDetalle = respuestasDetalle.map(d => ({
+          respuesta_id: respuestaId,
+          pregunta_id: d.pregunta_id,
+          valor_respuesta: d.valor_respuesta,
+          puntaje_obtenido: d.puntaje_obtenido,
+          es_correcta: d.es_correcta
+        }));
+        const { error: errDet } = await supabase.from('encuesta_respuesta_detalles').insert(rowsDetalle);
+        if (errDet) {
+          this.logger.error('Error insertando detalles de respuesta:', errDet);
+        }
       }
 
       return {
