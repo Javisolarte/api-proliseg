@@ -29,12 +29,13 @@ export class EncuestasService {
     try {
       let sql = `
         SELECT e.*,
-               COALESCE(e.creado_por_nombre, 'Administrador SGG') as creado_por_nombre,
+               COALESCE(u.nombre_completo, e.creado_por_nombre, 'Administrador SGG') as creado_por_nombre,
                COUNT(DISTINCT r.id)::int as total_respuestas,
                COALESCE(ROUND(AVG(r.porcentaje_favorabilidad), 1), 0)::float as favorabilidad_promedio,
                COALESCE(ROUND(AVG(r.puntaje_total), 1), 0)::float as puntaje_promedio,
                COUNT(DISTINCT p.id)::int as cantidad_preguntas
         FROM encuestas e
+        LEFT JOIN usuarios_externos u ON e.creado_por = u.id
         LEFT JOIN encuesta_respuestas r ON e.id = r.encuesta_id AND r.completada = true
         LEFT JOIN encuesta_preguntas p ON e.id = p.encuesta_id
         WHERE 1=1
@@ -47,7 +48,7 @@ export class EncuestasService {
         sql += ` AND e.estado = '${filters.estado}'`;
       }
 
-      sql += ` GROUP BY e.id ORDER BY e.created_at DESC`;
+      sql += ` GROUP BY e.id, u.nombre_completo ORDER BY e.created_at DESC`;
 
       const rows = await this.execSql(sql);
       return rows;
@@ -69,6 +70,21 @@ export class EncuestasService {
 
       if (error || !encuesta) {
         throw new NotFoundException(`Encuesta con ID ${id} no encontrada`);
+      }
+
+      if (encuesta.creado_por && (!encuesta.creado_por_nombre || encuesta.creado_por_nombre === 'Administrador SGG')) {
+        try {
+          const { data: userObj } = await supabase
+            .from('usuarios_externos')
+            .select('nombre_completo')
+            .eq('id', encuesta.creado_por)
+            .single();
+          if (userObj && userObj.nombre_completo) {
+            encuesta.creado_por_nombre = userObj.nombre_completo;
+          }
+        } catch (e) {
+          this.logger.error('Error fetching creator name in findOne:', e);
+        }
       }
 
       const { data: preguntas } = await supabase
@@ -133,6 +149,22 @@ export class EncuestasService {
         fechaCierre = new Date(createDto.fecha_cierre).toISOString();
       }
 
+      let creadoPorNombre = 'Administrador SGG';
+      if (usuarioId) {
+        try {
+          const { data: userObj } = await supabase
+            .from('usuarios_externos')
+            .select('nombre_completo')
+            .eq('id', usuarioId)
+            .single();
+          if (userObj && userObj.nombre_completo) {
+            creadoPorNombre = userObj.nombre_completo;
+          }
+        } catch (e) {
+          this.logger.error('Error fetching creator name:', e);
+        }
+      }
+
       const payloadEncuesta: any = {
         titulo: createDto.titulo,
         descripcion: createDto.descripcion || '',
@@ -147,7 +179,8 @@ export class EncuestasService {
         tipo_vigencia: tipoVigencia,
         horas_vigencia: tipoVigencia === 'horas' ? horasVigencia : null,
         fecha_cierre: fechaCierre,
-        creado_por: usuarioId || null
+        creado_por: usuarioId || null,
+        creado_por_nombre: creadoPorNombre
       };
 
       const { data: nuevaEncuesta, error } = await supabase
@@ -526,7 +559,7 @@ export class EncuestasService {
         WHERE r.encuesta_id = ${id} AND r.completada = true
         GROUP BY r.id
         ORDER BY r.created_at DESC
-        LIMIT 50
+        LIMIT 5000
       `;
       const respuestasRecientes = await this.execSql(sqlRespuestasRecientes);
 
