@@ -285,14 +285,14 @@ export class EncuestasService {
 
       const preguntas = encuesta.preguntas || [];
       const mapaPreguntas = new Map<number, any>();
-      preguntas.forEach((p: any) => mapaPreguntas.set(p.id, p));
+      preguntas.forEach((p: any) => mapaPreguntas.set(Number(p.id), p));
 
       let totalPuntaje = 0;
       let maximoPuntajePosible = 0;
       let respuestasDetalle: any[] = [];
 
       for (const r of dto.respuestas) {
-        const p = mapaPreguntas.get(r.pregunta_id);
+        const p = mapaPreguntas.get(Number(r.pregunta_id));
         if (!p) continue;
 
         let puntajeObtenido = 0;
@@ -305,13 +305,13 @@ export class EncuestasService {
           const numVal = match ? parseInt(match[1], 10) : parseInt(valStr, 10) || 0;
           puntajeObtenido = numVal;
           maximoPuntajePosible += 5;
-        } else if (p.respuesta_correcta !== null && p.respuesta_correcta !== undefined) {
+        } else if (p.respuesta_correcta !== null && p.respuesta_correcta !== undefined && String(p.respuesta_correcta).trim() !== '') {
           const respCorrStr = typeof p.respuesta_correcta === 'string' ? p.respuesta_correcta : JSON.stringify(p.respuesta_correcta);
           esCorrecta = valStr.trim().toLowerCase() === respCorrStr.trim().toLowerCase();
           puntajeObtenido = esCorrecta ? (p.puntos || 1) : 0;
           maximoPuntajePosible += (p.puntos || 1);
         } else {
-          maximoPuntajePosible += (p.puntos || 1);
+          // No evaluable (general / asistencia)
         }
 
         totalPuntaje += puntajeObtenido;
@@ -323,10 +323,16 @@ export class EncuestasService {
         });
       }
 
-      const pctFavorabilidad = maximoPuntajePosible > 0 ? (totalPuntaje / maximoPuntajePosible) * 100 : 0;
-      let nivelResultado = 'promedio';
-      if (pctFavorabilidad >= 85) nivelResultado = 'alto';
-      else if (pctFavorabilidad < 70) nivelResultado = 'bajo';
+      let pctFavorabilidad: number | null = null;
+      let nivelResultado: string | null = null;
+
+      if (maximoPuntajePosible > 0) {
+        const pctRaw = (totalPuntaje / maximoPuntajePosible) * 100;
+        pctFavorabilidad = parseFloat(pctRaw.toFixed(2));
+        nivelResultado = 'promedio';
+        if (pctFavorabilidad >= 85) nivelResultado = 'alto';
+        else if (pctFavorabilidad < 70) nivelResultado = 'bajo';
+      }
 
       const payloadRespuesta: any = {
         encuesta_id: encuesta.id,
@@ -337,7 +343,7 @@ export class EncuestasService {
         sede_area: dto.sede_area || '',
         acepta_tratamiento_datos: true,
         puntaje_total: totalPuntaje,
-        porcentaje_favorabilidad: parseFloat(pctFavorabilidad.toFixed(2)),
+        porcentaje_favorabilidad: pctFavorabilidad,
         nivel_resultado: nivelResultado,
         completada: true,
         duracion_segundos: dto.duracion_segundos || 0,
@@ -379,7 +385,7 @@ export class EncuestasService {
         message: '¡Encuesta registrada exitosamente! Muchas gracias por su valiosa participación.',
         respuesta_id: respuestaId,
         puntaje_total: totalPuntaje,
-        porcentaje_favorabilidad: parseFloat(pctFavorabilidad.toFixed(1)),
+        porcentaje_favorabilidad: pctFavorabilidad !== null ? parseFloat(pctFavorabilidad.toFixed(1)) : null,
         nivel_resultado: nivelResultado
       };
     } catch (error) {
