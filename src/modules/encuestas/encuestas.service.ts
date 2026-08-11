@@ -419,11 +419,7 @@ export class EncuestasService {
         respuesta_id: respuestaId,
         puntaje_total: totalPuntaje,
         porcentaje_favorabilidad: pctFavorabilidad !== null ? parseFloat(pctFavorabilidad.toFixed(1)) : null,
-        nivel_resultado: nivelResultado,
-        debug_preguntas_ids: preguntas.map((p: any) => p.id),
-        debug_mapa_keys: Array.from(mapaPreguntas.keys()),
-        debug_dto_respuestas: dto.respuestas,
-        debug_respuestas_detalle: respuestasDetalle
+        nivel_resultado: nivelResultado
       };
     } catch (error) {
       this.logger.error('Error registrando respuesta pública:', error);

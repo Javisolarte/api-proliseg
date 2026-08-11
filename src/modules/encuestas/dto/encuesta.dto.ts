@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsBoolean, IsArray, IsEnum, ValidateNested, IsNumber } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsArray, IsEnum, ValidateNested, IsNumber, IsDefined } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class PreguntaDto {
@@ -98,6 +98,7 @@ export class RespuestaDetalleDto {
   @IsNumber()
   pregunta_id: number;
 
+  @IsDefined()
   valor_respuesta: any;
 }
 
