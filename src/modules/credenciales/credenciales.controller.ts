@@ -9,13 +9,13 @@ import { CreateCredencialDto, UpdateCredencialDto } from './dto/credenciales.dto
 @ApiTags('Credenciales')
 @Controller()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
-@RequirePermissions('contraseña')
+@RequirePermissions('credenciales', 'contraseña')
 @ApiBearerAuth('JWT-auth')
 export class CredencialesController {
   constructor(private readonly credencialesService: CredencialesService) {}
 
   @Get('credenciales')
-  @RequirePermissions('contraseña')
+  @RequirePermissions('credenciales', 'contraseña')
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Listar todas las credenciales de dispositivos' })
   async findAll(
@@ -27,7 +27,7 @@ export class CredencialesController {
   }
 
   @Get('credenciales/stats')
-  @RequirePermissions('contraseña')
+  @RequirePermissions('credenciales', 'contraseña')
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Estadísticas de credenciales por tipo y estado' })
   async getStats() {
@@ -35,7 +35,7 @@ export class CredencialesController {
   }
 
   @Get('credenciales/:id')
-  @RequirePermissions('contraseña')
+  @RequirePermissions('credenciales', 'contraseña')
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Obtener detalle de credencial (sin contraseña en texto plano)' })
   async findOne(@Param('id') id: string) {
@@ -43,7 +43,7 @@ export class CredencialesController {
   }
 
   @Get('credenciales/:id/revelar')
-  @RequirePermissions('contraseña')
+  @RequirePermissions('credenciales', 'contraseña')
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Revelar contraseña/patrón/PIN descifrado' })
   async reveal(@Param('id') id: string) {
@@ -51,7 +51,7 @@ export class CredencialesController {
   }
 
   @Get('credenciales/:id/historial')
-  @RequirePermissions('contraseña')
+  @RequirePermissions('credenciales', 'contraseña')
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Consultar historial auditor de versiones y cambios anteriores' })
   async getHistorial(@Param('id') id: string) {
@@ -59,7 +59,7 @@ export class CredencialesController {
   }
 
   @Post('credenciales')
-  @RequirePermissions('contraseña')
+  @RequirePermissions('credenciales', 'contraseña')
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Crear nueva credencial de dispositivo' })
   async create(@Body() createDto: CreateCredencialDto, @Req() req: any) {
@@ -68,7 +68,7 @@ export class CredencialesController {
   }
 
   @Put('credenciales/:id')
-  @RequirePermissions('contraseña')
+  @RequirePermissions('credenciales', 'contraseña')
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Actualizar credencial existente' })
   async update(@Param('id') id: string, @Body() updateDto: UpdateCredencialDto, @Req() req: any) {
@@ -77,7 +77,7 @@ export class CredencialesController {
   }
 
   @Delete('credenciales/:id')
-  @RequirePermissions('contraseña')
+  @RequirePermissions('credenciales', 'contraseña')
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Eliminar credencial de dispositivo' })
   async remove(@Param('id') id: string) {
