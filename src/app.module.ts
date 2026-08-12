@@ -111,6 +111,7 @@ import { VerificacionReferenciasModule } from './modules/verificacion-referencia
 // 🆕 New modules - Operations & Maintenance
 import { VisitasTecnicasModule } from './modules/visitas-tecnicas/visitas-tecnicas.module';
 import { EncuestasModule } from './modules/encuestas/encuestas.module';
+import { CredencialesModule } from './modules/credenciales/credenciales.module';
 import { VisitasPreliminareModule } from './modules/visitas-preliminares/visitas-preliminares.module';
 import { InventarioPuestoModule } from './modules/inventario-puesto/inventario-puesto.module';
 import { EntregasInventarioModule } from './modules/entregas-inventario/entregas-inventario.module';
@@ -257,6 +258,7 @@ import { FacturacionModule } from './modules/facturacion/facturacion.module';
     // 🆕 Operations & Maintenance modules
     VisitasTecnicasModule,
     EncuestasModule,
+    CredencialesModule,
     VisitasPreliminareModule,
     InventarioPuestoModule,
     EntregasInventarioModule,
