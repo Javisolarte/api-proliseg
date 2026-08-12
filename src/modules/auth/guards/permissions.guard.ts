@@ -60,21 +60,17 @@ export class PermissionsGuard implements CanActivate {
 
     this.logger.log(`✅ Permisos del usuario: ${userPermissions.join(", ")}`);
 
-    // Verificar que el usuario tenga todos los permisos requeridos
-    // Usando la función helper que soporta permisos granulares
-    const hasAll = requiredPermissions.every((requiredPerm) =>
+    // Verificar que el usuario tenga al menos uno de los permisos requeridos
+    const hasAny = requiredPermissions.some((requiredPerm) =>
       hasPermission(userPermissions, requiredPerm)
     );
 
-    if (!hasAll) {
-      const missingPerms = requiredPermissions.filter(
-        (perm) => !hasPermission(userPermissions, perm)
-      );
+    if (!hasAny) {
       this.logger.warn(
-        `🚫 Usuario no tiene los permisos requeridos. Faltan: ${missingPerms.join(", ")}`
+        `🚫 Usuario no tiene los permisos requeridos. Se requiere alguno de: ${requiredPermissions.join(", ")}`
       );
       throw new ForbiddenException(
-        `No tiene los permisos necesarios para acceder a este recurso. Permisos faltantes: ${missingPerms.join(", ")}`
+        `No tiene los permisos necesarios para acceder a este recurso. Permisos requeridos: ${requiredPermissions.join(", ")}`
       );
     }
 
