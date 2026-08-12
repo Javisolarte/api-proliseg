@@ -92,12 +92,16 @@ export class AuthController {
   /**
    * 👤 PROFILE - Retorna información completa del usuario autenticado
    */
+  @UseGuards(JwtAuthGuard)
   @Get('profile')
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Obtener el perfil completo del usuario autenticado' })
   @ApiResponse({ status: 200, description: 'Perfil obtenido exitosamente' })
   @ApiResponse({ status: 401, description: 'No autorizado o token inválido' })
   async getProfile(@CurrentUser() user: any) {
+    if (!user || !user.id) {
+      throw new BadRequestException('Usuario no autenticado o no encontrado en el token');
+    }
     this.logger.log(`👤 [PROFILE] Solicitado por: ${user?.email || user?.id}`);
 
     try {
