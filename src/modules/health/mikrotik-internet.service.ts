@@ -150,23 +150,30 @@ export class MikrotikInternetService {
           );
 
           const pingResults = Array.isArray(pingResponse.data) ? pingResponse.data : [pingResponse.data];
-          // Filter out summary entries, keep only actual ping results with time
           const pingEntries = pingResults.filter((p: any) => p.time != null && p.time !== '');
 
           if (pingEntries.length > 0) {
             baseResult.tiene_internet = true;
-            // Extraer latencia promedio
+            // Parse MikroTik time (handles "13ms", "13156us", "13.15ms", "00:00:00.013")
             const latencies = pingEntries.map((p: any) => {
-              const timeStr = String(p.time || '0');
-              // MikroTik returns time like "12ms" or "12"
-              return parseFloat(timeStr.replace('ms', '').trim());
+              const timeStr = String(p.time || '0').trim().toLowerCase();
+              if (timeStr.includes('us')) {
+                const usVal = parseFloat(timeStr.replace('us', '').trim());
+                return isNaN(usVal) ? 0 : Math.round(usVal / 1000);
+              }
+              if (timeStr.includes('ms')) {
+                const msVal = parseFloat(timeStr.split('ms')[0].trim());
+                return isNaN(msVal) ? 0 : Math.round(msVal > 5000 ? msVal / 1000 : msVal);
+              }
+              const val = parseFloat(timeStr);
+              if (isNaN(val)) return 0;
+              return val > 5000 ? Math.round(val / 1000) : Math.round(val);
             }).filter((l: number) => !isNaN(l) && l > 0);
 
             if (latencies.length > 0) {
               baseResult.latencia_ms = Math.round(latencies.reduce((a: number, b: number) => a + b, 0) / latencies.length);
             }
           } else {
-            // Ping returned but no responses — no internet
             baseResult.tiene_internet = false;
           }
         } catch (pingErr) {
