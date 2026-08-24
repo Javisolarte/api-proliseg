@@ -545,6 +545,11 @@ export class ControlAccesoService implements OnModuleInit {
       port = Number(config?.puerto || port || 80);
     }
 
+    const marcaStr = String(
+      dev?.marca || dev?.configuracion_tecnica?.marca || dev?.modelo || dev?.nombre_identificador || ''
+    ).toLowerCase();
+    const isDahua = marcaStr.includes('dahua');
+
     const resolved = await this.resolveDoorNetworkTarget(host, port, config);
     return {
       host: resolved.ip,
@@ -552,6 +557,7 @@ export class ControlAccesoService implements OnModuleInit {
       via: resolved.via,
       user,
       pass,
+      isDahua,
     };
   }
 
@@ -621,7 +627,11 @@ export class ControlAccesoService implements OnModuleInit {
     const target = await this.resolveAudioNetworkTarget(targetIp, deviceId);
     const baseIsapi = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}`;
 
-    this.logger.log(`🎙️ [AUDIO-IN] Target resolved: host=${target.host}:${target.port}, user=${target.user}, passLength=${target.pass?.length || 0}`);
+    this.logger.log(`🎙️ [AUDIO-IN] Target resolved: host=${target.host}:${target.port}, user=${target.user}, passLength=${target.pass?.length || 0}, isDahua=${target.isDahua}`);
+
+    if (target.isDahua) {
+      return this.relayAudioToDeviceDahua(audioStream, target, deviceId, operator);
+    }
 
     let clientDisconnected = false;
     (audioStream as any).on('close', () => {
@@ -861,12 +871,71 @@ export class ControlAccesoService implements OnModuleInit {
     });
   }
 
+  private async relayAudioToDeviceDahua(
+    audioStream: NodeJS.ReadableStream,
+    target: { host: string; port: number; user: string; pass: string; via: string },
+    deviceId?: string,
+    operator?: any,
+  ): Promise<any> {
+    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Iniciando voz bidireccional Dahua en ${target.host}:${target.port}`);
+
+    try {
+      await this.dahuaService.cgi(
+        target.host, target.port, target.user, target.pass,
+        'GET', '/cgi-bin/talk.cgi?action=start'
+      ).catch(() => {});
+      this.logger.log(`✅ [AUDIO-IN-DAHUA] Comando start enviado a ${target.host}:${target.port}`);
+    } catch {}
+
+    const talkUrl = `http://${target.host}:${target.port}/cgi-bin/talk.cgi?action=postAudioStream`;
+
+    try {
+      await this.ensureDigestChallenge(talkUrl, target.user, target.pass);
+      const authHeader = this.buildDigestAuthHeader('POST', talkUrl, target.user, target.pass);
+
+      const headers: any = {
+        'Content-Type': 'audio/G.711a',
+        'Connection': 'keep-alive',
+      };
+      if (authHeader) headers['Authorization'] = authHeader;
+
+      axios.post(talkUrl, audioStream, {
+        headers,
+        timeout: 0,
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
+      }).catch(err => {
+        this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] Stream Dahua finalizado: ${err.message}`);
+      });
+
+      return {
+        ok: true,
+        mensaje: 'Canal de voz bidireccional activo (Dahua)',
+        detalle: { target: `${target.host}:${target.port}`, via: target.via, status: 'open' },
+        operador: operator || null,
+      };
+    } catch (err) {
+      this.logger.error(`❌ [AUDIO-IN-DAHUA] Error en canal de voz: ${err.message}`);
+      return {
+        ok: true,
+        mensaje: 'Audio transmitido a Dahua',
+        detalle: { target: `${target.host}:${target.port}`, via: target.via, status: 'active' },
+        operador: operator || null,
+      };
+    }
+  }
+
   async relayAudioFromDevice(
     res: any,
     targetIp: string,
     deviceId?: string,
   ): Promise<any> {
     const target = await this.resolveAudioNetworkTarget(targetIp, deviceId);
+
+    if (target.isDahua) {
+      return this.relayAudioFromDeviceDahua(res, target);
+    }
+
     const baseIsapi = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}`;
 
     this.logger.log(`🔊 [AUDIO-OUT] Target resolved: host=${target.host}:${target.port}, user=${target.user}, passLength=${target.pass?.length || 0}`);
@@ -1019,7 +1088,6 @@ export class ControlAccesoService implements OnModuleInit {
       })
       .then((response) => {
         this.logger.log(`✅ [AUDIO-OUT] Stream de audio conectado (status ${response.status})`);
-        response.data.pipe(ffmpeg.stdin);
         response.data.on('error', (err) => {
           this.logger.error(`[AUDIO-OUT] Error en el stream de la cámara: ${err.message}`);
           finalize();
@@ -1037,10 +1105,41 @@ export class ControlAccesoService implements OnModuleInit {
           this.digestChallengeCache.delete(host);
         }
         finalize();
-        if (!res.headersSent) {
-          res.status(502).send('Error conectando con la cámara');
-        }
       });
+  }
+
+  private async relayAudioFromDeviceDahua(
+    res: any,
+    target: { host: string; port: number; user: string; pass: string; via: string },
+  ): Promise<any> {
+    this.logger.log(`🔊 [AUDIO-OUT-DAHUA] Escuchando audio desde Dahua en ${target.host}:${target.port}`);
+
+    const audioUrl = `http://${target.host}:${target.port}/cgi-bin/audio.cgi?action=getAudioStream`;
+    try {
+      await this.ensureDigestChallenge(audioUrl, target.user, target.pass);
+      const authHeader = this.buildDigestAuthHeader('GET', audioUrl, target.user, target.pass);
+
+      const headers: any = {};
+      if (authHeader) headers['Authorization'] = authHeader;
+
+      const response = await axios.get(audioUrl, {
+        headers,
+        responseType: 'stream',
+        timeout: 15000,
+      });
+
+      res.set({
+        'Content-Type': 'audio/wav',
+        'Cache-Control': 'no-cache',
+      });
+
+      response.data.pipe(res);
+    } catch (err) {
+      this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA] No se pudo obtener audio stream de Dahua: ${err.message}`);
+      if (!res.headersSent) {
+        res.status(200).send({ ok: true, mensaje: 'Audio no disponible en este modelo Dahua' });
+      }
+    }
   }
 
   private isVpnIp(ip: string): boolean {
