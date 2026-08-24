@@ -1722,12 +1722,18 @@ export class ControlAccesoService implements OnModuleInit {
       const rtspPort = rtspTarget.port;
 
       // Detectar la marca para armar la URL RTSP correcta (Sub-Stream)
-      const marca = dev.configuracion_tecnica?.marca?.toLowerCase() || 'hikvision';
+      const marcaStr = String(
+        dev.marca || dev.configuracion_tecnica?.marca || dev.modelo || dev.nombre_identificador || ''
+      ).toLowerCase();
+      const isDahua = marcaStr.includes('dahua');
+
       let rtspPath = '/Streaming/Channels/102'; // Default: Hikvision Sub-Stream
 
-      if (marca === 'dahua') {
+      if (isDahua) {
         rtspPath = '/cam/realmonitor?channel=1&subtype=1'; // Dahua Sub-Stream
-      } else if (marca === 'zkteco' || marca === 'zk') {
+        const httpPort = Number(dev.configuracion_tecnica?.puerto || dev.puerto || 80);
+        this.dahuaService.asegurarFormatoH264(targetIp, httpPort, user, pass).catch(() => {});
+      } else if (marcaStr.includes('zk')) {
         rtspPath = '/live/ch01_1'; // ZKTeco Sub-Stream
       }
 
