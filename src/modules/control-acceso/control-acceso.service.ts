@@ -1286,29 +1286,9 @@ export class ControlAccesoService implements OnModuleInit {
     ip: string, port: number, doorId: number,
     command: string, user: string, pass: string
   ): Promise<{ ok: boolean; mensaje: string; marca: string; detalle?: any }> {
-    const base = `http://${ip}:${port}`;
-    const auth = { username: user, password: pass };
-    const cfg = { auth, timeout: 8000 };
-
-    // Dahua usa la API CGI  /cgi-bin/accessControl.cgi
-    let action: string;
-    switch (command) {
-      case 'abrir':           action = 'openDoor';       break;
-      case 'cerrar':          action = 'closeDoor';      break;
-      case 'siempre-abierta': action = 'alwaysOpenDoor'; break;
-      case 'siempre-cerrada': action = 'alwaysCloseDoor'; break;
-      default: throw new Error(`Comando desconocido: ${command}`);
-    }
-
-    const url = `${base}/cgi-bin/accessControl.cgi?action=${action}&channel=${doorId}`;
-    const resp = await axios.get(url, cfg);
-
-    if (String(resp.data).includes('OK') || resp.status === 200) {
-      this.logger.log(`✅ [DAHUA] Puerta ${doorId} → ${command} en ${ip}:${port}`);
-      return { ok: true, mensaje: `Puerta ${doorId} ejecutó "${command}" correctamente (Dahua)`, marca: 'Dahua' };
-    }
-
-    throw new Error(`Respuesta inesperada de Dahua: ${resp.data}`);
+    const validCommands = ['abrir', 'cerrar', 'siempre-abierta', 'siempre-cerrada'];
+    const cmd = validCommands.includes(command) ? (command as any) : 'abrir';
+    return this.dahuaService.controlPuerta(ip, port, user, pass, cmd, doorId);
   }
 
 
@@ -1924,6 +1904,23 @@ export class ControlAccesoService implements OnModuleInit {
     }
 
     const ip = device.ip_direccion;
+    const isDahua = String(device.marca || device.configuracion_tecnica?.marca || '').toLowerCase().includes('dahua');
+
+    if (isDahua) {
+      const port = Number(device.configuracion_tecnica?.puerto || device.puerto || 80);
+      const user = String(device.credencial_usuario || 'admin');
+      const pass = String(device.credencial_password || '');
+      const personasDahua = await this.dahuaService.listarPersonas(ip, port, user, pass);
+      return {
+        dispositivo_id: device.id,
+        dispositivo: device.nombre_identificador,
+        marca: 'Dahua',
+        total_hardware: personasDahua.length,
+        total_sincronizados: personasDahua.length,
+        personas: personasDahua,
+      };
+    }
+
     const raw = await this.buscarUsuariosHardware(ip, device.id);
     const usuarios = this.extractHardwareUsers(raw);
     const resultados: any[] = [];
