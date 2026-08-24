@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/commo
 import axios from 'axios';
 import { createHash, randomBytes } from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
+import { DahuaService } from './dahua.service';
 
 // ─── Tipos públicos ────────────────────────────────────────────────────────
 
@@ -36,6 +37,11 @@ interface DeviceInfo {
 @Injectable()
 export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DevicePollerService.name);
+
+  constructor(
+    private readonly supabase: SupabaseService,
+    private readonly dahuaService: DahuaService,
+  ) {}
 
   /** Función de emisión WebSocket — inyectada desde el Gateway */
   private emitFn: EmitEventoFn | null = null;
@@ -81,8 +87,6 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
    */
   private readonly fallbackTimers = new Map<string, NodeJS.Timeout>();
   private readonly FALLBACK_POLL_MS = 30_000; // 30s solo para los que no tienen push
-
-  constructor(private readonly supabase: SupabaseService) {}
 
   // ─── Ciclo de vida ────────────────────────────────────────────────────────
 
@@ -139,30 +143,50 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       const device = await this.getDeviceById(dispositivoId || '');
       if (!device) return { ok: false };
 
-      const eventId = `dah_push_${device.id}_${payload?.LocaleTime || Date.now()}`;
+      const eventId = `dah_push_${device.id}_${payload?.LocaleTime || payload?.Time || Date.now()}`;
       if (this.seenEventIds.has(eventId)) return { ok: true, duplicado: true };
       this.markAsSeen(eventId);
 
-      const eventName = String(payload?.EventName || payload?.event || '').toLowerCase();
-      const isCall = eventName.includes('videotalk') || eventName.includes('call') || eventName.includes('bell') || eventName.includes('timbre');
+      // ── Usar el procesador unificado del DahuaService ──────────────────────
+      const parsed = this.dahuaService.procesarPayloadWebhook(payload);
+
+      // Buscar persona en BD si viene con userId
+      let personaId: string | undefined;
+      let nombrePersona = parsed.nombre;
+      if (parsed.userId) {
+        try {
+          const { data: p } = await this.supabase.getClient()
+            .from('personas_gestion_acceso')
+            .select('id, nombre_completo')
+            .eq('documento_identidad', parsed.userId)
+            .maybeSingle();
+          if (p) { personaId = p.id; nombrePersona = p.nombre_completo || nombrePersona; }
+        } catch { /* no bloquear */ }
+      }
 
       const evento: EventoAcceso = {
         dispositivo_id: device.id,
         nombre_dispositivo: device.nombre_identificador,
-        tipo_evento: isCall ? 'llamada' : (payload?.Action === 'Start' ? 'entrada' : 'salida'),
-        metodo_acceso: 'tarjeta',
-        nombre_persona: this.firstText(payload?.Name, payload?.UserName, payload?.User),
-        documento_persona: this.firstText(payload?.UserID, payload?.UserId, payload?.UserNo, payload?.EmployeeNo),
-        codigo_tarjeta: this.firstText(payload?.CardNo, payload?.CardNumber),
-        face_id_ref: this.firstText(payload?.FaceID, payload?.FaceId),
-        foto_evidencia_url: this.firstText(payload?.PictureURL, payload?.PhotoURL, payload?.FaceURL),
-        timestamp: payload?.LocaleTime || new Date().toISOString(),
-        detalles_raw: payload,
+        tipo_evento: parsed.tipoEvento,
+        metodo_acceso: parsed.metodoAcceso,
+        persona_id: personaId,
+        nombre_persona: nombrePersona,
+        documento_persona: parsed.userId,
+        codigo_tarjeta: parsed.codigoTarjeta,
+        foto_evidencia_url: parsed.fotoUrl,
+        timestamp: parsed.timestamp,
+        detalles_raw: { ...payload, _marca: 'dahua', _esLlamada: parsed.esLlamada },
       };
 
       this.saveAndEmit(evento);
-      this.logger.log(`🚪 [Webhook DH] ${evento.tipo_evento} — ${evento.nombre_persona || 'Desconocido'} @ ${device.nombre_identificador}`);
-      return { ok: true };
+
+      if (parsed.esLlamada) {
+        this.logger.log(`📞 [Webhook DH LLAMADA] Llamada entrante en ${device.nombre_identificador}`);
+      } else {
+        this.logger.log(`🚪 [Webhook DH] ${evento.tipo_evento} — ${evento.nombre_persona || 'Desconocido'} @ ${device.nombre_identificador}`);
+      }
+
+      return { ok: true, esLlamada: parsed.esLlamada };
     } catch (err) {
       this.logger.error(`❌ [Webhook DH] ${err.message}`);
       return { ok: false };
@@ -322,18 +346,15 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     this.logger.log(`✅ [EventSystem] Webhook Hikvision registrado → ${device.nombre_identificador} via ${protocolVal} (${ipAddressVal}:${portNoVal})`);
   }
 
-  // ─── Registro de webhook en Dahua CGI ─────────────────────────────────────
+  // ─── Registro de webhook en Dahua ASI — AlarmServer CGI (correcto para ASI7213X) ──
 
   private async registerDahuaWebhook(
     device: DeviceInfo, ip: string, port: number, user: string, pass: string, webhookBase: string
   ) {
-    const base = `http://${ip}:${port}`;
-    const auth = { username: user, password: pass };
-    
     const deviceIp = device.ip_direccion || ip;
     const isVpn = this.isVpnIp(deviceIp);
     const serverPort = process.env.PORT || '3000';
-    
+
     let gatewayIp = '10.8.0.1';
     if (isVpn && deviceIp) {
       const parts = deviceIp.split('.');
@@ -341,6 +362,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         gatewayIp = `${parts[0]}.${parts[1]}.${parts[2]}.1`;
       }
     }
+
     let webhookUrl = isVpn
       ? `http://${gatewayIp}:${serverPort}/api/control-acceso/webhook/evento/dahua/${device.id}`
       : `${webhookBase.replace(/^http:/i, 'https:')}/dahua/${device.id}`;
@@ -352,22 +374,9 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(`⚙️ [EventSystem] Usando webhook_base personalizado para Dahua (${device.nombre_identificador}): ${webhookUrl}`);
     }
 
-    let protocol = 'HTTP';
-    if (webhookUrl.startsWith('https://')) {
-      protocol = 'HTTPS';
-    }
-
-    await this.executeDigestRequest(
-      'GET',
-      `${base}/cgi-bin/configManager.cgi?action=setConfig&VSP_IPAddress[0].Enable=true&VSP_IPAddress[0].Address=${encodeURIComponent(webhookUrl)}&VSP_IPAddress[0].Protocol=${protocol}`,
-      user,
-      pass,
-      null,
-      'application/x-www-form-urlencoded',
-      5000
-    );
-
-    this.logger.log(`✅ [EventSystem] Webhook Dahua registrado → ${device.nombre_identificador} via ${protocol}`);
+    // Usar DahuaService para registrar el AlarmServer (correcto para ASI7213X)
+    await this.dahuaService.registrarWebhook(ip, port, user, pass, webhookUrl, 0);
+    this.logger.log(`✅ [EventSystem] Webhook Dahua (AlarmServer) registrado → ${device.nombre_identificador}: ${webhookUrl}`);
   }
 
   // ─── Fallback Polling (solo si no soporta webhook) ────────────────────────
@@ -384,6 +393,11 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async fallbackPoll(device: DeviceInfo, ip: string, port: number, user: string, pass: string, marca: string) {
+    // ── Separar path según marca — NO mezclar Hikvision ISAPI con Dahua CGI ──
+    if (marca.includes('dahua') || marca.includes('dh')) {
+      return this.fallbackPollDahua(device, ip, port, user, pass);
+    }
+    // ── Hikvision ISAPI (sin cambios) ─────────────────────────────────────────
     try {
       if (!this.latestDbTimestamp.has(device.id)) {
         const { data } = await this.supabase
@@ -437,8 +451,6 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         try {
           const dt = new Date(eventTimeStr);
           if (isNaN(dt.getTime()) || dt.getFullYear() < 2025) {
-            // Si la fecha es inválida o en 1970 (reloj desconfigurado), le asignamos la hora actual
-            // con un desfase incremental en segundos basado en el índice para mantener orden cronológico y evitar exclusión por timestamp
             const now = new Date();
             now.setSeconds(now.getSeconds() - (infos.length - infos.indexOf(info)));
             eventTimeStr = now.toISOString();
@@ -460,6 +472,72 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
         const evento = this.buildEventoAcceso(device, info, eventTimeStr);
         this.saveAndEmit(evento);
+      }
+    } catch (err) { /* offline — silencioso */ }
+  }
+
+  // ─── Fallback Polling exclusivo para Dahua — usa CGI, NO ISAPI ─────────────
+
+  private async fallbackPollDahua(device: DeviceInfo, ip: string, port: number, user: string, pass: string) {
+    try {
+      if (!this.latestDbTimestamp.has(device.id)) {
+        const { data } = await this.supabase
+          .getClient()
+          .from('dispositivos_eventos_historico')
+          .select('timestamp')
+          .eq('dispositivo_id', device.id)
+          .order('timestamp', { ascending: false })
+          .limit(1);
+        const lastTimestamp = data?.[0]?.timestamp || new Date(Date.now() - 5 * 60000).toISOString();
+        this.latestDbTimestamp.set(device.id, lastTimestamp);
+      }
+
+      const desde = new Date(this.latestDbTimestamp.get(device.id) || new Date(Date.now() - 5 * 60000).toISOString());
+      const eventos = await this.dahuaService.obtenerEventos(ip, port, user, pass, desde, 20);
+
+      const lastDbTime = desde.getTime();
+
+      for (const ev of eventos) {
+        const eventTime = new Date(ev.timestamp).getTime();
+        if (eventTime <= lastDbTime) continue;
+
+        const eventId = `dahua_poll_${device.id}_${ev.timestamp}_${ev.userId || ev.codigoTarjeta || Math.random()}`;
+        if (this.seenEventIds.has(eventId)) continue;
+        this.markAsSeen(eventId);
+
+        if (eventTime > new Date(this.latestDbTimestamp.get(device.id) || 0).getTime()) {
+          this.latestDbTimestamp.set(device.id, ev.timestamp);
+        }
+
+        // Buscar persona en BD
+        let personaId: string | undefined;
+        let nombrePersona = ev.nombre;
+        if (ev.userId) {
+          try {
+            const { data: p } = await this.supabase.getClient()
+              .from('personas_gestion_acceso')
+              .select('id, nombre_completo')
+              .eq('documento_identidad', ev.userId)
+              .maybeSingle();
+            if (p) { personaId = p.id; nombrePersona = p.nombre_completo || nombrePersona; }
+          } catch { /* no bloquear */ }
+        }
+
+        const evento: EventoAcceso = {
+          dispositivo_id: device.id,
+          nombre_dispositivo: device.nombre_identificador,
+          tipo_evento: ev.tipo,
+          metodo_acceso: 'tarjeta',
+          persona_id: personaId,
+          nombre_persona: nombrePersona,
+          documento_persona: ev.userId,
+          codigo_tarjeta: ev.codigoTarjeta,
+          timestamp: ev.timestamp,
+          detalles_raw: { ...ev.raw, _marca: 'dahua', _fuente: 'fallback_poll' },
+        };
+
+        this.saveAndEmit(evento);
+        this.logger.debug(`[Dahua Poll] ${evento.tipo_evento} — ${evento.nombre_persona || 'Desconocido'} @ ${device.nombre_identificador}`);
       }
     } catch (err) { /* offline — silencioso */ }
   }
@@ -949,15 +1027,27 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async syncDeviceTime(device: DeviceInfo) {
-    try {
-      const ip = device.ip_direccion;
-      const port = device.configuracion_tecnica?.puertos_mapeados?.mapped_http
-        || device.configuracion_tecnica?.puerto
-        || 80;
-      const user = device.credencial_usuario || 'admin';
-      const pass = device.credencial_password || '';
+    const marca = (device.configuracion_tecnica?.marca || '').toLowerCase();
+    const ip = device.ip_direccion;
+    const port = device.configuracion_tecnica?.puertos_mapeados?.mapped_http
+      || device.configuracion_tecnica?.puerto
+      || 80;
+    const user = device.credencial_usuario || 'admin';
+    const pass = device.credencial_password || '';
 
-      // Obtener hora local de Colombia (UTC-5)
+    // ── Dahua ASI: usar DahuaService (CGI) ────────────────────────────────────
+    if (marca.includes('dahua') || marca.includes('dh')) {
+      try {
+        await this.dahuaService.syncHora(ip, port, user, pass);
+        this.logger.log(`⏰ [EventSystem] Hora sincronizada (Dahua CGI) en ${device.nombre_identificador}`);
+      } catch (err) {
+        this.logger.warn(`⚠️ [EventSystem] No se pudo sincronizar la hora en ${device.nombre_identificador}: ${err.message}`);
+      }
+      return;
+    }
+
+    // ── Hikvision: ISAPI (sin cambios) ────────────────────────────────────────
+    try {
       const d = new Date();
       const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
       const colTime = new Date(utc - (3600000 * 5));

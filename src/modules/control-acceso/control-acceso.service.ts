@@ -6,6 +6,7 @@ import { CreateDispositivoDto, CreatePersonaAccesoDto } from './dto/control-acce
 import { randomBytes, createHash } from 'crypto';
 import { DevicePollerService } from './device-poller.service';
 import { spawn } from 'child_process';
+import { DahuaService } from './dahua.service';
 
 @Injectable()
 export class ControlAccesoService implements OnModuleInit {
@@ -21,6 +22,7 @@ export class ControlAccesoService implements OnModuleInit {
   constructor(
     private readonly supabase: SupabaseService,
     private readonly devicePoller: DevicePollerService,
+    private readonly dahuaService: DahuaService,
   ) { }
 
   async onModuleInit() {
@@ -1867,6 +1869,35 @@ export class ControlAccesoService implements OnModuleInit {
       }
     }
 
+    // Detectar la marca para usar el endpoint correcto de snapshot
+    let marcaSnap = 'hikvision';
+    try {
+      let qSnap = this.supabase.getClient().from('dispositivos_iot').select('configuracion_tecnica');
+      if (id) {
+        qSnap = qSnap.eq('id', id);
+      } else {
+        qSnap = qSnap.eq('ip_direccion', ip);
+      }
+      const { data: devSnap } = await qSnap.maybeSingle();
+      marcaSnap = (devSnap?.configuracion_tecnica?.marca || 'hikvision').toLowerCase();
+    } catch { /* usar hikvision por defecto */ }
+
+    // Dahua ASI usa CGI, Hikvision/genérico usa ISAPI
+    if (marcaSnap.includes('dahua') || marcaSnap.includes('dh')) {
+      const pathDahua = `/cgi-bin/snapshot.cgi?channel=1`;
+      try {
+        this.logger.log(`📸 [SNAPSHOT DAHUA] Capturando desde ${targetIp}:${port}${pathDahua}`);
+        const response = await this.executeDigestAuth('GET', `http://${targetIp}:${port}${pathDahua}`, user, pass, null, 'arraybuffer');
+        return response;
+      } catch (errDahua) {
+        // Fallback: intentar con el path sin parámetros
+        const pathDahua2 = `/cgi-bin/snapshot.cgi`;
+        this.logger.log(`⚠️ [SNAPSHOT DAHUA] Fallback a ${pathDahua2}`);
+        const response2 = await this.executeDigestAuth('GET', `http://${targetIp}:${port}${pathDahua2}`, user, pass, null, 'arraybuffer');
+        return response2;
+      }
+    }
+
     const path = `/ISAPI/Streaming/channels/1/picture`;
     try {
       // 2. Ejecutar petición directa ISAPI usando Digest Auth en la IP resuelta
@@ -3358,6 +3389,14 @@ export class ControlAccesoService implements OnModuleInit {
       throw new Error(`Dispositivo ${dispositivoId} no tiene IP asignada`);
     }
 
+    const marca = (device.configuracion_tecnica?.marca || '').toLowerCase();
+
+    // ── Dahua ASI: usa DahuaService CGI ─────────────────────────────────────────
+    if (marca.includes('dahua') || marca.includes('dh')) {
+      return this.pushPersonaToDeviceDahua(persona, device);
+    }
+
+    // ── Hikvision ISAPI (sin cambios) ────────────────────────────────────────
     await this.crearUsuarioEnHardware(ip, persona.documento_identidad, persona.nombre_completo, dispositivoId);
 
     if (persona.codigo_tarjeta) {
@@ -3393,6 +3432,102 @@ export class ControlAccesoService implements OnModuleInit {
     }
 
     return { ok: true };
+  }
+
+  // ─── Push de persona a Dahua ASI (CGI nativo) ──────────────────────────
+
+  private async pushPersonaToDeviceDahua(persona: any, device: any): Promise<any> {
+    const ip = device.ip_direccion;
+    const port = device.configuracion_tecnica?.puertos_mapeados?.mapped_http
+      || device.configuracion_tecnica?.puerto
+      || 80;
+    const user = device.credencial_usuario || 'admin';
+    const pass = device.credencial_password || '';
+
+    this.logger.log(`👤 [DAHUA SYNC] Sincronizando persona ${persona.documento_identidad} en ${ip}:${port}`);
+
+    // Obtener foto facial de la BD
+    const admin = this.supabase.getSupabaseAdminClient();
+    let fotoBase64: string | undefined;
+
+    const { data: facial } = await admin
+      .from('biometria_facial')
+      .select('foto_url_storage')
+      .eq('persona_id', persona.id)
+      .order('fecha_captura', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const fotoUrl = facial?.foto_url_storage || persona.foto_rostro_url;
+    if (fotoUrl) {
+      try {
+        if (fotoUrl.startsWith('data:image/')) {
+          fotoBase64 = fotoUrl.split(',')[1] || undefined;
+        } else {
+          const resp = await axios.get(fotoUrl, { responseType: 'arraybuffer', timeout: 15000 });
+          fotoBase64 = Buffer.from(resp.data).toString('base64');
+        }
+      } catch (fotoErr) {
+        this.logger.warn(`⚠️ [DAHUA SYNC] No se pudo obtener foto de ${fotoUrl}: ${fotoErr.message}`);
+      }
+    }
+
+    const resultado = await this.dahuaService.agregarPersona(ip, port, user, pass, {
+      userId: String(persona.documento_identidad).slice(0, 20),
+      nombre: persona.nombre_completo || `Usuario ${persona.documento_identidad}`,
+      codigoTarjeta: persona.codigo_tarjeta || undefined,
+      pin: persona.pin_seguridad || undefined,
+      habilitado: persona.activo !== false,
+      fotoBase64,
+    });
+
+    this.logger.log(`✅ [DAHUA SYNC] Persona ${persona.documento_identidad} sincronizada en ${ip}:${port} | Foto: ${resultado.fotoSubida}`);
+    return resultado;
+  }
+
+  // ─── Eliminar persona de Dahua ASI (CGI nativo) ───────────────────────
+
+  /**
+   * Elimina una persona del hardware Dahua.
+   * Equivalente a eliminarUsuarioDeHardware pero para Dahua.
+   */
+  async eliminarPersonaDahuaHardware(ip: string, userId: string, deviceId: string): Promise<void> {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const { data: device } = await admin
+      .from('dispositivos_iot')
+      .select('configuracion_tecnica, credencial_usuario, credencial_password')
+      .eq('id', deviceId)
+      .maybeSingle();
+
+    const port = device?.configuracion_tecnica?.puertos_mapeados?.mapped_http
+      || device?.configuracion_tecnica?.puerto || 80;
+    const user = device?.credencial_usuario || 'admin';
+    const pass = device?.credencial_password || '';
+
+    await this.dahuaService.eliminarPersona(ip, port, user, pass, userId);
+    this.logger.log(`🗑️ [DAHUA SYNC] Persona ${userId} eliminada del dispositivo ${deviceId}`);
+  }
+
+  /**
+   * Lista las personas registradas directamente en el hardware Dahua.
+   * Equivalente a buscarUsuariosHardware pero para Dahua.
+   */
+  async buscarUsuariosDahuaHardware(ip: string, deviceId: string): Promise<any> {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const { data: device } = await admin
+      .from('dispositivos_iot')
+      .select('configuracion_tecnica, credencial_usuario, credencial_password')
+      .eq('id', deviceId)
+      .maybeSingle();
+
+    const port = device?.configuracion_tecnica?.puertos_mapeados?.mapped_http
+      || device?.configuracion_tecnica?.puerto || 80;
+    const user = device?.credencial_usuario || 'admin';
+    const pass = device?.credencial_password || '';
+
+    const personas = await this.dahuaService.listarPersonas(ip, port, user, pass);
+    this.logger.log(`👥 [DAHUA SYNC] ${personas.length} personas encontradas en hardware ${deviceId}`);
+    return personas;
   }
 
   async syncRecopilacionRegistro(registroId: number, dispositivoIds: string[]): Promise<any> {

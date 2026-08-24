@@ -3,10 +3,11 @@ import { ControlAccesoService } from './control-acceso.service';
 import { ControlAccesoController } from './control-acceso.controller';
 import { ResidentesAppController } from './residentes-app.controller';
 import { DevicePollerService } from './device-poller.service';
+import { DahuaService } from './dahua.service';
 
 @Module({
   controllers: [ControlAccesoController, ResidentesAppController],
-  providers: [ControlAccesoService, DevicePollerService],
-  exports: [ControlAccesoService, DevicePollerService],
+  providers: [ControlAccesoService, DevicePollerService, DahuaService],
+  exports: [ControlAccesoService, DevicePollerService, DahuaService],
 })
 export class ControlAccesoModule {}
