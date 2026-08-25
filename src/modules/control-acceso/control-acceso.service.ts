@@ -551,6 +551,11 @@ export class ControlAccesoService implements OnModuleInit {
     const isDahua = marcaStr.includes('dahua');
 
     const resolved = await this.resolveDoorNetworkTarget(host, port, config);
+    // Resolver puerto RTSP mapeado para Dahua audio (via VPN: mapped_rtsp o puerto_rtsp)
+    const mapped = config?.puertos_mapeados || {};
+    const rtspPort = Number(
+      mapped?.mapped_rtsp || config?.puerto_rtsp || mapped?.original_rtsp || 554
+    );
     return {
       host: resolved.ip,
       port: resolved.port,
@@ -558,6 +563,7 @@ export class ControlAccesoService implements OnModuleInit {
       user,
       pass,
       isDahua,
+      rtspPort,
     };
   }
 
@@ -903,15 +909,30 @@ export class ControlAccesoService implements OnModuleInit {
     deviceId?: string,
     operator?: any,
   ): Promise<any> {
-    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Transmitiendo audio desde micrófono a Dahua en ${target.host}:${target.port}`);
+    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Transmitiendo audio a Dahua ${target.host}:${target.port}`);
 
+    // 1. Obtener Digest Auth header usando dahuaService (que maneja 401 automáticamente)
+    let digestAuthHeader: string | null = null;
+    try {
+      // Hacemos una petición de prueba para obtener el challenge Digest
+      await this.dahuaService.cgi(
+        target.host, target.port, target.user, target.pass,
+        'GET', '/cgi-bin/global.cgi?action=getCurrentTime'
+      );
+    } catch {}
+
+    // 2. Iniciar sesión de talk
     try {
       await this.dahuaService.cgi(
         target.host, target.port, target.user, target.pass,
         'GET', '/cgi-bin/talk.cgi?action=start'
-      ).catch(() => {});
-    } catch {}
+      );
+      this.logger.log(`✅ [AUDIO-IN-DAHUA] Talk session iniciada`);
+    } catch (e) {
+      this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] talk start: ${e.message}`);
+    }
 
+    // 3. FFmpeg: convertir WebM/Opus del navegador → PCM alaw 8000Hz mono
     const ffmpeg = spawn('ffmpeg', [
       '-i', 'pipe:0',
       '-f', 'alaw',
@@ -920,44 +941,63 @@ export class ControlAccesoService implements OnModuleInit {
       'pipe:1'
     ]);
 
-    const talkUrl = `http://${target.host}:${target.port}/cgi-bin/talk.cgi?action=postAudioStream`;
+    // 4. Usar http.request nativo (igual que Hikvision) para streaming sin buffering
+    const talkPath = '/cgi-bin/talk.cgi?action=postAudioStream';
+    const talkUrl = `http://${target.host}:${target.port}${talkPath}`;
 
+    // Obtener el Digest auth directamente intentando la URL de talk
     try {
-      await this.ensureDigestChallenge(talkUrl, target.user, target.pass);
-      const authHeader = this.buildDigestAuthHeader('POST', talkUrl, target.user, target.pass);
-
-      const headers: any = {
-        'Content-Type': 'audio/G.711a',
-        'Connection': 'keep-alive',
-      };
-      if (authHeader) headers['Authorization'] = authHeader;
-
-      audioStream.pipe(ffmpeg.stdin);
-
-      axios.post(talkUrl, ffmpeg.stdout, {
-        headers,
-        timeout: 0,
-        maxBodyLength: Infinity,
-        maxContentLength: Infinity,
-      }).catch(err => {
-        this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] Finalizó transmisión de audio: ${err.message}`);
+      const firstReq = await axios.post(talkUrl, Buffer.alloc(0), {
+        timeout: 3000,
+        validateStatus: () => true,
       });
+      if (firstReq.status === 401 && firstReq.headers['www-authenticate']) {
+        const header = firstReq.headers['www-authenticate'];
+        const realmMatch = header.match(/realm="([^"]+)"/);
+        const nonceMatch = header.match(/nonce="([^"]+)"/);
+        const qopMatch = header.match(/qop="([^"]+)"/);
+        if (realmMatch && nonceMatch) {
+          const host = `${target.host}:${target.port}`;
+          this.digestChallengeCache.set(host, {
+            realm: realmMatch[1],
+            nonce: nonceMatch[1],
+            qop: qopMatch ? qopMatch[1] : undefined,
+          });
+        }
+      }
+    } catch {}
 
-      return {
-        ok: true,
-        mensaje: 'Canal de voz bidireccional activo en Dahua',
-        detalle: { target: `${target.host}:${target.port}`, via: target.via, status: 'open' },
-        operador: operator || null,
-      };
-    } catch (err) {
-      this.logger.error(`❌ [AUDIO-IN-DAHUA] Error transmitiendo voz a Dahua: ${err.message}`);
-      return {
-        ok: true,
-        mensaje: 'Audio transmitido a Dahua',
-        detalle: { target: `${target.host}:${target.port}`, via: target.via, status: 'active' },
-        operador: operator || null,
-      };
-    }
+    const authHeader = this.buildDigestAuthHeader('POST', talkUrl, target.user, target.pass);
+
+    const transport = require('http');
+    const req = transport.request({
+      method: 'POST',
+      hostname: target.host,
+      port: target.port,
+      path: talkPath,
+      headers: {
+        ...(authHeader ? { Authorization: authHeader } : {}),
+        'Content-Type': 'application/octet-stream',
+        'Connection': 'keep-alive',
+        'Content-Length': '99999999',
+      },
+    }, (response) => {
+      this.logger.log(`[AUDIO-IN-DAHUA] Dahua respondió: ${response.statusCode}`);
+    });
+
+    req.on('error', (err) => {
+      this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] Conexión finalizada: ${err.message}`);
+    });
+
+    audioStream.pipe(ffmpeg.stdin);
+    ffmpeg.stdout.pipe(req);
+
+    return {
+      ok: true,
+      mensaje: 'Canal de voz bidireccional activo en Dahua',
+      detalle: { target: `${target.host}:${target.port}`, via: target.via, status: 'open' },
+      operador: operator || null,
+    };
   }
 
   async relayAudioFromDevice(
@@ -1149,22 +1189,22 @@ export class ControlAccesoService implements OnModuleInit {
   ): Promise<any> {
     this.logger.log(`🔊 [AUDIO-OUT-DAHUA] Escuchando audio desde Dahua en ${target.host}:${target.port}`);
 
-    const audioUrl = `http://${target.host}:${target.port}/cgi-bin/audio.cgi?action=getAudioStream`;
+    // Extraer audio directamente del stream RTSP del dispositivo Dahua con FFmpeg.
+    // El dispositivo transmite LPCM en el canal RTSP, FFmpeg lo convierte a MP3.
+    const rtspPort = (target as any).rtspPort || 554;
+    const encodedPass = encodeURIComponent(target.pass);
+    const rtspUrl = `rtsp://${target.user}:${encodedPass}@${target.host}:${rtspPort}/cam/realmonitor?channel=1&subtype=0`;
+
     try {
-      await this.ensureDigestChallenge(audioUrl, target.user, target.pass);
-      const authHeader = this.buildDigestAuthHeader('GET', audioUrl, target.user, target.pass);
-
-      const headers: any = {};
-      if (authHeader) headers['Authorization'] = authHeader;
-
       const ffmpeg = spawn('ffmpeg', [
-        '-f', 's16le',
-        '-ar', '8000',
-        '-ac', '1',
-        '-i', 'pipe:0',
-        '-f', 'mp3',
+        '-rtsp_transport', 'tcp',
+        '-i', rtspUrl,
+        '-vn',                    // Sin video, solo audio
+        '-acodec', 'libmp3lame',  // Codificar a MP3
         '-ab', '64k',
         '-ar', '16000',
+        '-ac', '1',
+        '-f', 'mp3',
         'pipe:1'
       ]);
 
@@ -1177,18 +1217,18 @@ export class ControlAccesoService implements OnModuleInit {
         'Access-Control-Allow-Origin': '*',
       });
 
-      const response = await axios.get(audioUrl, {
-        headers,
-        responseType: 'stream',
-        timeout: 0,
+      ffmpeg.stdout.pipe(res);
+
+      ffmpeg.stderr.on('data', (chunk) => {
+        this.logger.debug(`[AUDIO-OUT-DAHUA] ffmpeg: ${chunk.toString().trim()}`);
       });
 
-      response.data.pipe(ffmpeg.stdin);
-      ffmpeg.stdout.pipe(res);
+      ffmpeg.on('error', (err) => {
+        this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA] ffmpeg error: ${err.message}`);
+      });
 
       res.on('close', () => {
         try { ffmpeg.kill('SIGKILL'); } catch {}
-        try { response.data.destroy(); } catch {}
       });
     } catch (err) {
       this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA] No se pudo obtener audio stream de Dahua: ${err.message}`);
@@ -1885,7 +1925,7 @@ export class ControlAccesoService implements OnModuleInit {
       let rtspPath = '/Streaming/Channels/102'; // Default: Hikvision Sub-Stream
 
       if (isDahua) {
-        rtspPath = '/cam/realmonitor?channel=1&subtype=1'; // Dahua Sub-Stream
+        rtspPath = '/cam/realmonitor?channel=1&subtype=0'; // Dahua Main-Stream (menor latencia, GOP controlado)
         const httpPort = Number(dev.configuracion_tecnica?.puerto || dev.puerto || 80);
         this.dahuaService.asegurarFormatoH264(targetIp, httpPort, user, pass).catch(() => {});
       } else if (marcaStr.includes('zk')) {
