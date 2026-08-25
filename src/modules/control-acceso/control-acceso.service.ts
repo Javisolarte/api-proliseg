@@ -1967,20 +1967,10 @@ export class ControlAccesoService implements OnModuleInit {
       marcaSnap = (devSnap?.configuracion_tecnica?.marca || 'hikvision').toLowerCase();
     } catch { /* usar hikvision por defecto */ }
 
-    // Dahua ASI usa CGI, Hikvision/genérico usa ISAPI
+    // Dahua ASI usa CGI nativo, Hikvision/genérico usa ISAPI
     if (marcaSnap.includes('dahua') || marcaSnap.includes('dh')) {
-      const pathDahua = `/cgi-bin/snapshot.cgi?channel=1`;
-      try {
-        this.logger.log(`📸 [SNAPSHOT DAHUA] Capturando desde ${targetIp}:${port}${pathDahua}`);
-        const response = await this.executeDigestAuth('GET', `http://${targetIp}:${port}${pathDahua}`, user, pass, null, 'arraybuffer');
-        return response;
-      } catch (errDahua) {
-        // Fallback: intentar con el path sin parámetros
-        const pathDahua2 = `/cgi-bin/snapshot.cgi`;
-        this.logger.log(`⚠️ [SNAPSHOT DAHUA] Fallback a ${pathDahua2}`);
-        const response2 = await this.executeDigestAuth('GET', `http://${targetIp}:${port}${pathDahua2}`, user, pass, null, 'arraybuffer');
-        return response2;
-      }
+      this.logger.log(`📸 [SNAPSHOT DAHUA] Capturando desde ${targetIp}:${port} vía dahuaService`);
+      return this.dahuaService.getSnapshot(targetIp, port, user, pass);
     }
 
     const path = `/ISAPI/Streaming/channels/1/picture`;
