@@ -886,8 +886,7 @@ export class ControlAccesoService implements OnModuleInit {
       ).catch(() => {});
     } catch {}
 
-    const ffmpegPath = require('ffmpeg-static') || 'ffmpeg';
-    const ffmpeg = spawn(ffmpegPath, [
+    const ffmpeg = spawn('ffmpeg', [
       '-i', 'pipe:0',
       '-f', 'alaw',
       '-ar', '8000',
@@ -1132,18 +1131,39 @@ export class ControlAccesoService implements OnModuleInit {
       const headers: any = {};
       if (authHeader) headers['Authorization'] = authHeader;
 
+      const ffmpeg = spawn('ffmpeg', [
+        '-f', 'alaw',
+        '-ar', '8000',
+        '-ac', '1',
+        '-i', 'pipe:0',
+        '-f', 'mp3',
+        '-ab', '64k',
+        '-ar', '16000',
+        'pipe:1'
+      ]);
+
+      res.set({
+        'Content-Type': 'audio/mpeg',
+        'Transfer-Encoding': 'chunked',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+        'Access-Control-Allow-Origin': '*',
+      });
+
       const response = await axios.get(audioUrl, {
         headers,
         responseType: 'stream',
-        timeout: 15000,
+        timeout: 0,
       });
 
-      res.set({
-        'Content-Type': 'audio/wav',
-        'Cache-Control': 'no-cache',
-      });
+      response.data.pipe(ffmpeg.stdin);
+      ffmpeg.stdout.pipe(res);
 
-      response.data.pipe(res);
+      res.on('close', () => {
+        try { ffmpeg.kill('SIGKILL'); } catch {}
+        try { response.data.destroy(); } catch {}
+      });
     } catch (err) {
       this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA] No se pudo obtener audio stream de Dahua: ${err.message}`);
       if (!res.headersSent) {
