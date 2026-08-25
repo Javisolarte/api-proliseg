@@ -119,6 +119,40 @@ export class DahuaService {
   }
 
   /**
+   * Obtiene un header de Digest Auth válido para un endpoint Dahua.
+   * Hace un request de prueba para provocar el 401 y extraer el challenge.
+   */
+  async getDigestHeader(
+    ip: string, port: number, user: string, pass: string,
+    method: string, path: string,
+  ): Promise<string | null> {
+    const url = `http://${ip}:${port}${path}`;
+    try {
+      // Intentar sin auth para provocar 401
+      await axios.request({ method: 'GET', url, timeout: 5000, validateStatus: () => true }).then(resp => {
+        if (resp.status === 401 && resp.headers['www-authenticate']) {
+          throw { response: resp };
+        }
+      });
+      return null;
+    } catch (err: any) {
+      if (err?.response?.status === 401 || err?.response?.headers?.['www-authenticate']) {
+        const wwwAuth = err.response.headers['www-authenticate'] || '';
+        return this.buildDigestAuth(method.toUpperCase(), url, user, pass, wwwAuth);
+      }
+      // Intento alternativo: usar un endpoint conocido para obtener el challenge
+      try {
+        const probeUrl = `http://${ip}:${port}/cgi-bin/global.cgi?action=getCurrentTime`;
+        const probe = await axios.get(probeUrl, { timeout: 5000, validateStatus: () => true });
+        if (probe.status === 401 && probe.headers['www-authenticate']) {
+          return this.buildDigestAuth(method.toUpperCase(), url, user, pass, probe.headers['www-authenticate']);
+        }
+      } catch {}
+      return null;
+    }
+  }
+
+  /**
    * Captura snapshot del dispositivo Dahua.
    * GET /cgi-bin/snapshot.cgi?channel=1
    * Retorna el buffer de la imagen JPEG.

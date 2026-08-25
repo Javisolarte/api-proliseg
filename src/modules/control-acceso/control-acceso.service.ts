@@ -911,17 +911,7 @@ export class ControlAccesoService implements OnModuleInit {
   ): Promise<any> {
     this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Transmitiendo audio a Dahua ${target.host}:${target.port}`);
 
-    // 1. Obtener Digest Auth header usando dahuaService (que maneja 401 automáticamente)
-    let digestAuthHeader: string | null = null;
-    try {
-      // Hacemos una petición de prueba para obtener el challenge Digest
-      await this.dahuaService.cgi(
-        target.host, target.port, target.user, target.pass,
-        'GET', '/cgi-bin/global.cgi?action=getCurrentTime'
-      );
-    } catch {}
-
-    // 2. Iniciar sesión de talk
+    // 1. Iniciar sesión de talk en el Dahua
     try {
       await this.dahuaService.cgi(
         target.host, target.port, target.user, target.pass,
@@ -932,7 +922,7 @@ export class ControlAccesoService implements OnModuleInit {
       this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] talk start: ${e.message}`);
     }
 
-    // 3. FFmpeg: convertir WebM/Opus del navegador → PCM alaw 8000Hz mono
+    // 2. FFmpeg: convertir WebM/Opus del navegador → PCM alaw 8000Hz mono (G.711A)
     const ffmpeg = spawn('ffmpeg', [
       '-i', 'pipe:0',
       '-f', 'alaw',
@@ -941,34 +931,16 @@ export class ControlAccesoService implements OnModuleInit {
       'pipe:1'
     ]);
 
-    // 4. Usar http.request nativo (igual que Hikvision) para streaming sin buffering
+    // 3. Obtener Digest Auth usando dahuaService (maneja 401 correctamente)
     const talkPath = '/cgi-bin/talk.cgi?action=postAudioStream';
-    const talkUrl = `http://${target.host}:${target.port}${talkPath}`;
+    const authHeader = await this.dahuaService.getDigestHeader(
+      target.host, target.port, target.user, target.pass,
+      'POST', talkPath,
+    );
 
-    // Obtener el Digest auth directamente intentando la URL de talk
-    try {
-      const firstReq = await axios.post(talkUrl, Buffer.alloc(0), {
-        timeout: 3000,
-        validateStatus: () => true,
-      });
-      if (firstReq.status === 401 && firstReq.headers['www-authenticate']) {
-        const header = firstReq.headers['www-authenticate'];
-        const realmMatch = header.match(/realm="([^"]+)"/);
-        const nonceMatch = header.match(/nonce="([^"]+)"/);
-        const qopMatch = header.match(/qop="([^"]+)"/);
-        if (realmMatch && nonceMatch) {
-          const host = `${target.host}:${target.port}`;
-          this.digestChallengeCache.set(host, {
-            realm: realmMatch[1],
-            nonce: nonceMatch[1],
-            qop: qopMatch ? qopMatch[1] : undefined,
-          });
-        }
-      }
-    } catch {}
+    this.logger.log(`[AUDIO-IN-DAHUA] Digest auth para talk: ${authHeader ? 'OK' : 'Sin auth'}`);
 
-    const authHeader = this.buildDigestAuthHeader('POST', talkUrl, target.user, target.pass);
-
+    // 4. Usar http.request nativo para streaming sin buffering (igual que Hikvision)
     const transport = require('http');
     const req = transport.request({
       method: 'POST',
@@ -983,6 +955,9 @@ export class ControlAccesoService implements OnModuleInit {
       },
     }, (response) => {
       this.logger.log(`[AUDIO-IN-DAHUA] Dahua respondió: ${response.statusCode}`);
+      if (response.statusCode === 401) {
+        this.logger.error(`❌ [AUDIO-IN-DAHUA] Autenticación rechazada (401)`);
+      }
     });
 
     req.on('error', (err) => {
@@ -1189,18 +1164,27 @@ export class ControlAccesoService implements OnModuleInit {
   ): Promise<any> {
     this.logger.log(`🔊 [AUDIO-OUT-DAHUA] Escuchando audio desde Dahua en ${target.host}:${target.port}`);
 
-    // Extraer audio directamente del stream RTSP del dispositivo Dahua con FFmpeg.
-    // El dispositivo transmite LPCM en el canal RTSP, FFmpeg lo convierte a MP3.
-    const rtspPort = (target as any).rtspPort || 554;
-    const encodedPass = encodeURIComponent(target.pass);
-    const rtspUrl = `rtsp://${target.user}:${encodedPass}@${target.host}:${rtspPort}/cam/realmonitor?channel=1&subtype=0`;
+    const audioPath = '/cgi-bin/audio.cgi?action=getAudioStream';
 
     try {
+      // Obtener Digest Auth válido usando dahuaService (maneja 401 correctamente para Dahua)
+      const authHeader = await this.dahuaService.getDigestHeader(
+        target.host, target.port, target.user, target.pass,
+        'GET', audioPath,
+      );
+
+      this.logger.log(`[AUDIO-OUT-DAHUA] Digest auth: ${authHeader ? 'OK' : 'Sin auth'}`);
+
+      const headers: any = {};
+      if (authHeader) headers['Authorization'] = authHeader;
+
+      // FFmpeg: El Dahua transmite audio G.711A (alaw) configurado vía asegurarFormatoH264
       const ffmpeg = spawn('ffmpeg', [
-        '-rtsp_transport', 'tcp',
-        '-i', rtspUrl,
-        '-vn',                    // Sin video, solo audio
-        '-acodec', 'libmp3lame',  // Codificar a MP3
+        '-f', 'alaw',        // Formato de entrada: G.711A (alaw)
+        '-ar', '8000',        // Sample rate: 8kHz (estándar G.711)
+        '-ac', '1',           // Mono
+        '-i', 'pipe:0',
+        '-acodec', 'libmp3lame',
         '-ab', '64k',
         '-ar', '16000',
         '-ac', '1',
@@ -1217,6 +1201,17 @@ export class ControlAccesoService implements OnModuleInit {
         'Access-Control-Allow-Origin': '*',
       });
 
+      // Conectar al stream de audio del Dahua vía HTTP con Digest Auth
+      const audioUrl = `http://${target.host}:${target.port}${audioPath}`;
+      const response = await axios.get(audioUrl, {
+        headers,
+        responseType: 'stream',
+        timeout: 0,
+      });
+
+      this.logger.log(`🔊 [AUDIO-OUT-DAHUA] Stream de audio conectado: status=${response.status}, content-type=${response.headers['content-type']}`);
+
+      response.data.pipe(ffmpeg.stdin);
       ffmpeg.stdout.pipe(res);
 
       ffmpeg.stderr.on('data', (chunk) => {
@@ -1229,6 +1224,7 @@ export class ControlAccesoService implements OnModuleInit {
 
       res.on('close', () => {
         try { ffmpeg.kill('SIGKILL'); } catch {}
+        try { response.data.destroy(); } catch {}
       });
     } catch (err) {
       this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA] No se pudo obtener audio stream de Dahua: ${err.message}`);
