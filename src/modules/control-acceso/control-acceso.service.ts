@@ -575,6 +575,10 @@ export class ControlAccesoService implements OnModuleInit {
     const host = new URL(url).host;
     if (this.digestChallengeCache.has(host)) return;
 
+    if (url.includes('/cgi-bin/')) {
+      return this.ensureDahuaDigestChallengeHost(host, user, pass);
+    }
+
     try {
       await this.executeDigestAuthRequest(
         'GET',
@@ -586,8 +590,30 @@ export class ControlAccesoService implements OnModuleInit {
         5000,
       );
     } catch {
-      // El objetivo aquí es calentar el cache del digest; si falla,
-      // la llamada principal reportará el error real.
+      await this.ensureDahuaDigestChallengeHost(host, user, pass);
+    }
+  }
+
+  private async ensureDahuaDigestChallengeHost(host: string, user: string, pass: string): Promise<void> {
+    if (this.digestChallengeCache.has(host)) return;
+
+    try {
+      await axios.get(`http://${host}/cgi-bin/global.cgi?action=getCurrentTime`, { timeout: 4000 });
+    } catch (err) {
+      if (err.response && err.response.headers && err.response.headers['www-authenticate']) {
+        const header = err.response.headers['www-authenticate'];
+        const realmMatch = header.match(/realm="([^"]+)"/);
+        const nonceMatch = header.match(/nonce="([^"]+)"/);
+        const qopMatch = header.match(/qop="([^"]+)"/);
+        if (realmMatch && nonceMatch) {
+          this.digestChallengeCache.set(host, {
+            realm: realmMatch[1],
+            nonce: nonceMatch[1],
+            qop: qopMatch ? qopMatch[1] : undefined,
+          });
+          this.logger.log(`🔑 [DAHUA DIGEST] Nonce obtenido para ${host}: ${nonceMatch[1]}`);
+        }
+      }
     }
   }
 
@@ -1132,7 +1158,7 @@ export class ControlAccesoService implements OnModuleInit {
       if (authHeader) headers['Authorization'] = authHeader;
 
       const ffmpeg = spawn('ffmpeg', [
-        '-f', 'alaw',
+        '-f', 's16le',
         '-ar', '8000',
         '-ac', '1',
         '-i', 'pipe:0',
