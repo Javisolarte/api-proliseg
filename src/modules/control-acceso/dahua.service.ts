@@ -97,7 +97,7 @@ export class DahuaService {
   }
 
   /**
-   * Configura la compresión de video del Dahua en H.264 (necesario para compatibilidad WebRTC HTML5 en navegadores).
+   * Configura la compresión de video del Dahua en H.264 y audio en G.711A (necesario para compatibilidad WebRTC HTML5 en navegadores).
    * GET /cgi-bin/configManager.cgi?action=setConfig&Encode[0].MainFormat[0].Video.Compression=H.264...
    */
   async asegurarFormatoH264(ip: string, port: number, user: string, pass: string): Promise<void> {
@@ -106,11 +106,13 @@ export class DahuaService {
         'action=setConfig',
         'Encode[0].MainFormat[0].Video.Compression=H.264',
         'Encode[0].ExtraFormat[0].Video.Compression=H.264',
+        'Encode[0].MainFormat[0].Audio.Compression=G.711A',
+        'Encode[0].ExtraFormat[0].Audio.Compression=G.711A',
       ].join('&');
       await this.cgi(ip, port, user, pass, 'GET', `/cgi-bin/configManager.cgi?${query}`);
-      this.logger.log(`📹 [DAHUA ENCODE] Formato H.264 configurado en ${ip}:${port}`);
+      this.logger.log(`📹 [DAHUA ENCODE] Formato H.264 + Audio G.711A configurado en ${ip}:${port}`);
     } catch (err) {
-      this.logger.warn(`⚠️ [DAHUA ENCODE] No se pudo forzar H.264 vía CGI: ${err.message}`);
+      this.logger.warn(`⚠️ [DAHUA ENCODE] No se pudo forzar H.264/G.711A vía CGI: ${err.message}`);
     }
   }
 
