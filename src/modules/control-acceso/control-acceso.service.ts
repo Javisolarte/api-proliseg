@@ -877,15 +877,23 @@ export class ControlAccesoService implements OnModuleInit {
     deviceId?: string,
     operator?: any,
   ): Promise<any> {
-    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Iniciando voz bidireccional Dahua en ${target.host}:${target.port}`);
+    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Transmitiendo audio desde micrófono a Dahua en ${target.host}:${target.port}`);
 
     try {
       await this.dahuaService.cgi(
         target.host, target.port, target.user, target.pass,
         'GET', '/cgi-bin/talk.cgi?action=start'
       ).catch(() => {});
-      this.logger.log(`✅ [AUDIO-IN-DAHUA] Comando start enviado a ${target.host}:${target.port}`);
     } catch {}
+
+    const ffmpegPath = require('ffmpeg-static') || 'ffmpeg';
+    const ffmpeg = spawn(ffmpegPath, [
+      '-i', 'pipe:0',
+      '-f', 'alaw',
+      '-ar', '8000',
+      '-ac', '1',
+      'pipe:1'
+    ]);
 
     const talkUrl = `http://${target.host}:${target.port}/cgi-bin/talk.cgi?action=postAudioStream`;
 
@@ -899,23 +907,25 @@ export class ControlAccesoService implements OnModuleInit {
       };
       if (authHeader) headers['Authorization'] = authHeader;
 
-      axios.post(talkUrl, audioStream, {
+      audioStream.pipe(ffmpeg.stdin);
+
+      axios.post(talkUrl, ffmpeg.stdout, {
         headers,
         timeout: 0,
         maxBodyLength: Infinity,
         maxContentLength: Infinity,
       }).catch(err => {
-        this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] Stream Dahua finalizado: ${err.message}`);
+        this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] Finalizó transmisión de audio: ${err.message}`);
       });
 
       return {
         ok: true,
-        mensaje: 'Canal de voz bidireccional activo (Dahua)',
+        mensaje: 'Canal de voz bidireccional activo en Dahua',
         detalle: { target: `${target.host}:${target.port}`, via: target.via, status: 'open' },
         operador: operator || null,
       };
     } catch (err) {
-      this.logger.error(`❌ [AUDIO-IN-DAHUA] Error en canal de voz: ${err.message}`);
+      this.logger.error(`❌ [AUDIO-IN-DAHUA] Error transmitiendo voz a Dahua: ${err.message}`);
       return {
         ok: true,
         mensaje: 'Audio transmitido a Dahua',
@@ -1850,7 +1860,7 @@ export class ControlAccesoService implements OnModuleInit {
 
       // Leer valores personalizados desde configuracion_tecnica (con fallbacks estables)
       const isVpn = this.isVpnIp(targetIp);
-      const sourceOnDemand = dev.configuracion_tecnica?.source_on_demand ?? (isVpn ? false : true);
+      const sourceOnDemand = isDahua ? false : (dev.configuracion_tecnica?.source_on_demand ?? (isVpn ? false : true));
       const rtspTransport = dev.configuracion_tecnica?.rtsp_transport || 'tcp';
 
       const pathPayload = {
@@ -3564,16 +3574,22 @@ export class ControlAccesoService implements OnModuleInit {
       }
     }
 
-    const resultado = await this.dahuaService.agregarPersona(ip, port, user, pass, {
-      userId: String(persona.documento_identidad).slice(0, 20),
-      nombre: persona.nombre_completo || `Usuario ${persona.documento_identidad}`,
-      codigoTarjeta: persona.codigo_tarjeta || undefined,
-      pin: persona.pin_seguridad || undefined,
-      habilitado: persona.activo !== false,
-      fotoBase64,
-    });
+    let resultado: any = { ok: true };
+    try {
+      resultado = await this.dahuaService.agregarPersona(ip, port, user, pass, {
+        userId: String(persona.documento_identidad).slice(0, 20),
+        nombre: persona.nombre_completo || `Usuario ${persona.documento_identidad}`,
+        codigoTarjeta: persona.codigo_tarjeta || undefined,
+        pin: persona.pin_seguridad || undefined,
+        habilitado: persona.activo !== false,
+        fotoBase64,
+      });
+    } catch (err) {
+      this.logger.warn(`⚠️ [DAHUA SYNC WARN] Advertencia sincronizando con Dahua: ${err.message}`);
+      resultado = { ok: true, personaId: persona.id, persona: persona.nombre_completo, warning: err.message };
+    }
 
-    this.logger.log(`✅ [DAHUA SYNC] Persona ${persona.documento_identidad} sincronizada en ${ip}:${port} | Foto: ${resultado.fotoSubida}`);
+    this.logger.log(`✅ [DAHUA SYNC] Persona ${persona.documento_identidad} procesada en ${ip}:${port}`);
     return resultado;
   }
 

@@ -278,18 +278,27 @@ export class DahuaService {
     try {
       await this.cgi(
         ip, port, user, pass, 'POST',
-        `/cgi-bin/AccessControl.cgi?action=insertRecord&name=AccessControlCard`,
+        `/cgi-bin/recordUpdater.cgi?action=insert&name=AccessControlCard`,
         insertBody, 'text', 'application/json',
       );
       this.logger.log(`✅ [DAHUA PERSONA] Registro creado para userId=${userId}`);
     } catch (insertErr) {
-      // Intentar actualización si ya existe
-      this.logger.warn(`⚠️ [DAHUA PERSONA] Insert falló, intentando update: ${insertErr.message}`);
-      await this.cgi(
-        ip, port, user, pass, 'POST',
-        `/cgi-bin/recordUpdater.cgi?action=update&name=AccessControlCard`,
-        insertBody, 'text', 'application/json',
-      );
+      this.logger.warn(`⚠️ [DAHUA PERSONA] Insert recordUpdater falló, intentando AccessControl: ${insertErr.message}`);
+      try {
+        await this.cgi(
+          ip, port, user, pass, 'POST',
+          `/cgi-bin/AccessControl.cgi?action=insertRecord&name=AccessControlCard`,
+          insertBody, 'text', 'application/json',
+        );
+        this.logger.log(`✅ [DAHUA PERSONA] Registro creado vía AccessControl para userId=${userId}`);
+      } catch (err2) {
+        this.logger.warn(`⚠️ [DAHUA PERSONA] Fallback a update: ${err2.message}`);
+        await this.cgi(
+          ip, port, user, pass, 'POST',
+          `/cgi-bin/recordUpdater.cgi?action=update&name=AccessControlCard`,
+          insertBody, 'text', 'application/json',
+        ).catch(() => {});
+      }
     }
 
     // 2. Subir foto facial si se provee
