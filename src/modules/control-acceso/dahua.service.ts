@@ -106,13 +106,15 @@ export class DahuaService {
         'action=setConfig',
         'Encode[0].MainFormat[0].Video.Compression=H.264',
         'Encode[0].ExtraFormat[0].Video.Compression=H.264',
+        'Encode[0].MainFormat[0].Video.GOP=25',
+        'Encode[0].ExtraFormat[0].Video.GOP=25',
         'Encode[0].MainFormat[0].Audio.Compression=G.711A',
         'Encode[0].ExtraFormat[0].Audio.Compression=G.711A',
       ].join('&');
       await this.cgi(ip, port, user, pass, 'GET', `/cgi-bin/configManager.cgi?${query}`);
-      this.logger.log(`📹 [DAHUA ENCODE] Formato H.264 + Audio G.711A configurado en ${ip}:${port}`);
+      this.logger.log(`📹 [DAHUA ENCODE] Formato H.264 (GOP=25) + Audio G.711A configurado en ${ip}:${port}`);
     } catch (err) {
-      this.logger.warn(`⚠️ [DAHUA ENCODE] No se pudo forzar H.264/G.711A vía CGI: ${err.message}`);
+      this.logger.warn(`⚠️ [DAHUA ENCODE] No se pudo forzar H.264/GOP/G.711A vía CGI: ${err.message}`);
     }
   }
 

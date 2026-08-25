@@ -365,7 +365,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
     let webhookUrl = isVpn
       ? `http://${gatewayIp}:${serverPort}/api/control-acceso/webhook/evento/dahua/${device.id}`
-      : `${webhookBase.replace(/^http:/i, 'https:')}/dahua/${device.id}`;
+      : `https://api.proliseg.com/api/control-acceso/webhook/evento/dahua/${device.id}`;
 
     // Permitir personalizar el webhook desde configuracion_tecnica
     const customWebhookBase = device.configuracion_tecnica?.webhook_base;
