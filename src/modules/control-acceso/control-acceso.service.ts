@@ -911,18 +911,17 @@ export class ControlAccesoService implements OnModuleInit {
   ): Promise<any> {
     this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Transmitiendo audio a Dahua ${target.host}:${target.port}`);
 
-    // 1. Iniciar sesión de talk en el Dahua
-    try {
-      await this.dahuaService.cgi(
-        target.host, target.port, target.user, target.pass,
-        'GET', '/cgi-bin/talk.cgi?action=start'
-      );
-      this.logger.log(`✅ [AUDIO-IN-DAHUA] Talk session iniciada`);
-    } catch (e) {
-      this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] talk start: ${e.message}`);
-    }
+    const talkPath = '/cgi-bin/audio.cgi?action=postAudioStream';
+    const deviceHost = `${target.host}:${target.port}`;
+    const talkUrl = `http://${deviceHost}${talkPath}`;
 
-    // 2. FFmpeg: convertir WebM/Opus del navegador → PCM alaw 8000Hz mono (G.711A)
+    // 1. Calentar y asegurar Digest challenge con Dahua
+    await this.ensureDigestChallenge(talkUrl, target.user, target.pass);
+    const authHeader = this.buildDigestAuthHeader('POST', talkUrl, target.user, target.pass);
+
+    this.logger.log(`[AUDIO-IN-DAHUA] Digest auth header: ${authHeader ? 'OK' : 'No challenge'}`);
+
+    // 2. FFmpeg: convertir WebM/Opus del navegador → PCM G.711A 8000Hz mono con ganancia
     const ffmpeg = spawn('ffmpeg', [
       '-hide_banner',
       '-loglevel', 'warning',
@@ -934,22 +933,13 @@ export class ControlAccesoService implements OnModuleInit {
       '-ac', '1',
       '-ar', '8000',
       '-c:a', 'pcm_alaw',
-      '-af', 'volume=3.0',
+      '-af', 'volume=4.0',
       '-f', 'alaw',
       '-flush_packets', '1',
       'pipe:1',
     ]);
 
-    // 3. Obtener Digest Auth usando dahuaService (maneja 401 correctamente)
-    const talkPath = '/cgi-bin/talk.cgi?action=postAudioStream';
-    const authHeader = await this.dahuaService.getDigestHeader(
-      target.host, target.port, target.user, target.pass,
-      'POST', talkPath,
-    );
-
-    this.logger.log(`[AUDIO-IN-DAHUA] Digest auth para talk: ${authHeader ? 'OK' : 'Sin auth'}`);
-
-    // 4. Usar http.request nativo para streaming sin buffering (igual que Hikvision)
+    // 3. Usar http.request nativo para streaming sin buffering hacia Dahua
     const transport = require('http');
     const req = transport.request({
       method: 'POST',
@@ -960,24 +950,29 @@ export class ControlAccesoService implements OnModuleInit {
         ...(authHeader ? { Authorization: authHeader } : {}),
         'Content-Type': 'application/octet-stream',
         'Connection': 'keep-alive',
-        'Content-Length': '99999999',
+        'Transfer-Encoding': 'chunked',
       },
-    }, (response) => {
-      this.logger.log(`[AUDIO-IN-DAHUA] Dahua respondió: ${response.statusCode}`);
+    }, (response: any) => {
+      this.logger.log(`[AUDIO-IN-DAHUA] Dahua respondió status: ${response.statusCode}`);
       if (response.statusCode === 401) {
-        this.logger.error(`❌ [AUDIO-IN-DAHUA] Autenticación rechazada (401)`);
+        this.logger.error(`❌ [AUDIO-IN-DAHUA] Autenticación rechazada (401). Limpiando cache digest.`);
+        this.digestChallengeCache.delete(deviceHost);
+        this.digestChallengeCache.delete(target.host);
       }
     });
 
-    req.on('error', (err) => {
-      this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] Conexión finalizada: ${err.message}`);
+    req.on('error', (err: any) => {
+      this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] Conexión de audio finalizada: ${err.message}`);
     });
 
     audioStream.on('close', () => {
-      this.dahuaService.cgi(
-        target.host, target.port, target.user, target.pass,
-        'GET', '/cgi-bin/talk.cgi?action=stop'
-      ).catch(() => {});
+      try { req.end(); } catch {}
+      try { ffmpeg.kill('SIGKILL'); } catch {}
+    });
+
+    (audioStream as any).on('end', () => {
+      try { req.end(); } catch {}
+      try { ffmpeg.kill('SIGKILL'); } catch {}
     });
 
     audioStream.pipe(ffmpeg.stdin);
@@ -1197,17 +1192,18 @@ export class ControlAccesoService implements OnModuleInit {
         'Access-Control-Allow-Origin': '*',
       });
 
-      // FFmpeg: Conectar al canal RTSP de Dahua y extraer audio a MP3 en tiempo real
+      // FFmpeg: Conectar al canal RTSP de Dahua y extraer audio a MP3 estándar para navegador
       const ffmpeg = spawn('ffmpeg', [
         '-hide_banner',
         '-loglevel', 'warning',
         '-rtsp_transport', 'tcp',
         '-i', rtspUrl,
-        '-vn',                        // Sin video
-        '-acodec', 'libmp3lame',      // Transcodificar a MP3 estándar
-        '-ab', '64k',
-        '-ar', '16000',
-        '-ac', '1',
+        '-vn',                                    // Sin video
+        '-acodec', 'libmp3lame',                  // Transcodificar a MP3 estándar
+        '-ab', '128k',                            // 128 kbps (alta fidelidad)
+        '-ar', '44100',                           // 44.1 kHz tasa de muestreo estándar de navegador (elimina voz gruesa/lenta)
+        '-ac', '1',                               // Mono
+        '-af', 'aresample=44100:async=1,volume=2.0', // Sincronización continua y ganancia de volumen
         '-f', 'mp3',
         'pipe:1',
       ]);
