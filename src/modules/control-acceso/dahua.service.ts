@@ -18,6 +18,7 @@ export interface DahuaPersona {
   nombre: string;
   codigoTarjeta?: string;
   habilitado: boolean;
+  recno?: number;
   raw: any;
 }
 
@@ -108,6 +109,8 @@ export class DahuaService {
         'Encode[0].ExtraFormat[0].Video.Compression=H.264',
         'Encode[0].MainFormat[0].Video.GOP=25',
         'Encode[0].ExtraFormat[0].Video.GOP=25',
+        'Encode[0].MainFormat[0].AudioEnable=true',
+        'Encode[0].ExtraFormat[0].AudioEnable=true',
         'Encode[0].MainFormat[0].Audio.Compression=G.711A',
         'Encode[0].ExtraFormat[0].Audio.Compression=G.711A',
       ].join('&');
@@ -256,94 +259,92 @@ export class DahuaService {
 
   /**
    * Lista todas las personas registradas en el hardware Dahua.
-   * POST /cgi-bin/recordFinder.cgi?action=find&name=AccessControlCard
+   * GET /cgi-bin/recordFinder.cgi?action=find&name=AccessControlCard&count=1000
    */
   async listarPersonas(ip: string, port: number, user: string, pass: string): Promise<DahuaPersona[]> {
     this.logger.log(`👥 [DAHUA PERSONAS] Listando usuarios de ${ip}:${port}`);
 
-    const body = JSON.stringify({
-      name: 'AccessControlCard',
-      condition: { CardType: '0' },
-    });
-
-    let resp: any;
     try {
-      resp = await this.cgi(
-        ip, port, user, pass, 'POST',
-        `/cgi-bin/recordFinder.cgi?action=find&name=AccessControlCard`,
-        body, 'text', 'application/json',
+      const resp = await this.cgi(
+        ip, port, user, pass, 'GET',
+        `/cgi-bin/recordFinder.cgi?action=find&name=AccessControlCard&count=1000`,
       );
+      const raw = String(resp.data || '');
+      return this.parseDahuaPersonas(raw);
     } catch (err) {
-      this.logger.warn(`⚠️ [DAHUA PERSONAS] Error al listar: ${err.message}`);
+      this.logger.warn(`⚠️ [DAHUA PERSONAS] Error al listar usuarios: ${err.message}`);
       return [];
     }
-
-    const raw = resp.data;
-    return this.parseDahuaPersonas(raw);
   }
 
   /**
    * Agrega una persona al hardware Dahua ASI7213X.
-   * 1. Crea el registro de tarjeta de acceso
+   * 1. Crea/actualiza el registro de tarjeta de acceso mediante recordUpdater.cgi
    * 2. Sube foto facial si se provee
    */
   async agregarPersona(
     ip: string, port: number, user: string, pass: string,
     persona: DahuaPersonaInput,
-  ): Promise<{ ok: boolean; userId: string; fotoSubida: boolean }> {
+  ): Promise<{ ok: boolean; userId: string; recno?: number; fotoSubida: boolean }> {
     const userId = String(persona.userId).slice(0, 20); // max 20 chars en Dahua
-    this.logger.log(`➕ [DAHUA PERSONA] Agregando userId=${userId} (${persona.nombre}) en ${ip}:${port}`);
+    const cardNo = (persona.codigoTarjeta || userId).slice(0, 32);
+    const cardName = (persona.nombre || `Usuario ${userId}`).slice(0, 32);
+    this.logger.log(`➕ [DAHUA PERSONA] Agregando userId=${userId} (${cardName}) en ${ip}:${port}`);
 
-    // 1. Crear/actualizar usuario en el hardware
-    const userRecord: any = {
-      CardNo: persona.codigoTarjeta || '',
-      UserID: userId,
-      UserName: persona.nombre.slice(0, 64),
-      CardType: '0',        // 0 = Normal
-      Enable: persona.habilitado !== false,
-      UseTimeSection: 255,  // Sin restricción de horario
-    };
+    // Verificar si ya existe en hardware para actualizar en vez de duplicar
+    const existentes = await this.listarPersonas(ip, port, user, pass);
+    const coincidencia = existentes.find(
+      p => String(p.userId) === String(userId) || String(p.codigoTarjeta) === String(cardNo)
+    );
+
+    if (coincidencia && coincidencia.recno !== undefined) {
+      this.logger.log(`🔄 [DAHUA PERSONA] Usuario ya existe en hardware con recno=${coincidencia.recno}, actualizando...`);
+      await this.actualizarPersona(ip, port, user, pass, persona);
+      return { ok: true, userId, recno: coincidencia.recno, fotoSubida: false };
+    }
+
+    // Inserción vía recordUpdater.cgi GET query params
+    const queryParams = [
+      'action=insert',
+      'name=AccessControlCard',
+      `CardNo=${encodeURIComponent(cardNo)}`,
+      `UserID=${encodeURIComponent(userId)}`,
+      `CardName=${encodeURIComponent(cardName)}`,
+      `CardStatus=0`,
+      `CardType=0`,
+      `IsValid=${persona.habilitado !== false}`,
+      `ValidDateStart=${encodeURIComponent('2020-01-01 00:00:00')}`,
+      `ValidDateEnd=${encodeURIComponent('2037-12-31 23:59:59')}`,
+    ];
 
     if (persona.pin) {
-      userRecord.Password = persona.pin;
-      userRecord.PasswordType = 'GeneralPassword';
+      queryParams.push(`Password=${encodeURIComponent(persona.pin)}`);
     }
-
-    const insertBody = JSON.stringify({ records: [userRecord] });
 
     try {
-      await this.cgi(
-        ip, port, user, pass, 'POST',
-        `/cgi-bin/recordUpdater.cgi?action=insert&name=AccessControlCard`,
-        insertBody, 'text', 'application/json',
+      const resp = await this.cgi(
+        ip, port, user, pass, 'GET',
+        `/cgi-bin/recordUpdater.cgi?${queryParams.join('&')}`,
       );
-      this.logger.log(`✅ [DAHUA PERSONA] Registro creado para userId=${userId}`);
-    } catch (insertErr) {
-      this.logger.warn(`⚠️ [DAHUA PERSONA] Insert recordUpdater falló, intentando AccessControl: ${insertErr.message}`);
-      try {
-        await this.cgi(
-          ip, port, user, pass, 'POST',
-          `/cgi-bin/AccessControl.cgi?action=insertRecord&name=AccessControlCard`,
-          insertBody, 'text', 'application/json',
-        );
-        this.logger.log(`✅ [DAHUA PERSONA] Registro creado vía AccessControl para userId=${userId}`);
-      } catch (err2) {
-        this.logger.warn(`⚠️ [DAHUA PERSONA] Fallback a update: ${err2.message}`);
-        await this.cgi(
-          ip, port, user, pass, 'POST',
-          `/cgi-bin/recordUpdater.cgi?action=update&name=AccessControlCard`,
-          insertBody, 'text', 'application/json',
-        ).catch(() => {});
+      const respText = String(resp.data || '');
+      this.logger.log(`✅ [DAHUA PERSONA] Usuario creado en ${ip}:${port}: ${respText.trim()}`);
+      
+      let recno: number | undefined;
+      const recnoMatch = respText.match(/RecNo=(\d+)/i);
+      if (recnoMatch) {
+        recno = parseInt(recnoMatch[1], 10);
       }
-    }
 
-    // 2. Subir foto facial si se provee
-    let fotoSubida = false;
-    if (persona.fotoBase64) {
-      fotoSubida = await this.subirFotoFacial(ip, port, user, pass, userId, persona.fotoBase64);
-    }
+      let fotoSubida = false;
+      if (persona.fotoBase64) {
+        fotoSubida = await this.subirFotoFacial(ip, port, user, pass, userId, persona.fotoBase64);
+      }
 
-    return { ok: true, userId, fotoSubida };
+      return { ok: true, userId, recno, fotoSubida };
+    } catch (insertErr) {
+      this.logger.error(`❌ [DAHUA PERSONA] Error al insertar usuario ${userId}: ${insertErr.message}`);
+      throw insertErr;
+    }
   }
 
   /**
@@ -352,53 +353,91 @@ export class DahuaService {
   async actualizarPersona(
     ip: string, port: number, user: string, pass: string,
     persona: DahuaPersonaInput,
-  ): Promise<{ ok: boolean }> {
+  ): Promise<{ ok: boolean; recno?: number }> {
     const userId = String(persona.userId).slice(0, 20);
+    const cardNo = (persona.codigoTarjeta || userId).slice(0, 32);
+    const cardName = (persona.nombre || `Usuario ${userId}`).slice(0, 32);
     this.logger.log(`✏️ [DAHUA PERSONA] Actualizando userId=${userId} en ${ip}:${port}`);
 
-    const userRecord: any = {
-      UserID: userId,
-      UserName: persona.nombre.slice(0, 64),
-      Enable: persona.habilitado !== false,
-    };
-
-    if (persona.codigoTarjeta !== undefined) {
-      userRecord.CardNo = persona.codigoTarjeta;
-    }
-    if (persona.pin) {
-      userRecord.Password = persona.pin;
-      userRecord.PasswordType = 'GeneralPassword';
-    }
-
-    const body = JSON.stringify({ records: [userRecord] });
-    await this.cgi(
-      ip, port, user, pass, 'POST',
-      `/cgi-bin/recordUpdater.cgi?action=update&name=AccessControlCard`,
-      body, 'text', 'application/json',
+    // 1. Buscar recno del usuario
+    const existentes = await this.listarPersonas(ip, port, user, pass);
+    const coincidencia = existentes.find(
+      p => String(p.userId) === String(userId) || String(p.codigoTarjeta) === String(cardNo)
     );
 
-    if (persona.fotoBase64) {
-      await this.subirFotoFacial(ip, port, user, pass, userId, persona.fotoBase64);
+    if (!coincidencia || coincidencia.recno === undefined) {
+      this.logger.warn(`⚠️ [DAHUA PERSONA] Usuario ${userId} no encontrado en hardware para actualizar, creando nuevo...`);
+      const res = await this.agregarPersona(ip, port, user, pass, persona);
+      return { ok: true, recno: res.recno };
     }
 
-    return { ok: true };
+    const recno = coincidencia.recno;
+    const queryParams = [
+      'action=update',
+      'name=AccessControlCard',
+      `recno=${recno}`,
+      `CardNo=${encodeURIComponent(cardNo)}`,
+      `UserID=${encodeURIComponent(userId)}`,
+      `CardName=${encodeURIComponent(cardName)}`,
+      `CardStatus=0`,
+      `IsValid=${persona.habilitado !== false}`,
+      `ValidDateStart=${encodeURIComponent('2020-01-01 00:00:00')}`,
+      `ValidDateEnd=${encodeURIComponent('2037-12-31 23:59:59')}`,
+    ];
+
+    if (persona.pin) {
+      queryParams.push(`Password=${encodeURIComponent(persona.pin)}`);
+    }
+
+    try {
+      const resp = await this.cgi(
+        ip, port, user, pass, 'GET',
+        `/cgi-bin/recordUpdater.cgi?${queryParams.join('&')}`,
+      );
+      this.logger.log(`✅ [DAHUA PERSONA] Usuario ${userId} (recno=${recno}) actualizado en ${ip}:${port}: ${String(resp.data || '').trim()}`);
+
+      if (persona.fotoBase64) {
+        await this.subirFotoFacial(ip, port, user, pass, userId, persona.fotoBase64);
+      }
+
+      return { ok: true, recno };
+    } catch (updErr) {
+      this.logger.error(`❌ [DAHUA PERSONA] Error al actualizar usuario ${userId}: ${updErr.message}`);
+      throw updErr;
+    }
   }
 
   /**
    * Elimina una persona del hardware Dahua.
-   * DELETE /cgi-bin/AccessControl.cgi?action=deleteRecord&name=AccessControlCard
+   * GET /cgi-bin/recordUpdater.cgi?action=remove&name=AccessControlCard&recno=...
    */
   async eliminarPersona(ip: string, port: number, user: string, pass: string, userId: string): Promise<{ ok: boolean }> {
-    this.logger.log(`🗑️ [DAHUA PERSONA] Eliminando userId=${userId} de ${ip}:${port}`);
+    const userIdClean = String(userId).slice(0, 20);
+    this.logger.log(`🗑️ [DAHUA PERSONA] Eliminando userId=${userIdClean} de ${ip}:${port}`);
 
-    const body = JSON.stringify({ records: [{ UserID: String(userId).slice(0, 20) }] });
-    await this.cgi(
-      ip, port, user, pass, 'POST',
-      `/cgi-bin/AccessControl.cgi?action=deleteRecord&name=AccessControlCard`,
-      body, 'text', 'application/json',
+    // 1. Buscar recno del usuario
+    const existentes = await this.listarPersonas(ip, port, user, pass);
+    const coincidencia = existentes.find(
+      p => String(p.userId) === userIdClean || String(p.codigoTarjeta) === userIdClean
     );
 
-    return { ok: true };
+    if (!coincidencia || coincidencia.recno === undefined) {
+      this.logger.warn(`⚠️ [DAHUA PERSONA] Usuario ${userIdClean} no encontrado en hardware para eliminar (ya no existe)`);
+      return { ok: true };
+    }
+
+    const recno = coincidencia.recno;
+    try {
+      const resp = await this.cgi(
+        ip, port, user, pass, 'GET',
+        `/cgi-bin/recordUpdater.cgi?action=remove&name=AccessControlCard&recno=${recno}`,
+      );
+      this.logger.log(`✅ [DAHUA PERSONA] Usuario ${userIdClean} (recno=${recno}) eliminado de ${ip}:${port}: ${String(resp.data || '').trim()}`);
+      return { ok: true };
+    } catch (delErr) {
+      this.logger.error(`❌ [DAHUA PERSONA] Error al eliminar usuario ${userIdClean} (recno=${recno}): ${delErr.message}`);
+      throw delErr;
+    }
   }
 
   /**
@@ -728,37 +767,54 @@ export class DahuaService {
    * Parsea la lista de personas del CGI recordFinder.
    */
   private parseDahuaPersonas(raw: string): DahuaPersona[] {
-    const personas: DahuaPersona[] = [];
+    const rawStr = String(raw || '');
+    const personasMap = new Map<number, any>();
 
-    // Intentar parsear como JSON primero
+    // 1. Intentar parsear como JSON primero
     try {
-      const json = JSON.parse(raw);
+      const json = JSON.parse(rawStr);
       const records = json?.records || json?.data || json?.result || [];
-      if (Array.isArray(records)) {
+      if (Array.isArray(records) && records.length > 0) {
         return records.map((r: any) => ({
           userId: String(r.UserID || r.userId || r.CardNo || ''),
-          nombre: String(r.UserName || r.name || r.Name || ''),
+          nombre: String(r.CardName || r.UserName || r.name || r.Name || ''),
           codigoTarjeta: r.CardNo || r.cardNo || undefined,
-          habilitado: r.Enable !== false && r.enable !== false,
+          habilitado: r.CardStatus === 0 || r.Enable !== false || r.IsValid === true || r.IsValid === 'true',
+          recno: r.RecNo !== undefined ? Number(r.RecNo) : undefined,
           raw: r,
         }));
       }
-    } catch { /* no es JSON, parsear como key=value */ }
+    } catch { /* no es JSON */ }
 
-    // Parsear formato table.AccessControlCard[0].UserID=xxx
-    const block = raw.split(/\n(?=table\.)/);
-    block.forEach(b => {
-      const kv = this.parseConfig(b);
-      if (kv['UserID']) {
+    // 2. Parsear formato records[i].Key=Value y table.AccessControlCard[i].Key=Value
+    const lines = rawStr.split(/[\r\n]+/);
+    for (const line of lines) {
+      const match = line.match(/(?:records|table\.[^\[]+)\[(\d+)\]\.([^=]+)=(.*)/);
+      if (match) {
+        const idx = parseInt(match[1], 10);
+        const key = match[2].trim();
+        const val = match[3].trim();
+        if (!personasMap.has(idx)) {
+          personasMap.set(idx, {});
+        }
+        personasMap.get(idx)[key] = val;
+      }
+    }
+
+    const personas: DahuaPersona[] = [];
+    for (const [, obj] of personasMap.entries()) {
+      const userId = obj['UserID'] || obj['CardNo'] || '';
+      if (userId) {
         personas.push({
-          userId: kv['UserID'],
-          nombre: kv['UserName'] || '',
-          codigoTarjeta: kv['CardNo'] || undefined,
-          habilitado: kv['Enable'] !== 'false',
-          raw: kv,
+          userId: String(userId),
+          nombre: obj['CardName'] || obj['UserName'] || `Usuario ${userId}`,
+          codigoTarjeta: obj['CardNo'] || undefined,
+          habilitado: obj['CardStatus'] === '0' || obj['IsValid'] === 'true' || obj['Enable'] !== 'false',
+          recno: obj['RecNo'] ? parseInt(obj['RecNo'], 10) : undefined,
+          raw: obj,
         });
       }
-    });
+    }
 
     return personas;
   }

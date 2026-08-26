@@ -905,7 +905,7 @@ export class ControlAccesoService implements OnModuleInit {
 
   private async relayAudioToDeviceDahua(
     audioStream: NodeJS.ReadableStream,
-    target: { host: string; port: number; user: string; pass: string; via: string },
+    target: { host: string; port: number; user: string; pass: string; via: string; rtspPort?: number },
     deviceId?: string,
     operator?: any,
   ): Promise<any> {
@@ -924,11 +924,20 @@ export class ControlAccesoService implements OnModuleInit {
 
     // 2. FFmpeg: convertir WebM/Opus del navegador → PCM alaw 8000Hz mono (G.711A)
     const ffmpeg = spawn('ffmpeg', [
+      '-hide_banner',
+      '-loglevel', 'warning',
+      '-fflags', 'nobuffer',
+      '-flags', 'low_delay',
+      '-probesize', '4096',
+      '-f', 'webm',
       '-i', 'pipe:0',
-      '-f', 'alaw',
-      '-ar', '8000',
       '-ac', '1',
-      'pipe:1'
+      '-ar', '8000',
+      '-c:a', 'pcm_alaw',
+      '-af', 'volume=3.0',
+      '-f', 'alaw',
+      '-flush_packets', '1',
+      'pipe:1',
     ]);
 
     // 3. Obtener Digest Auth usando dahuaService (maneja 401 correctamente)
@@ -962,6 +971,13 @@ export class ControlAccesoService implements OnModuleInit {
 
     req.on('error', (err) => {
       this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] Conexión finalizada: ${err.message}`);
+    });
+
+    audioStream.on('close', () => {
+      this.dahuaService.cgi(
+        target.host, target.port, target.user, target.pass,
+        'GET', '/cgi-bin/talk.cgi?action=stop'
+      ).catch(() => {});
     });
 
     audioStream.pipe(ffmpeg.stdin);
@@ -1160,38 +1176,18 @@ export class ControlAccesoService implements OnModuleInit {
 
   private async relayAudioFromDeviceDahua(
     res: any,
-    target: { host: string; port: number; user: string; pass: string; via: string },
+    target: { host: string; port: number; user: string; pass: string; via: string; rtspPort?: number },
   ): Promise<any> {
-    this.logger.log(`🔊 [AUDIO-OUT-DAHUA] Escuchando audio desde Dahua en ${target.host}:${target.port}`);
+    this.logger.log(`🔊 [AUDIO-OUT-DAHUA] Escuchando audio desde Dahua en ${target.host}:${target.port} (RTSP port: ${target.rtspPort || 554})`);
 
-    const audioPath = '/cgi-bin/audio.cgi?action=getAudioStream';
+    const rtspPort = target.rtspPort || 554;
+    const encodedPass = encodeURIComponent(target.pass);
+    const rtspUrl = `rtsp://${target.user}:${encodedPass}@${target.host}:${rtspPort}/cam/realmonitor?channel=1&subtype=0`;
+
+    // Asegurar en background que el audio esté habilitado en el encoder Dahua
+    this.dahuaService.asegurarFormatoH264(target.host, target.port, target.user, target.pass).catch(() => {});
 
     try {
-      // Obtener Digest Auth válido usando dahuaService (maneja 401 correctamente para Dahua)
-      const authHeader = await this.dahuaService.getDigestHeader(
-        target.host, target.port, target.user, target.pass,
-        'GET', audioPath,
-      );
-
-      this.logger.log(`[AUDIO-OUT-DAHUA] Digest auth: ${authHeader ? 'OK' : 'Sin auth'}`);
-
-      const headers: any = {};
-      if (authHeader) headers['Authorization'] = authHeader;
-
-      // FFmpeg: El Dahua transmite audio G.711A (alaw) configurado vía asegurarFormatoH264
-      const ffmpeg = spawn('ffmpeg', [
-        '-f', 'alaw',        // Formato de entrada: G.711A (alaw)
-        '-ar', '8000',        // Sample rate: 8kHz (estándar G.711)
-        '-ac', '1',           // Mono
-        '-i', 'pipe:0',
-        '-acodec', 'libmp3lame',
-        '-ab', '64k',
-        '-ar', '16000',
-        '-ac', '1',
-        '-f', 'mp3',
-        'pipe:1'
-      ]);
-
       res.set({
         'Content-Type': 'audio/mpeg',
         'Transfer-Encoding': 'chunked',
@@ -1201,17 +1197,23 @@ export class ControlAccesoService implements OnModuleInit {
         'Access-Control-Allow-Origin': '*',
       });
 
-      // Conectar al stream de audio del Dahua vía HTTP con Digest Auth
-      const audioUrl = `http://${target.host}:${target.port}${audioPath}`;
-      const response = await axios.get(audioUrl, {
-        headers,
-        responseType: 'stream',
-        timeout: 0,
-      });
+      // FFmpeg: Conectar al canal RTSP de Dahua y extraer audio a MP3 en tiempo real
+      const ffmpeg = spawn('ffmpeg', [
+        '-hide_banner',
+        '-loglevel', 'warning',
+        '-rtsp_transport', 'tcp',
+        '-i', rtspUrl,
+        '-vn',                        // Sin video
+        '-acodec', 'libmp3lame',      // Transcodificar a MP3 estándar
+        '-ab', '64k',
+        '-ar', '16000',
+        '-ac', '1',
+        '-f', 'mp3',
+        'pipe:1',
+      ]);
 
-      this.logger.log(`🔊 [AUDIO-OUT-DAHUA] Stream de audio conectado: status=${response.status}, content-type=${response.headers['content-type']}`);
+      this.logger.log(`🔊 [AUDIO-OUT-DAHUA] Transcodificador RTSP->MP3 iniciado para ${target.host}:${rtspPort}`);
 
-      response.data.pipe(ffmpeg.stdin);
       ffmpeg.stdout.pipe(res);
 
       ffmpeg.stderr.on('data', (chunk) => {
@@ -1223,8 +1225,8 @@ export class ControlAccesoService implements OnModuleInit {
       });
 
       res.on('close', () => {
+        this.logger.log(`🔇 [AUDIO-OUT-DAHUA] Cliente cerró conexión de audio`);
         try { ffmpeg.kill('SIGKILL'); } catch {}
-        try { response.data.destroy(); } catch {}
       });
     } catch (err) {
       this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA] No se pudo obtener audio stream de Dahua: ${err.message}`);
@@ -1792,9 +1794,14 @@ export class ControlAccesoService implements OnModuleInit {
       const ip = p.dispositivo?.ip_direccion;
       if (ip) {
         try {
+          const marca = (p.dispositivo?.configuracion_tecnica?.marca || p.dispositivo?.marca || '').toLowerCase();
           if (body.activo === false) {
             // Si se desactiva, lo quitamos físicamente del chip del hardware
-            await this.eliminarUsuarioDeHardware(ip, persona.documento_identidad, p.dispositivo_id);
+            if (marca.includes('dahua')) {
+              await this.eliminarPersonaDahuaHardware(ip, persona.documento_identidad, p.dispositivo_id);
+            } else {
+              await this.eliminarUsuarioDeHardware(ip, persona.documento_identidad, p.dispositivo_id);
+            }
             this.logger.log(`👤 [HARDWARE SYNC] Acceso DESACTIVADO: Eliminado usuario ${persona.documento_identidad} de dispositivo ${ip}`);
           } else {
             // Re-sincronizar siempre en caliente con los nuevos datos (nombre, rostro, tarjeta, etc.)
@@ -2094,17 +2101,58 @@ export class ControlAccesoService implements OnModuleInit {
     const isDahua = String(device.marca || device.configuracion_tecnica?.marca || '').toLowerCase().includes('dahua');
 
     if (isDahua) {
-      const port = Number(device.configuracion_tecnica?.puerto || device.puerto || 80);
+      const port = Number(
+        device.configuracion_tecnica?.puertos_mapeados?.mapped_http
+        || device.configuracion_tecnica?.puerto
+        || device.puerto
+        || 80
+      );
       const user = String(device.credencial_usuario || 'admin');
       const pass = String(device.credencial_password || '');
       const personasDahua = await this.dahuaService.listarPersonas(ip, port, user, pass);
+      const resultados: any[] = [];
+
+      for (const p of personasDahua) {
+        if (!p.userId) continue;
+        const personaData = {
+          documento_identidad: p.userId,
+          nombre_completo: p.nombre || `Usuario ${p.userId}`,
+          codigo_tarjeta: p.codigoTarjeta || null,
+          tipo_persona: 'residente',
+          activo: p.habilitado !== false,
+          actualizado_en: new Date().toISOString(),
+        };
+
+        const { data: persona, error } = await this.supabase
+          .getSupabaseAdminClient()
+          .from('personas_gestion_acceso')
+          .upsert([personaData], { onConflict: 'documento_identidad' })
+          .select()
+          .single();
+
+        if (error) {
+          resultados.push({ ok: false, usuario: p, error: error.message });
+          continue;
+        }
+
+        await this.vincularPersonaDispositivos(persona.id, [device.id]);
+
+        resultados.push({
+          ok: true,
+          persona_id: persona.id,
+          nombre_completo: persona.nombre_completo,
+          documento_identidad: persona.documento_identidad,
+        });
+      }
+
       return {
         dispositivo_id: device.id,
         dispositivo: device.nombre_identificador,
         marca: 'Dahua',
         total_hardware: personasDahua.length,
-        total_sincronizados: personasDahua.length,
-        personas: personasDahua,
+        total_sincronizados: resultados.filter((item: any) => item.ok).length,
+        errores: resultados.filter((item: any) => !item.ok),
+        personas: resultados.filter((item: any) => item.ok),
       };
     }
 
@@ -4134,7 +4182,12 @@ export class ControlAccesoService implements OnModuleInit {
       const ip = p.dispositivo?.ip_direccion;
       if (ip) {
         try {
-          await this.eliminarUsuarioDeHardware(ip, persona.documento_identidad, p.dispositivo_id);
+          const marca = (p.dispositivo?.configuracion_tecnica?.marca || p.dispositivo?.marca || '').toLowerCase();
+          if (marca.includes('dahua')) {
+            await this.eliminarPersonaDahuaHardware(ip, persona.documento_identidad, p.dispositivo_id);
+          } else {
+            await this.eliminarUsuarioDeHardware(ip, persona.documento_identidad, p.dispositivo_id);
+          }
         } catch (err) {
           this.logger.warn(`⚠️ [HARDWARE SYNC] No se pudo eliminar usuario ${persona.documento_identidad} de ${ip}: ${err.message}`);
         }
