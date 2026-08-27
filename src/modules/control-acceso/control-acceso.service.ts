@@ -956,11 +956,10 @@ export class ControlAccesoService implements OnModuleInit {
     deviceId?: string,
     operator?: any,
   ): Promise<any> {
-    const rtspPort = target.rtspPort || (target.port === 10006 ? 30006 : target.port === 10199 ? 30199 : 554);
-    const encodedPass = encodeURIComponent(target.pass);
-    const rtspUrl = `rtsp://${target.user}:${encodedPass}@${target.host}:${rtspPort}/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif`;
+    const baseOffset = target.port >= 10000 ? (target.port % 10000) : Number(target.host.split('.').pop() || '6');
+    const rtpPort = 40000 + baseOffset;
 
-    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Transmitiendo audio a Dahua ${target.host}:${rtspPort}`);
+    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Transmitiendo audio RTP PCMA a Dahua ${target.host}:${rtpPort}`);
 
     return new Promise((resolve) => {
       let isSettled = false;
@@ -975,17 +974,16 @@ export class ControlAccesoService implements OnModuleInit {
         '-ac', '1',
         '-ar', '8000',
         '-c:a', 'pcm_alaw',
-        '-af', 'volume=2.0',
-        '-f', 'rtsp',
-        '-rtsp_transport', 'tcp',
-        rtspUrl,
+        '-payload_type', '8',
+        '-f', 'rtp',
+        `rtp://${target.host}:${rtpPort}`,
       ]);
 
       const safeFinish = () => {
         if (isSettled) return;
         isSettled = true;
         try { ffmpeg.kill('SIGKILL'); } catch {}
-        resolve({ ok: true, mensaje: 'Transmisión a Dahua finalizada' });
+        resolve({ ok: true, mensaje: 'Transmisión RTP a Dahua finalizada' });
       };
 
       ffmpeg.on('close', (code) => {
