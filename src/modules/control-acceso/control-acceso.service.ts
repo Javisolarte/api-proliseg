@@ -14,7 +14,7 @@ export class ControlAccesoService implements OnModuleInit {
 
   private readonly proxyUrl = 'https://servidor.proliseg.com/dispositivos';
   private readonly apiKey = 'proliseg-acceso-2026';
-  private digestChallengeCache = new Map<string, { realm: string; nonce: string; qop: string }>();
+  private digestChallengeCache = new Map<string, { realm: string; nonce: string; qop?: string; opaque?: string }>();
   private deviceCodecCache = new Map<string, string>();
   private faceUploadFormatCache = new Map<string, string>();
   private readonly audioTalkChannelId = 1;
@@ -600,6 +600,14 @@ export class ControlAccesoService implements OnModuleInit {
     }
   }
 
+  private getFfmpegBinary(): string {
+    try {
+      const staticPath = require('ffmpeg-static');
+      if (staticPath && typeof staticPath === 'string') return staticPath;
+    } catch {}
+    return 'ffmpeg';
+  }
+
   private async ensureDahuaDigestChallengeHost(host: string, user: string, pass: string): Promise<void> {
     if (this.digestChallengeCache.has(host)) return;
 
@@ -611,11 +619,13 @@ export class ControlAccesoService implements OnModuleInit {
         const realmMatch = header.match(/realm="([^"]+)"/);
         const nonceMatch = header.match(/nonce="([^"]+)"/);
         const qopMatch = header.match(/qop="([^"]+)"/);
+        const opaqueMatch = header.match(/opaque="([^"]+)"/);
         if (realmMatch && nonceMatch) {
           this.digestChallengeCache.set(host, {
             realm: realmMatch[1],
             nonce: nonceMatch[1],
             qop: qopMatch ? qopMatch[1] : undefined,
+            opaque: opaqueMatch ? opaqueMatch[1] : undefined,
           });
           this.logger.log(`🔑 [DAHUA DIGEST] Nonce obtenido para ${host}: ${nonceMatch[1]}`);
         }
@@ -628,7 +638,7 @@ export class ControlAccesoService implements OnModuleInit {
     const cached = this.digestChallengeCache.get(host);
     if (!cached) return null;
 
-    const { realm, nonce, qop } = cached;
+    const { realm, nonce, qop, opaque } = cached;
     const nc = '00000001';
     const cnonce = randomBytes(4).toString('hex');
     const uri = new URL(url).pathname + (new URL(url).search || '');
@@ -646,6 +656,9 @@ export class ControlAccesoService implements OnModuleInit {
     let authStr = `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${responseHash}"`;
     if (qop === 'auth') {
       authStr += `, qop="${qop}", nc=${nc}, cnonce="${cnonce}"`;
+    }
+    if (opaque) {
+      authStr += `, opaque="${opaque}"`;
     }
     return authStr;
   }
@@ -750,7 +763,7 @@ export class ControlAccesoService implements OnModuleInit {
       let req: any = null;
 
       // ffmpeg: convierte WebM/Opus del navegador → PCM G.711 a/μ-law crudo (sin contenedor WAV)
-      const ffmpeg = spawn('ffmpeg', [
+      const ffmpeg = spawn(this.getFfmpegBinary(), [
         '-hide_banner',
         '-loglevel', 'info',
         '-fflags', 'nobuffer',
@@ -761,7 +774,7 @@ export class ControlAccesoService implements OnModuleInit {
         '-ac', '1',             // Mono
         '-ar', '8000',          // 8kHz (requerido por G.711)
         '-c:a', audioFormat === 'alaw' ? 'pcm_alaw' : 'pcm_mulaw',   // Codec de salida
-        '-af', 'volume=3.0',    // Aumento de volumen para asegurar claridad
+        '-af', 'volume=2.0',    // Volumen calibrado sin saturación
         '-f', audioFormat,      // Formato de salida: raw alaw/mulaw
         '-flush_packets', '1',
         'pipe:1',
@@ -921,8 +934,8 @@ export class ControlAccesoService implements OnModuleInit {
 
     this.logger.log(`[AUDIO-IN-DAHUA] Digest auth header: ${authHeader ? 'OK' : 'No challenge'}`);
 
-    // 2. FFmpeg: convertir WebM/Opus del navegador → PCM G.711A 8000Hz mono con ganancia
-    const ffmpeg = spawn('ffmpeg', [
+    // 2. FFmpeg: convertir WebM/Opus del navegador → PCM G.711A 8000Hz mono
+    const ffmpeg = spawn(this.getFfmpegBinary(), [
       '-hide_banner',
       '-loglevel', 'warning',
       '-fflags', 'nobuffer',
@@ -933,7 +946,7 @@ export class ControlAccesoService implements OnModuleInit {
       '-ac', '1',
       '-ar', '8000',
       '-c:a', 'pcm_alaw',
-      '-af', 'volume=4.0',
+      '-af', 'volume=2.0',
       '-f', 'alaw',
       '-flush_packets', '1',
       'pipe:1',
@@ -1193,17 +1206,17 @@ export class ControlAccesoService implements OnModuleInit {
       });
 
       // FFmpeg: Conectar al canal RTSP de Dahua y extraer audio a MP3 estándar para navegador
-      const ffmpeg = spawn('ffmpeg', [
+      const ffmpeg = spawn(this.getFfmpegBinary(), [
         '-hide_banner',
         '-loglevel', 'warning',
         '-rtsp_transport', 'tcp',
         '-i', rtspUrl,
         '-vn',                                    // Sin video
         '-acodec', 'libmp3lame',                  // Transcodificar a MP3 estándar
-        '-ab', '128k',                            // 128 kbps (alta fidelidad)
-        '-ar', '44100',                           // 44.1 kHz tasa de muestreo estándar de navegador (elimina voz gruesa/lenta)
+        '-ab', '128k',                            // 128 kbps
+        '-ar', '44100',                           // 44.1 kHz tasa de muestreo estándar de navegador
         '-ac', '1',                               // Mono
-        '-af', 'aresample=44100:async=1,volume=2.0', // Sincronización continua y ganancia de volumen
+        '-af', 'aresample=44100:async=1',         // Resample con sincro continua sin distorsión de volumen
         '-f', 'mp3',
         'pipe:1',
       ]);

@@ -112,10 +112,14 @@ export class DahuaService {
         'Encode[0].MainFormat[0].AudioEnable=true',
         'Encode[0].ExtraFormat[0].AudioEnable=true',
         'Encode[0].MainFormat[0].Audio.Compression=G.711A',
+        'Encode[0].MainFormat[0].Audio.Frequency=8000',
+        'Encode[0].MainFormat[0].Audio.Bitrate=64',
         'Encode[0].ExtraFormat[0].Audio.Compression=G.711A',
+        'Encode[0].ExtraFormat[0].Audio.Frequency=8000',
+        'Encode[0].ExtraFormat[0].Audio.Bitrate=64',
       ].join('&');
       await this.cgi(ip, port, user, pass, 'GET', `/cgi-bin/configManager.cgi?${query}`);
-      this.logger.log(`📹 [DAHUA ENCODE] Formato H.264 (GOP=25) + Audio G.711A configurado en ${ip}:${port}`);
+      this.logger.log(`📹 [DAHUA ENCODE] Formato H.264 (GOP=25) + Audio G.711A (8000Hz) configurado en ${ip}:${port}`);
     } catch (err) {
       this.logger.warn(`⚠️ [DAHUA ENCODE] No se pudo forzar H.264/GOP/G.711A vía CGI: ${err.message}`);
     }
@@ -722,6 +726,7 @@ export class DahuaService {
     const realm = wwwAuth.match(/realm="([^"]+)"/)?.[1];
     const nonce = wwwAuth.match(/nonce="([^"]+)"/)?.[1];
     const qop   = wwwAuth.match(/qop="([^"]+)"/)?.[1];
+    const opaque = wwwAuth.match(/opaque="([^"]+)"/)?.[1];
 
     if (!realm || !nonce) return null;
 
@@ -742,6 +747,9 @@ export class DahuaService {
     let auth = `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${responseHash}"`;
     if (qop === 'auth') {
       auth += `, qop="${qop}", nc=${nc}, cnonce="${cnonce}"`;
+    }
+    if (opaque) {
+      auth += `, opaque="${opaque}"`;
     }
     return auth;
   }
