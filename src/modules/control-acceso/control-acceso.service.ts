@@ -922,81 +922,57 @@ export class ControlAccesoService implements OnModuleInit {
     deviceId?: string,
     operator?: any,
   ): Promise<any> {
-    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Transmitiendo audio a Dahua ${target.host}:${target.port}`);
+    const rtspPort = target.rtspPort || (target.port === 10006 ? 30006 : target.port === 10199 ? 30199 : 554);
+    const encodedPass = encodeURIComponent(target.pass);
+    const rtspUrl = `rtsp://${target.user}:${encodedPass}@${target.host}:${rtspPort}/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif`;
 
-    const talkPath = '/cgi-bin/audio.cgi?action=postAudioStream';
-    const deviceHost = `${target.host}:${target.port}`;
-    const talkUrl = `http://${deviceHost}${talkPath}`;
+    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Transmitiendo audio a Dahua ${target.host}:${rtspPort}`);
 
-    // 1. Calentar y asegurar Digest challenge con Dahua
-    await this.ensureDigestChallenge(talkUrl, target.user, target.pass);
-    const authHeader = this.buildDigestAuthHeader('POST', talkUrl, target.user, target.pass);
+    return new Promise((resolve) => {
+      let isSettled = false;
+      const ffmpeg = spawn(this.getFfmpegBinary(), [
+        '-hide_banner',
+        '-loglevel', 'warning',
+        '-fflags', 'nobuffer',
+        '-flags', 'low_delay',
+        '-probesize', '4096',
+        '-f', 'webm',
+        '-i', 'pipe:0',
+        '-ac', '1',
+        '-ar', '8000',
+        '-c:a', 'pcm_alaw',
+        '-af', 'volume=2.0',
+        '-f', 'rtsp',
+        '-rtsp_transport', 'tcp',
+        rtspUrl,
+      ]);
 
-    this.logger.log(`[AUDIO-IN-DAHUA] Digest auth header: ${authHeader ? 'OK' : 'No challenge'}`);
+      const safeFinish = () => {
+        if (isSettled) return;
+        isSettled = true;
+        try { ffmpeg.kill('SIGKILL'); } catch {}
+        resolve({ ok: true, mensaje: 'Transmisión a Dahua finalizada' });
+      };
 
-    // 2. FFmpeg: convertir WebM/Opus del navegador → PCM G.711A 8000Hz mono
-    const ffmpeg = spawn(this.getFfmpegBinary(), [
-      '-hide_banner',
-      '-loglevel', 'warning',
-      '-fflags', 'nobuffer',
-      '-flags', 'low_delay',
-      '-probesize', '4096',
-      '-f', 'webm',
-      '-i', 'pipe:0',
-      '-ac', '1',
-      '-ar', '8000',
-      '-c:a', 'pcm_alaw',
-      '-af', 'volume=2.0',
-      '-f', 'alaw',
-      '-flush_packets', '1',
-      'pipe:1',
-    ]);
+      ffmpeg.on('close', (code) => {
+        this.logger.log(`🎙️ [AUDIO-IN-DAHUA] FFmpeg cerró (código ${code})`);
+        safeFinish();
+      });
 
-    // 3. Usar http.request nativo para streaming sin buffering hacia Dahua
-    const transport = require('http');
-    const req = transport.request({
-      method: 'POST',
-      hostname: target.host,
-      port: target.port,
-      path: talkPath,
-      headers: {
-        ...(authHeader ? { Authorization: authHeader } : {}),
-        'Content-Type': 'application/octet-stream',
-        'Connection': 'keep-alive',
-        'Transfer-Encoding': 'chunked',
-      },
-    }, (response: any) => {
-      this.logger.log(`[AUDIO-IN-DAHUA] Dahua respondió status: ${response.statusCode}`);
-      if (response.statusCode === 401) {
-        this.logger.error(`❌ [AUDIO-IN-DAHUA] Autenticación rechazada (401). Limpiando cache digest.`);
-        this.digestChallengeCache.delete(deviceHost);
-        this.digestChallengeCache.delete(target.host);
-      }
+      ffmpeg.on('error', (err) => {
+        this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] FFmpeg error: ${err.message}`);
+        safeFinish();
+      });
+
+      audioStream.on('close', safeFinish);
+      (audioStream as any).on('end', safeFinish);
+      audioStream.on('error', (err) => {
+        this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] AudioStream error: ${err.message}`);
+        safeFinish();
+      });
+
+      audioStream.pipe(ffmpeg.stdin);
     });
-
-    req.on('error', (err: any) => {
-      this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] Conexión de audio finalizada: ${err.message}`);
-    });
-
-    audioStream.on('close', () => {
-      try { req.end(); } catch {}
-      try { ffmpeg.kill('SIGKILL'); } catch {}
-    });
-
-    (audioStream as any).on('end', () => {
-      try { req.end(); } catch {}
-      try { ffmpeg.kill('SIGKILL'); } catch {}
-    });
-
-    audioStream.pipe(ffmpeg.stdin);
-    ffmpeg.stdout.pipe(req);
-
-    return {
-      ok: true,
-      mensaje: 'Canal de voz bidireccional activo en Dahua',
-      detalle: { target: `${target.host}:${target.port}`, via: target.via, status: 'open' },
-      operador: operator || null,
-    };
   }
 
   async relayAudioFromDevice(
