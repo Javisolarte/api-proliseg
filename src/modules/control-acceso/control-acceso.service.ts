@@ -2924,23 +2924,26 @@ Content-Length: 0\r
 
         const existingRules = checkResponse.data || [];
 
-        // 1. REUTILIZACIÓN DE REGLAS: Si ya existe una regla para esta IP, reutilizar el puerto existente sin duplicar
+        // 1. REUTILIZACIÓN DE REGLAS: Si ya existe una regla para esta IP y protocolo, reutilizar el puerto existente sin duplicar
         const existingRule = existingRules.find((rule: any) =>
-          rule['to-addresses'] === deviceLocalIp && rule['to-ports'] === targetLocalPort
+          rule['to-addresses'] === deviceLocalIp &&
+          rule['to-ports'] === targetLocalPort &&
+          (rule['protocol'] === protocolType || !rule['protocol'])
         );
 
         // Asegurar automáticamente que exista la regla de retorno (masquerade) para evitar problemas de túnel y rutas asimétricas
-        await this.ensureMasqueradeRule(url, deviceLocalIp, username, password, httpsAgent, existingRules, targetLocalPort);
+        await this.ensureMasqueradeRule(url, deviceLocalIp, username, password, httpsAgent, existingRules, targetLocalPort, protocolType);
 
         if (existingRule) {
           const activePort = Number(existingRule['dst-port'] || publicPort);
-          this.logger.log(`ℹ️ [NAT RULE REUSE] Reutilizando regla NAT existente en MikroTik para ${deviceLocalIp} -> puerto ${activePort}`);
+          this.logger.log(`ℹ️ [NAT RULE REUSE] Reutilizando regla NAT existente en MikroTik para ${deviceLocalIp} -> puerto ${activePort} (${protocolType})`);
           return activePort;
         }
 
-        // 2. RESOLUCIÓN DE CONFLICTOS: Si el puerto objetivo está ocupado por otra IP, eliminar la regla conflictiva vieja
+        // 2. RESOLUCIÓN DE CONFLICTOS: Si el puerto objetivo está ocupado por otra IP para el mismo protocolo, eliminar la regla conflictiva vieja
         const conflictingRule = existingRules.find((rule: any) =>
           String(rule['dst-port']) === String(publicPort) &&
+          (rule['protocol'] === protocolType || !rule['protocol']) &&
           rule['to-addresses'] !== deviceLocalIp
         );
 
