@@ -543,7 +543,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private buildDigestHeader(method: string, url: string, user: string, pass: string, challenge: any) {
-    const { realm, nonce, qop } = challenge;
+    const { realm, nonce, qop, opaque } = challenge;
     const nc = '00000001';
     const cnonce = randomBytes(4).toString('hex');
     const uri = new URL(url).pathname + (new URL(url).search || '');
@@ -561,6 +561,9 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     let authStr = `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${responseHash}"`;
     if (qop === 'auth') {
       authStr += `, qop="${qop}", nc=${nc}, cnonce="${cnonce}"`;
+    }
+    if (opaque) {
+      authStr += `, opaque="${opaque}"`;
     }
     return authStr;
   }
@@ -592,8 +595,9 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         const realm = authHeader.match(/realm="([^"]+)"/)?.[1];
         const nonce = authHeader.match(/nonce="([^"]+)"/)?.[1];
         const qop = authHeader.match(/qop="([^"]+)"/)?.[1];
+        const opaque = authHeader.match(/opaque="([^"]+)"/)?.[1];
         
-        const challenge = { realm, nonce, qop };
+        const challenge = { realm, nonce, qop, opaque };
         const header = this.buildDigestHeader(method, url, user, pass, challenge);
         
         return await axios.request({
