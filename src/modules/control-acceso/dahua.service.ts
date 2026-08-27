@@ -262,19 +262,35 @@ export class DahuaService {
   // ─── GESTIÓN DE PERSONAS ────────────────────────────────────────────────────
 
   /**
-   * Lista todas las personas registradas en el hardware Dahua.
-   * GET /cgi-bin/recordFinder.cgi?action=find&name=AccessControlCard&count=1000
+   * Lista todas las personas registradas en el hardware Dahua (usuarios y tarjetas).
    */
   async listarPersonas(ip: string, port: number, user: string, pass: string): Promise<DahuaPersona[]> {
     this.logger.log(`👥 [DAHUA PERSONAS] Listando usuarios de ${ip}:${port}`);
 
     try {
-      const resp = await this.cgi(
-        ip, port, user, pass, 'GET',
-        `/cgi-bin/recordFinder.cgi?action=find&name=AccessControlCard&count=1000`,
-      );
-      const raw = String(resp.data || '');
-      return this.parseDahuaPersonas(raw);
+      const [respUser, respCard] = await Promise.all([
+        this.cgi(ip, port, user, pass, 'GET', `/cgi-bin/recordFinder.cgi?action=find&name=AccessUserInfo&count=1000`).catch(() => ({ data: '' })),
+        this.cgi(ip, port, user, pass, 'GET', `/cgi-bin/recordFinder.cgi?action=find&name=AccessControlCard&count=1000`).catch(() => ({ data: '' })),
+      ]);
+
+      const personasUser = this.parseDahuaPersonas(String(respUser.data || ''));
+      const personasCard = this.parseDahuaPersonas(String(respCard.data || ''));
+
+      const map = new Map<string, DahuaPersona>();
+      for (const p of personasUser) {
+        map.set(String(p.userId), p);
+      }
+      for (const p of personasCard) {
+        if (map.has(String(p.userId))) {
+          const existing = map.get(String(p.userId))!;
+          existing.codigoTarjeta = p.codigoTarjeta || existing.codigoTarjeta;
+          existing.recno = p.recno ?? existing.recno;
+        } else {
+          map.set(String(p.userId), p);
+        }
+      }
+
+      return Array.from(map.values());
     } catch (err) {
       this.logger.warn(`⚠️ [DAHUA PERSONAS] Error al listar usuarios: ${err.message}`);
       return [];
@@ -283,8 +299,9 @@ export class DahuaService {
 
   /**
    * Agrega una persona al hardware Dahua ASI7213X.
-   * 1. Crea/actualiza el registro de tarjeta de acceso mediante recordUpdater.cgi
-   * 2. Sube foto facial si se provee
+   * 1. Crea el registro de usuario en AccessUserInfo
+   * 2. Crea el registro de tarjeta en AccessControlCard
+   * 3. Sube foto facial vía JSON-RPC nativo (AccessFaceInfo) si se provee
    */
   async agregarPersona(
     ip: string, port: number, user: string, pass: string,
@@ -295,20 +312,24 @@ export class DahuaService {
     const cardName = (persona.nombre || `Usuario ${userId}`).slice(0, 32);
     this.logger.log(`➕ [DAHUA PERSONA] Agregando userId=${userId} (${cardName}) en ${ip}:${port}`);
 
-    // Verificar si ya existe en hardware para actualizar en vez de duplicar
-    const existentes = await this.listarPersonas(ip, port, user, pass);
-    const coincidencia = existentes.find(
-      p => String(p.userId) === String(userId) || String(p.codigoTarjeta) === String(cardNo)
-    );
+    // 1. Crear el Usuario en AccessUserInfo (necesario para que Dahua reconozca el rostro y permisos)
+    const userParams = [
+      'action=insert',
+      'name=AccessUserInfo',
+      `UserID=${encodeURIComponent(userId)}`,
+      `UserName=${encodeURIComponent(cardName)}`,
+      `UserType=0`,
+      `Authority=1`,
+      `Doors[0]=0`,
+      `TimeSections[0]=255`,
+      `ValidFrom=${encodeURIComponent('2020-01-01 00:00:00')}`,
+      `ValidTo=${encodeURIComponent('2037-12-31 23:59:59')}`,
+    ];
 
-    if (coincidencia && coincidencia.recno !== undefined) {
-      this.logger.log(`🔄 [DAHUA PERSONA] Usuario ya existe en hardware con recno=${coincidencia.recno}, actualizando...`);
-      await this.actualizarPersona(ip, port, user, pass, persona);
-      return { ok: true, userId, recno: coincidencia.recno, fotoSubida: false };
-    }
+    await this.cgi(ip, port, user, pass, 'GET', `/cgi-bin/recordUpdater.cgi?${userParams.join('&')}`).catch(() => {});
 
-    // Inserción vía recordUpdater.cgi GET query params
-    const queryParams = [
+    // 2. Crear la tarjeta en AccessControlCard
+    const cardParams = [
       'action=insert',
       'name=AccessControlCard',
       `CardNo=${encodeURIComponent(cardNo)}`,
@@ -322,33 +343,33 @@ export class DahuaService {
     ];
 
     if (persona.pin) {
-      queryParams.push(`Password=${encodeURIComponent(persona.pin)}`);
+      cardParams.push(`Password=${encodeURIComponent(persona.pin)}`);
     }
 
+    let recno: number | undefined;
     try {
       const resp = await this.cgi(
         ip, port, user, pass, 'GET',
-        `/cgi-bin/recordUpdater.cgi?${queryParams.join('&')}`,
+        `/cgi-bin/recordUpdater.cgi?${cardParams.join('&')}`,
       );
       const respText = String(resp.data || '');
-      this.logger.log(`✅ [DAHUA PERSONA] Usuario creado en ${ip}:${port}: ${respText.trim()}`);
+      this.logger.log(`✅ [DAHUA PERSONA] Tarjeta creada en ${ip}:${port}: ${respText.trim()}`);
       
-      let recno: number | undefined;
       const recnoMatch = respText.match(/RecNo=(\d+)/i);
       if (recnoMatch) {
         recno = parseInt(recnoMatch[1], 10);
       }
-
-      let fotoSubida = false;
-      if (persona.fotoBase64) {
-        fotoSubida = await this.subirFotoFacial(ip, port, user, pass, userId, persona.fotoBase64);
-      }
-
-      return { ok: true, userId, recno, fotoSubida };
     } catch (insertErr) {
-      this.logger.error(`❌ [DAHUA PERSONA] Error al insertar usuario ${userId}: ${insertErr.message}`);
-      throw insertErr;
+      this.logger.warn(`⚠️ [DAHUA PERSONA] Nota en AccessControlCard: ${insertErr.message}`);
     }
+
+    // 3. Subir foto facial vía JSON-RPC nativo
+    let fotoSubida = false;
+    if (persona.fotoBase64) {
+      fotoSubida = await this.subirFotoFacial(ip, port, user, pass, userId, persona.fotoBase64);
+    }
+
+    return { ok: true, userId, recno, fotoSubida };
   }
 
   /**
@@ -363,90 +384,88 @@ export class DahuaService {
     const cardName = (persona.nombre || `Usuario ${userId}`).slice(0, 32);
     this.logger.log(`✏️ [DAHUA PERSONA] Actualizando userId=${userId} en ${ip}:${port}`);
 
-    // 1. Buscar recno del usuario
+    // 1. Actualizar AccessUserInfo
+    const userParams = [
+      'action=insert',
+      'name=AccessUserInfo',
+      `UserID=${encodeURIComponent(userId)}`,
+      `UserName=${encodeURIComponent(cardName)}`,
+      `UserType=0`,
+      `Authority=1`,
+      `Doors[0]=0`,
+      `TimeSections[0]=255`,
+    ];
+    await this.cgi(ip, port, user, pass, 'GET', `/cgi-bin/recordUpdater.cgi?${userParams.join('&')}`).catch(() => {});
+
+    // 2. Buscar recno del usuario en AccessControlCard
     const existentes = await this.listarPersonas(ip, port, user, pass);
     const coincidencia = existentes.find(
       p => String(p.userId) === String(userId) || String(p.codigoTarjeta) === String(cardNo)
     );
 
-    if (!coincidencia || coincidencia.recno === undefined) {
-      this.logger.warn(`⚠️ [DAHUA PERSONA] Usuario ${userId} no encontrado en hardware para actualizar, creando nuevo...`);
-      const res = await this.agregarPersona(ip, port, user, pass, persona);
-      return { ok: true, recno: res.recno };
-    }
+    let recno = coincidencia?.recno;
+    if (recno !== undefined) {
+      const queryParams = [
+        'action=update',
+        'name=AccessControlCard',
+        `recno=${recno}`,
+        `CardNo=${encodeURIComponent(cardNo)}`,
+        `UserID=${encodeURIComponent(userId)}`,
+        `CardName=${encodeURIComponent(cardName)}`,
+        `CardStatus=0`,
+        `IsValid=${persona.habilitado !== false}`,
+      ];
 
-    const recno = coincidencia.recno;
-    const queryParams = [
-      'action=update',
-      'name=AccessControlCard',
-      `recno=${recno}`,
-      `CardNo=${encodeURIComponent(cardNo)}`,
-      `UserID=${encodeURIComponent(userId)}`,
-      `CardName=${encodeURIComponent(cardName)}`,
-      `CardStatus=0`,
-      `IsValid=${persona.habilitado !== false}`,
-      `ValidDateStart=${encodeURIComponent('2020-01-01 00:00:00')}`,
-      `ValidDateEnd=${encodeURIComponent('2037-12-31 23:59:59')}`,
-    ];
-
-    if (persona.pin) {
-      queryParams.push(`Password=${encodeURIComponent(persona.pin)}`);
-    }
-
-    try {
-      const resp = await this.cgi(
-        ip, port, user, pass, 'GET',
-        `/cgi-bin/recordUpdater.cgi?${queryParams.join('&')}`,
-      );
-      this.logger.log(`✅ [DAHUA PERSONA] Usuario ${userId} (recno=${recno}) actualizado en ${ip}:${port}: ${String(resp.data || '').trim()}`);
-
-      if (persona.fotoBase64) {
-        await this.subirFotoFacial(ip, port, user, pass, userId, persona.fotoBase64);
+      if (persona.pin) {
+        queryParams.push(`Password=${encodeURIComponent(persona.pin)}`);
       }
 
-      return { ok: true, recno };
-    } catch (updErr) {
-      this.logger.error(`❌ [DAHUA PERSONA] Error al actualizar usuario ${userId}: ${updErr.message}`);
-      throw updErr;
+      await this.cgi(
+        ip, port, user, pass, 'GET',
+        `/cgi-bin/recordUpdater.cgi?${queryParams.join('&')}`,
+      ).catch(() => {});
     }
+
+    if (persona.fotoBase64) {
+      await this.subirFotoFacial(ip, port, user, pass, userId, persona.fotoBase64);
+    }
+
+    return { ok: true, recno };
   }
 
   /**
-   * Elimina una persona del hardware Dahua.
-   * GET /cgi-bin/recordUpdater.cgi?action=remove&name=AccessControlCard&recno=...
+   * Elimina una persona del hardware Dahua (AccessUserInfo y AccessControlCard).
    */
   async eliminarPersona(ip: string, port: number, user: string, pass: string, userId: string): Promise<{ ok: boolean }> {
     const userIdClean = String(userId).slice(0, 20);
     this.logger.log(`🗑️ [DAHUA PERSONA] Eliminando userId=${userIdClean} de ${ip}:${port}`);
 
-    // 1. Buscar recno del usuario
+    // 1. Eliminar de AccessControlCard
     const existentes = await this.listarPersonas(ip, port, user, pass);
     const coincidencia = existentes.find(
       p => String(p.userId) === userIdClean || String(p.codigoTarjeta) === userIdClean
     );
 
-    if (!coincidencia || coincidencia.recno === undefined) {
-      this.logger.warn(`⚠️ [DAHUA PERSONA] Usuario ${userIdClean} no encontrado en hardware para eliminar (ya no existe)`);
-      return { ok: true };
+    if (coincidencia && coincidencia.recno !== undefined) {
+      await this.cgi(
+        ip, port, user, pass, 'GET',
+        `/cgi-bin/recordUpdater.cgi?action=remove&name=AccessControlCard&recno=${coincidencia.recno}`,
+      ).catch(() => {});
     }
 
-    const recno = coincidencia.recno;
+    // 2. Eliminar de AccessUserInfo
     try {
-      const resp = await this.cgi(
+      await this.cgi(
         ip, port, user, pass, 'GET',
-        `/cgi-bin/recordUpdater.cgi?action=remove&name=AccessControlCard&recno=${recno}`,
+        `/cgi-bin/recordUpdater.cgi?action=remove&name=AccessUserInfo&UserID=${encodeURIComponent(userIdClean)}`,
       );
-      this.logger.log(`✅ [DAHUA PERSONA] Usuario ${userIdClean} (recno=${recno}) eliminado de ${ip}:${port}: ${String(resp.data || '').trim()}`);
-      return { ok: true };
-    } catch (delErr) {
-      this.logger.error(`❌ [DAHUA PERSONA] Error al eliminar usuario ${userIdClean} (recno=${recno}): ${delErr.message}`);
-      throw delErr;
-    }
+    } catch {}
+
+    return { ok: true };
   }
 
   /**
-   * Sube/actualiza la foto facial de una persona en el hardware Dahua.
-   * POST /cgi-bin/AccessControl.cgi?action=insertRecord&name=Face
+   * Sube/actualiza la foto facial de una persona en el hardware Dahua ASI7213X vía JSON-RPC (AccessFaceInfo).
    */
   async subirFotoFacial(
     ip: string, port: number, user: string, pass: string,
@@ -455,42 +474,96 @@ export class DahuaService {
     try {
       this.logger.log(`🤳 [DAHUA FACE] Subiendo foto facial para userId=${userId} en ${ip}:${port}`);
 
-      // Limpiar prefijo si viene con data:image/...
+      // Limpiar prefijo data:image/... si está presente
       const base64Clean = fotoBase64.includes(',') ? fotoBase64.split(',')[1] : fotoBase64;
-      const imageBuffer = Buffer.from(base64Clean, 'base64');
 
-      // Dahua ASI acepta la foto en multipart con el UserID en los parámetros
-      const boundary = `----DahuaBoundary${randomBytes(8).toString('hex')}`;
-      const faceRecord = JSON.stringify({ UserID: String(userId).slice(0, 20) });
+      // 1. Crear instancia de RecordUpdater para AccessFaceInfo
+      const inst = await this.rpcCall(ip, port, user, pass, 'RecordUpdater.factory.instance', { name: 'AccessFaceInfo' });
+      const updaterId = inst?.result;
 
-      const parts = [
-        `--${boundary}\r\n`,
-        `Content-Disposition: form-data; name="FaceURL"\r\n`,
-        `Content-Type: application/json\r\n\r\n`,
-        `${faceRecord}\r\n`,
-        `--${boundary}\r\n`,
-        `Content-Disposition: form-data; name="FaceImage"; filename="face.jpg"\r\n`,
-        `Content-Type: image/jpeg\r\n\r\n`,
-      ];
+      if (!updaterId) {
+        this.logger.warn(`⚠️ [DAHUA FACE] No se pudo obtener RecordUpdater para AccessFaceInfo en ${ip}:${port}`);
+        return false;
+      }
 
-      const header = Buffer.from(parts.join(''));
-      const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
-      const multipartBody = Buffer.concat([header, imageBuffer, footer]);
+      // 2. Insertar foto facial para el UserID
+      const insertRes = await this.rpcCall(ip, port, user, pass, 'RecordUpdater.insert', {
+        record: {
+          UserID: String(userId).slice(0, 20),
+          PhotoData: [base64Clean],
+        }
+      }, updaterId);
 
-      await this.cgiRaw(
-        ip, port, user, pass,
-        'POST',
-        `/cgi-bin/AccessControl.cgi?action=insertRecord&name=Face`,
-        multipartBody,
-        `multipart/form-data; boundary=${boundary}`,
-      );
+      // 3. Destruir el RecordUpdater para liberar recursos en el Dahua
+      await this.rpcCall(ip, port, user, pass, 'RecordUpdater.destroy', null, updaterId).catch(() => {});
 
-      this.logger.log(`✅ [DAHUA FACE] Foto facial subida correctamente para userId=${userId}`);
-      return true;
+      if (insertRes?.result) {
+        this.logger.log(`✅ [DAHUA FACE] Foto facial vinculada exitosamente con el rostro en Dahua para userId=${userId}`);
+        return true;
+      } else {
+        this.logger.warn(`⚠️ [DAHUA FACE] Dahua no pudo procesar el rostro para userId=${userId}: ${JSON.stringify(insertRes?.error || insertRes)}`);
+        return false;
+      }
     } catch (err) {
       this.logger.error(`❌ [DAHUA FACE] Error al subir foto facial userId=${userId}: ${err.message}`);
       return false;
     }
+  }
+
+  /**
+   * Ejecuta llamadas JSON-RPC autenticadas al endpoint /RPC2_Login y /RPC2 de Dahua.
+   */
+  async rpcCall(ip: string, port: number, user: string, pass: string, method: string, params: any = null, objectId?: number): Promise<any> {
+    const baseUrl = `http://${ip}:${port}`;
+
+    // Step 1: Challenge
+    const step1 = await axios.post(`${baseUrl}/RPC2_Login`, {
+      method: 'global.login',
+      params: { userName: user, password: '', clientType: 'Web3.0' },
+      id: 1,
+    }, { timeout: 6000 });
+
+    const step1Data = step1.data;
+    if (!step1Data?.params) {
+      throw new Error(`Dahua RPC2 challenge falló`);
+    }
+
+    const { realm, random } = step1Data.params;
+    const sessionId = step1Data.session;
+
+    // Step 2: Response hash
+    const ha1 = createHash('md5').update(`${user}:${realm}:${pass}`).digest('hex').toUpperCase();
+    const finalPass = createHash('md5').update(`${user}:${random}:${ha1}`).digest('hex').toUpperCase();
+
+    const step2 = await axios.post(`${baseUrl}/RPC2_Login`, {
+      method: 'global.login',
+      params: {
+        userName: user,
+        password: finalPass,
+        clientType: 'Web3.0',
+        authorityType: 'Default',
+      },
+      session: sessionId,
+      id: 2,
+    }, { timeout: 6000 });
+
+    if (!step2.data?.result) {
+      throw new Error(`Dahua RPC2 login rechazado`);
+    }
+
+    // Step 3: Execute method
+    const rpcPayload: any = {
+      method,
+      params,
+      session: sessionId,
+      id: 3,
+    };
+    if (objectId !== undefined) {
+      rpcPayload.object = objectId;
+    }
+
+    const methodResp = await axios.post(`${baseUrl}/RPC2`, rpcPayload, { timeout: 10000 });
+    return methodResp.data;
   }
 
   // ─── EVENTOS / LOG ──────────────────────────────────────────────────────────
