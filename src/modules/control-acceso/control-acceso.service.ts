@@ -165,35 +165,64 @@ export class ControlAccesoService implements OnModuleInit {
       try {
         const lastOctet = local_ip.split('.').pop();
         const baseOffset = Number(lastOctet || '80');
+        const marca = String(insertData.configuracion_tecnica?.marca || insertData.marca || '').toLowerCase();
+        const isDahua = marca.includes('dahua');
 
         const mappedHttpPort = 10000 + baseOffset;
         const mappedSdkPort = 20000 + baseOffset;
         const mappedRtspPort = 30000 + baseOffset;
+        const mappedSipPort = 50000 + baseOffset;
+        const mappedRtpPort = 40000 + baseOffset;
 
-        this.logger.log(`🔧 [NAT MAPPING] Creando reglas NAT en MikroTik ${mikrotik_ip} hacia ${local_ip}...`);
+        this.logger.log(`🔧 [NAT MAPPING] Creando reglas NAT en MikroTik ${mikrotik_ip} hacia ${local_ip} (Marca: ${isDahua ? 'Dahua' : 'Hikvision'})...`);
 
         // Mapear HTTP (80)
         const finalActivePort = await this.addMikrotikNatRule(
           mikrotik_ip, local_ip, mappedHttpPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '80'
         );
 
-        // Mapear SDK (8000)
-        await this.addMikrotikNatRule(
-          mikrotik_ip, local_ip, mappedSdkPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '8000'
-        );
-
-        // Mapear RTSP (554) - TCP
-        await this.addMikrotikNatRule(
-          mikrotik_ip, local_ip, mappedRtspPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '554', 'tcp'
-        );
-
-        // Mapear RTSP (554) - UDP (Requerido por algunas cámaras genéricas)
-        await this.addMikrotikNatRule(
-          mikrotik_ip, local_ip, mappedRtspPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '554', 'udp'
-        );
+        if (isDahua) {
+          // ─── DAHUA ESPECÍFICO ───
+          // 1. SDK Dahua (37777 TCP)
+          await this.addMikrotikNatRule(
+            mikrotik_ip, local_ip, mappedSdkPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '37777', 'tcp'
+          );
+          // 2. RTSP TCP (554)
+          await this.addMikrotikNatRule(
+            mikrotik_ip, local_ip, mappedRtspPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '554', 'tcp'
+          );
+          // 3. RTSP UDP (554)
+          await this.addMikrotikNatRule(
+            mikrotik_ip, local_ip, mappedRtspPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '554', 'udp'
+          );
+          // 4. SIP Intercom (5060 TCP & UDP)
+          await this.addMikrotikNatRule(
+            mikrotik_ip, local_ip, mappedSipPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '5060', 'tcp'
+          );
+          await this.addMikrotikNatRule(
+            mikrotik_ip, local_ip, mappedSipPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '5060', 'udp'
+          );
+          // 5. RTP Audio (15000 UDP)
+          await this.addMikrotikNatRule(
+            mikrotik_ip, local_ip, mappedRtpPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '15000', 'udp'
+          );
+        } else {
+          // ─── HIKVISION / GENÉRICO (Intacto) ───
+          // Mapear SDK Hikvision (8000)
+          await this.addMikrotikNatRule(
+            mikrotik_ip, local_ip, mappedSdkPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '8000'
+          );
+          // Mapear RTSP (554) - TCP
+          await this.addMikrotikNatRule(
+            mikrotik_ip, local_ip, mappedRtspPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '554', 'tcp'
+          );
+          // Mapear RTSP (554) - UDP
+          await this.addMikrotikNatRule(
+            mikrotik_ip, local_ip, mappedRtspPort, mikrotik_usuario, mikrotik_password, mikrotik_puerto, '554', 'udp'
+          );
+        }
 
         // Actualizar detalles del dispositivo con el puerto mapeado HTTP principal
-        // NO sobrescribimos finalIp porque la VPN (10.8.0.2) es la mejor ruta para MediaMTX
         finalPort = finalActivePort;
 
         // Actualizar mappedPortsInfo si el NAT fue exitoso
@@ -201,8 +230,13 @@ export class ControlAccesoService implements OnModuleInit {
           mapped_http: mappedHttpPort,
           mapped_sdk: mappedSdkPort,
           mapped_rtsp: mappedRtspPort,
+          mapped_sip: isDahua ? mappedSipPort : undefined,
+          mapped_rtp: isDahua ? mappedRtpPort : undefined,
           original_http: originalHttpPort,
           original_rtsp: originalRtspPort,
+          original_sdk: isDahua ? 37777 : 8000,
+          original_sip: isDahua ? 5060 : undefined,
+          original_rtp: isDahua ? 15000 : undefined,
           original_ip: local_ip
         };
       } catch (err) {
@@ -4987,5 +5021,111 @@ export class ControlAccesoService implements OnModuleInit {
       .single();
     if (error) throw error;
     return data;
+  }
+
+  /**
+   * Sincroniza y crea/actualiza automáticamente las reglas NAT en MikroTik según la marca del dispositivo.
+   * - Hikvision: HTTP (80), SDK (8000), RTSP (554).
+   * - Dahua: HTTP (80), NetSDK (37777), RTSP (554), SIP (5060), RTP Audio (15000).
+   */
+  async sincronizarNatMikrotikDispositivo(dispositivoId: string): Promise<any> {
+    const { data: dev, error } = await this.supabase
+      .getClient()
+      .from('dispositivos_iot')
+      .select('*')
+      .eq('id', dispositivoId)
+      .single();
+
+    if (error || !dev) {
+      throw new Error(`Dispositivo no encontrado con ID: ${dispositivoId}`);
+    }
+
+    const config = dev.configuracion_tecnica || {};
+    const local_ip = config.puertos_mapeados?.original_ip || dev.ip_direccion;
+
+    // Buscar servidor MikroTik correspondiente
+    const { data: servers } = await this.supabase
+      .getClient()
+      .from('control_acceso_servidores_mikrotik')
+      .select('*')
+      .eq('activo', true);
+
+    if (!servers || servers.length === 0) {
+      throw new Error('No hay servidores MikroTik configurados en la plataforma');
+    }
+
+    // Seleccionar el servidor MikroTik afín
+    const srv = servers.find(s => s.ip_publica === dev.ip_direccion) || servers[0];
+    const lastOctet = local_ip.split('.').pop();
+    const baseOffset = Number(lastOctet || '80');
+    const marca = String(config.marca || dev.marca || '').toLowerCase();
+    const isDahua = marca.includes('dahua');
+
+    const mappedHttpPort = 10000 + baseOffset;
+    const mappedSdkPort = 20000 + baseOffset;
+    const mappedRtspPort = 30000 + baseOffset;
+    const mappedSipPort = 50000 + baseOffset;
+    const mappedRtpPort = 40000 + baseOffset;
+
+    const mikrotikPort = String(srv.puerto_rest || 8088);
+
+    this.logger.log(`🔧 [SYNC NAT] Sincronizando NAT en MikroTik ${srv.ip_publica}:${mikrotikPort} para ${dev.nombre_identificador} (${local_ip}) - Marca: ${isDahua ? 'Dahua' : 'Hikvision'}`);
+
+    // 1. Mapear HTTP (80)
+    await this.addMikrotikNatRule(srv.ip_publica, local_ip, mappedHttpPort, srv.usuario, srv.password, mikrotikPort, '80');
+
+    if (isDahua) {
+      // ─── DAHUA ───
+      // 2. NetSDK Dahua (37777 TCP)
+      await this.addMikrotikNatRule(srv.ip_publica, local_ip, mappedSdkPort, srv.usuario, srv.password, mikrotikPort, '37777', 'tcp');
+      // 3. RTSP TCP & UDP (554)
+      await this.addMikrotikNatRule(srv.ip_publica, local_ip, mappedRtspPort, srv.usuario, srv.password, mikrotikPort, '554', 'tcp');
+      await this.addMikrotikNatRule(srv.ip_publica, local_ip, mappedRtspPort, srv.usuario, srv.password, mikrotikPort, '554', 'udp');
+      // 4. SIP Intercom (5060 TCP & UDP)
+      await this.addMikrotikNatRule(srv.ip_publica, local_ip, mappedSipPort, srv.usuario, srv.password, mikrotikPort, '5060', 'tcp');
+      await this.addMikrotikNatRule(srv.ip_publica, local_ip, mappedSipPort, srv.usuario, srv.password, mikrotikPort, '5060', 'udp');
+      // 5. RTP Audio (15000 UDP)
+      await this.addMikrotikNatRule(srv.ip_publica, local_ip, mappedRtpPort, srv.usuario, srv.password, mikrotikPort, '15000', 'udp');
+    } else {
+      // ─── HIKVISION ───
+      await this.addMikrotikNatRule(srv.ip_publica, local_ip, mappedSdkPort, srv.usuario, srv.password, mikrotikPort, '8000');
+      await this.addMikrotikNatRule(srv.ip_publica, local_ip, mappedRtspPort, srv.usuario, srv.password, mikrotikPort, '554', 'tcp');
+      await this.addMikrotikNatRule(srv.ip_publica, local_ip, mappedRtspPort, srv.usuario, srv.password, mikrotikPort, '554', 'udp');
+    }
+
+    const updatedMapped = {
+      mapped_http: mappedHttpPort,
+      mapped_sdk: mappedSdkPort,
+      mapped_rtsp: mappedRtspPort,
+      mapped_sip: isDahua ? mappedSipPort : undefined,
+      mapped_rtp: isDahua ? mappedRtpPort : undefined,
+      original_http: 80,
+      original_rtsp: 554,
+      original_sdk: isDahua ? 37777 : 8000,
+      original_sip: isDahua ? 5060 : undefined,
+      original_rtp: isDahua ? 15000 : undefined,
+      original_ip: local_ip,
+    };
+
+    const newConfig = {
+      ...config,
+      puerto: mappedHttpPort,
+      puertos_mapeados: updatedMapped,
+    };
+
+    await this.supabase
+      .getClient()
+      .from('dispositivos_iot')
+      .update({ configuracion_tecnica: newConfig })
+      .eq('id', dispositivoId);
+
+    await this.devicePoller.refreshDeviceList().catch(() => {});
+
+    return {
+      ok: true,
+      mensaje: `Reglas NAT sincronizadas con éxito en MikroTik para ${dev.nombre_identificador}`,
+      servidor_mikrotik: srv.ip_publica,
+      puertos_mapeados: updatedMapped,
+    };
   }
 }

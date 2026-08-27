@@ -207,6 +207,13 @@ export class ControlAccesoController {
     return this.controlAccesoService.startVideoStream(id);
   }
 
+  @Post('dispositivos/:id/sincronizar-nat')
+  @ApiOperation({ summary: 'Sincroniza y crea/actualiza automáticamente las reglas NAT en MikroTik según la marca (Dahua/Hikvision)' })
+  async sincronizarNat(@Param('id') id: string) {
+    this.logger.log(`🔧 [SYNC-NAT] Solicitando sincronización de reglas NAT MikroTik para dispositivo: ${id}`);
+    return this.controlAccesoService.sincronizarNatMikrotikDispositivo(id);
+  }
+
   @Public()
   @Get('debug-intercom/:id')
   @ApiOperation({ summary: 'Queries intercom configuration and status' })
