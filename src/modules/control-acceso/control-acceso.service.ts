@@ -4,6 +4,7 @@ import axios from 'axios';
 import { SupabaseService } from '../supabase/supabase.service';
 import { CreateDispositivoDto, CreatePersonaAccesoDto } from './dto/control-acceso.dto';
 import { randomBytes, createHash } from 'crypto';
+import * as dgram from 'dgram';
 import { DevicePollerService } from './device-poller.service';
 import { spawn } from 'child_process';
 import { DahuaService } from './dahua.service';
@@ -958,8 +959,61 @@ export class ControlAccesoService implements OnModuleInit {
   ): Promise<any> {
     const baseOffset = target.port >= 10000 ? (target.port % 10000) : Number(target.host.split('.').pop() || '6');
     const rtpPort = 40000 + baseOffset;
+    const sipPort = 50000 + baseOffset;
 
-    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Transmitiendo audio RTP PCMA a Dahua ${target.host}:${rtpPort}`);
+    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Iniciando sesión SIP (${target.host}:${sipPort}) y stream RTP PCMA (${target.host}:${rtpPort}) hacia Dahua...`);
+
+    const callId = randomBytes(12).toString('hex') + '@proliseg';
+    const fromTag = randomBytes(6).toString('hex');
+    const branch = 'z9hG4bK' + randomBytes(8).toString('hex');
+    let toTag = '';
+    const sipClient = dgram.createSocket('udp4');
+
+    const sdpBody = 
+`v=0\r
+o=8000 1234 1234 IN IP4 10.8.0.1\r
+s=Talk\r
+c=IN IP4 10.8.0.1\r
+t=0 0\r
+m=audio ${rtpPort} RTP/AVP 8 0\r
+a=rtpmap:8 PCMA/8000\r
+a=rtpmap:0 PCMU/8000\r
+a=sendrecv\r
+`;
+
+    const sipInvite = 
+`INVITE sip:8001@${target.host}:${sipPort} SIP/2.0\r
+Via: SIP/2.0/UDP 10.8.0.1:5060;branch=${branch};rport\r
+Max-Forwards: 70\r
+From: <sip:8000@10.8.0.1>;tag=${fromTag}\r
+To: <sip:8001@${target.host}:${sipPort}>\r
+Call-ID: ${callId}\r
+CSeq: 1 INVITE\r
+Contact: <sip:8000@10.8.0.1:5060>\r
+User-Agent: Dahua VTH5221D\r
+Call-Type: 0\r
+Content-Type: application/sdp\r
+Content-Length: ${Buffer.byteLength(sdpBody)}\r
+\r
+${sdpBody}`;
+
+    sipClient.on('message', (msg) => {
+      const text = msg.toString();
+      if (text.includes('180 Ringing') || text.includes('101 Dialog') || text.includes('200 OK')) {
+        const extractedTag = text.match(/To:[^\n]+tag=([^\r\n;]+)/i)?.[1];
+        if (extractedTag) toTag = extractedTag;
+      }
+    });
+
+    sipClient.on('error', (err) => {
+      this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] SIP error: ${err.message}`);
+    });
+
+    // Enviar INVITE para abrir el canal de audio en el Dahua
+    sipClient.send(Buffer.from(sipInvite), sipPort, target.host, (err) => {
+      if (err) this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] Error al enviar SIP INVITE: ${err.message}`);
+      else this.logger.log(`📞 [AUDIO-IN-DAHUA] SIP INVITE enviado con éxito a ${target.host}:${sipPort}`);
+    });
 
     return new Promise((resolve) => {
       let isSettled = false;
@@ -983,7 +1037,39 @@ export class ControlAccesoService implements OnModuleInit {
         if (isSettled) return;
         isSettled = true;
         try { ffmpeg.kill('SIGKILL'); } catch {}
-        resolve({ ok: true, mensaje: 'Transmisión RTP a Dahua finalizada' });
+
+        // Enviar BYE / CANCEL para cerrar la llamada en el Dahua
+        try {
+          const sipBye = 
+`BYE sip:8001@${target.host}:${sipPort} SIP/2.0\r
+Via: SIP/2.0/UDP 10.8.0.1:5060;branch=${branch}2;rport\r
+Max-Forwards: 70\r
+From: <sip:8000@10.8.0.1>;tag=${fromTag}\r
+To: <sip:8001@${target.host}:${sipPort}>${toTag ? ';tag=' + toTag : ''}\r
+Call-ID: ${callId}\r
+CSeq: 2 BYE\r
+Content-Length: 0\r
+\r
+`;
+          const sipCancel = 
+`CANCEL sip:8001@${target.host}:${sipPort} SIP/2.0\r
+Via: SIP/2.0/UDP 10.8.0.1:5060;branch=${branch};rport\r
+Max-Forwards: 70\r
+From: <sip:8000@10.8.0.1>;tag=${fromTag}\r
+To: <sip:8001@${target.host}:${sipPort}>\r
+Call-ID: ${callId}\r
+CSeq: 1 CANCEL\r
+Content-Length: 0\r
+\r
+`;
+          sipClient.send(Buffer.from(toTag ? sipBye : sipCancel), sipPort, target.host, () => {
+            try { sipClient.close(); } catch {}
+          });
+        } catch {
+          try { sipClient.close(); } catch {}
+        }
+
+        resolve({ ok: true, mensaje: 'Transmisión Dahua finalizada' });
       };
 
       ffmpeg.on('close', (code) => {
