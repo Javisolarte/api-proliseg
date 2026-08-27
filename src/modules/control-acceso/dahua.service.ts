@@ -117,6 +117,18 @@ export class DahuaService {
         'Encode[0].ExtraFormat[0].Audio.Compression=G.711A',
         'Encode[0].ExtraFormat[0].Audio.Frequency=8000',
         'Encode[0].ExtraFormat[0].Audio.Bitrate=64',
+        'Encode[1].MainFormat[0].Video.Compression=H.264',
+        'Encode[1].ExtraFormat[0].Video.Compression=H.264',
+        'Encode[1].MainFormat[0].Video.GOP=25',
+        'Encode[1].ExtraFormat[0].Video.GOP=25',
+        'Encode[1].MainFormat[0].AudioEnable=true',
+        'Encode[1].ExtraFormat[0].AudioEnable=true',
+        'Encode[1].MainFormat[0].Audio.Compression=G.711A',
+        'Encode[1].MainFormat[0].Audio.Frequency=8000',
+        'Encode[1].MainFormat[0].Audio.Bitrate=64',
+        'Encode[1].ExtraFormat[0].Audio.Compression=G.711A',
+        'Encode[1].ExtraFormat[0].Audio.Frequency=8000',
+        'Encode[1].ExtraFormat[0].Audio.Bitrate=64',
       ].join('&');
       await this.cgi(ip, port, user, pass, 'GET', `/cgi-bin/configManager.cgi?${query}`);
       this.logger.log(`📹 [DAHUA ENCODE] Formato H.264 (GOP=25) + Audio G.711A (8000Hz) configurado en ${ip}:${port}`);
