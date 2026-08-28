@@ -3917,7 +3917,6 @@ Content-Length: 0\r
       lista_estado: 'blanca',
       entidad_tipo: 'residente',
       activo: true,
-      foto_rostro_url: rec.foto_rostro_url || null,
     };
 
     if (rec.correo_electronico) {
