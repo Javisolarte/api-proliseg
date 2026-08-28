@@ -766,7 +766,7 @@ export class DahuaService {
 
   /**
    * Obtiene el log de eventos de acceso del Dahua ASI7213X.
-   * POST /cgi-bin/recordFinder.cgi?action=find&name=ACSAccessLog
+   * GET /cgi-bin/recordFinder.cgi?action=find&name=AccessControlCardRec&count=50
    */
   async obtenerEventos(
     ip: string, port: number, user: string, pass: string,
@@ -774,29 +774,36 @@ export class DahuaService {
   ): Promise<DahuaEvento[]> {
     this.logger.debug(`📋 [DAHUA EVENTOS] Obteniendo log de ${ip}:${port}`);
 
-    const condition: any = { Count: maxResults };
-    if (desde) {
-      const fmt = (n: number) => String(n).padStart(2, '0');
-      const d = desde;
-      condition.StartTime = `${d.getFullYear()}-${fmt(d.getMonth() + 1)}-${fmt(d.getDate())} ` +
-        `${fmt(d.getHours())}:${fmt(d.getMinutes())}:${fmt(d.getSeconds())}`;
+    const tables = ['AccessControlCardRec', 'AccessRecord'];
+    for (const table of tables) {
+      try {
+        const resp = await this.cgi(
+          ip, port, user, pass, 'GET',
+          `/cgi-bin/recordFinder.cgi?action=find&name=${table}&count=${maxResults}`,
+        );
+        const raw = String(resp.data || '');
+        if (raw && !raw.toLowerCase().includes('error')) {
+          const eventos = this.parseDahuaEventos(raw);
+          if (eventos.length > 0) return eventos;
+        }
+      } catch (err: any) {
+        this.logger.debug(`⚠️ [DAHUA EVENTOS] Tabla ${table} no disponible: ${err.message}`);
+      }
     }
 
-    const body = JSON.stringify({ name: 'ACSAccessLog', condition });
-
-    let resp: any;
+    // Fallback: log.cgi
     try {
-      resp = await this.cgi(
-        ip, port, user, pass, 'POST',
-        `/cgi-bin/recordFinder.cgi?action=find&name=ACSAccessLog`,
-        body, 'text', 'application/json',
+      const resp = await this.cgi(
+        ip, port, user, pass, 'GET',
+        `/cgi-bin/log.cgi?action=getLog&count=${maxResults}`,
       );
-    } catch (err) {
-      this.logger.warn(`⚠️ [DAHUA EVENTOS] Error: ${err.message}`);
-      return [];
-    }
+      const raw = String(resp.data || '');
+      if (raw && !raw.toLowerCase().includes('error')) {
+        return this.parseDahuaEventos(raw);
+      }
+    } catch {}
 
-    return this.parseDahuaEventos(String(resp.data || ''));
+    return [];
   }
 
   // ─── PROCESAMIENTO DE WEBHOOK ────────────────────────────────────────────────
@@ -1063,35 +1070,44 @@ export class DahuaService {
 
     try {
       const json = JSON.parse(raw);
-      const records = json?.records || json?.data || [];
+      const records = json?.records || json?.data || json?.params?.records || [];
       if (Array.isArray(records)) {
         return records.map((r: any) => ({
-          tipo: this.mapDahuaEventType(r.EventType || r.type || ''),
+          tipo: this.mapDahuaEventType(r.EventType || r.type || r.Status || ''),
           userId: r.UserID || r.userId || undefined,
-          nombre: r.UserName || r.name || undefined,
+          nombre: r.CardName || r.UserName || r.name || undefined,
           codigoTarjeta: r.CardNo || r.cardNo || undefined,
           timestamp: r.Time || r.time || new Date().toISOString(),
-          canal: Number(r.Channel || r.channel || 1),
+          canal: Number(r.Door || r.Channel || r.channel || 1),
           raw: r,
         }));
       }
-    } catch { /* parsear como key=value */ }
+    } catch { /* parsear como table.XXX */ }
 
-    const block = raw.split(/\n(?=table\.)/);
-    block.forEach(b => {
-      const kv = this.parseConfig(b);
-      if (kv['UserID'] || kv['CardNo']) {
+    const map = new Map<string, any>();
+    const lines = raw.split('\n');
+    for (const line of lines) {
+      const match = line.trim().match(/^table\.([a-zA-Z0-9_]+)\[(\d+)\]\.([a-zA-Z0-9_]+)=(.*)$/);
+      if (!match) continue;
+      const [, tableName, index, key, val] = match;
+      const itemKey = `${tableName}_${index}`;
+      if (!map.has(itemKey)) map.set(itemKey, {});
+      map.get(itemKey)[key] = val;
+    }
+
+    for (const [, obj] of map.entries()) {
+      if (obj.UserID || obj.CardNo || obj.Time || obj.CardName || obj.UserName) {
         eventos.push({
-          tipo: this.mapDahuaEventType(kv['EventType'] || ''),
-          userId: kv['UserID'] || undefined,
-          nombre: kv['UserName'] || undefined,
-          codigoTarjeta: kv['CardNo'] || undefined,
-          timestamp: kv['Time'] || new Date().toISOString(),
-          canal: Number(kv['Channel'] || 1),
-          raw: kv,
+          tipo: this.mapDahuaEventType(obj.EventType || obj.Status || obj.Method || ''),
+          userId: obj.UserID || undefined,
+          nombre: obj.CardName || obj.UserName || undefined,
+          codigoTarjeta: obj.CardNo || undefined,
+          timestamp: obj.Time || new Date().toISOString(),
+          canal: Number(obj.Door || obj.Channel || 1),
+          raw: obj,
         });
       }
-    });
+    }
 
     return eventos;
   }
@@ -1099,15 +1115,15 @@ export class DahuaService {
   /**
    * Mapea el EventType del Dahua al tipo de evento normalizado de PROLISEG.
    */
-  private mapDahuaEventType(eventType: string): string {
+  private mapDahuaEventType(eventType: string | number): string {
     const et = String(eventType).toLowerCase();
-    if (et.includes('entry') || et.includes('enter') || et === '0') return 'entrada';
-    if (et.includes('exit') || et === '1') return 'salida';
-    if (et.includes('failed') || et.includes('deny') || et === '2') return 'acceso_denegado';
+    if (et.includes('entry') || et.includes('enter') || et === '1' || et === 'true') return 'entrada';
+    if (et.includes('exit')) return 'salida';
+    if (et.includes('failed') || et.includes('deny') || et === '0' || et === 'false') return 'acceso_denegado';
     if (et.includes('call') || et.includes('videotalk')) return 'llamada';
     if (et.includes('open')) return 'puerta_abierta';
     if (et.includes('close')) return 'puerta_cerrada';
-    return 'evento';
+    return 'entrada';
   }
 
   /**
