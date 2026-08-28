@@ -1010,14 +1010,17 @@ export class ControlAccesoService implements OnModuleInit {
 
     const sdpBody = 
 `v=0\r
-o=8000 1234 1234 IN IP4 10.8.0.1\r
-s=Talk\r
+o=- 1234 1234 IN IP4 10.8.0.1\r
+s=vtcall\r
 c=IN IP4 10.8.0.1\r
 t=0 0\r
-m=audio ${rtpPort} RTP/AVP 8 0\r
-a=rtpmap:8 PCMA/8000\r
+m=audio ${rtpPort} RTP/AVP 0 97\r
 a=rtpmap:0 PCMU/8000\r
+a=rtpmap:97 PCM/16000\r
 a=sendrecv\r
+m=video ${rtpPort + 2} RTP/AVP 97\r
+a=recvonly\r
+a=rtpmap:97 H264/90000\r
 `;
 
     const sipInvite = 
@@ -1029,7 +1032,7 @@ To: <sip:8001@${target.host}:${sipPort}>\r
 Call-ID: ${callId}\r
 CSeq: 1 INVITE\r
 Contact: <sip:8000@10.8.0.1:5060>\r
-User-Agent: Dahua DSS-C9100\r
+User-Agent: SmartPSSPlusClient\r
 Call-Type: 0\r
 Action: Call\r
 Alert-Info: <urn:alert:service:normal>;info=AutoAnswer\r
@@ -1088,9 +1091,9 @@ Content-Length: 0\r
         '-i', 'pipe:0',
         '-ac', '1',
         '-ar', '8000',
-        '-c:a', 'pcm_alaw',
-        '-af', 'volume=3.0',
-        '-payload_type', '8',
+        '-c:a', 'pcm_mulaw',
+        '-af', 'volume=3.5',
+        '-payload_type', '0',
         '-flush_packets', '1',
         '-f', 'rtp',
         `rtp://${target.host}:${rtpPort}`,
