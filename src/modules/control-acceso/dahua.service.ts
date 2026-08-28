@@ -245,8 +245,29 @@ export class DahuaService {
       ].join('&');
       await this.cgi(ip, port, user, pass, 'GET', `/cgi-bin/configManager.cgi?${query}`);
       this.logger.log(`📹 [DAHUA ENCODE] Formato H.264 (GOP=25) + Audio G.711A (8000Hz) configurado en ${ip}:${port}`);
-    } catch (err) {
+    } catch (err: any) {
       this.logger.warn(`⚠️ [DAHUA ENCODE] No se pudo forzar H.264/GOP/G.711A vía CGI: ${err.message}`);
+    }
+  }
+
+  /**
+   * Configura el volumen del altavoz físico y avisos de voz en el hardware Dahua (0-10) y desmutea.
+   */
+  async ajustarVolumenAltavoz(ip: string, port: number, user: string, pass: string, volumen = 8): Promise<void> {
+    try {
+      const query = [
+        'action=setConfig',
+        `Volume.VoicePrompt=${volumen}`,
+        `Volume.Call=${volumen}`,
+        `Volume.Beep=${volumen}`,
+        `AudioOut[0].Volume=${volumen * 10}`,
+        `Speaker.Volume=${volumen * 10}`,
+        `VoicePrompt.Enable=true`
+      ].join('&');
+      await this.cgi(ip, port, user, pass, 'GET', `/cgi-bin/configManager.cgi?${query}`);
+      this.logger.log(`🔊 [DAHUA VOLUMEN] Altavoz desmuteado y volumen fijado en ${volumen}/10 en ${ip}:${port}`);
+    } catch (e: any) {
+      this.logger.warn(`⚠️ [DAHUA VOLUMEN] Nota al ajustar volumen: ${e.message}`);
     }
   }
 
