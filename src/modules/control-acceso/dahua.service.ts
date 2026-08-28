@@ -651,7 +651,7 @@ export class DahuaService {
   }
 
   /**
-   * Sube/actualiza la foto facial de una persona en el hardware Dahua ASI7213X vía JSON-RPC (AccessFaceInfo).
+   * Sube/actualiza la foto facial de una persona en el hardware Dahua ASI7213X vía método nativo AccessFace.insertMulti.
    */
   async subirFotoFacial(
     ip: string, port: number, user: string, pass: string,
@@ -666,50 +666,40 @@ export class DahuaService {
       const normBuf = await this.normalizeFaceJpeg(rawBuf);
       const base64Clean = normBuf.toString('base64');
 
-      // 1. Crear instancia de RecordUpdater para AccessFaceInfo
-      const inst = await this.rpcCall(ip, port, user, pass, 'RecordUpdater.factory.instance', { name: 'AccessFaceInfo' });
-      const updaterId = inst?.result;
+      const uIdStr = String(userId).slice(0, 20);
 
-      if (!updaterId) {
-        this.logger.warn(`⚠️ [DAHUA FACE] No se pudo obtener RecordUpdater para AccessFaceInfo en ${ip}:${port}`);
-        return false;
-      }
-
-      // 2. Insertar o actualizar foto facial para el UserID
-      let uploadSuccess = false;
-      const insertRes = await this.rpcCall(ip, port, user, pass, 'RecordUpdater.insert', {
-        record: {
-          UserID: String(userId).slice(0, 20),
-          PhotoData: [base64Clean],
-        }
-      }, updaterId).catch(() => null);
-
-      if (insertRes?.result) {
-        uploadSuccess = true;
-      } else {
-        // Si falló (ej. ya existía), intentar actualizar
-        const updateRes = await this.rpcCall(ip, port, user, pass, 'RecordUpdater.update', {
-          record: {
-            UserID: String(userId).slice(0, 20),
+      // 1. Usar el método nativo AccessFace.insertMulti
+      const insertRes = await this.rpcCall(ip, port, user, pass, 'AccessFace.insertMulti', {
+        FaceList: [
+          {
+            UserID: uIdStr,
             PhotoData: [base64Clean],
           }
-        }, updaterId).catch(() => null);
+        ]
+      }).catch(() => null);
 
-        if (updateRes?.result) {
-          uploadSuccess = true;
-        }
-      }
-
-      // 3. Destruir el RecordUpdater para liberar recursos en el Dahua
-      await this.rpcCall(ip, port, user, pass, 'RecordUpdater.destroy', null, updaterId).catch(() => {});
-
-      if (uploadSuccess) {
-        this.logger.log(`✅ [DAHUA FACE] Foto facial vinculada exitosamente con el rostro en Dahua para userId=${userId}`);
+      if (insertRes?.result) {
+        this.logger.log(`✅ [DAHUA FACE] Foto facial registrada exitosamente en hardware Dahua para userId=${userId}`);
         return true;
-      } else {
-        this.logger.warn(`⚠️ [DAHUA FACE] Dahua procesó el registro para userId=${userId}: ${JSON.stringify(insertRes?.error || insertRes)}`);
-        return false;
       }
+
+      // 2. Si ya existía, intentar AccessFace.updateMulti
+      const updateRes = await this.rpcCall(ip, port, user, pass, 'AccessFace.updateMulti', {
+        FaceList: [
+          {
+            UserID: uIdStr,
+            PhotoData: [base64Clean],
+          }
+        ]
+      }).catch(() => null);
+
+      if (updateRes?.result) {
+        this.logger.log(`✅ [DAHUA FACE] Foto facial actualizada exitosamente en hardware Dahua para userId=${userId}`);
+        return true;
+      }
+
+      this.logger.warn(`⚠️ [DAHUA FACE] Dahua no pudo indexar la foto para userId=${userId}: ${JSON.stringify(insertRes?.error || updateRes?.error)}`);
+      return false;
     } catch (err: any) {
       this.logger.error(`❌ [DAHUA FACE] Error al subir foto facial userId=${userId}: ${err.message}`);
       return false;
