@@ -629,10 +629,10 @@ export class DahuaService {
       const { spawn } = require('child_process');
       const proc = spawn(bin, [
         '-i', 'pipe:0',
-        '-vf', 'scale=480:640:force_original_aspect_ratio=decrease,pad=480:640:(ow-iw)/2:(oh-ih)/2',
+        '-vf', 'scale=420:560:force_original_aspect_ratio=decrease,pad=420:560:(ow-iw)/2:(oh-ih)/2',
         '-pix_fmt', 'yuvj420p',
         '-map_metadata', '-1',
-        '-q:v', '5',
+        '-q:v', '4',
         '-f', 'image2',
         '-vcodec', 'mjpeg',
         'pipe:1'
