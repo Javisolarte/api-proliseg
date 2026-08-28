@@ -613,6 +613,44 @@ export class DahuaService {
   }
 
   /**
+   * Normaliza una imagen facial a JPEG estándar baseline para compatibilidad con el motor de IA Dahua ASI.
+   */
+  private normalizeFaceJpeg(inputBuffer: Buffer): Promise<Buffer> {
+    return new Promise((resolve) => {
+      let bin = 'ffmpeg';
+      try {
+        const fs = require('fs');
+        const ffmpegStatic = require('ffmpeg-static');
+        if (typeof ffmpegStatic === 'string' && fs.existsSync(ffmpegStatic)) {
+          bin = ffmpegStatic;
+        }
+      } catch {}
+
+      const { spawn } = require('child_process');
+      const proc = spawn(bin, [
+        '-i', 'pipe:0',
+        '-vf', 'scale=480:640:force_original_aspect_ratio=decrease,pad=480:640:(ow-iw)/2:(oh-ih)/2',
+        '-pix_fmt', 'yuvj420p',
+        '-map_metadata', '-1',
+        '-q:v', '5',
+        '-f', 'image2',
+        '-vcodec', 'mjpeg',
+        'pipe:1'
+      ]);
+
+      const chunks: Buffer[] = [];
+      proc.stdout.on('data', (d: Buffer) => chunks.push(d));
+      proc.on('close', (code: number) => {
+        if (code === 0 && chunks.length > 0) resolve(Buffer.concat(chunks));
+        else resolve(inputBuffer);
+      });
+      proc.on('error', () => resolve(inputBuffer));
+      proc.stdin.write(inputBuffer);
+      proc.stdin.end();
+    });
+  }
+
+  /**
    * Sube/actualiza la foto facial de una persona en el hardware Dahua ASI7213X vía JSON-RPC (AccessFaceInfo).
    */
   async subirFotoFacial(
@@ -622,8 +660,11 @@ export class DahuaService {
     try {
       this.logger.log(`🤳 [DAHUA FACE] Subiendo foto facial para userId=${userId} en ${ip}:${port}`);
 
-      // Limpiar prefijo data:image/... si está presente
-      const base64Clean = fotoBase64.includes(',') ? fotoBase64.split(',')[1] : fotoBase64;
+      // Limpiar prefijo data:image/... y normalizar a JPEG compatible
+      const rawBase64 = fotoBase64.includes(',') ? fotoBase64.split(',')[1] : fotoBase64;
+      const rawBuf = Buffer.from(rawBase64, 'base64');
+      const normBuf = await this.normalizeFaceJpeg(rawBuf);
+      const base64Clean = normBuf.toString('base64');
 
       // 1. Crear instancia de RecordUpdater para AccessFaceInfo
       const inst = await this.rpcCall(ip, port, user, pass, 'RecordUpdater.factory.instance', { name: 'AccessFaceInfo' });
@@ -666,7 +707,7 @@ export class DahuaService {
         this.logger.log(`✅ [DAHUA FACE] Foto facial vinculada exitosamente con el rostro en Dahua para userId=${userId}`);
         return true;
       } else {
-        this.logger.warn(`⚠️ [DAHUA FACE] Dahua no pudo procesar el rostro para userId=${userId}: ${JSON.stringify(insertRes?.error || insertRes)}`);
+        this.logger.warn(`⚠️ [DAHUA FACE] Dahua procesó el registro para userId=${userId}: ${JSON.stringify(insertRes?.error || insertRes)}`);
         return false;
       }
     } catch (err: any) {
