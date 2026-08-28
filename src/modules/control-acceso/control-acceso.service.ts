@@ -1101,9 +1101,9 @@ Content-Length: 0\r
         resolve({ ok: true, mensaje: 'Transmisión Dahua finalizada' });
       };
 
-      const startFFmpeg = (dahuaAudioPort: number) => {
+      const startFFmpeg = () => {
         if (ffmpegProcess) return;
-        this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Extrayendo puerto RTP SDP Dahua: ${dahuaAudioPort}. Iniciando FFmpeg...`);
+        this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Iniciando stream RTP PCMU hacia ${target.host}:${rtpPort}...`);
         ffmpegProcess = spawn(this.getFfmpegBinary(), [
           '-hide_banner',
           '-loglevel', 'warning',
@@ -1119,7 +1119,7 @@ Content-Length: 0\r
           '-payload_type', '0',
           '-flush_packets', '1',
           '-f', 'rtp',
-          `rtp://${target.host}:${dahuaAudioPort}`,
+          `rtp://${target.host}:${rtpPort}`,
         ]);
 
         audioStream.pipe(ffmpegProcess.stdin);
@@ -1141,14 +1141,8 @@ Content-Length: 0\r
         if (extractedTag) toTag = extractedTag;
         
         if (!audioPortFound) {
-          const audioPortMatch = text.match(/m=audio\s+(\d+)/i);
-          if (audioPortMatch && parseInt(audioPortMatch[1], 10) > 0) {
-            audioPortFound = true;
-            startFFmpeg(parseInt(audioPortMatch[1], 10));
-          } else if (text.includes('200 OK') && !audioPortFound) {
-            audioPortFound = true;
-            startFFmpeg(rtpPort);
-          }
+          audioPortFound = true;
+          startFFmpeg();
         }
         
         sendAck(toTag);
@@ -1165,13 +1159,8 @@ Content-Length: 0\r
           safeFinish();
         } else {
           this.logger.log(`📞 [AUDIO-IN-DAHUA] SIP INVITE enviado a ${target.host}:${sipPort}`);
-          setTimeout(() => {
-            if (!audioPortFound) {
-              this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] Timeout SDP. Forzando puerto RTP ${rtpPort}`);
-              audioPortFound = true;
-              startFFmpeg(rtpPort);
-            }
-          }, 3000);
+          // Iniciar FFmpeg de inmediato para no perder paquetes iniciales
+          startFFmpeg();
         }
       });
 
@@ -1376,9 +1365,6 @@ Content-Length: 0\r
     const rtspPort = target.rtspPort || 554;
     const encodedPass = encodeURIComponent(target.pass);
     const rtspUrl = `rtsp://${target.user}:${encodedPass}@${target.host}:${rtspPort}/cam/realmonitor?channel=1&subtype=0`;
-
-    // Asegurar en background que el audio esté habilitado en el encoder Dahua
-    this.dahuaService.asegurarFormatoH264(target.host, target.port, target.user, target.pass).catch(() => {});
 
     try {
       res.set({
