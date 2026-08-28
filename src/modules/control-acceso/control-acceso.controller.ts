@@ -435,6 +435,24 @@ export class ControlAccesoController {
     return this.controlAccesoService.deletePersona(id);
   }
 
+  @Delete('dispositivos/:dispositivoId/personas/:personaId')
+  @ApiOperation({ summary: 'Eliminar una persona de un dispositivo específico sin borrarla globalmente' })
+  async deletePersonaDeDispositivo(
+    @Param('dispositivoId') dispositivoId: string,
+    @Param('personaId') personaId: string
+  ) {
+    return this.controlAccesoService.eliminarPersonaDeDispositivo(dispositivoId, personaId);
+  }
+
+  @Delete('personas/:personaId/dispositivos/:dispositivoId')
+  @ApiOperation({ summary: 'Alias para eliminar una persona de un dispositivo específico' })
+  async deletePersonaDeDispositivoAlias(
+    @Param('personaId') personaId: string,
+    @Param('dispositivoId') dispositivoId: string
+  ) {
+    return this.controlAccesoService.eliminarPersonaDeDispositivo(dispositivoId, personaId);
+  }
+
   // ─────────────────────────────────────────────────────────────────
   // VISITAS
   // ─────────────────────────────────────────────────────────────────

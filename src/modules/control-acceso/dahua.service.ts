@@ -17,9 +17,12 @@ export interface DahuaPersona {
   userId: string;
   nombre: string;
   codigoTarjeta?: string;
+  cardRecno?: number;
   habilitado: boolean;
   recno?: number;
-  raw: any;
+  validFrom?: string;
+  validTo?: string;
+  raw?: any;
 }
 
 export interface DahuaEvento {
@@ -384,42 +387,6 @@ export class DahuaService {
   // ─── GESTIÓN DE PERSONAS ────────────────────────────────────────────────────
 
   /**
-   * Lista todas las personas registradas en el hardware Dahua (usuarios y tarjetas).
-   */
-  async listarPersonas(ip: string, port: number, user: string, pass: string): Promise<DahuaPersona[]> {
-    this.logger.log(`👥 [DAHUA PERSONAS] Listando usuarios de ${ip}:${port}`);
-
-    try {
-      const [respUser, respCard] = await Promise.all([
-        this.cgi(ip, port, user, pass, 'GET', `/cgi-bin/recordFinder.cgi?action=find&name=AccessUserInfo&count=1000`).catch(() => ({ data: '' })),
-        this.cgi(ip, port, user, pass, 'GET', `/cgi-bin/recordFinder.cgi?action=find&name=AccessControlCard&count=1000`).catch(() => ({ data: '' })),
-      ]);
-
-      const personasUser = this.parseDahuaPersonas(String(respUser.data || ''));
-      const personasCard = this.parseDahuaPersonas(String(respCard.data || ''));
-
-      const map = new Map<string, DahuaPersona>();
-      for (const p of personasUser) {
-        map.set(String(p.userId), p);
-      }
-      for (const p of personasCard) {
-        if (map.has(String(p.userId))) {
-          const existing = map.get(String(p.userId))!;
-          existing.codigoTarjeta = p.codigoTarjeta || existing.codigoTarjeta;
-          existing.recno = p.recno ?? existing.recno;
-        } else {
-          map.set(String(p.userId), p);
-        }
-      }
-
-      return Array.from(map.values());
-    } catch (err) {
-      this.logger.warn(`⚠️ [DAHUA PERSONAS] Error al listar usuarios: ${err.message}`);
-      return [];
-    }
-  }
-
-  /**
    * Agrega una persona al hardware Dahua ASI7213X.
    * 1. Crea el registro de usuario en AccessUserInfo
    * 2. Crea el registro de tarjeta en AccessControlCard
@@ -556,32 +523,91 @@ export class DahuaService {
   }
 
   /**
+   * Lista todos los usuarios y tarjetas registrados en el hardware Dahua (AccessUserInfo y AccessControlCard).
+   */
+  async listarPersonas(ip: string, port: number, user: string, pass: string): Promise<any[]> {
+    try {
+      this.logger.log(`📋 [DAHUA LISTAR] Consultando usuarios y tarjetas en ${ip}:${port}...`);
+      const [usersRes, cardsRes] = await Promise.all([
+        this.cgi(ip, port, user, pass, 'GET', '/cgi-bin/recordFinder.cgi?action=find&name=AccessUserInfo&count=200').catch(() => null),
+        this.cgi(ip, port, user, pass, 'GET', '/cgi-bin/recordFinder.cgi?action=find&name=AccessControlCard&count=200').catch(() => null),
+      ]);
+
+      const parseCgiKv = (text: string) => {
+        const records: Record<number, any> = {};
+        for (const line of (text || '').split('\n')) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          const match = trimmed.match(/^records\[(\d+)\]\.(.+?)=(.*)$/);
+          if (match) {
+            const idx = parseInt(match[1], 10);
+            const key = match[2];
+            const val = match[3];
+            if (!records[idx]) records[idx] = { recno: idx };
+            records[idx][key] = val;
+          }
+        }
+        return Object.values(records);
+      };
+
+      const userRecords = parseCgiKv(usersRes?.data || '');
+      const cardRecords = parseCgiKv(cardsRes?.data || '');
+
+      const cardMap = new Map<string, { cardNo: string; recno: number }>();
+      for (const c of cardRecords) {
+        if (c.UserID && c.CardNo) {
+          cardMap.set(String(c.UserID).trim(), {
+            cardNo: String(c.CardNo).trim(),
+            recno: Number(c.RecNo || c.recno),
+          });
+        }
+      }
+
+      return userRecords
+        .filter(u => u.UserID)
+        .map(u => ({
+          recno: Number(u.RecNo || u.recno),
+          userId: String(u.UserID).trim(),
+          nombre: String(u.UserName || '').trim(),
+          codigoTarjeta: cardMap.get(String(u.UserID).trim())?.cardNo,
+          cardRecno: cardMap.get(String(u.UserID).trim())?.recno,
+          habilitado: u.UserStatus === '0' || u.UserStatus === 0,
+          validFrom: u.ValidFrom,
+          validTo: u.ValidTo,
+        }));
+    } catch (err) {
+      this.logger.error(`❌ [DAHUA LISTAR] Error al listar personas de ${ip}:${port}: ${err.message}`);
+      return [];
+    }
+  }
+
+  /**
    * Elimina una persona del hardware Dahua (AccessUserInfo y AccessControlCard).
    */
   async eliminarPersona(ip: string, port: number, user: string, pass: string, userId: string): Promise<{ ok: boolean }> {
-    const userIdClean = String(userId).slice(0, 20);
+    const userIdClean = String(userId).trim().slice(0, 20);
     this.logger.log(`🗑️ [DAHUA PERSONA] Eliminando userId=${userIdClean} de ${ip}:${port}`);
 
-    // 1. Eliminar de AccessControlCard
     const existentes = await this.listarPersonas(ip, port, user, pass);
     const coincidencia = existentes.find(
       p => String(p.userId) === userIdClean || String(p.codigoTarjeta) === userIdClean
     );
 
-    if (coincidencia && coincidencia.recno !== undefined) {
+    // 1. Eliminar de AccessControlCard
+    if (coincidencia && coincidencia.cardRecno !== undefined) {
       await this.cgi(
         ip, port, user, pass, 'GET',
-        `/cgi-bin/recordUpdater.cgi?action=remove&name=AccessControlCard&recno=${coincidencia.recno}`,
+        `/cgi-bin/recordUpdater.cgi?action=remove&name=AccessControlCard&recno=${coincidencia.cardRecno}`,
       ).catch(() => {});
     }
 
     // 2. Eliminar de AccessUserInfo
-    try {
+    if (coincidencia && coincidencia.recno !== undefined) {
       await this.cgi(
         ip, port, user, pass, 'GET',
-        `/cgi-bin/recordUpdater.cgi?action=remove&name=AccessUserInfo&UserID=${encodeURIComponent(userIdClean)}`,
-      );
-    } catch {}
+        `/cgi-bin/recordUpdater.cgi?action=remove&name=AccessUserInfo&recno=${coincidencia.recno}`,
+      ).catch(() => {});
+    }
 
     return { ok: true };
   }

@@ -4361,6 +4361,58 @@ Content-Length: 0\r
     return { ok: true };
   }
 
+  /**
+   * Elimina una persona de un dispositivo específico únicamente (sin borrarla globalmente ni de otros dispositivos).
+   */
+  async eliminarPersonaDeDispositivo(dispositivoId: string, personaId: string): Promise<any> {
+    const admin = this.supabase.getSupabaseAdminClient();
+
+    const { data: persona, error: pErr } = await admin
+      .from('personas_gestion_acceso')
+      .select('*')
+      .eq('id', personaId)
+      .single();
+
+    if (pErr || !persona) {
+      throw new Error(`Persona no encontrada: ${pErr?.message}`);
+    }
+
+    const { data: dispositivo, error: dErr } = await admin
+      .from('dispositivos_iot')
+      .select('*')
+      .eq('id', dispositivoId)
+      .single();
+
+    if (dErr || !dispositivo) {
+      throw new Error(`Dispositivo no encontrado: ${dErr?.message}`);
+    }
+
+    const ip = dispositivo.ip_direccion;
+    if (ip) {
+      try {
+        const marca = (dispositivo.configuracion_tecnica?.marca || dispositivo.marca || '').toLowerCase();
+        if (marca.includes('dahua')) {
+          await this.eliminarPersonaDahuaHardware(ip, persona.documento_identidad, dispositivo.id);
+        } else {
+          await this.eliminarUsuarioDeHardware(ip, persona.documento_identidad, dispositivo.id);
+        }
+      } catch (err) {
+        this.logger.warn(`⚠️ [HARDWARE SYNC] No se pudo eliminar usuario ${persona.documento_identidad} de ${ip}: ${err.message}`);
+      }
+    }
+
+    // Eliminar únicamente el permiso/vínculo de este dispositivo específico
+    await admin
+      .from('acceso_permisos_dispositivos')
+      .delete()
+      .eq('persona_id', personaId)
+      .eq('dispositivo_id', dispositivoId);
+
+    this.logger.log(`✅ [PERSONA-DISPOSITIVO] Persona ${persona.documento_identidad} desvinculada exitosamente del dispositivo ${dispositivo.nombre_identificador || dispositivoId}`);
+
+    return { ok: true, persona_id: personaId, dispositivo_id: dispositivoId };
+  }
+
   public async proxyRequestDynamic(
     targetIp: string,
     method: string,
