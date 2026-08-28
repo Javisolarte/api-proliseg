@@ -1058,53 +1058,16 @@ Content-Length: 0\r
       sipClient.send(Buffer.from(ack), sipPort, target.host, () => {});
     };
 
-    sipClient.on('message', (msg) => {
-      const text = msg.toString();
-      const extractedTag = text.match(/To:[^\n]+tag=([^\r\n;]+)/i)?.[1];
-      if (extractedTag) toTag = extractedTag;
-      sendAck(toTag);
-    });
-
-    sipClient.on('error', (err) => {
-      this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] SIP error: ${err.message}`);
-    });
-
-    // Enviar INVITE para abrir la pantalla de llamada y el canal de audio en el Dahua
-    sipClient.send(Buffer.from(sipInvite), sipPort, target.host, (err) => {
-      if (err) this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] Error al enviar SIP INVITE: ${err.message}`);
-      else {
-        this.logger.log(`📞 [AUDIO-IN-DAHUA] SIP INVITE (Call/AutoAnswer) enviado con éxito a ${target.host}:${sipPort}`);
-        setTimeout(() => sendAck(toTag), 100);
-        setTimeout(() => sendAck(toTag), 300);
-      }
-    });
-
     return new Promise((resolve) => {
       let isSettled = false;
-      const ffmpeg = spawn(this.getFfmpegBinary(), [
-        '-hide_banner',
-        '-loglevel', 'warning',
-        '-fflags', 'nobuffer',
-        '-flags', 'low_delay',
-        '-probesize', '4096',
-        '-f', 'webm',
-        '-i', 'pipe:0',
-        '-ac', '1',
-        '-ar', '8000',
-        '-c:a', 'pcm_mulaw',
-        '-af', 'volume=3.5',
-        '-payload_type', '0',
-        '-flush_packets', '1',
-        '-f', 'rtp',
-        `rtp://${target.host}:${rtpPort}`,
-      ]);
+      let ffmpegProcess: any = null;
+      let audioPortFound = false;
 
       const safeFinish = () => {
         if (isSettled) return;
         isSettled = true;
-        try { ffmpeg.kill('SIGKILL'); } catch {}
+        try { if (ffmpegProcess) ffmpegProcess.kill('SIGKILL'); } catch {}
 
-        // Enviar BYE / CANCEL para cerrar la llamada en el Dahua
         try {
           const sipBye = 
 `BYE sip:8001@${target.host}:${sipPort} SIP/2.0\r
@@ -1138,14 +1101,78 @@ Content-Length: 0\r
         resolve({ ok: true, mensaje: 'Transmisión Dahua finalizada' });
       };
 
-      ffmpeg.on('close', (code) => {
-        this.logger.log(`🎙️ [AUDIO-IN-DAHUA] FFmpeg cerró (código ${code})`);
+      const startFFmpeg = (dahuaAudioPort: number) => {
+        if (ffmpegProcess) return;
+        this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Extrayendo puerto RTP SDP Dahua: ${dahuaAudioPort}. Iniciando FFmpeg...`);
+        ffmpegProcess = spawn(this.getFfmpegBinary(), [
+          '-hide_banner',
+          '-loglevel', 'warning',
+          '-fflags', 'nobuffer',
+          '-flags', 'low_delay',
+          '-probesize', '4096',
+          '-f', 'webm',
+          '-i', 'pipe:0',
+          '-ac', '1',
+          '-ar', '8000',
+          '-c:a', 'pcm_mulaw',
+          '-af', 'volume=3.5',
+          '-payload_type', '0',
+          '-flush_packets', '1',
+          '-f', 'rtp',
+          `rtp://${target.host}:${dahuaAudioPort}`,
+        ]);
+
+        audioStream.pipe(ffmpegProcess.stdin);
+
+        ffmpegProcess.on('close', (code: any) => {
+          this.logger.log(`🎙️ [AUDIO-IN-DAHUA] FFmpeg cerró (código ${code})`);
+          safeFinish();
+        });
+
+        ffmpegProcess.on('error', (err: any) => {
+          this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] FFmpeg error: ${err.message}`);
+          safeFinish();
+        });
+      };
+
+      sipClient.on('message', (msg) => {
+        const text = msg.toString();
+        const extractedTag = text.match(/To:[^\n]+tag=([^\r\n;]+)/i)?.[1];
+        if (extractedTag) toTag = extractedTag;
+        
+        if (!audioPortFound) {
+          const audioPortMatch = text.match(/m=audio\s+(\d+)/i);
+          if (audioPortMatch && parseInt(audioPortMatch[1], 10) > 0) {
+            audioPortFound = true;
+            startFFmpeg(parseInt(audioPortMatch[1], 10));
+          } else if (text.includes('200 OK') && !audioPortFound) {
+            audioPortFound = true;
+            startFFmpeg(rtpPort);
+          }
+        }
+        
+        sendAck(toTag);
+      });
+
+      sipClient.on('error', (err) => {
+        this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] SIP error: ${err.message}`);
         safeFinish();
       });
 
-      ffmpeg.on('error', (err) => {
-        this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] FFmpeg error: ${err.message}`);
-        safeFinish();
+      sipClient.send(Buffer.from(sipInvite), sipPort, target.host, (err) => {
+        if (err) {
+          this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] Error al enviar SIP INVITE: ${err.message}`);
+          safeFinish();
+        } else {
+          this.logger.log(`📞 [AUDIO-IN-DAHUA] SIP INVITE enviado a ${target.host}:${sipPort}`);
+          setTimeout(() => {
+            if (!audioPortFound) {
+              this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] Timeout SDP. Forzando puerto RTP ${rtpPort}`);
+              audioPortFound = true;
+              startFFmpeg(rtpPort);
+            }
+          }, 3000);
+        }
       });
 
       audioStream.on('close', safeFinish);
@@ -1154,8 +1181,6 @@ Content-Length: 0\r
         this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] AudioStream error: ${err.message}`);
         safeFinish();
       });
-
-      audioStream.pipe(ffmpeg.stdin);
     });
   }
 
