@@ -973,6 +973,29 @@ export class ControlAccesoService implements OnModuleInit {
     deviceId?: string,
     operator?: any,
   ): Promise<any> {
+    // 1. Intentar transmisión nativa vía NetSDK TCP (puerto 37777 / 20006)
+    if (this.dahuaService) {
+      try {
+        const netSdkResult = await this.dahuaService.relayAudioNetSDK(
+          audioStream,
+          target.host,
+          target.port,
+          target.user,
+          target.pass,
+        );
+        if (netSdkResult) {
+          return {
+            ok: true,
+            mensaje: 'Audio transmitido al altavoz Dahua por NetSDK',
+            detalle: { target: `${target.host}:${target.port}`, via: 'NetSDK TCP' },
+            operador: operator || null,
+          };
+        }
+      } catch (sdkErr: any) {
+        this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] NetSDK Talk no disponible, usando fallback SIP: ${sdkErr.message}`);
+      }
+    }
+
     const baseOffset = target.port >= 10000 ? (target.port % 10000) : Number(target.host.split('.').pop() || '6');
     const rtpPort = 40000 + baseOffset;
     const sipPort = 50000 + baseOffset;

@@ -1109,4 +1109,126 @@ export class DahuaService {
     if (et.includes('close')) return 'puerta_cerrada';
     return 'evento';
   }
+
+  /**
+   * Transmite audio bidireccional directamente al altavoz del hardware Dahua usando NetSDK TCP (puerto 37777 / 20006).
+   */
+  async relayAudioNetSDK(
+    audioStream: NodeJS.ReadableStream,
+    ip: string,
+    port: number,
+    user: string,
+    pass: string,
+  ): Promise<boolean> {
+    try {
+      const sdkPort = port >= 10000 ? (20000 + (port % 10000)) : 37777;
+      this.logger.log(`🎙️ [DAHUA-NETSDK-TALK] Iniciando audio bidireccional por NetSDK TCP ${ip}:${sdkPort}...`);
+
+      const koffi = require('koffi');
+      const dllPath = 'C:\\Program Files\\SmartPSSLite\\dhnetsdk.dll';
+      const fs = require('fs');
+
+      if (!fs.existsSync(dllPath)) {
+        this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] dhnetsdk.dll no encontrado en ${dllPath}`);
+        return false;
+      }
+
+      const lib = koffi.load(dllPath);
+
+      const NET_DEVICEINFO_Ex = koffi.struct('NET_DEVICEINFO_Ex_AudioTalk', {
+        sSerialNumber: koffi.array('char', 48),
+        byAlarmInPortNum: 'uint8_t',
+        byAlarmOutPortNum: 'uint8_t',
+        byDiskNum: 'uint8_t',
+        byDVRType: 'uint8_t',
+        byChanNum: 'uint8_t',
+        byLimitLoginTime: 'uint8_t',
+        byLeftLogTimes: 'uint8_t',
+        byReserved: koffi.array('uint8_t', 1),
+        byLockLeftTime: 'uint32_t',
+        reserved: koffi.array('char', 24),
+      });
+
+      const CLIENT_Init = lib.func('bool __stdcall CLIENT_Init(void* fDisConnect, int64_t dwUser)');
+      const CLIENT_Cleanup = lib.func('void __stdcall CLIENT_Cleanup()');
+      const CLIENT_LoginEx2 = lib.func('int64_t __stdcall CLIENT_LoginEx2(str pchDVRIP, uint16_t wDVRPort, str pchUserName, str pchPassword, int nSpecCap, void* pCapParam, _Out_ NET_DEVICEINFO_Ex_AudioTalk* lpDeviceInfo, _Out_ int* error)');
+      const CLIENT_Logout = lib.func('bool __stdcall CLIENT_Logout(int64_t lLoginID)');
+      const CLIENT_StartTalkEx = lib.func('int64_t __stdcall CLIENT_StartTalkEx(int64_t lLoginID, void *pfcb, int64_t dwUser)');
+      const CLIENT_StopTalkEx = lib.func('bool __stdcall CLIENT_StopTalkEx(int64_t lTalkHandle)');
+      const CLIENT_TalkSendData = lib.func('int32_t __stdcall CLIENT_TalkSendData(int64_t lTalkHandle, uint8_t *pDataBuf, uint32_t dwBufSize)');
+
+      CLIENT_Init(null, 0);
+
+      const devInfo = {};
+      const errPtr = [0];
+      const loginId = CLIENT_LoginEx2(ip, sdkPort, user, pass, 0, null, devInfo, errPtr);
+
+      if (!loginId || loginId === 0n || loginId === 0) {
+        this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] Login falló en ${ip}:${sdkPort} (Error ${errPtr[0]})`);
+        CLIENT_Cleanup();
+        return false;
+      }
+
+      const talkHandle = CLIENT_StartTalkEx(loginId, null, 0);
+      if (!talkHandle || talkHandle === 0n || talkHandle === 0) {
+        this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] CLIENT_StartTalkEx falló`);
+        CLIENT_Logout(loginId);
+        CLIENT_Cleanup();
+        return false;
+      }
+
+      this.logger.log(`🎉 [DAHUA-NETSDK-TALK] Altavoz abierto en hardware Dahua (Handle: ${talkHandle})`);
+
+      const ffmpegPath = require('ffmpeg-static');
+      const { spawn } = require('child_process');
+
+      const ffmpeg = spawn(ffmpegPath, [
+        '-hide_banner',
+        '-loglevel', 'warning',
+        '-fflags', 'nobuffer',
+        '-flags', 'low_delay',
+        '-probesize', '4096',
+        '-f', 'webm',
+        '-i', 'pipe:0',
+        '-ac', '1',
+        '-ar', '8000',
+        '-c:a', 'pcm_alaw',
+        '-af', 'volume=3.5',
+        '-f', 'alaw',
+        '-flush_packets', '1',
+        'pipe:1',
+      ]);
+
+      ffmpeg.stdout.on('data', (chunk: Buffer) => {
+        try {
+          CLIENT_TalkSendData(talkHandle, chunk, chunk.length);
+        } catch {}
+      });
+
+      return new Promise<boolean>((resolve) => {
+        let isDone = false;
+        const cleanUp = () => {
+          if (isDone) return;
+          isDone = true;
+          try { ffmpeg.kill('SIGKILL'); } catch {}
+          try { CLIENT_StopTalkEx(talkHandle); } catch {}
+          try { CLIENT_Logout(loginId); } catch {}
+          try { CLIENT_Cleanup(); } catch {}
+          this.logger.log(`✅ [DAHUA-NETSDK-TALK] Sesión de audio finalizada`);
+          resolve(true);
+        };
+
+        audioStream.on('close', cleanUp);
+        (audioStream as any).on('end', cleanUp);
+        audioStream.on('error', cleanUp);
+        ffmpeg.on('close', cleanUp);
+        ffmpeg.on('error', cleanUp);
+
+        audioStream.pipe(ffmpeg.stdin);
+      });
+    } catch (e: any) {
+      this.logger.error(`❌ [DAHUA-NETSDK-TALK] Error: ${e.message}`);
+      return false;
+    }
+  }
 }
