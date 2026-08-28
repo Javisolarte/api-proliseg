@@ -2596,6 +2596,53 @@ Content-Length: 0\r
 
     const ip = device.ip_direccion;
     const results: any = {};
+    const isDahua = String(device.marca || device.configuracion_tecnica?.marca || '').toLowerCase().includes('dahua');
+
+    if (isDahua) {
+      const port = Number(
+        device.configuracion_tecnica?.puertos_mapeados?.mapped_http
+        || device.configuracion_tecnica?.puerto
+        || device.puerto
+        || 80
+      );
+      const user = String(device.credencial_usuario || 'admin');
+      const pass = String(device.credencial_password || '');
+
+      const dahuaConfigs = [
+        'Audio',
+        'AudioIn',
+        'AudioOut',
+        'Volume',
+        'Speaker',
+        'VoicePrompt',
+        'VTHConfig',
+        'SIP',
+        'Encode[0]',
+        'Intercom'
+      ];
+
+      for (const name of dahuaConfigs) {
+        try {
+          const resp = await this.dahuaService.cgi(
+            ip, port, user, pass, 'GET',
+            `/cgi-bin/configManager.cgi?action=getConfig&name=${name}`
+          );
+          results[name] = resp?.data || 'OK';
+        } catch (err: any) {
+          results[name] = { error: err.message, status: err.response?.status };
+        }
+      }
+
+      return {
+        dispositivo: {
+          id: device.id,
+          nombre: device.nombre_identificador,
+          ip: device.ip_direccion,
+          marca: 'Dahua'
+        },
+        results
+      };
+    }
 
     const paths = [
       { key: 'sip_config_json', path: '/ISAPI/VideoIntercom/sip/config?format=json', method: 'get' },
