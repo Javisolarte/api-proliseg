@@ -1007,9 +1007,9 @@ Call-ID: ${callId}\r
 CSeq: 1 INVITE\r
 Contact: <sip:8000@10.8.0.1:5060>\r
 User-Agent: Dahua DSS-C9100\r
-Call-Type: 1\r
-Action: Talk\r
-Alert-Info: info=AutoAnswer\r
+Call-Type: 0\r
+Action: Call\r
+Alert-Info: <urn:alert:service:normal>;info=AutoAnswer\r
 Answer-Mode: Auto\r
 Content-Type: application/sdp\r
 Content-Length: ${Buffer.byteLength(sdpBody)}\r
@@ -1043,13 +1043,13 @@ Content-Length: 0\r
       this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] SIP error: ${err.message}`);
     });
 
-    // Enviar INVITE para abrir el canal de audio en el Dahua
+    // Enviar INVITE para abrir la pantalla de llamada y el canal de audio en el Dahua
     sipClient.send(Buffer.from(sipInvite), sipPort, target.host, (err) => {
       if (err) this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] Error al enviar SIP INVITE: ${err.message}`);
       else {
-        this.logger.log(`📞 [AUDIO-IN-DAHUA] SIP INVITE enviado con éxito a ${target.host}:${sipPort}`);
-        setTimeout(() => sendAck(toTag), 150);
-        setTimeout(() => sendAck(toTag), 400);
+        this.logger.log(`📞 [AUDIO-IN-DAHUA] SIP INVITE (Call/AutoAnswer) enviado con éxito a ${target.host}:${sipPort}`);
+        setTimeout(() => sendAck(toTag), 100);
+        setTimeout(() => sendAck(toTag), 300);
       }
     });
 
@@ -1066,7 +1066,7 @@ Content-Length: 0\r
         '-ac', '1',
         '-ar', '8000',
         '-c:a', 'pcm_alaw',
-        '-af', 'volume=2.5',
+        '-af', 'volume=3.0',
         '-payload_type', '8',
         '-flush_packets', '1',
         '-f', 'rtp',
