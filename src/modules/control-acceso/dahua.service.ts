@@ -53,6 +53,116 @@ export interface DahuaSystemInfo {
 @Injectable()
 export class DahuaService {
   private readonly logger = new Logger(DahuaService.name);
+  private readonly digestCache = new Map<string, { realm: string; nonce: string; qop?: string }>();
+
+  /**
+   * Ejecuta peticiones HTTP CGI autenticadas con Digest Auth nativo hacia dispositivos Dahua.
+   */
+  async cgi(
+    ip: string,
+    port: number,
+    user: string,
+    pass: string,
+    method: 'GET' | 'POST' = 'GET',
+    path: string,
+    data?: any,
+    responseType: any = 'text',
+    contentType: string = 'application/x-www-form-urlencoded',
+    timeout: number = 10000,
+  ): Promise<any> {
+    const url = `http://${ip}:${port}${path}`;
+    const host = `${ip}:${port}`;
+    const cached = this.digestCache.get(host);
+
+    const headers: Record<string, string> = { 'Content-Type': contentType };
+
+    if (cached) {
+      const { realm, nonce, qop } = cached;
+      const nc = '00000001';
+      const cnonce = randomBytes(4).toString('hex');
+      const uri = path;
+      const ha1 = createHash('md5').update(`${user}:${realm}:${pass}`).digest('hex');
+      const ha2 = createHash('md5').update(`${method}:${uri}`).digest('hex');
+      let responseHash = '';
+      if (qop === 'auth') {
+        responseHash = createHash('md5').update(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`).digest('hex');
+      } else {
+        responseHash = createHash('md5').update(`${ha1}:${nonce}:${ha2}`).digest('hex');
+      }
+
+      let authStr = `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${responseHash}"`;
+      if (qop === 'auth') {
+        authStr += `, qop="${qop}", nc=${nc}, cnonce="${cnonce}"`;
+      }
+
+      headers['Authorization'] = authStr;
+
+      try {
+        return await axios.request({
+          method,
+          url,
+          data,
+          headers,
+          responseType,
+          timeout,
+        });
+      } catch (err: any) {
+        if (err?.response?.status === 401) {
+          this.digestCache.delete(host);
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    try {
+      return await axios.request({ method, url, data, headers, responseType, timeout });
+    } catch (err: any) {
+      if (err?.response?.status === 401 && err?.response?.headers?.['www-authenticate']) {
+        const authHeader = err.response.headers['www-authenticate'];
+        const matchRealm = authHeader.match(/realm="([^"]+)"/);
+        const matchNonce = authHeader.match(/nonce="([^"]+)"/);
+        const matchQop = authHeader.match(/qop="([^"]+)"/);
+
+        if (matchRealm && matchNonce) {
+          const realm = matchRealm[1];
+          const nonce = matchNonce[1];
+          const qop = matchQop ? (matchQop[1].includes('auth') ? 'auth' : matchQop[1].split(',')[0].trim()) : '';
+
+          this.digestCache.set(host, { realm, nonce, qop });
+
+          const nc = '00000001';
+          const cnonce = randomBytes(4).toString('hex');
+          const uri = path;
+          const ha1 = createHash('md5').update(`${user}:${realm}:${pass}`).digest('hex');
+          const ha2 = createHash('md5').update(`${method}:${uri}`).digest('hex');
+          let responseHash = '';
+          if (qop === 'auth') {
+            responseHash = createHash('md5').update(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`).digest('hex');
+          } else {
+            responseHash = createHash('md5').update(`${ha1}:${nonce}:${ha2}`).digest('hex');
+          }
+
+          let authStr = `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${responseHash}"`;
+          if (qop === 'auth') {
+            authStr += `, qop="${qop}", nc=${nc}, cnonce="${cnonce}"`;
+          }
+
+          headers['Authorization'] = authStr;
+
+          return await axios.request({
+            method,
+            url,
+            data,
+            headers,
+            responseType,
+            timeout,
+          });
+        }
+      }
+      throw err;
+    }
+  }
 
   // ─── SISTEMA ────────────────────────────────────────────────────────────────
 
@@ -498,25 +608,42 @@ export class DahuaService {
         return false;
       }
 
-      // 2. Insertar foto facial para el UserID
+      // 2. Insertar o actualizar foto facial para el UserID
+      let uploadSuccess = false;
       const insertRes = await this.rpcCall(ip, port, user, pass, 'RecordUpdater.insert', {
         record: {
           UserID: String(userId).slice(0, 20),
           PhotoData: [base64Clean],
         }
-      }, updaterId);
+      }, updaterId).catch(() => null);
+
+      if (insertRes?.result) {
+        uploadSuccess = true;
+      } else {
+        // Si falló (ej. ya existía), intentar actualizar
+        const updateRes = await this.rpcCall(ip, port, user, pass, 'RecordUpdater.update', {
+          record: {
+            UserID: String(userId).slice(0, 20),
+            PhotoData: [base64Clean],
+          }
+        }, updaterId).catch(() => null);
+
+        if (updateRes?.result) {
+          uploadSuccess = true;
+        }
+      }
 
       // 3. Destruir el RecordUpdater para liberar recursos en el Dahua
       await this.rpcCall(ip, port, user, pass, 'RecordUpdater.destroy', null, updaterId).catch(() => {});
 
-      if (insertRes?.result) {
+      if (uploadSuccess) {
         this.logger.log(`✅ [DAHUA FACE] Foto facial vinculada exitosamente con el rostro en Dahua para userId=${userId}`);
         return true;
       } else {
         this.logger.warn(`⚠️ [DAHUA FACE] Dahua no pudo procesar el rostro para userId=${userId}: ${JSON.stringify(insertRes?.error || insertRes)}`);
         return false;
       }
-    } catch (err) {
+    } catch (err: any) {
       this.logger.error(`❌ [DAHUA FACE] Error al subir foto facial userId=${userId}: ${err.message}`);
       return false;
     }
@@ -726,47 +853,6 @@ export class DahuaService {
 
   // ─── HELPERS INTERNOS ────────────────────────────────────────────────────────
 
-  /**
-   * Petición CGI con Digest Auth al dispositivo Dahua.
-   */
-  async cgi(
-    ip: string, port: number, user: string, pass: string,
-    method: string, path: string,
-    body?: any, responseType: any = 'text',
-    contentType = 'application/x-www-form-urlencoded',
-  ): Promise<any> {
-    const url = `http://${ip}:${port}${path}`;
-    const cfg: AxiosRequestConfig = {
-      method: method as any,
-      url,
-      data: body,
-      headers: { 'Content-Type': contentType },
-      timeout: 10000,
-      responseType,
-    };
-
-    try {
-      return await axios.request(cfg);
-    } catch (err) {
-      if (err.response?.status === 401) {
-        // Digest Auth handshake
-        const authHeader = this.buildDigestAuth(
-          method, url, user, pass,
-          err.response.headers['www-authenticate'] || '',
-        );
-        if (!authHeader) throw err;
-
-        return await axios.request({
-          ...cfg,
-          headers: {
-            ...cfg.headers,
-            Authorization: authHeader,
-          },
-        });
-      }
-      throw err;
-    }
-  }
 
   /**
    * Petición CGI con body binario (Buffer) — para uploads multipart.

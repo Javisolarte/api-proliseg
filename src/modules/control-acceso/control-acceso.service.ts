@@ -990,8 +990,11 @@ To: <sip:8001@${target.host}:${sipPort}>\r
 Call-ID: ${callId}\r
 CSeq: 1 INVITE\r
 Contact: <sip:8000@10.8.0.1:5060>\r
-User-Agent: Dahua VTH5221D\r
-Call-Type: 0\r
+User-Agent: Dahua DSS-C9100\r
+Call-Type: 1\r
+Action: Talk\r
+Alert-Info: info=AutoAnswer\r
+Answer-Mode: Auto\r
 Content-Type: application/sdp\r
 Content-Length: ${Buffer.byteLength(sdpBody)}\r
 \r
@@ -1028,7 +1031,9 @@ ${sdpBody}`;
         '-ac', '1',
         '-ar', '8000',
         '-c:a', 'pcm_alaw',
+        '-af', 'volume=2.5',
         '-payload_type', '8',
+        '-flush_packets', '1',
         '-f', 'rtp',
         `rtp://${target.host}:${rtpPort}`,
       ]);
@@ -3893,6 +3898,7 @@ Content-Length: 0\r
       lista_estado: 'blanca',
       entidad_tipo: 'residente',
       activo: true,
+      foto_rostro_url: rec.foto_rostro_url || null,
     };
 
     if (rec.correo_electronico) {
