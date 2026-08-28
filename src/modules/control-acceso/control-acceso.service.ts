@@ -1000,12 +1000,27 @@ Content-Length: ${Buffer.byteLength(sdpBody)}\r
 \r
 ${sdpBody}`;
 
+    const sendAck = (receivedToTag: string = '') => {
+      const ack = 
+`ACK sip:8001@${target.host}:${sipPort} SIP/2.0\r
+Via: SIP/2.0/UDP 10.8.0.1:5060;branch=${branch};rport\r
+Max-Forwards: 70\r
+From: <sip:8000@10.8.0.1>;tag=${fromTag}\r
+To: <sip:8001@${target.host}:${sipPort}>${receivedToTag ? ';tag=' + receivedToTag : ''}\r
+Call-ID: ${callId}\r
+CSeq: 1 ACK\r
+Contact: <sip:8000@10.8.0.1:5060>\r
+Content-Length: 0\r
+\r
+`;
+      sipClient.send(Buffer.from(ack), sipPort, target.host, () => {});
+    };
+
     sipClient.on('message', (msg) => {
       const text = msg.toString();
-      if (text.includes('180 Ringing') || text.includes('101 Dialog') || text.includes('200 OK')) {
-        const extractedTag = text.match(/To:[^\n]+tag=([^\r\n;]+)/i)?.[1];
-        if (extractedTag) toTag = extractedTag;
-      }
+      const extractedTag = text.match(/To:[^\n]+tag=([^\r\n;]+)/i)?.[1];
+      if (extractedTag) toTag = extractedTag;
+      sendAck(toTag);
     });
 
     sipClient.on('error', (err) => {
@@ -1015,7 +1030,11 @@ ${sdpBody}`;
     // Enviar INVITE para abrir el canal de audio en el Dahua
     sipClient.send(Buffer.from(sipInvite), sipPort, target.host, (err) => {
       if (err) this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] Error al enviar SIP INVITE: ${err.message}`);
-      else this.logger.log(`📞 [AUDIO-IN-DAHUA] SIP INVITE enviado con éxito a ${target.host}:${sipPort}`);
+      else {
+        this.logger.log(`📞 [AUDIO-IN-DAHUA] SIP INVITE enviado con éxito a ${target.host}:${sipPort}`);
+        setTimeout(() => sendAck(toTag), 150);
+        setTimeout(() => sendAck(toTag), 400);
+      }
     });
 
     return new Promise((resolve) => {
