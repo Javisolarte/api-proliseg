@@ -636,10 +636,26 @@ export class ControlAccesoService implements OnModuleInit {
   }
 
   private getFfmpegBinary(): string {
+    const fs = require('fs');
     try {
       const staticPath = require('ffmpeg-static');
-      if (staticPath && typeof staticPath === 'string') return staticPath;
+      if (staticPath && typeof staticPath === 'string' && fs.existsSync(staticPath)) {
+        return staticPath;
+      }
     } catch {}
+
+    const commonPaths = [
+      '/usr/bin/ffmpeg',
+      '/usr/local/bin/ffmpeg',
+      '/bin/ffmpeg',
+      '/app/ffmpeg',
+    ];
+    for (const p of commonPaths) {
+      try {
+        if (fs.existsSync(p)) return p;
+      } catch {}
+    }
+
     return 'ffmpeg';
   }
 
