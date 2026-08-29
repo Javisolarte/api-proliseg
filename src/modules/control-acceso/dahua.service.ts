@@ -1213,7 +1213,7 @@ export class DahuaService {
 
       const CLIENT_Init = lib.func(`bool ${callConv}CLIENT_Init(void* fDisConnect, int64_t dwUser)`);
       const CLIENT_Cleanup = lib.func(`void ${callConv}CLIENT_Cleanup()`);
-      const CLIENT_Login = lib.func(`int64_t ${callConv}CLIENT_Login(str pchDVRIP, uint16_t wDVRPort, str pchUserName, str pchPassword, _Out_ NET_DEVICEINFO_NetTalk* lpDeviceInfo, _Out_ int* error)`);
+      const CLIENT_Login = lib.func(`int64_t ${callConv}CLIENT_Login(str pchDVRIP, uint16_t wDVRPort, str pchUserName, str pchPassword, void* lpDeviceInfo, _Out_ int* error)`);
       const CLIENT_Logout = lib.func(`bool ${callConv}CLIENT_Logout(int64_t lLoginID)`);
       const CLIENT_StartTalkEx = lib.func(`int64_t ${callConv}CLIENT_StartTalkEx(int64_t lLoginID, void *pfcb, int64_t dwUser)`);
       const CLIENT_StopTalkEx = lib.func(`bool ${callConv}CLIENT_StopTalkEx(int64_t lTalkHandle)`);
@@ -1222,7 +1222,7 @@ export class DahuaService {
 
       CLIENT_Init(null, 0);
 
-      const devInfo = {};
+      const devInfo = Buffer.alloc(1024);
       const errPtr = [0];
       const loginId = CLIENT_Login(ip, sdkPort, userClean, passClean, devInfo, errPtr);
 
