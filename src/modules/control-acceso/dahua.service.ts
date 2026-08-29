@@ -1229,6 +1229,7 @@ export class DahuaService {
       const CLIENT_StopTalkEx = lib.func(`bool ${callConv}CLIENT_StopTalkEx(int64_t lTalkHandle)`);
       const CLIENT_TalkSendData = lib.func(`int32_t ${callConv}CLIENT_TalkSendData(int64_t lTalkHandle, uint8_t *pDataBuf, uint32_t dwBufSize)`);
       const CLIENT_SetVolume = lib.func(`bool ${callConv}CLIENT_SetVolume(int64_t lTalkHandle, int nVolume)`);
+      const CLIENT_SetDeviceMode = lib.func(`bool ${callConv}CLIENT_SetDeviceMode(int64_t lLoginID, int emType, void *pValue)`);
 
       CLIENT_Init(null, 0);
 
@@ -1242,7 +1243,15 @@ export class DahuaService {
         return false;
       }
 
-      this.logger.log(`✅ [DAHUA-NETSDK-TALK] Login exitoso (ID: ${loginId}). Iniciando TalkEx...`);
+      this.logger.log(`✅ [DAHUA-NETSDK-TALK] Login exitoso (ID: ${loginId}). Configurando códec de audio G.711A...`);
+
+      // 1. Configurar modo de codificación a G.711A (1 = DH_TALK_ENCODE_TYPE, 1 = DH_TALK_G711a)
+      try {
+        const encodeBuf = Buffer.alloc(4);
+        encodeBuf.writeInt32LE(1, 0);
+        CLIENT_SetDeviceMode(loginId, 1, encodeBuf);
+        CLIENT_SetDeviceMode(loginId, 4, null); // DH_TALK_CLIENT_MODE = 4 (PC a terminal)
+      } catch {}
 
       const talkHandle = CLIENT_StartTalkEx(loginId, null, 0);
       if (!talkHandle || talkHandle === 0n || talkHandle === 0) {
