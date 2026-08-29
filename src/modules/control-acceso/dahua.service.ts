@@ -1199,14 +1199,17 @@ export class DahuaService {
         byChanNum: 'uint8_t',
       });
 
-      const CLIENT_Init = lib.func('bool __stdcall CLIENT_Init(void* fDisConnect, int64_t dwUser)');
-      const CLIENT_Cleanup = lib.func('void __stdcall CLIENT_Cleanup()');
-      const CLIENT_Login = lib.func('int64_t __stdcall CLIENT_Login(str pchDVRIP, uint16_t wDVRPort, str pchUserName, str pchPassword, _Out_ NET_DEVICEINFO_NetTalk* lpDeviceInfo, _Out_ int* error)');
-      const CLIENT_Logout = lib.func('bool __stdcall CLIENT_Logout(int64_t lLoginID)');
-      const CLIENT_StartTalkEx = lib.func('int64_t __stdcall CLIENT_StartTalkEx(int64_t lLoginID, void *pfcb, int64_t dwUser)');
-      const CLIENT_StopTalkEx = lib.func('bool __stdcall CLIENT_StopTalkEx(int64_t lTalkHandle)');
-      const CLIENT_TalkSendData = lib.func('int32_t __stdcall CLIENT_TalkSendData(int64_t lTalkHandle, uint8_t *pDataBuf, uint32_t dwBufSize)');
-      const CLIENT_SetVolume = lib.func('bool __stdcall CLIENT_SetVolume(int64_t lTalkHandle, int nVolume)');
+      const isWin = process.platform === 'win32';
+      const callConv = isWin && process.arch === 'ia32' ? '__stdcall ' : '';
+
+      const CLIENT_Init = lib.func(`bool ${callConv}CLIENT_Init(void* fDisConnect, int64_t dwUser)`);
+      const CLIENT_Cleanup = lib.func(`void ${callConv}CLIENT_Cleanup()`);
+      const CLIENT_Login = lib.func(`int64_t ${callConv}CLIENT_Login(str pchDVRIP, uint16_t wDVRPort, str pchUserName, str pchPassword, _Out_ NET_DEVICEINFO_NetTalk* lpDeviceInfo, _Out_ int* error)`);
+      const CLIENT_Logout = lib.func(`bool ${callConv}CLIENT_Logout(int64_t lLoginID)`);
+      const CLIENT_StartTalkEx = lib.func(`int64_t ${callConv}CLIENT_StartTalkEx(int64_t lLoginID, void *pfcb, int64_t dwUser)`);
+      const CLIENT_StopTalkEx = lib.func(`bool ${callConv}CLIENT_StopTalkEx(int64_t lTalkHandle)`);
+      const CLIENT_TalkSendData = lib.func(`int32_t ${callConv}CLIENT_TalkSendData(int64_t lTalkHandle, uint8_t *pDataBuf, uint32_t dwBufSize)`);
+      const CLIENT_SetVolume = lib.func(`bool ${callConv}CLIENT_SetVolume(int64_t lTalkHandle, int nVolume)`);
 
       CLIENT_Init(null, 0);
 

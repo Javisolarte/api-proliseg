@@ -19,6 +19,10 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# 1.1 Copiar librerías nativas de Dahua a /usr/lib y actualizar caché del linker
+COPY libs/linux-x64/*.so /usr/lib/
+RUN ldconfig || true
+
 # 2. Crear directorio de trabajo
 WORKDIR /app
 
