@@ -2650,16 +2650,68 @@ Content-Length: 0\r
         }
       }
 
-      // Intentar cambiar idioma a Español
+      // Sincronizar hora del dispositivo
       try {
-        const langRes = await this.dahuaService.cgi(
-          ip, port, user, pass, 'GET',
-          `/cgi-bin/configManager.cgi?action=setConfig&General.Language=Spanish&Locales.Language=Spanish`
-        );
-        results['cambio_idioma_espanol'] = langRes?.data || 'OK';
-      } catch (lErr: any) {
-        results['cambio_idioma_espanol'] = { error: lErr.message };
+        await this.dahuaService.syncHora(ip, port, user, pass);
+        results['hora_sincronizada'] = true;
+      } catch (hErr: any) {
+        results['hora_sincronizada'] = { error: hErr.message };
       }
+
+      // Reparar y autorizar usuario ID 1 ("dispositivo") en hardware
+      try {
+        const u1Params = [
+          'action=insert',
+          'name=AccessUserInfo',
+          'UserID=1',
+          'UserName=dispositivo',
+          'UserType=0',
+          'UserStatus=0',
+          'Authority=0',
+          'Doors[0]=0',
+          'TimeSections[0]=255',
+          `ValidFrom=${encodeURIComponent('2000-01-01 00:00:00')}`,
+          `ValidTo=${encodeURIComponent('2037-12-31 23:59:59')}`,
+        ];
+        await this.dahuaService.cgi(ip, port, user, pass, 'GET', `/cgi-bin/recordUpdater.cgi?${u1Params.join('&')}`);
+
+        const c1Params = [
+          'action=insert',
+          'name=AccessControlCard',
+          'CardNo=1',
+          'UserID=1',
+          'CardName=dispositivo',
+          'CardStatus=0',
+          'CardType=0',
+          'Doors[0]=0',
+          'TimeSections[0]=255',
+          'IsValid=true',
+          `ValidDateStart=${encodeURIComponent('2000-01-01 00:00:00')}`,
+          `ValidDateEnd=${encodeURIComponent('2037-12-31 23:59:59')}`,
+        ];
+        const cardRes = await this.dahuaService.cgi(ip, port, user, pass, 'GET', `/cgi-bin/recordUpdater.cgi?${c1Params.join('&')}`);
+        results['reparar_usuario_1'] = { ok: true, detalle: cardRes?.data?.trim() };
+      } catch (u1Err: any) {
+        results['reparar_usuario_1'] = { error: u1Err.message };
+      }
+
+      // Obtener lista de idiomas disponibles vía RPC
+      try {
+        const rpcLang1 = await this.dahuaService.rpcCall(ip, port, user, pass, 'global.getLanguageList').catch(() => null);
+        const rpcLang2 = await this.dahuaService.rpcCall(ip, port, user, pass, 'magicBox.getLanguageList').catch(() => null);
+        results['idiomas_soportados_rpc'] = rpcLang1?.result || rpcLang2?.result || null;
+      } catch (rErr: any) {
+        results['idiomas_soportados_rpc'] = { error: rErr.message };
+      }
+
+      // Configurar mensaje de bienvenida (VoiceID=4)
+      try {
+        await this.dahuaService.cgi(
+          ip, port, user, pass, 'GET',
+          '/cgi-bin/configManager.cgi?action=setConfig&AccessControlGeneral.AccessVoice.CurrentVoiceID=4'
+        );
+        results['voz_bienvenida'] = 'VoiceID=4 configurado';
+      } catch {}
 
       // Listar usuarios registrados físicamente en el chip Dahua
       try {
