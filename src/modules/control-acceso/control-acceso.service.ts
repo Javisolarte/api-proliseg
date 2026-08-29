@@ -992,14 +992,139 @@ export class ControlAccesoService implements OnModuleInit {
           };
         }
       } catch (sdkErr: any) {
-        this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] NetSDK Talk error: ${sdkErr.message}`);
+        this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] NetSDK Talk no disponible, usando Intercom VTS: ${sdkErr.message}`);
       }
     }
 
-    return {
-      ok: false,
-      mensaje: 'No se pudo iniciar la sesión de audio NetSDK con el terminal Dahua',
-    };
+    // 2. Transmisión Intercom VTS nativa (VTS Management Center 9901#0 hacia Dahua)
+    const baseOffset = target.port >= 10000 ? (target.port % 10000) : Number(target.host.split('.').pop() || '6');
+    const rtpPort = 40000 + baseOffset;
+    const sipPort = 50000 + baseOffset;
+
+    this.logger.log(`📞 [INTERCOM-VTS-DAHUA] Iniciando llamada Intercom VTS hacia ${target.host}:${sipPort} y stream RTP ${target.host}:${rtpPort}...`);
+
+    const callId = randomBytes(12).toString('hex') + '@proliseg';
+    const fromTag = randomBytes(6).toString('hex');
+    const branch = 'z9hG4bK' + randomBytes(8).toString('hex');
+    let toTag = '';
+    const sipClient = dgram.createSocket('udp4');
+
+    const sdpBody = 
+`v=0\r
+o=- 1234 1234 IN IP4 10.8.0.1\r
+s=AudioTalk\r
+c=IN IP4 10.8.0.1\r
+t=0 0\r
+m=audio ${rtpPort} RTP/AVP 8 0\r
+a=rtpmap:8 PCMA/8000\r
+a=rtpmap:0 PCMU/8000\r
+a=sendrecv\r
+`;
+
+    const sipInvite = 
+`INVITE sip:8001@${target.host}:${sipPort} SIP/2.0\r
+Via: SIP/2.0/UDP 10.8.0.1:5060;branch=${branch};rport\r
+Max-Forwards: 70\r
+From: <sip:9901#0@10.8.0.1:5060>;tag=${fromTag}\r
+To: <sip:8001@${target.host}:${sipPort}>\r
+Call-ID: ${callId}\r
+CSeq: 1 INVITE\r
+Contact: <sip:9901#0@10.8.0.1:5060>\r
+User-Agent: VTS\r
+Call-Type: 2\r
+Action: Talk\r
+Content-Type: application/sdp\r
+Content-Length: ${Buffer.byteLength(sdpBody)}\r
+\r
+${sdpBody}`;
+
+    return new Promise((resolve) => {
+      let isSettled = false;
+      let ffmpegProcess: any = null;
+
+      const safeFinish = () => {
+        if (isSettled) return;
+        isSettled = true;
+        try { if (ffmpegProcess) ffmpegProcess.kill('SIGKILL'); } catch {}
+
+        try {
+          const cancel = 
+`CANCEL sip:8001@${target.host}:${sipPort} SIP/2.0\r
+Via: SIP/2.0/UDP 10.8.0.1:5060;branch=${branch};rport\r
+Max-Forwards: 70\r
+From: <sip:9901#0@10.8.0.1:5060>;tag=${fromTag}\r
+To: <sip:8001@${target.host}:${sipPort}>${toTag ? ';tag=' + toTag : ''}\r
+Call-ID: ${callId}\r
+CSeq: 1 CANCEL\r
+User-Agent: VTS\r
+Content-Length: 0\r
+\r
+`;
+          sipClient.send(Buffer.from(cancel), sipPort, target.host, () => {
+            try { sipClient.close(); } catch {}
+          });
+        } catch {
+          try { sipClient.close(); } catch {}
+        }
+
+        resolve({ ok: true, mensaje: 'Llamada Intercom Dahua finalizada' });
+      };
+
+      // Iniciar FFmpeg transcoder hacia el puerto RTP de audio del hardware
+      this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Iniciando transcoder FFmpeg RTP hacia ${target.host}:${rtpPort}...`);
+      ffmpegProcess = spawn(this.getFfmpegBinary(), [
+        '-hide_banner',
+        '-loglevel', 'warning',
+        '-re',
+        '-fflags', '+nobuffer+flush_packets',
+        '-flags', 'low_delay',
+        '-probesize', '32768',
+        '-f', 'webm',
+        '-i', 'pipe:0',
+        '-ac', '1',
+        '-ar', '8000',
+        '-c:a', 'pcm_alaw',
+        '-af', 'volume=5.0, highpass=f=150, lowpass=f=3400',
+        '-payload_type', '8',
+        '-flush_packets', '1',
+        '-f', 'rtp',
+        `rtp://${target.host}:${rtpPort}?pkt_size=160`,
+      ]);
+
+      audioStream.pipe(ffmpegProcess.stdin);
+
+      ffmpegProcess.on('close', (code: any) => {
+        this.logger.log(`🎙️ [AUDIO-IN-DAHUA] FFmpeg stream cerrado (código ${code})`);
+      });
+
+      sipClient.on('message', (msg) => {
+        const text = msg.toString();
+        const firstLine = text.split('\r\n')[0];
+        this.logger.log(`📞 [INTERCOM-VTS] Respuesta Dahua: ${firstLine}`);
+
+        const extractedTag = text.match(/To:[^\n]+tag=([^\r\n;]+)/i)?.[1];
+        if (extractedTag) toTag = extractedTag;
+      });
+
+      sipClient.on('error', (err) => {
+        this.logger.warn(`⚠️ [INTERCOM-VTS] Error SIP: ${err.message}`);
+        safeFinish();
+      });
+
+      // Enviar solicitud de llamada Intercom VTS hacia el Dahua
+      sipClient.send(Buffer.from(sipInvite), sipPort, target.host, (err) => {
+        if (err) {
+          this.logger.warn(`⚠️ [INTERCOM-VTS] Error al enviar llamada: ${err.message}`);
+          safeFinish();
+        } else {
+          this.logger.log(`📞 [INTERCOM-VTS] Llamada VTS 9901#0 enviada a ${target.host}:${sipPort}`);
+        }
+      });
+
+      audioStream.on('close', safeFinish);
+      (audioStream as any).on('end', safeFinish);
+      audioStream.on('error', safeFinish);
+    });
   }
 
   async relayAudioFromDevice(
