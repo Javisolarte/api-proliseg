@@ -1120,11 +1120,11 @@ Content-Length: 0\r
           '-ac', '1',
           '-ar', '8000',
           '-c:a', 'pcm_alaw',
-          '-af', 'volume=3.5',
+          '-af', 'volume=4.5, highpass=f=200, lowpass=f=3400',
           '-payload_type', '8',
           '-flush_packets', '1',
           '-f', 'rtp',
-          `rtp://${target.host}:${rtpPort}`,
+          `rtp://${target.host}:${rtpPort}?pkt_size=160`,
         ]);
 
         audioStream.pipe(ffmpegProcess.stdin);
@@ -2122,7 +2122,7 @@ Content-Length: 0\r
       let rtspPath = '/Streaming/Channels/102'; // Default: Hikvision Sub-Stream
 
       if (isDahua) {
-        rtspPath = '/cam/realmonitor?channel=1&subtype=0'; // Dahua Main-Stream (menor latencia, GOP controlado)
+        rtspPath = '/cam/realmonitor?channel=1&subtype=1'; // Dahua Sub-Stream (Fluido, ultra baja latencia, no se congela en llamadas)
         const httpPort = Number(dev.configuracion_tecnica?.puerto || dev.puerto || 80);
         this.dahuaService.asegurarFormatoH264(targetIp, httpPort, user, pass).catch(() => {});
       } else if (marcaStr.includes('zk')) {
