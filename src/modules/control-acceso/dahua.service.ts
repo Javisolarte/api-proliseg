@@ -57,6 +57,7 @@ export interface DahuaSystemInfo {
 export class DahuaService {
   private readonly logger = new Logger(DahuaService.name);
   private readonly digestCache = new Map<string, { realm: string; nonce: string; qop?: string }>();
+  private readonly activeNetSdkSessions = new Map<string, () => void>();
 
   /**
    * Ejecuta peticiones HTTP CGI autenticadas con Digest Auth nativo hacia dispositivos Dahua.
@@ -1165,7 +1166,16 @@ export class DahuaService {
   ): Promise<boolean> {
     try {
       const sdkPort = port >= 10000 ? (20000 + (port % 10000)) : 37777;
-      this.logger.log(`🎙️ [DAHUA-NETSDK-TALK] Iniciando audio bidireccional por NetSDK TCP ${ip}:${sdkPort}...`);
+      const sessionKey = `${ip}:${sdkPort}`;
+      this.logger.log(`🎙️ [DAHUA-NETSDK-TALK] Iniciando audio bidireccional por NetSDK TCP ${sessionKey}...`);
+
+      // Limpiar sesión previa si estuviera abierta para evitar Error 9 (Busy)
+      const prevSession = this.activeNetSdkSessions.get(sessionKey);
+      if (prevSession) {
+        this.logger.log(`🔄 [DAHUA-NETSDK-TALK] Limpiando sesión previa para ${sessionKey}`);
+        try { prevSession(); } catch {}
+        this.activeNetSdkSessions.delete(sessionKey);
+      }
 
       const koffi = require('koffi');
       const fs = require('fs');
@@ -1209,15 +1219,6 @@ export class DahuaService {
 
       const lib = koffi.load(dllPath);
 
-      const NET_DEVICEINFO_Simple = koffi.struct('NET_DEVICEINFO_NetTalk', {
-        sSerialNumber: koffi.array('char', 48),
-        byAlarmInPortNum: 'uint8_t',
-        byAlarmOutPortNum: 'uint8_t',
-        byDiskNum: 'uint8_t',
-        byDVRType: 'uint8_t',
-        byChanNum: 'uint8_t',
-      });
-
       const isWin = process.platform === 'win32';
       const callConv = isWin && process.arch === 'ia32' ? '__stdcall ' : '';
 
@@ -1225,11 +1226,14 @@ export class DahuaService {
       const CLIENT_Cleanup = lib.func(`void ${callConv}CLIENT_Cleanup()`);
       const CLIENT_Login = lib.func(`int64_t ${callConv}CLIENT_Login(str pchDVRIP, uint16_t wDVRPort, str pchUserName, str pchPassword, void* lpDeviceInfo, _Out_ int* error)`);
       const CLIENT_Logout = lib.func(`bool ${callConv}CLIENT_Logout(int64_t lLoginID)`);
-      const CLIENT_StartTalkEx = lib.func(`int64_t ${callConv}CLIENT_StartTalkEx(int64_t lLoginID, void *pfcb, int64_t dwUser)`);
       const CLIENT_StopTalkEx = lib.func(`bool ${callConv}CLIENT_StopTalkEx(int64_t lTalkHandle)`);
       const CLIENT_TalkSendData = lib.func(`int32_t ${callConv}CLIENT_TalkSendData(int64_t lTalkHandle, uint8_t *pDataBuf, uint32_t dwBufSize)`);
       const CLIENT_SetVolume = lib.func(`bool ${callConv}CLIENT_SetVolume(int64_t lTalkHandle, int nVolume)`);
       const CLIENT_SetDeviceMode = lib.func(`bool ${callConv}CLIENT_SetDeviceMode(int64_t lLoginID, int emType, void *pValue)`);
+
+      // Definir prototipo del callback de retorno de audio del Dahua
+      const AudioDataCallbackProto = koffi.proto(`void ${callConv}pfAudioDataCallBack(int64_t lTalkHandle, void *pDataBuf, uint32_t dwBufSize, uint8_t byAudioFlag, int64_t dwUser)`);
+      const CLIENT_StartTalkEx = lib.func(`int64_t ${callConv}CLIENT_StartTalkEx(int64_t lLoginID, pfAudioDataCallBack *pfcb, int64_t dwUser)`);
 
       CLIENT_Init(null, 0);
 
@@ -1250,12 +1254,21 @@ export class DahuaService {
         const encodeBuf = Buffer.alloc(4);
         encodeBuf.writeInt32LE(1, 0);
         CLIENT_SetDeviceMode(loginId, 1, encodeBuf);
-        CLIENT_SetDeviceMode(loginId, 4, null); // DH_TALK_CLIENT_MODE = 4 (PC a terminal)
+
+        const transferBuf = Buffer.alloc(4);
+        transferBuf.writeInt32LE(0, 0); // DH_TALK_TRANSFER_MODE = 3 (0 = Directo)
+        CLIENT_SetDeviceMode(loginId, 3, transferBuf);
       } catch {}
 
-      const talkHandle = CLIENT_StartTalkEx(loginId, null, 0);
+      // 2. Registrar callback de audio obligatorio para evitar que el firmware Dahua corte la llamada
+      const audioCb = koffi.register(AudioDataCallbackProto, (handle: any, pBuf: any, size: number, flag: number, user: any) => {
+        // Callback para stream de retorno
+      });
+
+      const talkHandle = CLIENT_StartTalkEx(loginId, audioCb, 0);
       if (!talkHandle || talkHandle === 0n || talkHandle === 0) {
         this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] CLIENT_StartTalkEx falló`);
+        try { koffi.unregister(audioCb); } catch {}
         CLIENT_Logout(loginId);
         CLIENT_Cleanup();
         return false;
@@ -1267,13 +1280,13 @@ export class DahuaService {
 
       this.logger.log(`🎉 [DAHUA-NETSDK-TALK] Altavoz abierto en hardware Dahua (Handle: ${talkHandle})`);
 
-      // 1. Enviar ráfaga inicial de frames de confort (G.711A 0xd5) para enganchar de inmediato el DSP del hardware
+      // 3. Enviar ráfaga inicial de frames de confort (G.711A 0xd5) para enganchar de inmediato el DSP del hardware
       try {
         const initialBurst = Buffer.alloc(640, 0xd5);
         CLIENT_TalkSendData(talkHandle, initialBurst, initialBurst.length);
       } catch {}
 
-      // 2. Heartbeat continuo para mantener el canal abierto incluso antes de que lleguen los chunks del navegador
+      // 4. Heartbeat continuo para mantener el canal abierto incluso antes de que lleguen los chunks del navegador
       let lastAudioSent = Date.now();
       const keepAliveInterval = setInterval(() => {
         if (Date.now() - lastAudioSent >= 200) {
@@ -1324,15 +1337,19 @@ export class DahuaService {
           if (isDone) return;
           isDone = true;
           this.logger.log(`🛑 [DAHUA-NETSDK-TALK] Finalizando llamada Dahua (Razón: ${reason})`);
+          this.activeNetSdkSessions.delete(sessionKey);
           try { clearInterval(keepAliveInterval); } catch {}
           try { ffmpeg.stdin.end(); } catch {}
           try { ffmpeg.kill('SIGKILL'); } catch {}
           try { CLIENT_StopTalkEx(talkHandle); } catch {}
+          try { koffi.unregister(audioCb); } catch {}
           try { CLIENT_Logout(loginId); } catch {}
           try { CLIENT_Cleanup(); } catch {}
           this.logger.log(`✅ [DAHUA-NETSDK-TALK] Llamada finalizada y cerrada limpiamente`);
           resolve(true);
         };
+
+        this.activeNetSdkSessions.set(sessionKey, () => cleanUp('reemplazo de sesion'));
 
         audioStream.on('close', () => cleanUp('audioStream close'));
         (audioStream as any).on('end', () => cleanUp('audioStream end'));
