@@ -1172,11 +1172,12 @@ export class DahuaService {
       const path = require('path');
 
       const possibleDllPaths = [
-        'C:\\Program Files\\SmartPSSLite\\dhnetsdk.dll',
-        'C:\\Program Files (x86)\\SmartPSS\\dhnetsdk.dll',
+        path.join(process.cwd(), 'libs', 'linux-x64', 'libdhnetsdk.so'),
+        path.join(process.cwd(), 'libs', 'libdhnetsdk.so'),
         '/usr/lib/libdhnetsdk.so',
         '/usr/local/lib/libdhnetsdk.so',
-        path.join(process.cwd(), 'libs', 'libdhnetsdk.so'),
+        'C:\\Program Files\\SmartPSSLite\\dhnetsdk.dll',
+        'C:\\Program Files (x86)\\SmartPSS\\dhnetsdk.dll',
         path.join(process.cwd(), 'libs', 'dhnetsdk.dll'),
       ];
 
