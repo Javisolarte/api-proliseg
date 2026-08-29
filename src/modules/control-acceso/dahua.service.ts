@@ -1183,10 +1183,19 @@ export class DahuaService {
 
       const dllPath = possibleDllPaths.find(p => fs.existsSync(p));
 
-      if (!dllPath) {
-        this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] dhnetsdk no encontrado en rutas conocidas`);
-        return false;
-      }
+      const userClean = user || 'admin';
+      const passClean = pass || 'proliseg123';
+
+      this.logger.log(`🎙️ [DAHUA-NETSDK-TALK] Usando librería: ${dllPath}`);
+
+      // Pre-cargar librerías auxiliares en Linux para resolución de símbolos
+      try {
+        const libDir = path.dirname(dllPath);
+        const dvrPath = path.join(libDir, 'libdhdvr.so');
+        const cfgPath = path.join(libDir, 'libdhconfigsdk.so');
+        if (fs.existsSync(dvrPath)) { try { koffi.load(dvrPath); } catch {} }
+        if (fs.existsSync(cfgPath)) { try { koffi.load(cfgPath); } catch {} }
+      } catch {}
 
       const lib = koffi.load(dllPath);
 
@@ -1215,13 +1224,15 @@ export class DahuaService {
 
       const devInfo = {};
       const errPtr = [0];
-      const loginId = CLIENT_Login(ip, sdkPort, user, pass, devInfo, errPtr);
+      const loginId = CLIENT_Login(ip, sdkPort, userClean, passClean, devInfo, errPtr);
 
       if (!loginId || loginId === 0n || loginId === 0) {
-        this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] Login falló en ${ip}:${sdkPort} (Error ${errPtr[0]})`);
+        this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] Login falló en ${ip}:${sdkPort} (Error ${errPtr[0]}) con usuario ${userClean}`);
         CLIENT_Cleanup();
         return false;
       }
+
+      this.logger.log(`✅ [DAHUA-NETSDK-TALK] Login exitoso (ID: ${loginId}). Iniciando TalkEx...`);
 
       const talkHandle = CLIENT_StartTalkEx(loginId, null, 0);
       if (!talkHandle || talkHandle === 0n || talkHandle === 0) {
