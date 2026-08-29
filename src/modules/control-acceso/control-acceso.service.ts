@@ -1000,11 +1000,6 @@ export class ControlAccesoService implements OnModuleInit {
     const rtpPort = 40000 + baseOffset;
     const sipPort = 50000 + baseOffset;
 
-    // Desmutear altavoz físico y subir volumen al 90%
-    if (this.dahuaService) {
-      this.dahuaService.ajustarVolumenAltavoz(target.host, target.port, target.user, target.pass, 9).catch(() => {});
-    }
-
     this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Iniciando sesión SIP (${target.host}:${sipPort}) y stream RTP PCMA (${target.host}:${rtpPort}) hacia Dahua...`);
 
     const callId = randomBytes(12).toString('hex') + '@proliseg';
