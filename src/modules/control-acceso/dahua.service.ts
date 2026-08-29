@@ -1188,13 +1188,23 @@ export class DahuaService {
 
       this.logger.log(`🎙️ [DAHUA-NETSDK-TALK] Usando librería: ${dllPath}`);
 
-      // Pre-cargar librerías auxiliares en Linux para resolución de símbolos
+      // Pre-cargar librerías auxiliares en Linux para resolución completa de símbolos
       try {
         const libDir = path.dirname(dllPath);
-        const dvrPath = path.join(libDir, 'libdhdvr.so');
-        const cfgPath = path.join(libDir, 'libdhconfigsdk.so');
-        if (fs.existsSync(dvrPath)) { try { koffi.load(dvrPath); } catch {} }
-        if (fs.existsSync(cfgPath)) { try { koffi.load(cfgPath); } catch {} }
+        const preloadList = [
+          'libInfra.so',
+          'libNetFramework.so',
+          'libStream.so',
+          'libStreamSvr.so',
+          'libavnetsdk.so',
+          'libdhconfigsdk.so',
+        ];
+        for (const f of preloadList) {
+          const fullPath = path.join(libDir, f);
+          if (fs.existsSync(fullPath)) {
+            try { koffi.load(fullPath); } catch {}
+          }
+        }
       } catch {}
 
       const lib = koffi.load(dllPath);
