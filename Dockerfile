@@ -47,8 +47,9 @@ RUN npm prune --production && npm cache clean --force
 # 9. Copiar el archivo de Firebase si existe (opcional con truco de wildcard)
 COPY package.json *-firebase-adminsdk-*.json ./
 
-# Configurar NODE_ENV a producción para el tiempo de ejecución
+# Configurar NODE_ENV a producción para el tiempo de ejecución y LD_LIBRARY_PATH para Dahua NetSDK
 ENV NODE_ENV=production
+ENV LD_LIBRARY_PATH=/app/libs/linux-x64:$LD_LIBRARY_PATH
 
 # API HTTP/WebSocket and the two TCP listeners used by the alarm receiver.
 # Publishing them on the VPS still requires the deployment platform to map these
