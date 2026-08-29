@@ -1025,16 +1025,14 @@ a=sendrecv\r
 `INVITE sip:8001@${target.host}:${sipPort} SIP/2.0\r
 Via: SIP/2.0/UDP 10.8.0.1:5060;branch=${branch};rport\r
 Max-Forwards: 70\r
-From: <sip:8000@10.8.0.1>;tag=${fromTag}\r
+From: <sip:9901#0@10.8.0.1:5060>;tag=${fromTag}\r
 To: <sip:8001@${target.host}:${sipPort}>\r
 Call-ID: ${callId}\r
 CSeq: 1 INVITE\r
-Contact: <sip:8000@10.8.0.1:5060>\r
-User-Agent: SmartPSSPlusClient\r
-Call-Type: 0\r
-Action: AudioTalk\r
-Alert-Info: <urn:alert:service:normal>;info=AutoAnswer\r
-Answer-Mode: Auto\r
+Contact: <sip:9901#0@10.8.0.1:5060>\r
+User-Agent: VTS\r
+Call-Type: 1\r
+Action: Invite\r
 Content-Type: application/sdp\r
 Content-Length: ${Buffer.byteLength(sdpBody)}\r
 \r
@@ -1043,7 +1041,7 @@ ${sdpBody}`;
     const sendAck = (toHeaderRaw?: string, fromHeaderRaw?: string) => {
       const ackBranch = 'z9hG4bK' + randomBytes(8).toString('hex');
       const ackTo = toHeaderRaw || `<sip:8001@${target.host}:${sipPort}>${toTag ? ';tag=' + toTag : ''}`;
-      const ackFrom = fromHeaderRaw || `<sip:8000@10.8.0.1>;tag=${fromTag}`;
+      const ackFrom = fromHeaderRaw || `<sip:9901#0@10.8.0.1:5060>;tag=${fromTag}`;
       const ack = 
 `ACK sip:8001@${target.host}:${sipPort} SIP/2.0\r
 Via: SIP/2.0/UDP 10.8.0.1:5060;branch=${ackBranch};rport\r
@@ -1052,8 +1050,8 @@ From: ${ackFrom}\r
 To: ${ackTo}\r
 Call-ID: ${callId}\r
 CSeq: 1 ACK\r
-Contact: <sip:8000@10.8.0.1:5060>\r
-User-Agent: SmartPSSPlusClient\r
+Contact: <sip:9901#0@10.8.0.1:5060>\r
+User-Agent: VTS\r
 Content-Length: 0\r
 \r
 `;
@@ -1075,11 +1073,11 @@ Content-Length: 0\r
 `BYE sip:8001@${target.host}:${sipPort} SIP/2.0\r
 Via: SIP/2.0/UDP 10.8.0.1:5060;branch=${byeBranch};rport\r
 Max-Forwards: 70\r
-From: <sip:8000@10.8.0.1>;tag=${fromTag}\r
+From: <sip:9901#0@10.8.0.1:5060>;tag=${fromTag}\r
 To: <sip:8001@${target.host}:${sipPort}>${toTag ? ';tag=' + toTag : ''}\r
 Call-ID: ${callId}\r
 CSeq: 2 BYE\r
-User-Agent: SmartPSSPlusClient\r
+User-Agent: VTS\r
 Content-Length: 0\r
 \r
 `;
@@ -1087,11 +1085,11 @@ Content-Length: 0\r
 `CANCEL sip:8001@${target.host}:${sipPort} SIP/2.0\r
 Via: SIP/2.0/UDP 10.8.0.1:5060;branch=${branch};rport\r
 Max-Forwards: 70\r
-From: <sip:8000@10.8.0.1>;tag=${fromTag}\r
+From: <sip:9901#0@10.8.0.1:5060>;tag=${fromTag}\r
 To: <sip:8001@${target.host}:${sipPort}>\r
 Call-ID: ${callId}\r
 CSeq: 1 CANCEL\r
-User-Agent: SmartPSSPlusClient\r
+User-Agent: VTS\r
 Content-Length: 0\r
 \r
 `;
