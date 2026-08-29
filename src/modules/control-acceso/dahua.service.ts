@@ -1263,16 +1263,17 @@ export class DahuaService {
 
       const ffmpeg = spawn(ffmpegPath, [
         '-hide_banner',
-        '-loglevel', 'warning',
-        '-fflags', 'nobuffer',
+        '-loglevel', 'error',
+        '-re',
+        '-fflags', '+nobuffer+flush_packets',
         '-flags', 'low_delay',
-        '-probesize', '4096',
+        '-probesize', '32768',
         '-f', 'webm',
         '-i', 'pipe:0',
         '-ac', '1',
         '-ar', '8000',
         '-c:a', 'pcm_alaw',
-        '-af', 'volume=3.5',
+        '-af', 'volume=4.5',
         '-f', 'alaw',
         '-flush_packets', '1',
         'pipe:1',
@@ -1281,29 +1282,36 @@ export class DahuaService {
       ffmpeg.stdout.on('data', (chunk: Buffer) => {
         try {
           CLIENT_TalkSendData(talkHandle, chunk, chunk.length);
-        } catch {}
+        } catch (err: any) {
+          this.logger.debug(`[DAHUA-NETSDK-TALK] SendData warning: ${err.message}`);
+        }
+      });
+
+      ffmpeg.stderr.on('data', (d: Buffer) => {
+        this.logger.debug(`[FFMPEG-TALK-STDERR] ${d.toString().trim()}`);
       });
 
       return new Promise<boolean>((resolve) => {
         let isDone = false;
-        const cleanUp = () => {
+        const cleanUp = (reason: string = 'normal') => {
           if (isDone) return;
           isDone = true;
+          this.logger.log(`🛑 [DAHUA-NETSDK-TALK] Finalizando llamada Dahua (Razón: ${reason})`);
+          try { ffmpeg.stdin.end(); } catch {}
           try { ffmpeg.kill('SIGKILL'); } catch {}
           try { CLIENT_StopTalkEx(talkHandle); } catch {}
           try { CLIENT_Logout(loginId); } catch {}
           try { CLIENT_Cleanup(); } catch {}
-          this.logger.log(`✅ [DAHUA-NETSDK-TALK] Sesión de audio finalizada`);
+          this.logger.log(`✅ [DAHUA-NETSDK-TALK] Llamada finalizada y cerrada limpiamente`);
           resolve(true);
         };
 
-        audioStream.on('close', cleanUp);
-        (audioStream as any).on('end', cleanUp);
-        audioStream.on('error', cleanUp);
-        ffmpeg.on('close', cleanUp);
-        ffmpeg.on('error', cleanUp);
+        audioStream.on('close', () => cleanUp('audioStream close'));
+        (audioStream as any).on('end', () => cleanUp('audioStream end'));
+        audioStream.on('error', (err: any) => cleanUp(`audioStream error: ${err?.message || err}`));
 
-        audioStream.pipe(ffmpeg.stdin);
+        // Inyectar datos de audio del micrófono en stdin de FFmpeg
+        audioStream.pipe(ffmpeg.stdin, { end: false });
       });
     } catch (e: any) {
       this.logger.error(`❌ [DAHUA-NETSDK-TALK] Error: ${e.message}`);
