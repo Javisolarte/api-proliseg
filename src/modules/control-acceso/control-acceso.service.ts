@@ -993,9 +993,6 @@ export class ControlAccesoService implements OnModuleInit {
         }
       } catch (sdkErr: any) {
         this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] NetSDK Talk no disponible, usando fallback SIP: ${sdkErr.message}`);
-      }
-    }
-
     const baseOffset = target.port >= 10000 ? (target.port % 10000) : Number(target.host.split('.').pop() || '6');
     const rtpPort = 40000 + baseOffset;
     const sipPort = 50000 + baseOffset;
@@ -1032,7 +1029,7 @@ CSeq: 1 INVITE\r
 Contact: <sip:8000@10.8.0.1:5060>\r
 User-Agent: SmartPSSPlusClient\r
 Call-Type: 0\r
-Action: Call\r
+Action: AudioTalk\r
 Alert-Info: <urn:alert:service:normal>;info=AutoAnswer\r
 Answer-Mode: Auto\r
 Content-Type: application/sdp\r
@@ -1063,7 +1060,6 @@ Content-Length: 0\r
     return new Promise((resolve) => {
       let isSettled = false;
       let ffmpegProcess: any = null;
-      let audioPortFound = false;
 
       const safeFinish = () => {
         if (isSettled) return;
@@ -1106,39 +1102,41 @@ Content-Length: 0\r
         resolve({ ok: true, mensaje: 'Transmisión Dahua finalizada' });
       };
 
-      const startFFmpeg = () => {
-        if (ffmpegProcess) return;
-        this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Iniciando stream RTP PCMA (G.711A) hacia ${target.host}:${rtpPort}...`);
-        ffmpegProcess = spawn(this.getFfmpegBinary(), [
-          '-hide_banner',
-          '-loglevel', 'warning',
-          '-fflags', 'nobuffer',
-          '-flags', 'low_delay',
-          '-probesize', '4096',
-          '-f', 'webm',
-          '-i', 'pipe:0',
-          '-ac', '1',
-          '-ar', '8000',
-          '-c:a', 'pcm_alaw',
-          '-af', 'volume=4.5, highpass=f=200, lowpass=f=3400',
-          '-payload_type', '8',
-          '-flush_packets', '1',
-          '-f', 'rtp',
-          `rtp://${target.host}:${rtpPort}?pkt_size=160`,
-        ]);
+      // Iniciar FFmpeg de inmediato para no perder el encabezado WebM inicial del micrófono
+      this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Iniciando transcoder FFmpeg RTP hacia ${target.host}:${rtpPort}...`);
+      ffmpegProcess = spawn(this.getFfmpegBinary(), [
+        '-hide_banner',
+        '-loglevel', 'warning',
+        '-fflags', '+nobuffer+flush_packets',
+        '-flags', 'low_delay',
+        '-probesize', '32768',
+        '-f', 'webm',
+        '-i', 'pipe:0',
+        '-ac', '1',
+        '-ar', '8000',
+        '-c:a', 'pcm_alaw',
+        '-af', 'volume=5.0, highpass=f=150, lowpass=f=3400',
+        '-payload_type', '8',
+        '-flush_packets', '1',
+        '-f', 'rtp',
+        `rtp://${target.host}:${rtpPort}?pkt_size=160`,
+      ]);
 
-        audioStream.pipe(ffmpegProcess.stdin);
+      audioStream.pipe(ffmpegProcess.stdin);
 
-        ffmpegProcess.on('close', (code: any) => {
-          this.logger.log(`🎙️ [AUDIO-IN-DAHUA] FFmpeg cerró (código ${code})`);
-          safeFinish();
-        });
+      ffmpegProcess.stderr?.on('data', (chunk: Buffer) => {
+        this.logger.debug(`[FFMPEG-DAHUA-STDERR] ${chunk.toString().trim()}`);
+      });
 
-        ffmpegProcess.on('error', (err: any) => {
-          this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] FFmpeg error: ${err.message}`);
-          safeFinish();
-        });
-      };
+      ffmpegProcess.on('close', (code: any) => {
+        this.logger.log(`🎙️ [AUDIO-IN-DAHUA] FFmpeg cerró (código ${code})`);
+        safeFinish();
+      });
+
+      ffmpegProcess.on('error', (err: any) => {
+        this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] FFmpeg error: ${err.message}`);
+        safeFinish();
+      });
 
       sipClient.on('message', (msg) => {
         const text = msg.toString();
@@ -1151,13 +1149,8 @@ Content-Length: 0\r
         const toHeaderMatch = text.match(/To:\s*([^\r\n]+)/i)?.[1];
         const fromHeaderMatch = text.match(/From:\s*([^\r\n]+)/i)?.[1];
 
-        if (!audioPortFound) {
-          audioPortFound = true;
-          startFFmpeg();
-        }
-
         if (text.includes('200 OK')) {
-          this.logger.log(`✅ [SIP-DAHUA] 200 OK contestado por Dahua. Llamada en curso.`);
+          this.logger.log(`✅ [SIP-DAHUA] 200 OK contestado por Dahua. Audio bidireccional activo.`);
           sendAck(toHeaderMatch, fromHeaderMatch);
         }
       });
@@ -1172,9 +1165,7 @@ Content-Length: 0\r
           this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] Error al enviar SIP INVITE: ${err.message}`);
           safeFinish();
         } else {
-          this.logger.log(`📞 [AUDIO-IN-DAHUA] SIP INVITE enviado a ${target.host}:${sipPort}`);
-          // Iniciar FFmpeg de inmediato para no perder paquetes iniciales
-          startFFmpeg();
+          this.logger.log(`📞 [AUDIO-IN-DAHUA] SIP INVITE (Action: AudioTalk) enviado a ${target.host}:${sipPort}`);
         }
       });
 
