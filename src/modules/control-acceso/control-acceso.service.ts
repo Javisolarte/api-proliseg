@@ -2628,16 +2628,14 @@ Content-Length: 0\r
       const pass = String(device.credencial_password || '');
 
       const dahuaConfigs = [
-        'Audio',
-        'AudioIn',
-        'AudioOut',
-        'Volume',
-        'Speaker',
-        'VoicePrompt',
-        'VTHConfig',
+        'General',
+        'Locales',
+        'AccessControlGeneral',
+        'AccessControl',
+        'AccessFace',
+        'FaceRecognition',
         'SIP',
         'Encode[0]',
-        'Intercom'
       ];
 
       for (const name of dahuaConfigs) {
@@ -2650,6 +2648,24 @@ Content-Length: 0\r
         } catch (err: any) {
           results[name] = { error: err.message, status: err.response?.status };
         }
+      }
+
+      // Intentar cambiar idioma a Español
+      try {
+        const langRes = await this.dahuaService.cgi(
+          ip, port, user, pass, 'GET',
+          `/cgi-bin/configManager.cgi?action=setConfig&General.Language=Spanish&Locales.Language=Spanish`
+        );
+        results['cambio_idioma_espanol'] = langRes?.data || 'OK';
+      } catch (lErr: any) {
+        results['cambio_idioma_espanol'] = { error: lErr.message };
+      }
+
+      // Listar usuarios registrados físicamente en el chip Dahua
+      try {
+        results['usuarios_hardware_dahua'] = await this.dahuaService.listarPersonas(ip, port, user, pass);
+      } catch (uErr: any) {
+        results['usuarios_hardware_dahua'] = { error: uErr.message };
       }
 
       return {
