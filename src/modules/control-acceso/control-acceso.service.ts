@@ -2690,6 +2690,39 @@ Content-Length: 0\r
         results['reparar_usuario_1'] = { error: u1Err.message };
       }
 
+      // Asegurar que el método de apertura incluya Rostro (Face = 32, Total Method = 35)
+      try {
+        await this.dahuaService.cgi(
+          ip, port, user, pass, 'GET',
+          '/cgi-bin/configManager.cgi?action=setConfig&AccessControl[0].Method=35&AccessControl[0].Enable=true'
+        );
+        results['metodo_apertura_facial'] = 'AccessControl[0].Method=35 (Facial + Tarjeta + Password) configurado';
+      } catch (mErr: any) {
+        results['metodo_apertura_facial'] = { error: mErr.message };
+      }
+
+      // Asegurar tarjeta y permisos para OSCAR (1004192496)
+      try {
+        const cOscarParams = [
+          'action=insert',
+          'name=AccessControlCard',
+          'CardNo=1004192496',
+          'UserID=1004192496',
+          'CardName=OSCAR',
+          'CardStatus=0',
+          'CardType=0',
+          'Doors[0]=0',
+          'TimeSections[0]=255',
+          'IsValid=true',
+          `ValidDateStart=${encodeURIComponent('2020-01-01 00:00:00')}`,
+          `ValidDateEnd=${encodeURIComponent('2037-12-31 23:59:59')}`,
+        ];
+        const cardOscarRes = await this.dahuaService.cgi(ip, port, user, pass, 'GET', `/cgi-bin/recordUpdater.cgi?${cOscarParams.join('&')}`);
+        results['tarjeta_oscar'] = { ok: true, detalle: cardOscarRes?.data?.trim() };
+      } catch (oErr: any) {
+        results['tarjeta_oscar'] = { error: oErr.message };
+      }
+
       // Obtener lista de idiomas disponibles vía RPC
       try {
         const rpcLang1 = await this.dahuaService.rpcCall(ip, port, user, pass, 'global.getLanguageList').catch(() => null);
