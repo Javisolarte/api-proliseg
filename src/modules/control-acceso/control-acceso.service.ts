@@ -2101,7 +2101,7 @@ Content-Length: 0\r
       }
 
       const user = dev.credencial_usuario || 'admin';
-      const pass = dev.credencial_password || 'proliseg#123';
+      const pass = dev.credencial_password || 'proliseg123';
       const rtspTarget = await this.resolveRtspNetworkTarget(dev);
       const targetIp = rtspTarget.ip;
       const rtspPort = rtspTarget.port;
@@ -2177,7 +2177,7 @@ Content-Length: 0\r
 
   async getSnapshot(ip: string, id?: string): Promise<Buffer> {
     let user = 'admin';
-    let pass = 'proliseg#123';
+    let pass = 'proliseg123';
     let port = 80;
     let targetIp = ip;
 
@@ -4619,7 +4619,7 @@ Content-Length: 0\r
     let resolvedIp = targetIp;
     let targetPort = 80;
     let user = 'admin';
-    let pass = 'proliseg#123';
+    let pass = 'proliseg123';
 
     try {
       // 1. Consultar base de datos para recuperar credenciales y puerto
