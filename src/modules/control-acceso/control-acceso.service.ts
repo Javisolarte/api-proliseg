@@ -993,6 +993,9 @@ export class ControlAccesoService implements OnModuleInit {
         }
       } catch (sdkErr: any) {
         this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] NetSDK Talk no disponible, usando fallback SIP: ${sdkErr.message}`);
+      }
+    }
+
     const baseOffset = target.port >= 10000 ? (target.port % 10000) : Number(target.host.split('.').pop() || '6');
     const rtpPort = 40000 + baseOffset;
     const sipPort = 50000 + baseOffset;
