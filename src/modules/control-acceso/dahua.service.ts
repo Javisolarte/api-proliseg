@@ -1249,10 +1249,12 @@ export class DahuaService {
 
       this.logger.log(`✅ [DAHUA-NETSDK-TALK] Login exitoso (ID: ${loginId}). Configurando códec de audio G.711A...`);
 
-      // 1. Configurar modo de codificación a G.711A (1 = DH_TALK_ENCODE_TYPE, 1 = DH_TALK_G711a)
+      // 1. Configurar modo de codificación DH_AUDIO_FORMAT_NET: G.711A (1), 16 bits, 8000 Hz
       try {
-        const encodeBuf = Buffer.alloc(4);
-        encodeBuf.writeInt32LE(1, 0);
+        const encodeBuf = Buffer.alloc(32);
+        encodeBuf.writeInt32LE(1, 0);    // encodeType = 1 (DH_TALK_G711a)
+        encodeBuf.writeInt32LE(16, 4);   // nAudioBit = 16
+        encodeBuf.writeInt32LE(8000, 8); // dwSampleRate = 8000 Hz
         CLIENT_SetDeviceMode(loginId, 1, encodeBuf);
 
         const transferBuf = Buffer.alloc(4);
