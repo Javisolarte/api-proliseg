@@ -430,7 +430,7 @@ export class DahuaService {
       `UserName=${encodeURIComponent(cardName)}`,
       `UserType=0`,
       `UserStatus=0`,
-      `Authority=1`,
+      `Authority=0`,
       `Doors[0]=0`,
       `TimeSections[0]=255`,
       `ValidFrom=${encodeURIComponent('2020-01-01 00:00:00')}`,
@@ -448,6 +448,8 @@ export class DahuaService {
       `CardName=${encodeURIComponent(cardName)}`,
       `CardStatus=0`,
       `CardType=0`,
+      `Doors[0]=0`,
+      `TimeSections[0]=255`,
       `IsValid=${persona.habilitado !== false}`,
       `ValidDateStart=${encodeURIComponent('2020-01-01 00:00:00')}`,
       `ValidDateEnd=${encodeURIComponent('2037-12-31 23:59:59')}`,
@@ -470,7 +472,7 @@ export class DahuaService {
       if (recnoMatch) {
         recno = parseInt(recnoMatch[1], 10);
       }
-    } catch (insertErr) {
+    } catch (insertErr: any) {
       this.logger.warn(`⚠️ [DAHUA PERSONA] Nota en AccessControlCard: ${insertErr.message}`);
     }
 
@@ -503,7 +505,7 @@ export class DahuaService {
       `UserName=${encodeURIComponent(cardName)}`,
       `UserType=0`,
       `UserStatus=0`,
-      `Authority=1`,
+      `Authority=0`,
       `Doors[0]=0`,
       `TimeSections[0]=255`,
     ];
@@ -525,6 +527,8 @@ export class DahuaService {
         `UserID=${encodeURIComponent(userId)}`,
         `CardName=${encodeURIComponent(cardName)}`,
         `CardStatus=0`,
+        `Doors[0]=0`,
+        `TimeSections[0]=255`,
         `IsValid=${persona.habilitado !== false}`,
       ];
 
