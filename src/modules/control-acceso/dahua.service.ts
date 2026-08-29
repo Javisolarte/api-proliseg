@@ -1318,12 +1318,17 @@ export class DahuaService {
         'pipe:1',
       ]);
 
+      let totalBytesSent = 0;
       ffmpeg.stdout.on('data', (chunk: Buffer) => {
         lastAudioSent = Date.now();
+        totalBytesSent += chunk.length;
         try {
-          CLIENT_TalkSendData(talkHandle, chunk, chunk.length);
+          const ret = CLIENT_TalkSendData(talkHandle, chunk, chunk.length);
+          if (totalBytesSent % 6400 === 0 || totalBytesSent <= 1500) {
+            this.logger.log(`🔊 [DAHUA-NETSDK-TALK] Enviados ${chunk.length} bytes de voz al parlante Dahua (Total: ${totalBytesSent} bytes, Ret: ${ret})`);
+          }
         } catch (err: any) {
-          this.logger.debug(`[DAHUA-NETSDK-TALK] SendData warning: ${err.message}`);
+          this.logger.warn(`[DAHUA-NETSDK-TALK] SendData warning: ${err.message}`);
         }
       });
 
