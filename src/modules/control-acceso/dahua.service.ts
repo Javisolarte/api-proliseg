@@ -1258,6 +1258,23 @@ export class DahuaService {
 
       this.logger.log(`🎉 [DAHUA-NETSDK-TALK] Altavoz abierto en hardware Dahua (Handle: ${talkHandle})`);
 
+      // 1. Enviar ráfaga inicial de frames de confort (G.711A 0xd5) para enganchar de inmediato el DSP del hardware
+      try {
+        const initialBurst = Buffer.alloc(640, 0xd5);
+        CLIENT_TalkSendData(talkHandle, initialBurst, initialBurst.length);
+      } catch {}
+
+      // 2. Heartbeat continuo para mantener el canal abierto incluso antes de que lleguen los chunks del navegador
+      let lastAudioSent = Date.now();
+      const keepAliveInterval = setInterval(() => {
+        if (Date.now() - lastAudioSent >= 200) {
+          try {
+            const silenceFrame = Buffer.alloc(320, 0xd5);
+            CLIENT_TalkSendData(talkHandle, silenceFrame, silenceFrame.length);
+          } catch {}
+        }
+      }, 150);
+
       const ffmpegPath = require('ffmpeg-static');
       const { spawn } = require('child_process');
 
@@ -1280,6 +1297,7 @@ export class DahuaService {
       ]);
 
       ffmpeg.stdout.on('data', (chunk: Buffer) => {
+        lastAudioSent = Date.now();
         try {
           CLIENT_TalkSendData(talkHandle, chunk, chunk.length);
         } catch (err: any) {
@@ -1297,6 +1315,7 @@ export class DahuaService {
           if (isDone) return;
           isDone = true;
           this.logger.log(`🛑 [DAHUA-NETSDK-TALK] Finalizando llamada Dahua (Razón: ${reason})`);
+          try { clearInterval(keepAliveInterval); } catch {}
           try { ffmpeg.stdin.end(); } catch {}
           try { ffmpeg.kill('SIGKILL'); } catch {}
           try { CLIENT_StopTalkEx(talkHandle); } catch {}
