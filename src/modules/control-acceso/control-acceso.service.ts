@@ -1016,7 +1016,7 @@ export class ControlAccesoService implements OnModuleInit {
     const sdpBody = 
 `v=0\r
 o=- 1234 1234 IN IP4 10.8.0.1\r
-s=vtcall\r
+s=AudioTalk\r
 c=IN IP4 10.8.0.1\r
 t=0 0\r
 m=audio ${rtpPort} RTP/AVP 8 0 97\r
@@ -1024,9 +1024,6 @@ a=rtpmap:8 PCMA/8000\r
 a=rtpmap:0 PCMU/8000\r
 a=rtpmap:97 PCM/16000\r
 a=sendrecv\r
-m=video ${rtpPort + 2} RTP/AVP 97\r
-a=recvonly\r
-a=rtpmap:97 H264/90000\r
 `;
 
     const sipInvite = 
@@ -1048,16 +1045,20 @@ Content-Length: ${Buffer.byteLength(sdpBody)}\r
 \r
 ${sdpBody}`;
 
-    const sendAck = (receivedToTag: string = '') => {
+    const sendAck = (toHeaderRaw?: string, fromHeaderRaw?: string) => {
+      const ackBranch = 'z9hG4bK' + randomBytes(8).toString('hex');
+      const ackTo = toHeaderRaw || `<sip:8001@${target.host}:${sipPort}>${toTag ? ';tag=' + toTag : ''}`;
+      const ackFrom = fromHeaderRaw || `<sip:8000@10.8.0.1>;tag=${fromTag}`;
       const ack = 
 `ACK sip:8001@${target.host}:${sipPort} SIP/2.0\r
-Via: SIP/2.0/UDP 10.8.0.1:5060;branch=${branch};rport\r
+Via: SIP/2.0/UDP 10.8.0.1:5060;branch=${ackBranch};rport\r
 Max-Forwards: 70\r
-From: <sip:8000@10.8.0.1>;tag=${fromTag}\r
-To: <sip:8001@${target.host}:${sipPort}>${receivedToTag ? ';tag=' + receivedToTag : ''}\r
+From: ${ackFrom}\r
+To: ${ackTo}\r
 Call-ID: ${callId}\r
 CSeq: 1 ACK\r
 Contact: <sip:8000@10.8.0.1:5060>\r
+User-Agent: SmartPSSPlusClient\r
 Content-Length: 0\r
 \r
 `;
@@ -1075,14 +1076,16 @@ Content-Length: 0\r
         try { if (ffmpegProcess) ffmpegProcess.kill('SIGKILL'); } catch {}
 
         try {
+          const byeBranch = 'z9hG4bK' + randomBytes(8).toString('hex');
           const sipBye = 
 `BYE sip:8001@${target.host}:${sipPort} SIP/2.0\r
-Via: SIP/2.0/UDP 10.8.0.1:5060;branch=${branch}2;rport\r
+Via: SIP/2.0/UDP 10.8.0.1:5060;branch=${byeBranch};rport\r
 Max-Forwards: 70\r
 From: <sip:8000@10.8.0.1>;tag=${fromTag}\r
 To: <sip:8001@${target.host}:${sipPort}>${toTag ? ';tag=' + toTag : ''}\r
 Call-ID: ${callId}\r
 CSeq: 2 BYE\r
+User-Agent: SmartPSSPlusClient\r
 Content-Length: 0\r
 \r
 `;
@@ -1094,6 +1097,7 @@ From: <sip:8000@10.8.0.1>;tag=${fromTag}\r
 To: <sip:8001@${target.host}:${sipPort}>\r
 Call-ID: ${callId}\r
 CSeq: 1 CANCEL\r
+User-Agent: SmartPSSPlusClient\r
 Content-Length: 0\r
 \r
 `;
@@ -1143,15 +1147,24 @@ Content-Length: 0\r
 
       sipClient.on('message', (msg) => {
         const text = msg.toString();
+        const firstLine = text.split('\r\n')[0];
+        this.logger.log(`📞 [SIP-DAHUA] Respuesta recibida: ${firstLine}`);
+
         const extractedTag = text.match(/To:[^\n]+tag=([^\r\n;]+)/i)?.[1];
         if (extractedTag) toTag = extractedTag;
-        
+
+        const toHeaderMatch = text.match(/To:\s*([^\r\n]+)/i)?.[1];
+        const fromHeaderMatch = text.match(/From:\s*([^\r\n]+)/i)?.[1];
+
         if (!audioPortFound) {
           audioPortFound = true;
           startFFmpeg();
         }
-        
-        sendAck(toTag);
+
+        if (text.includes('200 OK')) {
+          this.logger.log(`✅ [SIP-DAHUA] 200 OK contestado por Dahua. Llamada en curso.`);
+          sendAck(toHeaderMatch, fromHeaderMatch);
+        }
       });
 
       sipClient.on('error', (err) => {
