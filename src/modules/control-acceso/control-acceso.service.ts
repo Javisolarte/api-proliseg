@@ -1019,7 +1019,8 @@ o=- 1234 1234 IN IP4 10.8.0.1\r
 s=vtcall\r
 c=IN IP4 10.8.0.1\r
 t=0 0\r
-m=audio ${rtpPort} RTP/AVP 0 97\r
+m=audio ${rtpPort} RTP/AVP 8 0 97\r
+a=rtpmap:8 PCMA/8000\r
 a=rtpmap:0 PCMU/8000\r
 a=rtpmap:97 PCM/16000\r
 a=sendrecv\r
@@ -1108,7 +1109,7 @@ Content-Length: 0\r
 
       const startFFmpeg = () => {
         if (ffmpegProcess) return;
-        this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Iniciando stream RTP PCMU hacia ${target.host}:${rtpPort}...`);
+        this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Iniciando stream RTP PCMA (G.711A) hacia ${target.host}:${rtpPort}...`);
         ffmpegProcess = spawn(this.getFfmpegBinary(), [
           '-hide_banner',
           '-loglevel', 'warning',
@@ -1119,9 +1120,9 @@ Content-Length: 0\r
           '-i', 'pipe:0',
           '-ac', '1',
           '-ar', '8000',
-          '-c:a', 'pcm_mulaw',
+          '-c:a', 'pcm_alaw',
           '-af', 'volume=3.5',
-          '-payload_type', '0',
+          '-payload_type', '8',
           '-flush_packets', '1',
           '-f', 'rtp',
           `rtp://${target.host}:${rtpPort}`,
