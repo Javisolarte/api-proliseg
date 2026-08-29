@@ -1110,6 +1110,7 @@ Content-Length: 0\r
       ffmpegProcess = spawn(this.getFfmpegBinary(), [
         '-hide_banner',
         '-loglevel', 'warning',
+        '-re',
         '-fflags', '+nobuffer+flush_packets',
         '-flags', 'low_delay',
         '-probesize', '32768',
@@ -1133,12 +1134,10 @@ Content-Length: 0\r
 
       ffmpegProcess.on('close', (code: any) => {
         this.logger.log(`🎙️ [AUDIO-IN-DAHUA] FFmpeg cerró (código ${code})`);
-        safeFinish();
       });
 
       ffmpegProcess.on('error', (err: any) => {
         this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] FFmpeg error: ${err.message}`);
-        safeFinish();
       });
 
       sipClient.on('message', (msg) => {
@@ -2116,7 +2115,7 @@ Content-Length: 0\r
       let rtspPath = '/Streaming/Channels/102'; // Default: Hikvision Sub-Stream
 
       if (isDahua) {
-        rtspPath = '/cam/realmonitor?channel=1&subtype=1'; // Dahua Sub-Stream (Fluido, ultra baja latencia, no se congela en llamadas)
+        rtspPath = '/cam/realmonitor?channel=1&subtype=0'; // Dahua Main-Stream (H.264 compatible con todos los navegadores)
         const httpPort = Number(dev.configuracion_tecnica?.puerto || dev.puerto || 80);
         this.dahuaService.asegurarFormatoH264(targetIp, httpPort, user, pass).catch(() => {});
       } else if (marcaStr.includes('zk')) {
