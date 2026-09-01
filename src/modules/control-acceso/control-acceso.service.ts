@@ -453,7 +453,7 @@ export class ControlAccesoService implements OnModuleInit {
       const { data: dev } = await this.supabase
         .getClient()
         .from('dispositivos_iot')
-        .select('ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica')
+        .select('id, nombre_identificador, ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica')
         .eq('id', options.deviceId)
         .maybeSingle();
  
@@ -549,7 +549,7 @@ export class ControlAccesoService implements OnModuleInit {
       const { data } = await this.supabase
         .getSupabaseAdminClient()
         .from('dispositivos_iot')
-        .select('ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica')
+        .select('id, nombre_identificador, ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica')
         .eq('id', deviceId)
         .maybeSingle();
       dev = data;
@@ -572,6 +572,19 @@ export class ControlAccesoService implements OnModuleInit {
       }
     }
 
+    // En producción algunos dispositivos se guardan con IP VPN/NAT y la IP LAN queda
+    // en configuracion_tecnica.puertos_mapeados.original_ip.
+    if (!dev && host) {
+      const { data: devicesByOriginalIp } = await this.supabase
+        .getSupabaseAdminClient()
+        .from('dispositivos_iot')
+        .select('id, nombre_identificador, ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica')
+        .contains('configuracion_tecnica', { puertos_mapeados: { original_ip: host } })
+        .limit(1);
+
+      dev = devicesByOriginalIp?.[0] || null;
+    }
+
     if (dev) {
       host = dev.ip_direccion || host;
       user = dev.credencial_usuario || user;
@@ -586,11 +599,12 @@ export class ControlAccesoService implements OnModuleInit {
     const isDahua = marcaStr.includes('dahua');
 
     const resolved = await this.resolveDoorNetworkTarget(host, port, config);
-    // Resolver puerto RTSP mapeado para Dahua audio (via VPN: mapped_rtsp o puerto_rtsp)
+    // Resolver puertos mapeados para audio Dahua.
     const mapped = config?.puertos_mapeados || {};
     const rtspPort = Number(
       mapped?.mapped_rtsp || config?.puerto_rtsp || mapped?.original_rtsp || 554
     );
+    const sdkPort = isDahua ? this.resolveDahuaSdkPort(resolved.port, config, resolved.via) : undefined;
     return {
       host: resolved.ip,
       port: resolved.port,
@@ -599,7 +613,25 @@ export class ControlAccesoService implements OnModuleInit {
       pass,
       isDahua,
       rtspPort,
+      sdkPort,
     };
+  }
+
+  private resolveDahuaSdkPort(httpPort: number, config: any = {}, via = 'directo'): number {
+    const mapped = config?.puertos_mapeados || {};
+    const mappedSdk = Number(mapped?.mapped_sdk || 0);
+    const originalSdk = Number(mapped?.original_sdk || config?.puerto_sdk || 37777);
+    const configuredPort = Number(config?.puerto || 0);
+
+    if (mappedSdk && (via !== 'directo' || configuredPort >= 10000 || httpPort >= 10000)) {
+      return mappedSdk;
+    }
+
+    if (httpPort >= 10000) {
+      return 20000 + (httpPort % 10000);
+    }
+
+    return originalSdk || 37777;
   }
 
   private splitHostPort(value: string): [string, string | undefined] {
@@ -969,11 +1001,11 @@ export class ControlAccesoService implements OnModuleInit {
 
   private async relayAudioToDeviceDahua(
     audioStream: NodeJS.ReadableStream,
-    target: { host: string; port: number; user: string; pass: string; via: string; rtspPort?: number },
+    target: { host: string; port: number; user: string; pass: string; via: string; rtspPort?: number; sdkPort?: number },
     deviceId?: string,
     operator?: any,
   ): Promise<any> {
-    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Iniciando llamada nativa NetSDK (CLIENT_StartTalkEx) en ${target.host}:${target.port}...`);
+    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Iniciando llamada nativa NetSDK (CLIENT_StartTalkEx) en ${target.host}:${target.sdkPort || target.port}...`);
 
     if (this.dahuaService) {
       try {
@@ -983,12 +1015,13 @@ export class ControlAccesoService implements OnModuleInit {
           target.port,
           target.user,
           target.pass,
+          target.sdkPort,
         );
         if (netSdkResult) {
           return {
             ok: true,
             mensaje: 'Audio transmitido al altavoz Dahua por NetSDK (CLIENT_StartTalkEx)',
-            detalle: { target: `${target.host}:${target.port}`, via: 'NetSDK TCP 20006' },
+            detalle: { target: `${target.host}:${target.sdkPort || target.port}`, via: 'NetSDK TCP' },
             operador: operator || null,
           };
         }
@@ -2220,7 +2253,9 @@ export class ControlAccesoService implements OnModuleInit {
 
   /**
    * Fetch personas from device hardware (Dahua/Hikvision) WITHOUT saving to DB.
-   * Returns raw list for preview in the frontend.
+  /**
+   * Fetch personas from device hardware (Dahua/Hikvision) WITHOUT saving to DB.
+   * Returns raw list with photos for preview in the frontend.
    */
   async fetchPersonasFromDevice(deviceId: string): Promise<any> {
     const device = await this.resolveDeviceForSync({ deviceId });
@@ -2242,23 +2277,34 @@ export class ControlAccesoService implements OnModuleInit {
       const pass = String(device.credencial_password || '');
       const personasDahua = await this.dahuaService.listarPersonas(ip, port, user, pass);
 
+      const personasConFotos = await Promise.all(
+        personasDahua.map(async (p) => {
+          let fotoBase64: string | null = null;
+          try {
+            fotoBase64 = await this.dahuaService.obtenerFotoFacial(ip, port, user, pass, p.userId);
+          } catch (_) {}
+
+          return {
+            userId: p.userId,
+            nombre: p.nombre || `Usuario ${p.userId}`,
+            codigoTarjeta: p.codigoTarjeta || null,
+            habilitado: p.habilitado !== false,
+            validFrom: p.validFrom || null,
+            validTo: p.validTo || null,
+            fotoBase64: fotoBase64 || null,
+          };
+        })
+      );
+
       return {
         dispositivo_id: device.id,
         dispositivo: device.nombre_identificador,
         marca: 'Dahua',
-        total: personasDahua.length,
-        personas: personasDahua.map(p => ({
-          userId: p.userId,
-          nombre: p.nombre || `Usuario ${p.userId}`,
-          codigoTarjeta: p.codigoTarjeta || null,
-          habilitado: p.habilitado !== false,
-          validFrom: p.validFrom || null,
-          validTo: p.validTo || null,
-        })),
+        total: personasConFotos.length,
+        personas: personasConFotos,
       };
     }
 
-    // Hikvision fallback
     const raw = await this.buscarUsuariosHardware(ip, device.id);
     const usuarios = this.extractHardwareUsers(raw);
 
@@ -2274,6 +2320,7 @@ export class ControlAccesoService implements OnModuleInit {
           nombre: normalized.nombre_completo || u.name || '',
           codigoTarjeta: u.numOfCard || null,
           habilitado: true,
+          fotoBase64: null,
         };
       }),
     };
@@ -2281,17 +2328,16 @@ export class ControlAccesoService implements OnModuleInit {
 
   /**
    * Save selected personas (from hardware pull) into a recopilación list.
-   * Optionally creates a new list if crearLugar is provided.
+   * Uploads facial photos to Supabase Storage and stores valid recopilacion records.
    */
   async pullPersonasToRecopilacion(
     deviceId: string,
-    personas: Array<{ userId: string; nombre: string; codigoTarjeta?: string }>,
+    personas: Array<{ userId: string; nombre: string; codigoTarjeta?: string; fotoBase64?: string }>,
     lugarId?: number,
     crearLugar?: { nombre_lugar: string; descripcion?: string },
   ): Promise<any> {
     let targetLugarId = lugarId;
 
-    // Create new lugar if requested
     if (crearLugar && crearLugar.nombre_lugar) {
       const nuevoLugar = await this.createLugarRecopilacion({
         nombre_lugar: crearLugar.nombre_lugar,
@@ -2303,6 +2349,18 @@ export class ControlAccesoService implements OnModuleInit {
     if (!targetLugarId) {
       throw new Error('Debe seleccionar o crear una lista de recopilación');
     }
+
+    const device = await this.resolveDeviceForSync({ deviceId }).catch(() => null);
+    const ip = device?.ip_direccion;
+    const port = Number(
+      device?.configuracion_tecnica?.puertos_mapeados?.mapped_http
+      || device?.configuracion_tecnica?.puerto
+      || device?.puerto
+      || 80
+    );
+    const user = String(device?.credencial_usuario || 'admin');
+    const pass = String(device?.credencial_password || '');
+    const isDahua = String(device?.marca || device?.configuracion_tecnica?.marca || '').toLowerCase().includes('dahua');
 
     const resultados: any[] = [];
     let exitosos = 0;
@@ -2316,13 +2374,14 @@ export class ControlAccesoService implements OnModuleInit {
         continue;
       }
 
-      // Check if this cedula already exists in the target list
+      const cedulaClean = String(p.userId).trim();
+
       const { data: existing } = await this.supabase
         .getSupabaseAdminClient()
         .from('control_acceso_recoleccion_registros')
         .select('id')
         .eq('lugar_id', targetLugarId)
-        .eq('cedula', String(p.userId).trim())
+        .eq('cedula', cedulaClean)
         .maybeSingle();
 
       if (existing) {
@@ -2331,39 +2390,64 @@ export class ControlAccesoService implements OnModuleInit {
         continue;
       }
 
+      let fotoUrl: string | null = null;
+      let fotoBase64: string | null | undefined = p.fotoBase64;
+
+      if (!fotoBase64 && isDahua && ip) {
+        try {
+          fotoBase64 = await this.dahuaService.obtenerFotoFacial(ip, port, user, pass, p.userId);
+        } catch (_) {}
+      }
+
+      if (fotoBase64 && typeof fotoBase64 === 'string') {
+        try {
+          const rawBase64 = fotoBase64.includes(',') ? fotoBase64.split(',')[1] : fotoBase64;
+          const fileBuffer = Buffer.from(rawBase64, 'base64');
+          if (fileBuffer.length > 200) {
+            const fileName = `pull-${targetLugarId}-${cedulaClean}-${Date.now()}.jpg`;
+            const filePath = `${targetLugarId}/${fileName}`;
+            const { error: uploadError } = await this.supabase
+              .getSupabaseAdminClient()
+              .storage
+              .from('control-acceso-faces')
+              .upload(filePath, fileBuffer, { upsert: true, contentType: 'image/jpeg' });
+
+            if (!uploadError) {
+              const { data: pub } = this.supabase
+                .getSupabaseAdminClient()
+                .storage
+                .from('control-acceso-faces')
+                .getPublicUrl(filePath);
+              fotoUrl = pub?.publicUrl || null;
+            }
+          }
+        } catch (imgErr: any) {
+          this.logger.warn(`⚠️ [PULL] Error procesando imagen para ${cedulaClean}: ${imgErr.message}`);
+        }
+      }
+
       const payload = {
         lugar_id: targetLugarId,
         nombre_completo: p.nombre || `Usuario ${p.userId}`,
-        cedula: String(p.userId).trim(),
-        telefono: null,
-        telefono2: null,
-        correo_electronico: null,
-        apartamento: null,
-        torre: null,
-        tiene_vehiculo: false,
-        placa_vehiculo: null,
-        color_vehiculo: null,
-        foto_rostro_url: null,
-        acepta_tratamiento_datos: true,
-        acepta_ingreso_prolicontrol: false,
+        cedula: cedulaClean,
+        foto_rostro_url: fotoUrl,
         consentimiento_aceptado_at: new Date().toISOString(),
-        origen: 'hardware_pull',
-        dispositivo_origen_id: deviceId,
       };
 
       const { data, error } = await this.supabase
         .getSupabaseAdminClient()
         .from('control_acceso_recoleccion_registros')
         .insert(payload)
-        .select('id, nombre_completo, cedula')
+        .select('id, nombre_completo, cedula, foto_rostro_url')
         .single();
 
       if (error) {
+        this.logger.error(`❌ [PULL-SAVE] Error insertando registro ${cedulaClean}: ${error.message}`);
         fallidos++;
         resultados.push({ ok: false, userId: p.userId, nombre: p.nombre, error: error.message });
       } else {
         exitosos++;
-        resultados.push({ ok: true, id: data.id, userId: p.userId, nombre: p.nombre });
+        resultados.push({ ok: true, id: data?.id, userId: p.userId, nombre: p.nombre, foto_rostro_url: data?.foto_rostro_url });
       }
     }
 

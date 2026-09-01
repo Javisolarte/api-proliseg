@@ -610,18 +610,30 @@ export class DahuaService {
   }
 
   /**
-   * Elimina una persona del hardware Dahua (AccessUserInfo y AccessControlCard).
+   * Elimina una persona del hardware Dahua (AccessUserInfo, AccessControlCard y AccessFace).
    */
   async eliminarPersona(ip: string, port: number, user: string, pass: string, userId: string): Promise<{ ok: boolean }> {
     const userIdClean = String(userId).trim().slice(0, 20);
-    this.logger.log(`🗑️ [DAHUA PERSONA] Eliminando userId=${userIdClean} de ${ip}:${port}`);
+    this.logger.log(`🗑️ [DAHUA PERSONA] Eliminando completamente userId=${userIdClean} de ${ip}:${port}`);
 
-    const existentes = await this.listarPersonas(ip, port, user, pass);
+    // 1. Eliminar rostro facial vía RPC
+    await this.rpcCall(ip, port, user, pass, 'AccessFace.removeMulti', {
+      UserList: [userIdClean]
+    }).catch(() => null);
+    await this.rpcCall(ip, port, user, pass, 'AccessFace.deleteMulti', {
+      UserList: [userIdClean]
+    }).catch(() => null);
+
+    // 2. Eliminar rostro facial vía CGI
+    await this.cgi(ip, port, user, pass, 'GET', `/cgi-bin/recordUpdater.cgi?action=remove&name=AccessFace&UserID=${encodeURIComponent(userIdClean)}`).catch(() => null);
+
+    // 3. Buscar coincidencia en usuarios para recno y tarjeta
+    const existentes = await this.listarPersonas(ip, port, user, pass).catch(() => []);
     const coincidencia = existentes.find(
-      p => String(p.userId) === userIdClean || String(p.codigoTarjeta) === userIdClean
+      p => String(p.userId).trim() === userIdClean || String(p.codigoTarjeta || '').trim() === userIdClean
     );
 
-    // 1. Eliminar de AccessControlCard
+    // 4. Eliminar de AccessControlCard (por recno, por CardNo, por UserID y por RPC)
     if (coincidencia && coincidencia.cardRecno !== undefined) {
       await this.cgi(
         ip, port, user, pass, 'GET',
@@ -732,6 +744,67 @@ export class DahuaService {
       this.logger.error(`❌ [DAHUA FACE] Error al subir foto facial userId=${userId}: ${err.message}`);
       return false;
     }
+  }
+
+  /**
+   * Obtiene la foto facial de una persona registrada en el hardware Dahua (retorna base64).
+   */
+  async obtenerFotoFacial(ip: string, port: number, user: string, pass: string, userId: string): Promise<string | null> {
+    const userIdClean = String(userId).trim().slice(0, 20);
+
+    // Método 1: JSON-RPC AccessFace.getMulti
+    try {
+      const rpcRes = await this.rpcCall(ip, port, user, pass, 'AccessFace.getMulti', {
+        UserList: [userIdClean]
+      });
+      const photoData = rpcRes?.params?.FaceList?.[0]?.PhotoData?.[0] || rpcRes?.result?.FaceList?.[0]?.PhotoData?.[0];
+      if (photoData && typeof photoData === 'string' && photoData.length > 100) {
+        return photoData;
+      }
+    } catch (_) {}
+
+    // Método 2: JSON-RPC AccessFace.findMulti
+    try {
+      const rpcRes = await this.rpcCall(ip, port, user, pass, 'AccessFace.findMulti', {
+        FaceList: [{ UserID: userIdClean }]
+      });
+      const photoData = rpcRes?.params?.FaceList?.[0]?.PhotoData?.[0] || rpcRes?.result?.FaceList?.[0]?.PhotoData?.[0];
+      if (photoData && typeof photoData === 'string' && photoData.length > 100) {
+        return photoData;
+      }
+    } catch (_) {}
+
+    // Método 3: CGI getFacePhoto binario
+    try {
+      const resp = await this.cgi(
+        ip, port, user, pass, 'GET',
+        `/cgi-bin/AccessFace.cgi?action=getFacePhoto&UserID=${encodeURIComponent(userIdClean)}`,
+        undefined,
+        'arraybuffer'
+      );
+      if (resp?.data) {
+        if (Buffer.isBuffer(resp.data) && resp.data.length > 500) {
+          return resp.data.toString('base64');
+        } else if (resp.data instanceof ArrayBuffer && resp.data.byteLength > 500) {
+          return Buffer.from(resp.data).toString('base64');
+        }
+      }
+    } catch (_) {}
+
+    // Método 4: CGI recordFinder AccessFace
+    try {
+      const resp = await this.cgi(
+        ip, port, user, pass, 'GET',
+        `/cgi-bin/recordFinder.cgi?action=find&name=AccessFace&count=1&UserID=${encodeURIComponent(userIdClean)}`
+      );
+      const text = String(resp?.data || '');
+      const photoMatch = text.match(/PhotoData\[0\]=(.*)/i) || text.match(/PhotoData=(.*)/i);
+      if (photoMatch && photoMatch[1] && photoMatch[1].trim().length > 100) {
+        return photoMatch[1].trim();
+      }
+    } catch (_) {}
+
+    return null;
   }
 
   /**
@@ -1163,9 +1236,10 @@ export class DahuaService {
     port: number,
     user: string,
     pass: string,
+    sdkPortOverride?: number,
   ): Promise<boolean> {
     try {
-      const sdkPort = port >= 10000 ? (20000 + (port % 10000)) : 37777;
+      const sdkPort = Number(sdkPortOverride || 0) || (port >= 10000 ? (20000 + (port % 10000)) : 37777);
       const sessionKey = `${ip}:${sdkPort}`;
       this.logger.log(`🎙️ [DAHUA-NETSDK-TALK] Iniciando audio bidireccional por NetSDK TCP ${sessionKey}...`);
 
@@ -1181,17 +1255,24 @@ export class DahuaService {
       const fs = require('fs');
       const path = require('path');
 
-      const possibleDllPaths = [
+      const linuxDllPaths = [
         path.join(process.cwd(), 'libs', 'linux-x64', 'libdhnetsdk.so'),
         path.join(process.cwd(), 'libs', 'libdhnetsdk.so'),
         '/usr/lib/libdhnetsdk.so',
         '/usr/local/lib/libdhnetsdk.so',
+      ];
+      const windowsDllPaths = [
         'C:\\Program Files\\SmartPSSLite\\dhnetsdk.dll',
         'C:\\Program Files (x86)\\SmartPSS\\dhnetsdk.dll',
         path.join(process.cwd(), 'libs', 'dhnetsdk.dll'),
       ];
+      const possibleDllPaths = process.platform === 'win32' ? windowsDllPaths : linuxDllPaths;
 
       const dllPath = possibleDllPaths.find(p => fs.existsSync(p));
+      if (!dllPath) {
+        this.logger.error(`❌ [DAHUA-NETSDK-TALK] No se encontró librería NetSDK Dahua compatible para ${process.platform}/${process.arch}`);
+        return false;
+      }
 
       const userClean = user || 'admin';
       const passClean = pass || 'proliseg123';
