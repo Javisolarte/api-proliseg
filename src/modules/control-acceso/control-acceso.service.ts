@@ -2288,32 +2288,9 @@ export class ControlAccesoService implements OnModuleInit {
             } catch (_) {}
           }
 
-          // Fallback a base de datos de Prolicontrol si ya existía la foto registrada
+          // Fallback a base de datos de Prolicontrol si no vino del hardware
           if (!fotoBase64) {
-            try {
-              const { data: personaDb } = await this.supabase
-                .getSupabaseAdminClient()
-                .from('personas_gestion_acceso')
-                .select('id, foto_rostro_url')
-                .eq('documento_identidad', String(p.userId).trim())
-                .maybeSingle();
-
-              if (personaDb?.foto_rostro_url) {
-                fotoUrlStorage = personaDb.foto_rostro_url;
-              } else if (personaDb?.id) {
-                const { data: facial } = await this.supabase
-                  .getSupabaseAdminClient()
-                  .from('biometria_facial')
-                  .select('foto_url_storage')
-                  .eq('persona_id', personaDb.id)
-                  .order('fecha_captura', { ascending: false })
-                  .limit(1)
-                  .maybeSingle();
-                if (facial?.foto_url_storage) {
-                  fotoUrlStorage = facial.foto_url_storage;
-                }
-              }
-            } catch (_) {}
+            fotoUrlStorage = await this.resolverFotoPersonaRegistrada(p.userId);
           }
 
           return {
@@ -2341,23 +2318,93 @@ export class ControlAccesoService implements OnModuleInit {
     const raw = await this.buscarUsuariosHardware(ip, device.id);
     const usuarios = this.extractHardwareUsers(raw);
 
+    const personasHikvision = await Promise.all(
+      usuarios.map(async (u) => {
+        const normalized = this.normalizeHardwareUser(u, device);
+        const uId = normalized.documento_identidad || u.employeeNo || '';
+        const fallbackFoto = await this.resolverFotoPersonaRegistrada(uId);
+        return {
+          userId: uId,
+          nombre: normalized.nombre_completo || u.name || '',
+          codigoTarjeta: u.numOfCard || null,
+          habilitado: true,
+          fotoBase64: null,
+          foto_rostro_url: fallbackFoto || null,
+        };
+      })
+    );
+
     return {
       dispositivo_id: device.id,
       dispositivo: device.nombre_identificador,
       marca: 'Hikvision',
       total: usuarios.length,
-      personas: usuarios.map(u => {
-        const normalized = this.normalizeHardwareUser(u, device);
-        return {
-          userId: normalized.documento_identidad || u.employeeNo || '',
-          nombre: normalized.nombre_completo || u.name || '',
-          codigoTarjeta: u.numOfCard || null,
-          habilitado: true,
-          fotoBase64: null,
-          foto_rostro_url: null,
-        };
-      }),
+      personas: personasHikvision,
     };
+  }
+
+  /**
+   * Resuelve la foto facial de una persona buscando en biometría facial, recopilación y empleados.
+   */
+  private async resolverFotoPersonaRegistrada(cedula: string): Promise<string | null> {
+    const cedClean = String(cedula || '').trim();
+    if (!cedClean) return null;
+
+    try {
+      // 1. Buscar en personas_gestion_acceso -> biometria_facial
+      const { data: pga } = await this.supabase
+        .getSupabaseAdminClient()
+        .from('personas_gestion_acceso')
+        .select('id')
+        .eq('documento_identidad', cedClean)
+        .maybeSingle();
+
+      if (pga?.id) {
+        const { data: bio } = await this.supabase
+          .getSupabaseAdminClient()
+          .from('biometria_facial')
+          .select('foto_url_storage')
+          .eq('persona_id', pga.id)
+          .order('fecha_captura', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (bio?.foto_url_storage) {
+          return bio.foto_url_storage;
+        }
+      }
+
+      // 2. Buscar en control_acceso_recoleccion_registros
+      const { data: rec } = await this.supabase
+        .getSupabaseAdminClient()
+        .from('control_acceso_recoleccion_registros')
+        .select('foto_rostro_url')
+        .eq('cedula', cedClean)
+        .not('foto_rostro_url', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (rec?.foto_rostro_url) {
+        return rec.foto_rostro_url;
+      }
+
+      // 3. Buscar en empleados
+      const { data: emp } = await this.supabase
+        .getSupabaseAdminClient()
+        .from('empleados')
+        .select('foto_perfil_url')
+        .eq('cedula', cedClean)
+        .maybeSingle();
+
+      if (emp?.foto_perfil_url && !emp.foto_perfil_url.includes('default-avatar')) {
+        return emp.foto_perfil_url;
+      }
+    } catch (err: any) {
+      this.logger.warn(`⚠️ [FOTO-RESOLVER] Error resolviendo foto para ${cedClean}: ${err.message}`);
+    }
+
+    return null;
   }
 
   /**
@@ -2462,30 +2509,7 @@ export class ControlAccesoService implements OnModuleInit {
 
       // Si aún no hay foto, buscar en la BD de Prolicontrol
       if (!fotoUrl) {
-        try {
-          const { data: personaDb } = await this.supabase
-            .getSupabaseAdminClient()
-            .from('personas_gestion_acceso')
-            .select('id, foto_rostro_url')
-            .eq('documento_identidad', cedulaClean)
-            .maybeSingle();
-
-          if (personaDb?.foto_rostro_url) {
-            fotoUrl = personaDb.foto_rostro_url;
-          } else if (personaDb?.id) {
-            const { data: facial } = await this.supabase
-              .getSupabaseAdminClient()
-              .from('biometria_facial')
-              .select('foto_url_storage')
-              .eq('persona_id', personaDb.id)
-              .order('fecha_captura', { ascending: false })
-              .limit(1)
-              .maybeSingle();
-            if (facial?.foto_url_storage) {
-              fotoUrl = facial.foto_url_storage;
-            }
-          }
-        } catch (_) {}
+        fotoUrl = await this.resolverFotoPersonaRegistrada(cedulaClean);
       }
 
       const payload = {

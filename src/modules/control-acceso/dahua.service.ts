@@ -610,6 +610,7 @@ export class DahuaService {
           nombre: String(u.UserName || '').trim(),
           codigoTarjeta: cardMap.get(String(u.UserID).trim())?.cardNo,
           cardRecno: cardMap.get(String(u.UserID).trim())?.recno,
+          fotoBase64: faceMap.get(String(u.UserID).trim()) || null,
           habilitado: u.UserStatus === '0' || u.UserStatus === 0,
           validFrom: u.ValidFrom,
           validTo: u.ValidTo,
