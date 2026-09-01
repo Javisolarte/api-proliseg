@@ -551,14 +551,15 @@ export class DahuaService {
   }
 
   /**
-   * Lista todos los usuarios y tarjetas registrados en el hardware Dahua (AccessUserInfo y AccessControlCard).
+   * Lista todos los usuarios, tarjetas y rostros registrados en el hardware Dahua (AccessUserInfo, AccessControlCard y AccessFace).
    */
   async listarPersonas(ip: string, port: number, user: string, pass: string): Promise<any[]> {
     try {
-      this.logger.log(`📋 [DAHUA LISTAR] Consultando usuarios y tarjetas en ${ip}:${port}...`);
-      const [usersRes, cardsRes] = await Promise.all([
+      this.logger.log(`📋 [DAHUA LISTAR] Consultando usuarios, tarjetas y rostros en ${ip}:${port}...`);
+      const [usersRes, cardsRes, facesRes] = await Promise.all([
         this.cgi(ip, port, user, pass, 'GET', '/cgi-bin/recordFinder.cgi?action=find&name=AccessUserInfo&count=200').catch(() => null),
         this.cgi(ip, port, user, pass, 'GET', '/cgi-bin/recordFinder.cgi?action=find&name=AccessControlCard&count=200').catch(() => null),
+        this.cgi(ip, port, user, pass, 'GET', '/cgi-bin/recordFinder.cgi?action=find&name=AccessFace&count=200').catch(() => null),
       ]);
 
       const parseCgiKv = (text: string) => {
@@ -580,6 +581,7 @@ export class DahuaService {
 
       const userRecords = parseCgiKv(usersRes?.data || '');
       const cardRecords = parseCgiKv(cardsRes?.data || '');
+      const faceRecords = parseCgiKv(facesRes?.data || '');
 
       const cardMap = new Map<string, { cardNo: string; recno: number }>();
       for (const c of cardRecords) {
@@ -588,6 +590,15 @@ export class DahuaService {
             cardNo: String(c.CardNo).trim(),
             recno: Number(c.RecNo || c.recno),
           });
+        }
+      }
+
+      const faceMap = new Map<string, string>();
+      for (const f of faceRecords) {
+        const uId = String(f.UserID || '').trim();
+        const photo = f['PhotoData[0]'] || f.PhotoData || f['FaceData[0]'] || f.FaceData;
+        if (uId && photo && typeof photo === 'string' && photo.length > 50) {
+          faceMap.set(uId, photo.trim());
         }
       }
 

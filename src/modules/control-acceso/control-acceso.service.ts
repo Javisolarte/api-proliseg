@@ -2279,10 +2279,12 @@ export class ControlAccesoService implements OnModuleInit {
 
       const personasConFotos = await Promise.all(
         personasDahua.map(async (p) => {
-          let fotoBase64: string | null = null;
-          try {
-            fotoBase64 = await this.dahuaService.obtenerFotoFacial(ip, port, user, pass, p.userId);
-          } catch (_) {}
+          let fotoBase64: string | null = p.fotoBase64 || null;
+          if (!fotoBase64) {
+            try {
+              fotoBase64 = await this.dahuaService.obtenerFotoFacial(ip, port, user, pass, p.userId);
+            } catch (_) {}
+          }
 
           return {
             userId: p.userId,
@@ -2430,7 +2432,11 @@ export class ControlAccesoService implements OnModuleInit {
         lugar_id: targetLugarId,
         nombre_completo: p.nombre || `Usuario ${p.userId}`,
         cedula: cedulaClean,
+        telefono: (p as any).telefono || 'Sin teléfono',
         foto_rostro_url: fotoUrl,
+        tiene_vehiculo: false,
+        acepta_tratamiento_datos: true,
+        acepta_ingreso_prolicontrol: false,
         consentimiento_aceptado_at: new Date().toISOString(),
       };
 
