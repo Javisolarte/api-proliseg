@@ -597,8 +597,22 @@ export class DahuaService {
       for (const f of faceRecords) {
         const uId = String(f.UserID || '').trim();
         const photo = f['PhotoData[0]'] || f.PhotoData || f['FaceData[0]'] || f.FaceData;
-        if (uId && photo && typeof photo === 'string' && photo.length > 50) {
-          faceMap.set(uId, photo.trim());
+        if (uId && photo && typeof photo === 'string') {
+          const cleanPhoto = photo.trim();
+          if (cleanPhoto.length > 100 && !cleanPhoto.startsWith('/') && !cleanPhoto.startsWith('http') && !cleanPhoto.startsWith('RPC_Loadfile')) {
+            faceMap.set(uId, cleanPhoto);
+          } else if (cleanPhoto.length > 0) {
+            try {
+              const dlPath = cleanPhoto.startsWith('http') ? new URL(cleanPhoto).pathname : (cleanPhoto.startsWith('/') ? cleanPhoto : '/' + cleanPhoto);
+              const dlResp = await this.cgi(ip, port, user, pass, 'GET', dlPath, undefined, 'arraybuffer').catch(() => null);
+              if (dlResp?.data) {
+                const buf = Buffer.isBuffer(dlResp.data) ? dlResp.data : (dlResp.data instanceof ArrayBuffer ? Buffer.from(dlResp.data) : null);
+                if (buf && buf.length > 50) {
+                  faceMap.set(uId, buf.toString('base64'));
+                }
+              }
+            } catch (_) {}
+          }
         }
       }
 

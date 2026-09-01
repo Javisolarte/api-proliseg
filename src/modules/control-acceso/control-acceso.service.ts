@@ -2253,8 +2253,6 @@ export class ControlAccesoService implements OnModuleInit {
 
   /**
    * Fetch personas from device hardware (Dahua/Hikvision) WITHOUT saving to DB.
-  /**
-   * Fetch personas from device hardware (Dahua/Hikvision) WITHOUT saving to DB.
    * Returns raw list with photos for preview in the frontend.
    */
   async fetchPersonasFromDevice(deviceId: string): Promise<any> {
@@ -2277,20 +2275,14 @@ export class ControlAccesoService implements OnModuleInit {
       const pass = String(device.credencial_password || '');
       const personasDahua = await this.dahuaService.listarPersonas(ip, port, user, pass);
 
-      // Traer fotos faciales en paralelo con fallback a Prolicontrol
+      // Traer fotos faciales directamente del hardware Dahua
       const personasConFotos = await Promise.all(
         personasDahua.map(async (p) => {
           let fotoBase64: string | null = p.fotoBase64 || null;
-          let fotoUrlStorage: string | null = null;
           if (!fotoBase64) {
             try {
               fotoBase64 = await this.dahuaService.obtenerFotoFacial(ip, port, user, pass, p.userId);
             } catch (_) {}
-          }
-
-          // Fallback a base de datos de Prolicontrol si no vino del hardware
-          if (!fotoBase64) {
-            fotoUrlStorage = await this.resolverFotoPersonaRegistrada(p.userId);
           }
 
           return {
@@ -2301,7 +2293,6 @@ export class ControlAccesoService implements OnModuleInit {
             validFrom: p.validFrom || null,
             validTo: p.validTo || null,
             fotoBase64: fotoBase64 || null,
-            foto_rostro_url: fotoUrlStorage || null,
           };
         })
       );
@@ -2318,93 +2309,22 @@ export class ControlAccesoService implements OnModuleInit {
     const raw = await this.buscarUsuariosHardware(ip, device.id);
     const usuarios = this.extractHardwareUsers(raw);
 
-    const personasHikvision = await Promise.all(
-      usuarios.map(async (u) => {
-        const normalized = this.normalizeHardwareUser(u, device);
-        const uId = normalized.documento_identidad || u.employeeNo || '';
-        const fallbackFoto = await this.resolverFotoPersonaRegistrada(uId);
-        return {
-          userId: uId,
-          nombre: normalized.nombre_completo || u.name || '',
-          codigoTarjeta: u.numOfCard || null,
-          habilitado: true,
-          fotoBase64: null,
-          foto_rostro_url: fallbackFoto || null,
-        };
-      })
-    );
-
     return {
       dispositivo_id: device.id,
       dispositivo: device.nombre_identificador,
       marca: 'Hikvision',
       total: usuarios.length,
-      personas: personasHikvision,
+      personas: usuarios.map(u => {
+        const normalized = this.normalizeHardwareUser(u, device);
+        return {
+          userId: normalized.documento_identidad || u.employeeNo || '',
+          nombre: normalized.nombre_completo || u.name || '',
+          codigoTarjeta: u.numOfCard || null,
+          habilitado: true,
+          fotoBase64: null,
+        };
+      }),
     };
-  }
-
-  /**
-   * Resuelve la foto facial de una persona buscando en biometría facial, recopilación y empleados.
-   */
-  private async resolverFotoPersonaRegistrada(cedula: string): Promise<string | null> {
-    const cedClean = String(cedula || '').trim();
-    if (!cedClean) return null;
-
-    try {
-      // 1. Buscar en personas_gestion_acceso -> biometria_facial
-      const { data: pga } = await this.supabase
-        .getSupabaseAdminClient()
-        .from('personas_gestion_acceso')
-        .select('id')
-        .eq('documento_identidad', cedClean)
-        .maybeSingle();
-
-      if (pga?.id) {
-        const { data: bio } = await this.supabase
-          .getSupabaseAdminClient()
-          .from('biometria_facial')
-          .select('foto_url_storage')
-          .eq('persona_id', pga.id)
-          .order('fecha_captura', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-
-        if (bio?.foto_url_storage) {
-          return bio.foto_url_storage;
-        }
-      }
-
-      // 2. Buscar en control_acceso_recoleccion_registros
-      const { data: rec } = await this.supabase
-        .getSupabaseAdminClient()
-        .from('control_acceso_recoleccion_registros')
-        .select('foto_rostro_url')
-        .eq('cedula', cedClean)
-        .not('foto_rostro_url', 'is', null)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (rec?.foto_rostro_url) {
-        return rec.foto_rostro_url;
-      }
-
-      // 3. Buscar en empleados
-      const { data: emp } = await this.supabase
-        .getSupabaseAdminClient()
-        .from('empleados')
-        .select('foto_perfil_url')
-        .eq('cedula', cedClean)
-        .maybeSingle();
-
-      if (emp?.foto_perfil_url && !emp.foto_perfil_url.includes('default-avatar')) {
-        return emp.foto_perfil_url;
-      }
-    } catch (err: any) {
-      this.logger.warn(`⚠️ [FOTO-RESOLVER] Error resolviendo foto para ${cedClean}: ${err.message}`);
-    }
-
-    return null;
   }
 
   /**
@@ -2413,7 +2333,7 @@ export class ControlAccesoService implements OnModuleInit {
    */
   async pullPersonasToRecopilacion(
     deviceId: string,
-    personas: Array<{ userId: string; nombre: string; codigoTarjeta?: string; fotoBase64?: string; foto_rostro_url?: string }>,
+    personas: Array<{ userId: string; nombre: string; codigoTarjeta?: string; fotoBase64?: string }>,
     lugarId?: number,
     crearLugar?: { nombre_lugar: string; descripcion?: string },
   ): Promise<any> {
@@ -2471,10 +2391,10 @@ export class ControlAccesoService implements OnModuleInit {
         continue;
       }
 
-      let fotoUrl: string | null = p.foto_rostro_url || null;
+      let fotoUrl: string | null = null;
       let fotoBase64: string | null | undefined = p.fotoBase64;
 
-      if (!fotoBase64 && !fotoUrl && isDahua && ip) {
+      if (!fotoBase64 && isDahua && ip) {
         try {
           fotoBase64 = await this.dahuaService.obtenerFotoFacial(ip, port, user, pass, p.userId);
         } catch (_) {}
@@ -2505,11 +2425,6 @@ export class ControlAccesoService implements OnModuleInit {
         } catch (imgErr: any) {
           this.logger.warn(`⚠️ [PULL] Error procesando imagen para ${cedulaClean}: ${imgErr.message}`);
         }
-      }
-
-      // Si aún no hay foto, buscar en la BD de Prolicontrol
-      if (!fotoUrl) {
-        fotoUrl = await this.resolverFotoPersonaRegistrada(cedulaClean);
       }
 
       const payload = {
