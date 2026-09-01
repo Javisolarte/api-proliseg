@@ -763,46 +763,66 @@ export class DahuaService {
   async obtenerFotoFacial(ip: string, port: number, user: string, pass: string, userId: string): Promise<string | null> {
     const userIdClean = String(userId).trim().slice(0, 20);
 
-    // Método 1: JSON-RPC AccessFace.getMulti
-    try {
-      const rpcRes = await this.rpcCall(ip, port, user, pass, 'AccessFace.getMulti', {
-        UserList: [userIdClean]
-      });
-      const photoData = rpcRes?.params?.FaceList?.[0]?.PhotoData?.[0] || rpcRes?.result?.FaceList?.[0]?.PhotoData?.[0];
-      if (photoData && typeof photoData === 'string' && photoData.length > 100) {
-        return photoData;
-      }
-    } catch (_) {}
+    // Método 1: CGI getFacePhoto binario directo
+    const cgiPhotoPaths = [
+      `/cgi-bin/AccessFace.cgi?action=getFacePhoto&UserID=${encodeURIComponent(userIdClean)}`,
+      `/cgi-bin/AccessFace.cgi?action=getFacePhoto&UserID=${encodeURIComponent(userIdClean)}&Index=0`,
+      `/cgi-bin/AccessFace.cgi?action=getFacePhoto&UserList[0]=${encodeURIComponent(userIdClean)}`,
+      `/cgi-bin/faceManager.cgi?action=getFacePhoto&UserID=${encodeURIComponent(userIdClean)}`,
+      `/RPC_Loadfile/FacePhoto/${encodeURIComponent(userIdClean)}_0.jpg`,
+      `/RPC_Loadfile/FacePhoto/${encodeURIComponent(userIdClean)}.jpg`,
+      `/RPC_Loadfile/${encodeURIComponent(userIdClean)}.jpg`,
+    ];
 
-    // Método 2: JSON-RPC AccessFace.findMulti
-    try {
-      const rpcRes = await this.rpcCall(ip, port, user, pass, 'AccessFace.findMulti', {
-        FaceList: [{ UserID: userIdClean }]
-      });
-      const photoData = rpcRes?.params?.FaceList?.[0]?.PhotoData?.[0] || rpcRes?.result?.FaceList?.[0]?.PhotoData?.[0];
-      if (photoData && typeof photoData === 'string' && photoData.length > 100) {
-        return photoData;
-      }
-    } catch (_) {}
-
-    // Método 3: CGI getFacePhoto binario
-    try {
-      const resp = await this.cgi(
-        ip, port, user, pass, 'GET',
-        `/cgi-bin/AccessFace.cgi?action=getFacePhoto&UserID=${encodeURIComponent(userIdClean)}`,
-        undefined,
-        'arraybuffer'
-      );
-      if (resp?.data) {
-        if (Buffer.isBuffer(resp.data) && resp.data.length > 500) {
-          return resp.data.toString('base64');
-        } else if (resp.data instanceof ArrayBuffer && resp.data.byteLength > 500) {
-          return Buffer.from(resp.data).toString('base64');
+    for (const cgiPath of cgiPhotoPaths) {
+      try {
+        const resp = await this.cgi(ip, port, user, pass, 'GET', cgiPath, undefined, 'arraybuffer', undefined, 6000);
+        if (resp?.data) {
+          if (Buffer.isBuffer(resp.data) && resp.data.length > 50) {
+            this.logger.log(`✅ [DAHUA FACE PULL] Foto facial obtenida vía CGI (${cgiPath}) para userId=${userIdClean}`);
+            return resp.data.toString('base64');
+          } else if (resp.data instanceof ArrayBuffer && resp.data.byteLength > 50) {
+            this.logger.log(`✅ [DAHUA FACE PULL] Foto facial obtenida vía CGI (${cgiPath}) para userId=${userIdClean}`);
+            return Buffer.from(resp.data).toString('base64');
+          }
         }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
 
-    // Método 4: CGI recordFinder AccessFace
+    // Método 2: JSON-RPC AccessFace.getMulti / AccessFace.findMulti / AccessFace.get
+    const rpcMethods = [
+      { method: 'AccessFace.getMulti', params: { UserList: [userIdClean] } },
+      { method: 'AccessFace.findMulti', params: { FaceList: [{ UserID: userIdClean }] } },
+      { method: 'AccessFace.get', params: { UserID: userIdClean } },
+      { method: 'AccessFace.find', params: { Condition: { UserID: userIdClean } } },
+      { method: 'FaceRecognition.findFace', params: { Condition: { UserID: userIdClean } } },
+    ];
+
+    for (const { method, params } of rpcMethods) {
+      try {
+        const rpcRes = await this.rpcCall(ip, port, user, pass, method, params);
+        const photoData = rpcRes?.params?.FaceList?.[0]?.PhotoData?.[0]
+          || rpcRes?.result?.FaceList?.[0]?.PhotoData?.[0]
+          || rpcRes?.params?.PhotoData?.[0]
+          || rpcRes?.result?.PhotoData?.[0]
+          || (typeof rpcRes?.result?.PhotoData === 'string' ? rpcRes.result.PhotoData : null);
+
+        if (photoData && typeof photoData === 'string' && photoData.length > 50) {
+          if (photoData.startsWith('http://') || photoData.startsWith('/') || photoData.startsWith('RPC_Loadfile')) {
+            const dlPath = photoData.startsWith('http') ? new URL(photoData).pathname : (photoData.startsWith('/') ? photoData : `/${photoData}`);
+            const dlResp = await this.cgi(ip, port, user, pass, 'GET', dlPath, undefined, 'arraybuffer').catch(() => null);
+            if (dlResp?.data && (Buffer.isBuffer(dlResp.data) || dlResp.data instanceof ArrayBuffer)) {
+              const buf = Buffer.isBuffer(dlResp.data) ? dlResp.data : Buffer.from(dlResp.data);
+              if (buf.length > 50) return buf.toString('base64');
+            }
+          }
+          this.logger.log(`✅ [DAHUA FACE PULL] Foto facial obtenida vía RPC (${method}) para userId=${userIdClean}`);
+          return photoData;
+        }
+      } catch (_) {}
+    }
+
+    // Método 3: CGI recordFinder AccessFace
     try {
       const resp = await this.cgi(
         ip, port, user, pass, 'GET',

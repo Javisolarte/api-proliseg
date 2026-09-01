@@ -2277,12 +2277,42 @@ export class ControlAccesoService implements OnModuleInit {
       const pass = String(device.credencial_password || '');
       const personasDahua = await this.dahuaService.listarPersonas(ip, port, user, pass);
 
+      // Traer fotos faciales en paralelo con fallback a Prolicontrol
       const personasConFotos = await Promise.all(
         personasDahua.map(async (p) => {
           let fotoBase64: string | null = p.fotoBase64 || null;
+          let fotoUrlStorage: string | null = null;
           if (!fotoBase64) {
             try {
               fotoBase64 = await this.dahuaService.obtenerFotoFacial(ip, port, user, pass, p.userId);
+            } catch (_) {}
+          }
+
+          // Fallback a base de datos de Prolicontrol si ya existía la foto registrada
+          if (!fotoBase64) {
+            try {
+              const { data: personaDb } = await this.supabase
+                .getSupabaseAdminClient()
+                .from('personas_gestion_acceso')
+                .select('id, foto_rostro_url')
+                .eq('documento_identidad', String(p.userId).trim())
+                .maybeSingle();
+
+              if (personaDb?.foto_rostro_url) {
+                fotoUrlStorage = personaDb.foto_rostro_url;
+              } else if (personaDb?.id) {
+                const { data: facial } = await this.supabase
+                  .getSupabaseAdminClient()
+                  .from('biometria_facial')
+                  .select('foto_url_storage')
+                  .eq('persona_id', personaDb.id)
+                  .order('fecha_captura', { ascending: false })
+                  .limit(1)
+                  .maybeSingle();
+                if (facial?.foto_url_storage) {
+                  fotoUrlStorage = facial.foto_url_storage;
+                }
+              }
             } catch (_) {}
           }
 
@@ -2294,6 +2324,7 @@ export class ControlAccesoService implements OnModuleInit {
             validFrom: p.validFrom || null,
             validTo: p.validTo || null,
             fotoBase64: fotoBase64 || null,
+            foto_rostro_url: fotoUrlStorage || null,
           };
         })
       );
@@ -2323,6 +2354,7 @@ export class ControlAccesoService implements OnModuleInit {
           codigoTarjeta: u.numOfCard || null,
           habilitado: true,
           fotoBase64: null,
+          foto_rostro_url: null,
         };
       }),
     };
@@ -2334,7 +2366,7 @@ export class ControlAccesoService implements OnModuleInit {
    */
   async pullPersonasToRecopilacion(
     deviceId: string,
-    personas: Array<{ userId: string; nombre: string; codigoTarjeta?: string; fotoBase64?: string }>,
+    personas: Array<{ userId: string; nombre: string; codigoTarjeta?: string; fotoBase64?: string; foto_rostro_url?: string }>,
     lugarId?: number,
     crearLugar?: { nombre_lugar: string; descripcion?: string },
   ): Promise<any> {
@@ -2392,10 +2424,10 @@ export class ControlAccesoService implements OnModuleInit {
         continue;
       }
 
-      let fotoUrl: string | null = null;
+      let fotoUrl: string | null = p.foto_rostro_url || null;
       let fotoBase64: string | null | undefined = p.fotoBase64;
 
-      if (!fotoBase64 && isDahua && ip) {
+      if (!fotoBase64 && !fotoUrl && isDahua && ip) {
         try {
           fotoBase64 = await this.dahuaService.obtenerFotoFacial(ip, port, user, pass, p.userId);
         } catch (_) {}
@@ -2426,6 +2458,34 @@ export class ControlAccesoService implements OnModuleInit {
         } catch (imgErr: any) {
           this.logger.warn(`⚠️ [PULL] Error procesando imagen para ${cedulaClean}: ${imgErr.message}`);
         }
+      }
+
+      // Si aún no hay foto, buscar en la BD de Prolicontrol
+      if (!fotoUrl) {
+        try {
+          const { data: personaDb } = await this.supabase
+            .getSupabaseAdminClient()
+            .from('personas_gestion_acceso')
+            .select('id, foto_rostro_url')
+            .eq('documento_identidad', cedulaClean)
+            .maybeSingle();
+
+          if (personaDb?.foto_rostro_url) {
+            fotoUrl = personaDb.foto_rostro_url;
+          } else if (personaDb?.id) {
+            const { data: facial } = await this.supabase
+              .getSupabaseAdminClient()
+              .from('biometria_facial')
+              .select('foto_url_storage')
+              .eq('persona_id', personaDb.id)
+              .order('fecha_captura', { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            if (facial?.foto_url_storage) {
+              fotoUrl = facial.foto_url_storage;
+            }
+          }
+        } catch (_) {}
       }
 
       const payload = {
