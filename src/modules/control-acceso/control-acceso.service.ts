@@ -2218,6 +2218,165 @@ export class ControlAccesoService implements OnModuleInit {
     };
   }
 
+  /**
+   * Fetch personas from device hardware (Dahua/Hikvision) WITHOUT saving to DB.
+   * Returns raw list for preview in the frontend.
+   */
+  async fetchPersonasFromDevice(deviceId: string): Promise<any> {
+    const device = await this.resolveDeviceForSync({ deviceId });
+    if (!device?.ip_direccion) {
+      throw new Error('No se encontró el dispositivo para consultar');
+    }
+
+    const ip = device.ip_direccion;
+    const isDahua = String(device.marca || device.configuracion_tecnica?.marca || '').toLowerCase().includes('dahua');
+
+    if (isDahua) {
+      const port = Number(
+        device.configuracion_tecnica?.puertos_mapeados?.mapped_http
+        || device.configuracion_tecnica?.puerto
+        || device.puerto
+        || 80
+      );
+      const user = String(device.credencial_usuario || 'admin');
+      const pass = String(device.credencial_password || '');
+      const personasDahua = await this.dahuaService.listarPersonas(ip, port, user, pass);
+
+      return {
+        dispositivo_id: device.id,
+        dispositivo: device.nombre_identificador,
+        marca: 'Dahua',
+        total: personasDahua.length,
+        personas: personasDahua.map(p => ({
+          userId: p.userId,
+          nombre: p.nombre || `Usuario ${p.userId}`,
+          codigoTarjeta: p.codigoTarjeta || null,
+          habilitado: p.habilitado !== false,
+          validFrom: p.validFrom || null,
+          validTo: p.validTo || null,
+        })),
+      };
+    }
+
+    // Hikvision fallback
+    const raw = await this.buscarUsuariosHardware(ip, device.id);
+    const usuarios = this.extractHardwareUsers(raw);
+
+    return {
+      dispositivo_id: device.id,
+      dispositivo: device.nombre_identificador,
+      marca: 'Hikvision',
+      total: usuarios.length,
+      personas: usuarios.map(u => {
+        const normalized = this.normalizeHardwareUser(u, device);
+        return {
+          userId: normalized.documento_identidad || u.employeeNo || '',
+          nombre: normalized.nombre_completo || u.name || '',
+          codigoTarjeta: u.numOfCard || null,
+          habilitado: true,
+        };
+      }),
+    };
+  }
+
+  /**
+   * Save selected personas (from hardware pull) into a recopilación list.
+   * Optionally creates a new list if crearLugar is provided.
+   */
+  async pullPersonasToRecopilacion(
+    deviceId: string,
+    personas: Array<{ userId: string; nombre: string; codigoTarjeta?: string }>,
+    lugarId?: number,
+    crearLugar?: { nombre_lugar: string; descripcion?: string },
+  ): Promise<any> {
+    let targetLugarId = lugarId;
+
+    // Create new lugar if requested
+    if (crearLugar && crearLugar.nombre_lugar) {
+      const nuevoLugar = await this.createLugarRecopilacion({
+        nombre_lugar: crearLugar.nombre_lugar,
+        descripcion: crearLugar.descripcion || `Importado desde dispositivo ${deviceId}`,
+      });
+      targetLugarId = nuevoLugar.id;
+    }
+
+    if (!targetLugarId) {
+      throw new Error('Debe seleccionar o crear una lista de recopilación');
+    }
+
+    const resultados: any[] = [];
+    let exitosos = 0;
+    let duplicados = 0;
+    let fallidos = 0;
+
+    for (const p of personas) {
+      if (!p.userId) {
+        fallidos++;
+        resultados.push({ ok: false, userId: p.userId, error: 'userId vacío' });
+        continue;
+      }
+
+      // Check if this cedula already exists in the target list
+      const { data: existing } = await this.supabase
+        .getSupabaseAdminClient()
+        .from('control_acceso_recoleccion_registros')
+        .select('id')
+        .eq('lugar_id', targetLugarId)
+        .eq('cedula', String(p.userId).trim())
+        .maybeSingle();
+
+      if (existing) {
+        duplicados++;
+        resultados.push({ ok: false, userId: p.userId, nombre: p.nombre, error: 'Ya existe en la lista' });
+        continue;
+      }
+
+      const payload = {
+        lugar_id: targetLugarId,
+        nombre_completo: p.nombre || `Usuario ${p.userId}`,
+        cedula: String(p.userId).trim(),
+        telefono: null,
+        telefono2: null,
+        correo_electronico: null,
+        apartamento: null,
+        torre: null,
+        tiene_vehiculo: false,
+        placa_vehiculo: null,
+        color_vehiculo: null,
+        foto_rostro_url: null,
+        acepta_tratamiento_datos: true,
+        acepta_ingreso_prolicontrol: false,
+        consentimiento_aceptado_at: new Date().toISOString(),
+        origen: 'hardware_pull',
+        dispositivo_origen_id: deviceId,
+      };
+
+      const { data, error } = await this.supabase
+        .getSupabaseAdminClient()
+        .from('control_acceso_recoleccion_registros')
+        .insert(payload)
+        .select('id, nombre_completo, cedula')
+        .single();
+
+      if (error) {
+        fallidos++;
+        resultados.push({ ok: false, userId: p.userId, nombre: p.nombre, error: error.message });
+      } else {
+        exitosos++;
+        resultados.push({ ok: true, id: data.id, userId: p.userId, nombre: p.nombre });
+      }
+    }
+
+    return {
+      lugar_id: targetLugarId,
+      total_enviados: personas.length,
+      exitosos,
+      duplicados,
+      fallidos,
+      resultados,
+    };
+  }
+
   private async resolveDeviceForSync(params: { ip?: string; deviceId?: string }) {
     let query = this.supabase
       .getClient()

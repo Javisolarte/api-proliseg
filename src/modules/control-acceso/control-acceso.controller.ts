@@ -145,6 +145,38 @@ export class ControlAccesoController {
     return this.controlAccesoService.syncUsuariosHardware({ deviceId: id, includePhotos: body?.includePhotos });
   }
 
+  @Get('dispositivos/:id/personas-hardware')
+  @ApiOperation({ summary: 'Consulta las personas registradas en el hardware sin guardar en BD (preview)' })
+  async fetchPersonasHardware(@Param('id') id: string) {
+    this.logger.log(`📋 [PULL-PREVIEW] Consultando personas del dispositivo ${id}`);
+    return this.controlAccesoService.fetchPersonasFromDevice(id);
+  }
+
+  @Post('dispositivos/:id/pull-to-recopilacion')
+  @ApiOperation({ summary: 'Guarda personas seleccionadas del hardware en una lista de recopilación' })
+  async pullToRecopilacion(
+    @Param('id') id: string,
+    @Body() body: {
+      personas: Array<{ userId: string; nombre: string; codigoTarjeta?: string }>;
+      lugarId?: number;
+      crearLugar?: { nombre_lugar: string; descripcion?: string };
+    }
+  ) {
+    this.logger.log(`💾 [PULL-SAVE] Guardando ${body.personas?.length || 0} personas del dispositivo ${id} en recopilación`);
+    if (!body.personas || !Array.isArray(body.personas) || body.personas.length === 0) {
+      throw new BadRequestException('Debe enviar al menos una persona');
+    }
+    if (!body.lugarId && !body.crearLugar?.nombre_lugar) {
+      throw new BadRequestException('Debe seleccionar una lista de recopilación o crear una nueva');
+    }
+    return this.controlAccesoService.pullPersonasToRecopilacion(
+      id,
+      body.personas,
+      body.lugarId,
+      body.crearLugar,
+    );
+  }
+
   @Post('subir-rostro')
   @ApiOperation({ summary: 'Sincroniza foto de rostro al hardware' })
   async subirRostro(@Body() body: { ip: string, userId: string, faceBase64: string, deviceId?: string }) {
