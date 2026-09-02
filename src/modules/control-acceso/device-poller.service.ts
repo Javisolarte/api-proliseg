@@ -250,6 +250,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         await this.registerHikvisionWebhook(device, ip, port, user, pass, webhookBase).catch((err) => {
           this.logger.warn(`⚠️ [EventSystem] Error al registrar webhook en ${device.nombre_identificador}: ${err.message}`);
         });
+        // Auto-configurar botón de intercomunicador para llamar al Centro de Gestión Prolicontrol
+        await this.configureHikvisionIntercom(device, ip, port, user, pass).catch(() => {});
         // Siempre iniciar polling como respaldo de seguridad
         this.startFallbackPolling(device, ip, port, user, pass, marca);
       } else if (marca.includes('dahua')) {
@@ -260,6 +262,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       } else {
         // Genérico: intentar Hikvision, si falla usar fallback
         await this.registerHikvisionWebhook(device, ip, port, user, pass, webhookBase).catch(() => {});
+        await this.configureHikvisionIntercom(device, ip, port, user, pass).catch(() => {});
         this.startFallbackPolling(device, ip, port, user, pass, 'hikvision');
       }
     });
@@ -344,6 +347,35 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     );
 
     this.logger.log(`✅ [EventSystem] Webhook Hikvision registrado → ${device.nombre_identificador} via ${protocolVal} (${ipAddressVal}:${portNoVal})`);
+  }
+
+  // ─── Auto-configuración de Intercomunicador Hikvision (Llamar a Centro) ────
+
+  private async configureHikvisionIntercom(device: DeviceInfo, ip: string, port: number, user: string, pass: string) {
+    try {
+      const base = `http://${ip}:${port}`;
+      const payload = `<?xml version="1.0" encoding="UTF-8"?>
+<KeyCfg version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
+  <id>1</id>
+  <module>main</module>
+  <callMethod>manageCenter</callMethod>
+  <enableCallCenter>true</enableCallCenter>
+</KeyCfg>`;
+
+      await this.executeDigestRequest(
+        'PUT',
+        `${base}/ISAPI/VideoIntercom/keyCfg/1`,
+        user,
+        pass,
+        payload,
+        'application/xml',
+        5000
+      );
+      this.logger.log(`📞 [EventSystem] Intercomunicador Hikvision configurado (Llamar a Centro de Gestión) → ${device.nombre_identificador}`);
+    } catch (err: any) {
+      // Dispositivos sin capacidades de videoportero o keyCfg rechazarán 404/invalidOperation
+      this.logger.debug(`[EventSystem] Dispositivo ${device.nombre_identificador} no soporta keyCfg intercom: ${err.message}`);
+    }
   }
 
   // ─── Registro de webhook en Dahua ASI — AlarmServer CGI (correcto para ASI7213X) ──
@@ -643,8 +675,26 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
   private mapHikvisionEventType(major: number, minor: number, eventType?: string): string {
     const et = String(eventType || '').toLowerCase();
-    
-    // Si es AccessControl (major 5), manejamos detalladamente sus subestados
+
+    // ── Intercomunicador / Timbre / Llamada ──────────────────────────────────
+    // En Hikvision las llamadas pueden reportarse como major 3 (VideoIntercom)
+    // o como major 5 (AccessControl) con sub-códigos específicos de timbre/llamada
+    if (
+      major === 3 ||
+      minor === 43 || // MINOR_CALL_CENTER (Timbre / Llamada a Centro)
+      minor === 44 || // MINOR_CALL_CENTER_OPERATION (Operación de llamada a Centro)
+      minor === 9 ||  // MINOR_CALL_OUT
+      minor === 88 || // MINOR_BELL_CALL
+      et.includes('call') ||
+      et.includes('ring') ||
+      et.includes('intercom') ||
+      et.includes('videotalk') ||
+      et.includes('bell')
+    ) {
+      return 'llamada';
+    }
+
+    // ── Control de Acceso (major 5) ─────────────────────────────────────────
     if (major === 5) {
       if (minor === 75) return 'entrada';
       if (minor === 76) return 'salida';
@@ -654,11 +704,6 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       return 'acceso';
     }
 
-    // Intercomunicador / Timbre (sólo si no es major 5)
-    if (major === 3 || minor === 44 || minor === 9 || minor === 22 || 
-        et.includes('call') || et.includes('ring') || et.includes('intercom') || et.includes('videotalk')) {
-      return 'llamada';
-    }
     if (major === 6) return 'alarma';
     if (major === 1 || eventType === 'doorOpen') return 'puerta_abierta';
     if (major === 2 || eventType === 'doorClose') return 'puerta_cerrada';
