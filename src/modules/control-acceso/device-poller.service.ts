@@ -282,28 +282,12 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     const isVpn = this.isVpnIp(deviceIp);
     const serverPort = process.env.PORT || '3000';
     
-    let ipAddressVal = '10.8.0.1';
-    if (isVpn && deviceIp) {
-      const parts = deviceIp.split('.');
-      if (parts.length === 4) {
-        ipAddressVal = `${parts[0]}.${parts[1]}.${parts[2]}.1`;
-      }
-    }
-    let portNoVal = isVpn ? parseInt(serverPort, 10) : 80;
-    let protocolVal = 'HTTP';
-    let addressingTypeVal = 'ipaddress';
-    let webhookUrl = isVpn
-      ? `http://${ipAddressVal}:${serverPort}/api/control-acceso/webhook/evento/hik/${device.id}`
-      : `http://${ipAddressVal}/api/control-acceso/webhook/evento/hik/${device.id}`;
-    
-    if (!isVpn) {
-      ipAddressVal = 'servidor.proliseg.com';
-      portNoVal = 443;
-      protocolVal = 'HTTPS';
-      addressingTypeVal = 'hostname';
-      const secureWebhookBase = webhookBase.replace(/^http:/i, 'https:');
-      webhookUrl = `${secureWebhookBase}/hik/${device.id}`;
-    }
+    let ipAddressVal = 'api.proliseg.com';
+    let portNoVal = 443;
+    let protocolVal = 'HTTPS';
+    let addressingTypeVal = 'hostname';
+    const cleanWebhookBase = webhookBase ? webhookBase.replace(/^http:/i, 'https:') : 'https://api.proliseg.com/api/control-acceso/webhook/evento';
+    let webhookUrl = `${cleanWebhookBase}/hik/${device.id}`;
 
     // Permitir personalizar el webhook desde configuracion_tecnica si es necesario
     const customWebhookBase = device.configuracion_tecnica?.webhook_base;
