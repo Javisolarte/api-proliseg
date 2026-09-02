@@ -354,26 +354,42 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   private async configureHikvisionIntercom(device: DeviceInfo, ip: string, port: number, user: string, pass: string) {
     try {
       const base = `http://${ip}:${port}`;
-      const payload = `<?xml version="1.0" encoding="UTF-8"?>
+      // Hikvision V4.4x usa 'callCenter', mientras que V4.3x e inferiores usan 'manageCenter'
+      const tryMethods = ['callCenter', 'manageCenter'];
+      let configured = false;
+
+      for (const method of tryMethods) {
+        const payload = `<?xml version="1.0" encoding="UTF-8"?>
 <KeyCfg version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
   <id>1</id>
-  <module>main</module>
-  <callMethod>manageCenter</callMethod>
+  <callMethod>${method}</callMethod>
+  <keyType>call</keyType>
   <enableCallCenter>true</enableCallCenter>
 </KeyCfg>`;
 
-      await this.executeDigestRequest(
-        'PUT',
-        `${base}/ISAPI/VideoIntercom/keyCfg/1`,
-        user,
-        pass,
-        payload,
-        'application/xml',
-        5000
-      );
-      this.logger.log(`📞 [EventSystem] Intercomunicador Hikvision configurado (Llamar a Centro de Gestión) → ${device.nombre_identificador}`);
+        try {
+          await this.executeDigestRequest(
+            'PUT',
+            `${base}/ISAPI/VideoIntercom/keyCfg/1`,
+            user,
+            pass,
+            payload,
+            'application/xml',
+            5000
+          );
+          this.logger.log(`📞 [EventSystem] Intercomunicador Hikvision configurado (callMethod=${method}) → ${device.nombre_identificador}`);
+          configured = true;
+          break;
+        } catch {
+          // Si el firmware rechaza el parámetro, probar con la otra variante
+          continue;
+        }
+      }
+
+      if (!configured) {
+        this.logger.debug(`[EventSystem] No se pudo configurar keyCfg en ${device.nombre_identificador}`);
+      }
     } catch (err: any) {
-      // Dispositivos sin capacidades de videoportero o keyCfg rechazarán 404/invalidOperation
       this.logger.debug(`[EventSystem] Dispositivo ${device.nombre_identificador} no soporta keyCfg intercom: ${err.message}`);
     }
   }
