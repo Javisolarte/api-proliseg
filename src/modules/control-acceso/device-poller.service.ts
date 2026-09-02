@@ -86,7 +86,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
    * Solo arranca si el dispositivo tiene configuracion_tecnica.push_disabled = true
    */
   private readonly fallbackTimers = new Map<string, NodeJS.Timeout>();
-  private readonly FALLBACK_POLL_MS = 30_000; // 30s solo para los que no tienen push
+  private readonly FALLBACK_POLL_MS = 3000; // 3s para detección en tiempo real de llamadas y eventos
 
   // ─── Ciclo de vida ────────────────────────────────────────────────────────
 
@@ -230,7 +230,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     }
 
     // URL pública donde las cámaras deben mandar sus eventos
-    const webhookBase = 'http://servidor.proliseg.com/api/control-acceso/webhook/evento';
+    const webhookBase = 'https://api.proliseg.com/api/control-acceso/webhook/evento';
 
     // Iniciar el registro de todos los dispositivos en paralelo para no bloquearse entre sí
     const setupPromises = (devices as DeviceInfo[]).map(async (device) => {
@@ -317,6 +317,10 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     <ipAddress>${ipAddressVal}</ipAddress>
     <portNo>${portNoVal}</portNo>
     <httpAuthenticationMethod>none</httpAuthenticationMethod>
+    <SubscribeEvent>
+      <heartbeat>15</heartbeat>
+      <eventMode>all</eventMode>
+    </SubscribeEvent>
   </HttpHostNotification>
 </HttpHostNotificationList>`;
 
@@ -505,6 +509,43 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         const evento = this.buildEventoAcceso(device, info, eventTimeStr);
         this.saveAndEmit(evento);
       }
+
+      // Detección en tiempo real de timbrado activo vía VideoIntercom/callStatus
+      try {
+        const csResp = await this.executeDigestRequest(
+          'GET',
+          `${base}/ISAPI/VideoIntercom/callStatus`,
+          user,
+          pass,
+          null,
+          'application/json',
+          2500,
+          'json'
+        );
+        let cs = csResp?.data;
+        if (typeof cs === 'string') {
+          try { cs = JSON.parse(cs); } catch {}
+        }
+        const callState = cs?.CallStatus?.status || cs?.status;
+        if (callState === 'ring') {
+          const ringKey = `call_ring_${device.id}_${Math.floor(Date.now() / 10000)}`;
+          if (!this.seenEventIds.has(ringKey)) {
+            this.seenEventIds.add(ringKey);
+            this.logger.log(`📞 [EventSystem] ¡TIMBRE ENTRANTE EN TIEMPO REAL! → ${device.nombre_identificador} (${callState})`);
+            const callEvent: EventoAcceso = {
+              dispositivo_id: device.id,
+              tipo_evento: 'llamada',
+              nombre_dispositivo: device.nombre_identificador,
+              nombre_persona: 'Llamada de Citófono',
+              documento_persona: 'LLAMADA',
+              metodo_acceso: 'intercom',
+              timestamp: new Date().toISOString(),
+              detalles_raw: { source: 'VideoIntercom/callStatus', status: callState, ip, port }
+            };
+            this.saveAndEmit(callEvent);
+          }
+        }
+      } catch {}
     } catch (err) { /* offline — silencioso */ }
   }
 
