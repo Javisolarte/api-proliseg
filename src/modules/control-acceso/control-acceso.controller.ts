@@ -285,6 +285,22 @@ export class ControlAccesoController {
   }
 
   @Public()
+  @Get('dahua-reboot/:id')
+  @ApiOperation({ summary: 'Configura audio/altavoz y reinicia un dispositivo Dahua vía CGI' })
+  async dahuaReboot(@Param('id') id: string) {
+    this.logger.log(`🔄 [DAHUA REBOOT] Solicitando reinicio para dispositivo: ${id}`);
+    return this.controlAccesoService.rebootDahuaDispositivo(id);
+  }
+
+  @Public()
+  @Get('dahua-reboot-all')
+  @ApiOperation({ summary: 'Configura audio/altavoz y reinicia todos los Dahua en Edificio Vado' })
+  async dahuaRebootAll() {
+    this.logger.log(`🔄 [DAHUA REBOOT ALL] Solicitando reinicio masivo de todos los Dahua Vado`);
+    return this.controlAccesoService.rebootAllDahuaVado();
+  }
+
+  @Public()
   @Get('debug-intercom/:id')
   @ApiOperation({ summary: 'Queries intercom configuration and status' })
   async debugIntercom(@Param('id') id: string) {

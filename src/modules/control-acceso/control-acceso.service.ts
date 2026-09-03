@@ -5759,5 +5759,102 @@ export class ControlAccesoService implements OnModuleInit {
 
     return report;
   }
+
+  /**
+   * Configura audio/parlante y reinicia un terminal Dahua vía CGI (magicBox.cgi?action=reboot)
+   */
+  async rebootDahuaDispositivo(dispositivoId: string): Promise<any> {
+    const { data: dev, error } = await this.supabase
+      .getClient()
+      .from('dispositivos_iot')
+      .select('*')
+      .eq('id', dispositivoId)
+      .single();
+
+    if (error || !dev) throw new Error(`Dispositivo no encontrado: ${dispositivoId}`);
+
+    const user = dev.credencial_usuario || 'admin';
+    const pass = dev.credencial_password || 'elvado2025';
+    const config = dev.configuracion_tecnica || {};
+    const ip = dev.ip_direccion || '10.8.0.4';
+    const httpPort = Number(config.puertos_mapeados?.mapped_http || config.puerto || 10084);
+
+    // 1. Configurar volumen del altavoz (0-10) y habilitar avisos de voz
+    try {
+      await this.dahuaService.ajustarVolumenAltavoz(ip, httpPort, user, pass, 9);
+    } catch {}
+
+    // 2. Asegurar compresión G.711A
+    try {
+      const mainQuery = 'action=setConfig&Encode[0].MainFormat[0].AudioEnable=true&Encode[0].MainFormat[0].Audio.Compression=G.711A&Encode[0].MainFormat[0].Audio.Frequency=8000&Encode[0].MainFormat[0].Audio.Bitrate=64';
+      await this.dahuaService.cgi(ip, httpPort, user, pass, 'GET', `/cgi-bin/configManager.cgi?${mainQuery}`);
+    } catch {}
+
+    // 3. Ejecutar reboot
+    let rebootResp = 'OK';
+    try {
+      const res = await this.dahuaService.cgi(ip, httpPort, user, pass, 'GET', '/cgi-bin/magicBox.cgi?action=reboot');
+      rebootResp = String(res?.data || '').trim();
+    } catch (e: any) {
+      rebootResp = e.message;
+    }
+
+    // 4. Programar reconexión del stream MediaMTX en 40 segundos
+    const streamName = `cam_${dispositivoId.substring(0, 8)}`;
+    setTimeout(async () => {
+      try {
+        const apiAuth = { username: 'proliseg_vms', password: 'vms_password_2026' };
+        await axios.delete(`https://servidor.proliseg.com/webrtc-api/v3/config/paths/delete/${streamName}`, { auth: apiAuth }).catch(() => {});
+        await new Promise(r => setTimeout(r, 2000));
+        await this.startVideoStream(dispositivoId);
+      } catch {}
+    }, 40000);
+
+    return {
+      ok: true,
+      dispositivo: dev.nombre_identificador,
+      ip,
+      httpPort,
+      mensaje: `Reinicio ejecutado en ${dev.nombre_identificador} (${ip}:${httpPort}). Respuesta: ${rebootResp}`,
+      respuesta: rebootResp
+    };
+  }
+
+  /**
+   * Ejecuta la configuración y reinicio en lote de todos los Dahua en Edificio Vado
+   */
+  async rebootAllDahuaVado(): Promise<any> {
+    const { data: devs } = await this.supabase
+      .getClient()
+      .from('dispositivos_iot')
+      .select('*');
+
+    const vadoDahuas = (devs || []).filter(d => {
+      const marca = String(d.marca || d.configuracion_tecnica?.marca || '').toLowerCase();
+      const ipOrig = d.configuracion_tecnica?.puertos_mapeados?.original_ip || d.nombre_identificador || '';
+      return marca.includes('dahua') && ipOrig.includes('192.168.35');
+    });
+
+    const resultados: any[] = [];
+    for (const dev of vadoDahuas) {
+      try {
+        const res = await this.rebootDahuaDispositivo(dev.id);
+        resultados.push(res);
+      } catch (err: any) {
+        resultados.push({
+          ok: false,
+          dispositivo: dev.nombre_identificador,
+          error: err.message
+        });
+      }
+    }
+
+    return {
+      ok: true,
+      total: vadoDahuas.length,
+      resultados
+    };
+  }
 }
+
 
