@@ -301,6 +301,14 @@ export class ControlAccesoController {
   }
 
   @Public()
+  @Get('dahua-test-full/:id')
+  @ApiOperation({ summary: 'Diagnostico profundo de audio bidireccional y llamadas Dahua' })
+  async dahuaTestFull(@Param('id') id: string) {
+    this.logger.log(`🔍 [DAHUA TEST FULL] Ejecutando diagnostico profundo para: ${id}`);
+    return this.controlAccesoService.testDahuaFull(id);
+  }
+
+  @Public()
   @Get('debug-intercom/:id')
   @ApiOperation({ summary: 'Queries intercom configuration and status' })
   async debugIntercom(@Param('id') id: string) {

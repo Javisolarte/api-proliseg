@@ -5855,6 +5855,76 @@ export class ControlAccesoService implements OnModuleInit {
       resultados
     };
   }
+
+  /**
+   * Diagnóstico profundo de audio bidireccional y detección de llamadas en Dahua
+   */
+  async testDahuaFull(dispositivoId: string): Promise<any> {
+    const { data: dev } = await this.supabase
+      .getClient()
+      .from('dispositivos_iot')
+      .select('*')
+      .eq('id', dispositivoId)
+      .single();
+
+    if (!dev) return { error: 'Dispositivo no encontrado' };
+
+    const user = dev.credencial_usuario || 'admin';
+    const pass = dev.credencial_password || 'elvado2025';
+    const config = dev.configuracion_tecnica || {};
+    const ip = dev.ip_direccion || '10.8.0.4';
+    const httpPort = Number(config.puertos_mapeados?.mapped_http || config.puerto || 10084);
+    const sdkPort = Number(config.puertos_mapeados?.mapped_sdk || (httpPort >= 10000 ? 20000 + (httpPort % 10000) : 37777));
+
+    const report: any = {
+      dispositivo: dev.nombre_identificador,
+      ip,
+      httpPort,
+      sdkPort,
+      cgiTests: {},
+      netSdkTalkTest: {},
+    };
+
+    // 1. Probar endpoints CGI para llamadas y audio
+    const cgiEndpoints = [
+      { name: 'systemInfo', path: '/cgi-bin/magicBox.cgi?action=getSystemInfo' },
+      { name: 'deviceType', path: '/cgi-bin/magicBox.cgi?action=getDeviceType' },
+      { name: 'intercomCallStatus', path: '/cgi-bin/intercom.cgi?action=getCallStatus' },
+      { name: 'vtoCallStatus', path: '/cgi-bin/vto.cgi?action=getCallStatus' },
+      { name: 'callStateConfig', path: '/cgi-bin/configManager.cgi?action=getConfig&name=CallState' },
+      { name: 'videoTalkConfig', path: '/cgi-bin/configManager.cgi?action=getConfig&name=VideoTalk' },
+      { name: 'sipConfig', path: '/cgi-bin/configManager.cgi?action=getConfig&name=SIP' },
+      { name: 'audioInFormat', path: '/cgi-bin/configManager.cgi?action=getConfig&name=AudioInFormat' },
+      { name: 'audioOutVolume', path: '/cgi-bin/configManager.cgi?action=getConfig&name=AudioOut' },
+    ];
+
+    for (const ep of cgiEndpoints) {
+      try {
+        const res = await this.dahuaService.cgi(ip, httpPort, user, pass, 'GET', ep.path, undefined, 'text', 'application/x-www-form-urlencoded', 4000);
+        report.cgiTests[ep.name] = { ok: true, data: String(res?.data || '').trim() };
+      } catch (e: any) {
+        report.cgiTests[ep.name] = { ok: false, error: e.message, status: e.response?.status };
+      }
+    }
+
+    // 2. Probar si NetSDK / Talk está operativo
+    try {
+      const PassThrough = require('stream').PassThrough;
+      const dummyStream = new PassThrough();
+      const talkPromise = this.dahuaService.relayAudioNetSDK(dummyStream, ip, httpPort, user, pass, sdkPort);
+      setTimeout(() => dummyStream.end(), 1200);
+      const talkRes = await Promise.race([
+        talkPromise,
+        new Promise(r => setTimeout(() => r('TIMEOUT'), 5000))
+      ]);
+      report.netSdkTalkTest = { result: talkRes };
+    } catch (sdkErr: any) {
+      report.netSdkTalkTest = { error: sdkErr.message };
+    }
+
+    return report;
+  }
 }
+
 
 
