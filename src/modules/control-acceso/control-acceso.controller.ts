@@ -253,6 +253,22 @@ export class ControlAccesoController {
     return { ok: true, message: 'MediaMTX verificado y purgado correctamente' };
   }
 
+  @Public()
+  @Post('simular-llamada')
+  @ApiOperation({ summary: 'Simula un evento de llamada de citófono para probar la interfaz' })
+  async simularLlamada(@Body() body: { deviceId?: string }) {
+    const devId = body?.deviceId || 'b1de3230-aa82-4217-a0a3-f09074b1e42f';
+    const evento: any = {
+      dispositivo_id: devId,
+      nombre_dispositivo: 'EDIFICIO VADO PRINCIPAL INTERNO',
+      tipo_evento: 'llamada',
+      timestamp: new Date().toISOString(),
+      detalles_raw: { simulated: true }
+    };
+    this.devicePoller.saveAndEmit(evento);
+    return { ok: true, mensaje: 'Llamada simulada emitida', evento };
+  }
+
   @Post('dispositivos/:id/sincronizar-nat')
   @ApiOperation({ summary: 'Sincroniza y crea/actualiza automáticamente las reglas NAT en MikroTik según la marca (Dahua/Hikvision)' })
   async sincronizarNat(@Param('id') id: string) {
