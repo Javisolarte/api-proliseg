@@ -342,8 +342,9 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   private async configureHikvisionIntercom(device: DeviceInfo, ip: string, port: number, user: string, pass: string) {
     try {
       const base = `http://${ip}:${port}`;
-      // Hikvision V4.4x usa 'callCenter', mientras que V4.3x e inferiores usan 'manageCenter'
-      const tryMethods = ['callCenter', 'manageCenter'];
+      // 'app' (Hik-Connect) emite timbrado continuo sin requerir central fisica port 8000, evitando 'Fallo de conexion'
+      const preferred = device.configuracion_tecnica?.call_method;
+      const tryMethods = preferred ? [preferred, 'app', 'callCenter', 'manageCenter'] : ['app', 'callCenter', 'manageCenter'];
       let configured = false;
 
       for (const method of tryMethods) {
