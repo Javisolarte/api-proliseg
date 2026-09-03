@@ -277,6 +277,14 @@ export class ControlAccesoController {
   }
 
   @Public()
+  @Get('dahua-audio-setup/:id')
+  @ApiOperation({ summary: 'Diagnostica y activa el audio G.711A en dispositivos Dahua (DHI-ASI3203E-W)' })
+  async dahuaAudioSetup(@Param('id') id: string) {
+    this.logger.log(`🎙️ [DAHUA AUDIO SETUP] Solicitando activación de audio para dispositivo: ${id}`);
+    return this.controlAccesoService.diagnosticarYActivarAudioDahua(id);
+  }
+
+  @Public()
   @Get('debug-intercom/:id')
   @ApiOperation({ summary: 'Queries intercom configuration and status' })
   async debugIntercom(@Param('id') id: string) {

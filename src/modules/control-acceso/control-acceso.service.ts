@@ -5651,4 +5651,99 @@ export class ControlAccesoService implements OnModuleInit {
       puertos_mapeados: updatedMapped,
     };
   }
+
+  /**
+   * Diagnostica y fuerza la activación de audio G.711A en dispositivos Dahua (DHI-ASI3203E-W y similares).
+   */
+  async diagnosticarYActivarAudioDahua(dispositivoId: string): Promise<any> {
+    const { data: dev, error } = await this.supabase
+      .getClient()
+      .from('dispositivos_iot')
+      .select('*')
+      .eq('id', dispositivoId)
+      .single();
+
+    if (error || !dev) {
+      throw new Error(`Dispositivo no encontrado con ID: ${dispositivoId}`);
+    }
+
+    const user = dev.credencial_usuario || 'admin';
+    const pass = dev.credencial_password || 'elvado2025';
+    const config = dev.configuracion_tecnica || {};
+    const ip = dev.ip_direccion || '10.8.0.4';
+    const httpPort = Number(config.puertos_mapeados?.mapped_http || config.puerto || 10084);
+    const streamName = `cam_${dispositivoId.substring(0, 8)}`;
+
+    const report: any = {
+      dispositivo: dev.nombre_identificador,
+      modelo: dev.modelo || 'DHI-ASI3203E-W',
+      ip_vpn: ip,
+      http_port: httpPort,
+      user,
+      steps: []
+    };
+
+    // 1. Sincronizar NAT en MikroTik
+    try {
+      await this.sincronizarNatMikrotikDispositivo(dispositivoId);
+      report.steps.push({ step: 'Sincronizar NAT MikroTik', ok: true });
+    } catch (natErr: any) {
+      report.steps.push({ step: 'Sincronizar NAT MikroTik', ok: false, error: natErr.message });
+    }
+
+    // 2. Intentar leer configuración Encode de Dahua
+    try {
+      const getRes = await this.dahuaService.cgi(ip, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=getConfig&name=Encode');
+      report.steps.push({ 
+        step: 'Consultar Encode Dahua', 
+        ok: true, 
+        raw: String(getRes?.data || '').split('\n').filter(l => l.includes('Audio')).join(' | ') 
+      });
+    } catch (cgiErr: any) {
+      report.steps.push({ step: 'Consultar Encode Dahua', ok: false, error: cgiErr.message });
+    }
+
+    // 3. Forzar activación de Audio G.711A (8000Hz, 64k) en canal 1
+    try {
+      const mainQuery = 'action=setConfig&Encode[0].MainFormat[0].AudioEnable=true&Encode[0].MainFormat[0].Audio.Compression=G.711A&Encode[0].MainFormat[0].Audio.Frequency=8000&Encode[0].MainFormat[0].Audio.Bitrate=64';
+      const mainRes = await this.dahuaService.cgi(ip, httpPort, user, pass, 'GET', `/cgi-bin/configManager.cgi?${mainQuery}`);
+      report.steps.push({ step: 'Activar Audio MainFormat G.711A', ok: true, resp: String(mainRes?.data || '').trim() });
+    } catch (mainErr: any) {
+      report.steps.push({ step: 'Activar Audio MainFormat G.711A', ok: false, error: mainErr.message });
+    }
+
+    try {
+      const extraQuery = 'action=setConfig&Encode[0].ExtraFormat[0].AudioEnable=true&Encode[0].ExtraFormat[0].Audio.Compression=G.711A&Encode[0].ExtraFormat[0].Audio.Frequency=8000&Encode[0].ExtraFormat[0].Audio.Bitrate=64';
+      const extraRes = await this.dahuaService.cgi(ip, httpPort, user, pass, 'GET', `/cgi-bin/configManager.cgi?${extraQuery}`);
+      report.steps.push({ step: 'Activar Audio ExtraFormat G.711A', ok: true, resp: String(extraRes?.data || '').trim() });
+    } catch (extraErr: any) {
+      report.steps.push({ step: 'Activar Audio ExtraFormat G.711A', ok: false, error: extraErr.message });
+    }
+
+    // 4. Reiniciar el stream en MediaMTX
+    const apiAuth = { username: 'proliseg_vms', password: 'vms_password_2026' };
+    try {
+      await axios.delete(`https://servidor.proliseg.com/webrtc-api/v3/config/paths/delete/${streamName}`, { auth: apiAuth }).catch(() => {});
+      await new Promise(r => setTimeout(r, 1200));
+      await this.startVideoStream(dispositivoId);
+      report.steps.push({ step: 'Reconectar Stream en MediaMTX', ok: true });
+    } catch (mmtxErr: any) {
+      report.steps.push({ step: 'Reconectar Stream en MediaMTX', ok: false, error: mmtxErr.message });
+    }
+
+    // 5. Verificar tracks resultantes en MediaMTX
+    try {
+      await new Promise(r => setTimeout(r, 3500));
+      const pathRes = await axios.get(`https://servidor.proliseg.com/webrtc-api/v3/paths/get/${streamName}`, { auth: apiAuth });
+      report.tracksDetectados = pathRes.data?.tracks || [];
+      report.audioActivo = report.tracksDetectados.includes('G711') || report.tracksDetectados.includes('Opus');
+    } catch (trackErr: any) {
+      report.tracksDetectados = [];
+      report.audioActivo = false;
+      report.errorTracks = trackErr.message;
+    }
+
+    return report;
+  }
 }
+
