@@ -5888,36 +5888,73 @@ export class ControlAccesoService implements OnModuleInit {
     // 1. Probar endpoints CGI para llamadas y audio
     const cgiEndpoints = [
       { name: 'systemInfo', path: '/cgi-bin/magicBox.cgi?action=getSystemInfo' },
-      { name: 'deviceType', path: '/cgi-bin/magicBox.cgi?action=getDeviceType' },
-      { name: 'intercomCallStatus', path: '/cgi-bin/intercom.cgi?action=getCallStatus' },
-      { name: 'vtoCallStatus', path: '/cgi-bin/vto.cgi?action=getCallStatus' },
-      { name: 'callStateConfig', path: '/cgi-bin/configManager.cgi?action=getConfig&name=CallState' },
-      { name: 'videoTalkConfig', path: '/cgi-bin/configManager.cgi?action=getConfig&name=VideoTalk' },
+      { name: 'accessControlGeneral', path: '/cgi-bin/configManager.cgi?action=getConfig&name=AccessControlGeneral' },
+      { name: 'vtoKeyConfig', path: '/cgi-bin/configManager.cgi?action=getConfig&name=VTO' },
+      { name: 'callParamConfig', path: '/cgi-bin/configManager.cgi?action=getConfig&name=CallParam' },
       { name: 'sipConfig', path: '/cgi-bin/configManager.cgi?action=getConfig&name=SIP' },
-      { name: 'audioInFormat', path: '/cgi-bin/configManager.cgi?action=getConfig&name=AudioInFormat' },
-      { name: 'audioOutVolume', path: '/cgi-bin/configManager.cgi?action=getConfig&name=AudioOut' },
+      { name: 'eventAttachTest', path: '/cgi-bin/eventManager.cgi?action=attach&codes=[CallNoAnswered,Invite,VideoTalk,AccessControl]' },
     ];
 
     for (const ep of cgiEndpoints) {
       try {
-        const res = await this.dahuaService.cgi(ip, httpPort, user, pass, 'GET', ep.path, undefined, 'text', 'application/x-www-form-urlencoded', 4000);
-        report.cgiTests[ep.name] = { ok: true, data: String(res?.data || '').trim() };
+        const timeoutMs = ep.name === 'eventAttachTest' ? 2500 : 4000;
+        const res = await this.dahuaService.cgi(ip, httpPort, user, pass, 'GET', ep.path, undefined, 'text', 'application/x-www-form-urlencoded', timeoutMs);
+        report.cgiTests[ep.name] = { ok: true, data: String(res?.data || '').substring(0, 500).trim() };
       } catch (e: any) {
-        report.cgiTests[ep.name] = { ok: false, error: e.message, status: e.response?.status };
+        if (ep.name === 'eventAttachTest' && e.code === 'ECONNABORTED') {
+          // Si da timeout es porque el stream se quedó conectado escuchando eventos (¡soporta attach!)
+          report.cgiTests[ep.name] = { ok: true, note: 'Stream attach sostenido abierto (Soporta eventManager en tiempo real)' };
+        } else {
+          report.cgiTests[ep.name] = { ok: false, error: e.message, status: e.response?.status };
+        }
       }
     }
 
-    // 2. Probar si NetSDK / Talk está operativo
+    // 2. Probar diagnóstico detallado de NetSDK (hablar)
     try {
-      const PassThrough = require('stream').PassThrough;
-      const dummyStream = new PassThrough();
-      const talkPromise = this.dahuaService.relayAudioNetSDK(dummyStream, ip, httpPort, user, pass, sdkPort);
-      setTimeout(() => dummyStream.end(), 1200);
-      const talkRes = await Promise.race([
-        talkPromise,
-        new Promise(r => setTimeout(() => r('TIMEOUT'), 5000))
-      ]);
-      report.netSdkTalkTest = { result: talkRes };
+      const fs = require('fs');
+      const path = require('path');
+      const isWin = process.platform === 'win32';
+      const linuxDllPaths = [
+        path.join(process.cwd(), 'libs', 'linux-x64', 'libdhnetsdk.so'),
+        path.join(process.cwd(), 'libs', 'libdhnetsdk.so'),
+        '/usr/lib/libdhnetsdk.so',
+        '/usr/local/lib/libdhnetsdk.so',
+      ];
+      const windowsDllPaths = [
+        'C:\\Program Files\\SmartPSSLite\\dhnetsdk.dll',
+        'C:\\Program Files (x86)\\SmartPSS\\dhnetsdk.dll',
+        path.join(process.cwd(), 'libs', 'dhnetsdk.dll'),
+      ];
+      const possibleDllPaths = isWin ? windowsDllPaths : linuxDllPaths;
+      const dllPath = possibleDllPaths.find((p: string) => fs.existsSync(p));
+
+      report.netSdkTalkTest = {
+        platform: process.platform,
+        arch: process.arch,
+        dllPath: dllPath || 'NO_ENCONTRADO',
+        cwd: process.cwd(),
+      };
+
+      if (dllPath) {
+        const koffi = require('koffi');
+        const lib = koffi.load(dllPath);
+        const callConv = isWin && process.arch === 'ia32' ? '__stdcall ' : '';
+        const CLIENT_Init = lib.func(`bool ${callConv}CLIENT_Init(void* fDisConnect, int64_t dwUser)`);
+        const CLIENT_Login = lib.func(`int64_t ${callConv}CLIENT_Login(str pchDVRIP, uint16_t wDVRPort, str pchUserName, str pchPassword, void* lpDeviceInfo, _Out_ int* error)`);
+        const CLIENT_Logout = lib.func(`bool ${callConv}CLIENT_Logout(int64_t lLoginID)`);
+
+        CLIENT_Init(null, 0);
+        const devInfo = Buffer.alloc(1024);
+        const errPtr = [0];
+        const loginId = CLIENT_Login(ip, sdkPort, user, pass, devInfo, errPtr);
+        report.netSdkTalkTest.loginId = String(loginId);
+        report.netSdkTalkTest.errorCode = errPtr[0];
+        report.netSdkTalkTest.loginOk = Boolean(loginId && loginId !== 0n && loginId !== 0);
+        if (report.netSdkTalkTest.loginOk) {
+          CLIENT_Logout(loginId);
+        }
+      }
     } catch (sdkErr: any) {
       report.netSdkTalkTest = { error: sdkErr.message };
     }
