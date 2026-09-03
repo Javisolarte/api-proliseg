@@ -5703,6 +5703,20 @@ export class ControlAccesoService implements OnModuleInit {
       report.steps.push({ step: 'Consultar Encode Dahua', ok: false, error: cgiErr.message });
     }
 
+    try {
+      const capsRes = await this.dahuaService.cgi(ip, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=getCaps&name=Encode');
+      report.encodeAudioCaps = String(capsRes?.data || '').split('\n').filter(l => l.includes('Audio')).join(' | ');
+    } catch (capsErr: any) {
+      report.encodeAudioCaps = capsErr.message;
+    }
+
+    try {
+      const aInRes = await this.dahuaService.cgi(ip, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=getConfig&name=AudioIn');
+      report.audioInConfig = String(aInRes?.data || '').trim();
+    } catch (aInErr: any) {
+      report.audioInConfig = aInErr.message;
+    }
+
     // 3. Forzar activación de Audio G.711A (8000Hz, 64k) en canal 1
     try {
       const mainQuery = 'action=setConfig&Encode[0].MainFormat[0].AudioEnable=true&Encode[0].MainFormat[0].Audio.Compression=G.711A&Encode[0].MainFormat[0].Audio.Frequency=8000&Encode[0].MainFormat[0].Audio.Bitrate=64';
