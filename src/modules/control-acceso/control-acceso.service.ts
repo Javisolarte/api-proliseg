@@ -48,41 +48,53 @@ export class ControlAccesoService implements OnModuleInit {
       const domain = 'servidor.proliseg.com';
       const apiAuth = { username: 'admin', password: 'proliseg1025' };
 
-      this.logger.log('🔍 [MediaMTX] Verificando duplicados en webrtcICEServers2...');
       const response = await axios.get(`https://${domain}/webrtc-api/v3/config/global/get`, { auth: apiAuth });
       
-      const iceServers = response.data?.webrtcICEServers2;
-      if (Array.isArray(iceServers) && iceServers.length > 2) {
-        const seen = new Set<string>();
-        const uniqueServers = iceServers.filter(server => {
-          const key = `${server.url || ''}|${server.username || ''}|${server.password || ''}|${server.clientOnly}`;
-          if (seen.has(key)) {
-            return false;
-          }
-          seen.add(key);
-          return true;
-        });
+      const iceServers1 = response.data?.webrtcICEServers;
+      const iceServers2 = response.data?.webrtcICEServers2;
 
-        if (uniqueServers.length < iceServers.length) {
-          this.logger.log(`🧹 [MediaMTX] Detectados ${iceServers.length} servidores ICE. Limpiando a ${uniqueServers.length} únicos...`);
-          await axios.patch(
-            `https://${domain}/webrtc-api/v3/config/global/patch`,
-            { webrtcICEServers2: uniqueServers },
-            { auth: apiAuth }
-          );
-          this.logger.log('✅ [MediaMTX] webrtcICEServers2 limpiado con éxito.');
-        } else {
-          this.logger.log('ℹ️ [MediaMTX] No se detectaron servidores ICE duplicados.');
-        }
+      let needsCleaning = false;
+
+      // 1. Validar si webrtcICEServers tiene más de 1 entrada
+      if (Array.isArray(iceServers1) && iceServers1.length > 1) {
+        needsCleaning = true;
+      }
+
+      // 2. Validar si webrtcICEServers2 tiene más de 2 entradas o duplicados
+      if (Array.isArray(iceServers2) && iceServers2.length > 2) {
+        needsCleaning = true;
+      }
+
+      if (needsCleaning) {
+        this.logger.warn(`🧹 [MediaMTX Watchdog] Detectada saturación en servidores ICE (ICEServers: ${iceServers1?.length || 0}, ICEServers2: ${iceServers2?.length || 0}). Auto-purgando...`);
+        
+        await axios.patch(
+          `https://${domain}/webrtc-api/v3/config/global/patch`,
+          {
+            webrtcICEServers: ['stun:stun.l.google.com:19302'],
+            webrtcICEServers2: [
+              {
+                url: 'stun:stun.l.google.com:19302',
+                username: '',
+                password: '',
+                clientOnly: false
+              }
+            ]
+          },
+          { auth: apiAuth }
+        );
+        this.logger.log('✅ [MediaMTX Watchdog] Servidores ICE purgados y estabilizados en 1 STUN limpio.');
+      } else {
+        this.logger.debug('🛡️ [MediaMTX Watchdog] Servidores ICE verificados: limpios y óptimos.');
       }
     } catch (error) {
-      this.logger.warn(`⚠️ [MediaMTX] Error al limpiar webrtcICEServers2: ${error.message}`);
+      this.logger.warn(`⚠️ [MediaMTX Watchdog] Error en verificación de ICE: ${error.message}`);
     }
   }
 
-  @Cron(CronExpression.EVERY_6_HOURS)
+  // Guardián automático cada 10 minutos para evitar saturación para siempre
+  @Cron('*/10 * * * *')
   async handleCleanIceServersCron() {
-    this.logger.log('⏰ [Cron] Iniciando limpieza de servidores ICE en MediaMTX...');
     await this.cleanWebrtcIceServers();
   }
 
@@ -2071,12 +2083,17 @@ export class ControlAccesoService implements OnModuleInit {
         this.logger.log(`✅ [WEBRTC] Ruta ${streamName} creada en MediaMTX.`);
       } catch (err) {
         if (err.response?.status === 400) {
-          // La ruta YA EXISTE → usar PATCH para actualizarla sin borrarla
+          // La ruta YA EXISTE → verificar si ya tiene la misma fuente antes de hacer PATCH (para no reiniciar el stream en vivo)
           try {
-            await axios.patch(`https://${domain}/webrtc-api/v3/config/paths/patch/${streamName}`, pathPayload, { auth: apiAuth });
-            this.logger.log(`🔄 [WEBRTC] Ruta ${streamName} actualizada (PATCH) en MediaMTX.`);
+            const currentConf = await axios.get(`https://${domain}/webrtc-api/v3/config/paths/get/${streamName}`, { auth: apiAuth });
+            if (currentConf.data?.source !== sourceUrl || currentConf.data?.sourceOnDemand !== sourceOnDemand) {
+              await axios.patch(`https://${domain}/webrtc-api/v3/config/paths/patch/${streamName}`, pathPayload, { auth: apiAuth });
+              this.logger.log(`🔄 [WEBRTC] Ruta ${streamName} actualizada (PATCH) en MediaMTX.`);
+            } else {
+              this.logger.debug(`⚡ [WEBRTC] Ruta ${streamName} ya activa y al día en MediaMTX.`);
+            }
           } catch (patchErr) {
-            this.logger.warn(`⚠️ [WEBRTC] Error actualizando ruta en MediaMTX (PATCH): ${patchErr.message}`);
+            this.logger.warn(`⚠️ [WEBRTC] Error verificando/actualizando ruta en MediaMTX: ${patchErr.message}`);
           }
         } else {
           this.logger.warn(`⚠️ [WEBRTC] Error registrando ruta en MediaMTX: ${err.message}`);

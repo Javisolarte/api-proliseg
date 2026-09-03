@@ -245,6 +245,14 @@ export class ControlAccesoController {
     return this.controlAccesoService.startVideoStream(id);
   }
 
+  @Public()
+  @Get('webrtc-health')
+  @ApiOperation({ summary: 'Verifica y purga automáticamente la salud de MediaMTX WebRTC' })
+  async checkWebRtcHealth() {
+    await this.controlAccesoService.cleanWebrtcIceServers();
+    return { ok: true, message: 'MediaMTX verificado y purgado correctamente' };
+  }
+
   @Post('dispositivos/:id/sincronizar-nat')
   @ApiOperation({ summary: 'Sincroniza y crea/actualiza automáticamente las reglas NAT en MikroTik según la marca (Dahua/Hikvision)' })
   async sincronizarNat(@Param('id') id: string) {
