@@ -55,6 +55,12 @@ export class ControlAccesoController {
     return result;
   }
 
+  @Post('dispositivos/:id/colgar')
+  @ApiOperation({ summary: 'Cuelga o cancela una llamada de citófono en el dispositivo de hardware' })
+  async colgarLlamada(@Param('id') id: string) {
+    return this.controlAccesoService.colgarLlamadaDispositivo(id);
+  }
+
   @Put('audio-in')
   @ApiOperation({ summary: 'Recibe audio del micrófono y lo reenvía al dispositivo Hikvision' })
   async audioIn(

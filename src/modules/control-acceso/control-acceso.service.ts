@@ -505,6 +505,70 @@ export class ControlAccesoService implements OnModuleInit {
     }
   }
 
+  async colgarLlamadaDispositivo(deviceId: string) {
+    try {
+      const { data: dev } = await this.supabase
+        .getSupabaseAdminClient()
+        .from('dispositivos_iot')
+        .select('*')
+        .eq('id', deviceId)
+        .single();
+
+      if (!dev) return { ok: false, mensaje: 'Dispositivo no encontrado' };
+
+      const user = dev.credencial_usuario || 'admin';
+      const pass = dev.credencial_password || '';
+      const resolved = await this.resolveDoorNetworkTarget(
+        dev.ip_direccion,
+        dev.configuracion_tecnica?.puerto || 80,
+        dev.configuracion_tecnica
+      );
+
+      const base = `http://${resolved.ip}:${resolved.port}`;
+      this.logger.log(`📞 [INTERCOM] Enviando señal de colgar a ${dev.nombre_identificador} (${base})...`);
+      
+      const signals = ['hangUp', 'reject', 'cancle', 'cancel'];
+      let sent = false;
+      for (const sig of signals) {
+        const payloadJson = JSON.stringify({ CallSignal: { cmdType: sig } });
+        try {
+          await this.devicePoller.executeDigestRequest(
+            'PUT',
+            `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
+            user,
+            pass,
+            payloadJson,
+            'application/json',
+            3000
+          );
+          sent = true;
+          this.logger.log(`📞 [INTERCOM] Señal "${sig}" aceptada por ${dev.nombre_identificador}`);
+          break;
+        } catch {
+          try {
+            const xml = `<?xml version="1.0" encoding="UTF-8"?><CallSignal><cmdType>${sig}</cmdType></CallSignal>`;
+            await this.devicePoller.executeDigestRequest(
+              'PUT',
+              `${base}/ISAPI/VideoIntercom/callSignal`,
+              user,
+              pass,
+              xml,
+              'application/xml',
+              3000
+            );
+            sent = true;
+            this.logger.log(`📞 [INTERCOM] Señal XML "${sig}" aceptada por ${dev.nombre_identificador}`);
+            break;
+          } catch {}
+        }
+      }
+      return { ok: true, sent, mensaje: 'Señal de colgar enviada al hardware' };
+    } catch (err: any) {
+      this.logger.warn(`Error al colgar llamada en hardware: ${err.message}`);
+      return { ok: false, mensaje: err.message };
+    }
+  }
+
   private async resolveDoorNetworkTarget(ip: string, configuredPort: number, config: any = {}) {
     const mappedHttp = Number(config?.puertos_mapeados?.mapped_http || 0);
     const originalHttp = Number(

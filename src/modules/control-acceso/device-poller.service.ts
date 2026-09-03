@@ -642,7 +642,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     return authStr;
   }
 
-  private async executeDigestRequest(
+  public async executeDigestRequest(
     method: string,
     url: string,
     user: string,
