@@ -6159,6 +6159,74 @@ export class ControlAccesoService implements OnModuleInit {
 
     return report;
   }
+
+  /**
+   * Prueba todas las posibles variantes de apertura de puerta vía CGI en un Dahua
+   */
+  async testDahuaDoorVariants(dispositivoId: string): Promise<any> {
+    const { data: dev } = await this.supabase
+      .getClient()
+      .from('dispositivos_iot')
+      .select('*')
+      .eq('id', dispositivoId)
+      .single();
+
+    if (!dev) return { error: 'Dispositivo no encontrado' };
+
+    const user = dev.credencial_usuario || 'admin';
+    const pass = dev.credencial_password || 'elvado2025';
+    const config = dev.configuracion_tecnica || {};
+    const ip = dev.ip_direccion || '10.8.0.4';
+    const httpPort = Number(config.puertos_mapeados?.mapped_http || config.puerto || 10081);
+
+    const candidates = [
+      '/cgi-bin/accessControl.cgi?action=openDoor&channel=1&UserID=101&Type=Remote',
+      '/cgi-bin/accessControl.cgi?action=openDoor&channel=1&UserID=1&Type=Remote',
+      '/cgi-bin/accessControl.cgi?action=openDoor&channel=1&Type=Remote',
+      '/cgi-bin/accessControl.cgi?action=openDoor&channel=1',
+      '/cgi-bin/accessControl.cgi?action=openDoor&channel=0&UserID=101&Type=Remote',
+      '/cgi-bin/accessControl.cgi?action=openDoor&channel=0&UserID=1&Type=Remote',
+      '/cgi-bin/accessControl.cgi?action=openDoor&channel=0&Type=Remote',
+      '/cgi-bin/accessControl.cgi?action=openDoor&channel=0',
+      '/cgi-bin/accessControl.cgi?action=openDoor',
+      '/cgi-bin/accessControl.cgi?action=openDoor&UserID=101&Type=Remote',
+      '/cgi-bin/accessControl.cgi?action=openDoor&Door=1',
+      '/cgi-bin/accessControl.cgi?action=openDoor&Door=0',
+      '/cgi-bin/accessControl.cgi?action=openDoor&DoorIndex=0',
+      '/cgi-bin/accessControl.cgi?action=openDoor&DoorIndex=1',
+      '/cgi-bin/accessControl.cgi?action=openDoor&channel=1&status=open',
+      '/cgi-bin/accessControl.cgi?action=openDoor&channel=0&status=open',
+      '/cgi-bin/configManager.cgi?action=setConfig&AccessControl[0].Door[0].Open=true',
+      '/cgi-bin/door.cgi?action=open&channel=1',
+      '/cgi-bin/door.cgi?action=open&channel=0',
+    ];
+
+    const results: any = {};
+    for (const path of candidates) {
+      try {
+        const res = await this.dahuaService.cgi(ip, httpPort, user, pass, 'GET', path, undefined, 'text', 'application/x-www-form-urlencoded', 4000);
+        results[path] = {
+          ok: true,
+          status: res?.status,
+          data: String(res?.data || '').trim()
+        };
+      } catch (err: any) {
+        results[path] = {
+          ok: false,
+          status: err?.response?.status,
+          data: String(err?.response?.data || '').trim(),
+          error: err.message
+        };
+      }
+    }
+
+    return {
+      dispositivo: dev.nombre_identificador,
+      target: `${ip}:${httpPort}`,
+      user,
+      results
+    };
+  }
 }
 
 

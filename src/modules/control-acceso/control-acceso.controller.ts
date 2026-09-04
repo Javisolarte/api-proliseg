@@ -309,6 +309,14 @@ export class ControlAccesoController {
   }
 
   @Public()
+  @Get('dahua-test-door/:id')
+  @ApiOperation({ summary: 'Prueba todas las variantes de apertura de puerta en Dahua' })
+  async dahuaTestDoor(@Param('id') id: string) {
+    this.logger.log(`🚪 [DAHUA TEST DOOR] Probando variantes de apertura para: ${id}`);
+    return this.controlAccesoService.testDahuaDoorVariants(id);
+  }
+
+  @Public()
   @Get('debug-intercom/:id')
   @ApiOperation({ summary: 'Queries intercom configuration and status' })
   async debugIntercom(@Param('id') id: string) {
