@@ -625,7 +625,7 @@ export class ControlAccesoService implements OnModuleInit {
       const { data } = await this.supabase
         .getSupabaseAdminClient()
         .from('dispositivos_iot')
-        .select('id, nombre_identificador, ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica')
+        .select('*')
         .eq('id', deviceId)
         .maybeSingle();
       dev = data;
@@ -669,12 +669,20 @@ export class ControlAccesoService implements OnModuleInit {
       port = Number(config?.puerto || port || 80);
     }
 
+    const resolved = await this.resolveDoorNetworkTarget(host, port, config);
+
+    const origIp = String(config?.puertos_mapeados?.original_ip || dev?.ip_direccion || host || '');
     const marcaStr = String(
       dev?.marca || dev?.configuracion_tecnica?.marca || dev?.modelo || dev?.nombre_identificador || ''
     ).toLowerCase();
-    const isDahua = marcaStr.includes('dahua');
-
-    const resolved = await this.resolveDoorNetworkTarget(host, port, config);
+    const isDahua =
+      marcaStr.includes('dahua') ||
+      marcaStr.includes('asi32') ||
+      marcaStr.includes('vto') ||
+      origIp.startsWith('192.168.35.') ||
+      String(host).startsWith('192.168.35.') ||
+      (port >= 10080 && port <= 10099) ||
+      (resolved.port >= 10080 && resolved.port <= 10099);
     // Resolver puertos mapeados para audio Dahua.
     const mapped = config?.puertos_mapeados || {};
     const rtspPort = Number(
@@ -2103,17 +2111,29 @@ export class ControlAccesoService implements OnModuleInit {
       const targetIp = rtspTarget.ip;
       const rtspPort = rtspTarget.port;
 
-      // Detectar la marca para armar la URL RTSP correcta (Sub-Stream)
+      const origIp = String(dev.configuracion_tecnica?.puertos_mapeados?.original_ip || dev.ip_direccion || targetIp || '');
       const marcaStr = String(
         dev.marca || dev.configuracion_tecnica?.marca || dev.modelo || dev.nombre_identificador || ''
       ).toLowerCase();
-      const isDahua = marcaStr.includes('dahua');
+      const isDahua =
+        marcaStr.includes('dahua') ||
+        marcaStr.includes('asi32') ||
+        marcaStr.includes('vto') ||
+        origIp.startsWith('192.168.35.') ||
+        String(targetIp).startsWith('192.168.35.') ||
+        (rtspPort >= 30080 && rtspPort <= 30099) ||
+        (Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_http || 0) >= 10080 && Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_http || 0) <= 10099);
 
       let rtspPath = '/Streaming/Channels/102'; // Default: Hikvision Sub-Stream
 
       if (isDahua) {
         rtspPath = '/cam/realmonitor?channel=1&subtype=0'; // Dahua Main-Stream (H.264 compatible con todos los navegadores)
-        const httpPort = Number(dev.configuracion_tecnica?.puerto || dev.puerto || 80);
+        const httpPort = Number(
+          dev.configuracion_tecnica?.puertos_mapeados?.mapped_http ||
+          dev.configuracion_tecnica?.puerto ||
+          dev.puerto ||
+          80
+        );
         this.dahuaService.asegurarFormatoH264(targetIp, httpPort, user, pass).catch(() => {});
       } else if (marcaStr.includes('zk')) {
         rtspPath = '/live/ch01_1'; // ZKTeco Sub-Stream
@@ -6033,9 +6053,9 @@ export class ControlAccesoService implements OnModuleInit {
         if (report.netSdkTalkTest.loginOk) {
           try {
             let receivedAudioChunks = 0;
-            const audioCb = koffi.register(AudioDataCallbackProto, (handle: any, pBuf: any, size: number, flag: number, user: any) => {
+            const audioCb = koffi.register((handle: any, pBuf: any, size: number, flag: number, user: any) => {
               receivedAudioChunks++;
-            });
+            }, koffi.pointer(AudioDataCallbackProto));
             const talkHandle = CLIENT_StartTalkEx(loginId, audioCb, 0);
             report.netSdkTalkTest.talkHandle = String(talkHandle);
             report.netSdkTalkTest.talkOk = Boolean(talkHandle && talkHandle !== 0n && talkHandle !== 0);

@@ -73,6 +73,7 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "socket.io": "^4.8.3",
+    "ssh2": "^1.17.0",
     "swagger-ui-express": "^5.0.1",
     "twilio": "^5.13.0",
     "typeorm": "^0.3.27",
