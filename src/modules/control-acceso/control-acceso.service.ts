@@ -5892,6 +5892,10 @@ export class ControlAccesoService implements OnModuleInit {
       { name: 'vtoKeyConfig', path: '/cgi-bin/configManager.cgi?action=getConfig&name=VTO' },
       { name: 'callParamConfig', path: '/cgi-bin/configManager.cgi?action=getConfig&name=CallParam' },
       { name: 'sipConfig', path: '/cgi-bin/configManager.cgi?action=getConfig&name=SIP' },
+      { name: 'callStatus', path: '/cgi-bin/intercom.cgi?action=getCallStatus' },
+      { name: 'callingState', path: '/cgi-bin/intercom.cgi?action=getCallingState' },
+      { name: 'talkStatus', path: '/cgi-bin/intercom.cgi?action=getTalkStatus' },
+      { name: 'videoTalkPhone', path: '/cgi-bin/configManager.cgi?action=getConfig&name=VideoTalkPhone' },
       { name: 'eventAttachTest', path: '/cgi-bin/eventManager.cgi?action=attach&codes=[CallNoAnswered,Invite,VideoTalk,AccessControl]' },
     ];
 
@@ -5941,8 +5945,13 @@ export class ControlAccesoService implements OnModuleInit {
         const lib = koffi.load(dllPath);
         const callConv = isWin && process.arch === 'ia32' ? '__stdcall ' : '';
         const CLIENT_Init = lib.func(`bool ${callConv}CLIENT_Init(void* fDisConnect, int64_t dwUser)`);
+        const CLIENT_Cleanup = lib.func(`void ${callConv}CLIENT_Cleanup()`);
         const CLIENT_Login = lib.func(`int64_t ${callConv}CLIENT_Login(str pchDVRIP, uint16_t wDVRPort, str pchUserName, str pchPassword, void* lpDeviceInfo, _Out_ int* error)`);
         const CLIENT_Logout = lib.func(`bool ${callConv}CLIENT_Logout(int64_t lLoginID)`);
+        const CLIENT_GetLastError = lib.func(`uint32_t ${callConv}CLIENT_GetLastError()`);
+        const AudioDataCallbackProto = koffi.proto(`void ${callConv}pfAudioDataCallBack(int64_t lTalkHandle, void *pDataBuf, uint32_t dwBufSize, uint8_t byAudioFlag, int64_t dwUser)`);
+        const CLIENT_StartTalkEx = lib.func(`int64_t ${callConv}CLIENT_StartTalkEx(int64_t lLoginID, pfAudioDataCallBack *pfcb, int64_t dwUser)`);
+        const CLIENT_StopTalkEx = lib.func(`bool ${callConv}CLIENT_StopTalkEx(int64_t lTalkHandle)`);
 
         CLIENT_Init(null, 0);
         const devInfo = Buffer.alloc(1024);
@@ -5951,9 +5960,29 @@ export class ControlAccesoService implements OnModuleInit {
         report.netSdkTalkTest.loginId = String(loginId);
         report.netSdkTalkTest.errorCode = errPtr[0];
         report.netSdkTalkTest.loginOk = Boolean(loginId && loginId !== 0n && loginId !== 0);
+
         if (report.netSdkTalkTest.loginOk) {
+          try {
+            let receivedAudioChunks = 0;
+            const audioCb = koffi.register(AudioDataCallbackProto, (handle: any, pBuf: any, size: number, flag: number, user: any) => {
+              receivedAudioChunks++;
+            });
+            const talkHandle = CLIENT_StartTalkEx(loginId, audioCb, 0);
+            report.netSdkTalkTest.talkHandle = String(talkHandle);
+            report.netSdkTalkTest.talkOk = Boolean(talkHandle && talkHandle !== 0n && talkHandle !== 0);
+            report.netSdkTalkTest.talkLastError = CLIENT_GetLastError();
+
+            if (report.netSdkTalkTest.talkOk) {
+              await new Promise(r => setTimeout(r, 500));
+              CLIENT_StopTalkEx(talkHandle);
+            }
+            try { koffi.unregister(audioCb); } catch {}
+          } catch (talkErr: any) {
+            report.netSdkTalkTest.talkError = talkErr.message;
+          }
           CLIENT_Logout(loginId);
         }
+        CLIENT_Cleanup();
       }
     } catch (sdkErr: any) {
       report.netSdkTalkTest = { error: sdkErr.message };
