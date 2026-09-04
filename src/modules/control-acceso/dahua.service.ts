@@ -411,34 +411,43 @@ export class DahuaService {
 
     this.logger.log(`🚪 [DAHUA PUERTA] ${action} canal=${channel} en ${ip}:${port}`);
 
-    let resp: any;
-    try {
-      resp = await this.cgi(
-        ip, port, user, pass, 'GET',
-        `/cgi-bin/accessControl.cgi?action=${action}&channel=${channel}`,
+    const ch = channel ?? 1;
+    const candidates = [
+      `/cgi-bin/accessControl.cgi?action=${action}&channel=${ch}&UserID=101&Type=Remote`,
+      `/cgi-bin/accessControl.cgi?action=${action}&channel=${ch}&UserID=1&Type=Remote`,
+      `/cgi-bin/accessControl.cgi?action=${action}&channel=${ch}&Type=Remote`,
+      `/cgi-bin/accessControl.cgi?action=${action}&channel=${ch}`,
+    ];
+
+    if (ch !== 0) {
+      candidates.push(
+        `/cgi-bin/accessControl.cgi?action=${action}&channel=0&UserID=101&Type=Remote`,
+        `/cgi-bin/accessControl.cgi?action=${action}&channel=0&UserID=1&Type=Remote`,
+        `/cgi-bin/accessControl.cgi?action=${action}&channel=0&Type=Remote`,
+        `/cgi-bin/accessControl.cgi?action=${action}&channel=0`,
       );
-    } catch (err: any) {
-      if (channel === 1) {
-        this.logger.warn(`⚠️ [DAHUA PUERTA] Falló channel=1 (${err.message}), reintentando channel=0...`);
-        resp = await this.cgi(
-          ip, port, user, pass, 'GET',
-          `/cgi-bin/accessControl.cgi?action=${action}&channel=0`,
-        );
-      } else {
-        throw err;
+    }
+
+    let lastError: any = null;
+    for (const path of candidates) {
+      try {
+        const resp = await this.cgi(ip, port, user, pass, 'GET', path);
+        const body = String(resp.data || '').trim();
+        this.logger.debug(`[DAHUA PUERTA] ${path} -> respuesta: ${body}`);
+
+        if (body.includes('OK') || body.includes('ok') || resp.status === 200) {
+          this.logger.log(`✅ [DAHUA PUERTA] ${command} ejecutado correctamente en ${ip}:${port} (${path})`);
+          return { ok: true, mensaje: `Puerta ejecutó "${command}" correctamente (Dahua)`, marca: 'Dahua' };
+        }
+      } catch (err: any) {
+        lastError = err;
+        const errDetail = err?.response?.data || err.message;
+        this.logger.warn(`⚠️ [DAHUA PUERTA] Candidato ${path} falló: ${errDetail}`);
       }
     }
 
-    const body = String(resp.data || '').trim();
-    this.logger.debug(`[DAHUA PUERTA] Respuesta raw: ${body}`);
-
-    // Dahua responde "OK" cuando es exitoso, o puede ser HTTP 200 con cuerpo vacío
-    if (body.includes('OK') || body.includes('ok') || resp.status === 200) {
-      this.logger.log(`✅ [DAHUA PUERTA] ${command} ejecutado correctamente en ${ip}:${port}`);
-      return { ok: true, mensaje: `Puerta ejecutó "${command}" correctamente (Dahua)`, marca: 'Dahua' };
-    }
-
-    throw new Error(`Respuesta inesperada de Dahua al ${command}: ${body}`);
+    const detailMsg = lastError?.response?.data ? String(lastError.response.data).trim() : (lastError?.message || 'Error desconocido');
+    throw new Error(`Dahua rechazó comando ${command}: ${detailMsg}`);
   }
 
   // ─── REGISTRO DE WEBHOOK / ALARMA ───────────────────────────────────────────
