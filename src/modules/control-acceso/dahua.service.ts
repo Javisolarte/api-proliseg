@@ -1416,10 +1416,9 @@ export class DahuaService {
       const CLIENT_SetVolume = lib.func(`bool ${callConv}CLIENT_SetVolume(int64_t lTalkHandle, int nVolume)`);
       const CLIENT_SetDeviceMode = lib.func(`bool ${callConv}CLIENT_SetDeviceMode(int64_t lLoginID, int emType, void *pValue)`);
       const CLIENT_GetLastError = lib.func(`uint32_t ${callConv}CLIENT_GetLastError()`);
-
-      // Definir prototipo del callback de retorno de audio del Dahua
-      const AudioDataCallbackProto = koffi.proto(`void ${callConv}pfAudioDataCallBack(int64_t lTalkHandle, uint8_t *pDataBuf, uint32_t dwBufSize, uint8_t byAudioFlag, int64_t dwUser)`);
-      const CLIENT_StartTalkEx = lib.func(`int64_t ${callConv}CLIENT_StartTalkEx(int64_t lLoginID, pfAudioDataCallBack *pfcb, int64_t dwUser)`);
+      // Definir prototipo anónimo del callback de retorno de audio del Dahua (evita colisión de tipos)
+      const AudioDataCallbackProto = koffi.proto(`void (int64_t, uint8_t *, uint32_t, uint8_t, int64_t)`);
+      const CLIENT_StartTalkEx = lib.func(`int64_t ${callConv}CLIENT_StartTalkEx(int64_t lLoginID, void *pfcb, int64_t dwUser)`);
 
       CLIENT_Init(null, 0);
 
@@ -1626,8 +1625,8 @@ export class DahuaService {
       const CLIENT_SetDeviceMode = lib.func(`bool ${callConv}CLIENT_SetDeviceMode(int64_t lLoginID, int emType, void *pValue)`);
       const CLIENT_GetLastError = lib.func(`uint32_t ${callConv}CLIENT_GetLastError()`);
 
-      const AudioDataCallbackProto = koffi.proto(`void ${callConv}pfAudioDataCallBack(int64_t lTalkHandle, uint8_t *pDataBuf, uint32_t dwBufSize, uint8_t byAudioFlag, int64_t dwUser)`);
-      const CLIENT_StartTalkEx = lib.func(`int64_t ${callConv}CLIENT_StartTalkEx(int64_t lLoginID, pfAudioDataCallBack *pfcb, int64_t dwUser)`);
+      const AudioDataCallbackProto = koffi.proto(`void (int64_t, uint8_t *, uint32_t, uint8_t, int64_t)`);
+      const CLIENT_StartTalkEx = lib.func(`int64_t ${callConv}CLIENT_StartTalkEx(int64_t lLoginID, void *pfcb, int64_t dwUser)`);
 
       CLIENT_Init(null, 0);
 

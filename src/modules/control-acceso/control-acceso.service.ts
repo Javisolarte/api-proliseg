@@ -5953,6 +5953,10 @@ export class ControlAccesoService implements OnModuleInit {
     // 1. Probar endpoints CGI para llamadas y audio
     const cgiEndpoints = [
       { name: 'systemInfo', path: '/cgi-bin/magicBox.cgi?action=getSystemInfo' },
+      { name: 'encodeConfig', path: '/cgi-bin/configManager.cgi?action=getConfig&name=Encode' },
+      { name: 'audioOutConfig', path: '/cgi-bin/configManager.cgi?action=getConfig&name=AudioOut' },
+      { name: 'volumeConfig', path: '/cgi-bin/configManager.cgi?action=getConfig&name=Volume' },
+      { name: 'audioInConfig', path: '/cgi-bin/configManager.cgi?action=getConfig&name=AudioIn' },
       { name: 'accessControlGeneral', path: '/cgi-bin/configManager.cgi?action=getConfig&name=AccessControlGeneral' },
       { name: 'vtoKeyConfig', path: '/cgi-bin/configManager.cgi?action=getConfig&name=VTO' },
       { name: 'callParamConfig', path: '/cgi-bin/configManager.cgi?action=getConfig&name=CallParam' },
@@ -6014,8 +6018,8 @@ export class ControlAccesoService implements OnModuleInit {
         const CLIENT_Login = lib.func(`int64_t ${callConv}CLIENT_Login(str pchDVRIP, uint16_t wDVRPort, str pchUserName, str pchPassword, void* lpDeviceInfo, _Out_ int* error)`);
         const CLIENT_Logout = lib.func(`bool ${callConv}CLIENT_Logout(int64_t lLoginID)`);
         const CLIENT_GetLastError = lib.func(`uint32_t ${callConv}CLIENT_GetLastError()`);
-        const AudioDataCallbackProto = koffi.proto(`void ${callConv}pfAudioDataCallBack(int64_t lTalkHandle, void *pDataBuf, uint32_t dwBufSize, uint8_t byAudioFlag, int64_t dwUser)`);
-        const CLIENT_StartTalkEx = lib.func(`int64_t ${callConv}CLIENT_StartTalkEx(int64_t lLoginID, pfAudioDataCallBack *pfcb, int64_t dwUser)`);
+        const AudioDataCallbackProto = koffi.proto(`void (int64_t, void*, uint32_t, uint8_t, int64_t)`);
+        const CLIENT_StartTalkEx = lib.func(`int64_t ${callConv}CLIENT_StartTalkEx(int64_t lLoginID, void *pfcb, int64_t dwUser)`);
         const CLIENT_StopTalkEx = lib.func(`bool ${callConv}CLIENT_StopTalkEx(int64_t lTalkHandle)`);
 
         CLIENT_Init(null, 0);
