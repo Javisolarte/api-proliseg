@@ -397,7 +397,8 @@ export class DahuaService {
     ip: string, port: number, user: string, pass: string,
     command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada',
     channel = 1,
-  ): Promise<{ ok: boolean; mensaje: string; marca: string }> {
+    sdkPort?: number,
+  ): Promise<{ ok: boolean; mensaje: string; marca: string; detalle?: any }> {
 
     const actionMap: Record<string, string> = {
       'abrir':           'openDoor',
@@ -409,14 +410,30 @@ export class DahuaService {
     const action = actionMap[command];
     if (!action) throw new Error(`Comando Dahua desconocido: ${command}`);
 
-    this.logger.log(`🚪 [DAHUA PUERTA] ${action} canal=${channel} en ${ip}:${port}`);
+    this.logger.log(`🚪 [DAHUA PUERTA] ${action} canal=${channel} en ${ip}:${port} (sdkPort=${sdkPort || 'auto'})`);
 
     const ch = channel ?? 1;
+
+    // 1. INTENTO PRIMARIO VÍA NETSDK (Requerido para ASI3203E-W y terminales modernos)
+    if (command === 'abrir' || command === 'cerrar') {
+      try {
+        const netSdkResult = await this.controlPuertaNetSdk(ip, port, user, pass, command, ch, sdkPort);
+        if (netSdkResult?.ok) {
+          return netSdkResult;
+        }
+      } catch (sdkErr: any) {
+        this.logger.warn(`⚠️ [DAHUA PUERTA] Intento NetSDK lanzó excepción: ${sdkErr.message}. Continuando a fallback CGI...`);
+      }
+    }
+
+    // 2. FALLBACK VÍA HTTP CGI (Para dispositivos que aceptan CGI o si NetSDK no está disponible)
     const candidates = [
       `/cgi-bin/accessControl.cgi?action=${action}&channel=${ch}&UserID=101&Type=Remote`,
       `/cgi-bin/accessControl.cgi?action=${action}&channel=${ch}&UserID=1&Type=Remote`,
       `/cgi-bin/accessControl.cgi?action=${action}&channel=${ch}&Type=Remote`,
       `/cgi-bin/accessControl.cgi?action=${action}&channel=${ch}`,
+      `/cgi-bin/alarmOut.cgi?action=setStatus&channel=${ch}&status=1`,
+      `/cgi-bin/alarmOut.cgi?action=setStatus&channel=0&status=1`,
     ];
 
     if (ch !== 0) {
@@ -436,18 +453,150 @@ export class DahuaService {
         this.logger.debug(`[DAHUA PUERTA] ${path} -> respuesta: ${body}`);
 
         if (body.includes('OK') || body.includes('ok') || resp.status === 200) {
-          this.logger.log(`✅ [DAHUA PUERTA] ${command} ejecutado correctamente en ${ip}:${port} (${path})`);
-          return { ok: true, mensaje: `Puerta ejecutó "${command}" correctamente (Dahua)`, marca: 'Dahua' };
+          this.logger.log(`✅ [DAHUA PUERTA] ${command} ejecutado correctamente vía CGI en ${ip}:${port} (${path})`);
+          return { ok: true, mensaje: `Puerta ejecutó "${command}" correctamente (Dahua CGI)`, marca: 'Dahua', detalle: { path } };
         }
       } catch (err: any) {
         lastError = err;
         const errDetail = err?.response?.data || err.message;
-        this.logger.warn(`⚠️ [DAHUA PUERTA] Candidato ${path} falló: ${errDetail}`);
+        this.logger.warn(`⚠️ [DAHUA PUERTA] Candidato CGI ${path} falló: ${errDetail}`);
       }
     }
 
     const detailMsg = lastError?.response?.data ? String(lastError.response.data).trim() : (lastError?.message || 'Error desconocido');
     throw new Error(`Dahua rechazó comando ${command}: ${detailMsg}`);
+  }
+
+  /**
+   * Ejecuta apertura o cierre de puerta utilizando Dahua NetSDK (puerto TCP 37777 / 200xx).
+   * Utiliza CLIENT_ControlDevice con DH_CTRL_ACCESS_OPEN (260) y struct tagNET_CTRL_ACCESS_OPEN.
+   */
+  async controlPuertaNetSdk(
+    ip: string,
+    httpPort: number,
+    user: string,
+    pass: string,
+    command: 'abrir' | 'cerrar',
+    channel = 1,
+    sdkPort?: number,
+  ): Promise<{ ok: boolean; mensaje: string; marca: string; detalle?: any } | null> {
+    const fs = require('fs');
+    const path = require('path');
+
+    const linuxDllPaths = [
+      path.join(process.cwd(), 'libs', 'linux-x64', 'libdhnetsdk.so'),
+      path.join(process.cwd(), 'libs', 'libdhnetsdk.so'),
+      '/usr/lib/libdhnetsdk.so',
+      '/usr/local/lib/libdhnetsdk.so',
+    ];
+    const windowsDllPaths = [
+      'C:\\Program Files\\SmartPSSLite\\dhnetsdk.dll',
+      'C:\\Program Files (x86)\\SmartPSS\\dhnetsdk.dll',
+      path.join(process.cwd(), 'libs', 'dhnetsdk.dll'),
+    ];
+    const possibleDllPaths = process.platform === 'win32' ? windowsDllPaths : linuxDllPaths;
+    const dllPath = possibleDllPaths.find((p: string) => fs.existsSync(p));
+
+    if (!dllPath) {
+      this.logger.warn(`[DAHUA-NETSDK-DOOR] Librería NetSDK no encontrada para ${process.platform}/${process.arch}`);
+      return null;
+    }
+
+    const targetSdkPort = Number(
+      sdkPort || (httpPort >= 10000 ? 20000 + (httpPort % 10000) : 37777)
+    );
+
+    try {
+      const koffi = require('koffi');
+      const libDir = path.dirname(dllPath);
+      if (process.platform !== 'win32') {
+        const preloads = ['libInfra.so', 'libNetFramework.so', 'libStream.so', 'libStreamSvr.so', 'libavnetsdk.so', 'libdhconfigsdk.so'];
+        for (const f of preloads) {
+          const fp = path.join(libDir, f);
+          if (fs.existsSync(fp)) {
+            try { koffi.load(fp); } catch {}
+          }
+        }
+      }
+
+      const lib = koffi.load(dllPath);
+      const isWin = process.platform === 'win32';
+      const callConv = isWin && process.arch === 'ia32' ? '__stdcall ' : '';
+
+      const CLIENT_Init = lib.func(`bool ${callConv}CLIENT_Init(void* fDisConnect, int64_t dwUser)`);
+      const CLIENT_Cleanup = lib.func(`void ${callConv}CLIENT_Cleanup()`);
+      const CLIENT_Login = lib.func(`int64_t ${callConv}CLIENT_Login(str pchDVRIP, uint16_t wDVRPort, str pchUserName, str pchPassword, void* lpDeviceInfo, _Out_ int* error)`);
+      const CLIENT_Logout = lib.func(`bool ${callConv}CLIENT_Logout(int64_t lLoginID)`);
+      const CLIENT_ControlDevice = lib.func(`bool ${callConv}CLIENT_ControlDevice(int64_t lLoginID, int32_t emType, void* pParam, int32_t nWaitTime)`);
+      const CLIENT_GetLastError = lib.func(`uint32_t ${callConv}CLIENT_GetLastError()`);
+
+      CLIENT_Init(null, 0);
+
+      const devInfo = Buffer.alloc(1024);
+      const errPtr = [0];
+      const loginId = CLIENT_Login(ip, targetSdkPort, user, pass, devInfo, errPtr);
+
+      if (!loginId || loginId === 0n || loginId === 0) {
+        const code = errPtr[0];
+        CLIENT_Cleanup();
+        this.logger.warn(`⚠️ [DAHUA-NETSDK-DOOR] Login falló en ${ip}:${targetSdkPort} (Error ${code})`);
+        return null;
+      }
+
+      // CtrlType: 260 = DH_CTRL_ACCESS_OPEN (0x104), 261 = DH_CTRL_ACCESS_CLOSE (0x105)
+      const ctrlType = command === 'cerrar' ? 261 : 260;
+
+      // El índice de canal/puerta en Dahua normalmente es 0 para Puerta 1
+      const chIdx1 = Math.max(0, (channel || 1) - 1);
+      const chIdx2 = channel || 0;
+      const channelsToTry = [...new Set([chIdx1, chIdx2, 0, 1])];
+
+      let success = false;
+      let usedChannel = chIdx1;
+      let lastErr = 0;
+
+      for (const chIdx of channelsToTry) {
+        // Struct tagNET_CTRL_ACCESS_OPEN: dwSize (offset 0), nChannelID (offset 4)
+        for (const size of [8, 128]) {
+          const paramBuf = Buffer.alloc(size);
+          paramBuf.writeUInt32LE(size, 0);
+          paramBuf.writeInt32LE(chIdx, 4);
+
+          const ok = CLIENT_ControlDevice(loginId, ctrlType, paramBuf, 3000);
+          if (ok) {
+            success = true;
+            usedChannel = chIdx;
+            break;
+          } else {
+            lastErr = CLIENT_GetLastError();
+          }
+        }
+        if (success) break;
+      }
+
+      CLIENT_Logout(loginId);
+      CLIENT_Cleanup();
+
+      if (success) {
+        this.logger.log(`✅ [DAHUA-NETSDK-DOOR] Comando "${command}" ejecutado con éxito en ${ip}:${targetSdkPort} (Canal ${usedChannel})`);
+        return {
+          ok: true,
+          mensaje: `Puerta ejecutó "${command}" correctamente (Dahua NetSDK puerto ${targetSdkPort})`,
+          marca: 'Dahua',
+          detalle: {
+            method: 'NetSDK',
+            sdkPort: targetSdkPort,
+            channelIndex: usedChannel,
+          },
+        };
+      } else {
+        this.logger.warn(`⚠️ [DAHUA-NETSDK-DOOR] CLIENT_ControlDevice falló en ${ip}:${targetSdkPort} (Último error NetSDK: ${lastErr})`);
+        return null;
+      }
+    } catch (err: any) {
+      this.logger.warn(`⚠️ [DAHUA-NETSDK-DOOR] Excepción en llamada NetSDK: ${err.message}`);
+      return null;
+    }
   }
 
   // ─── REGISTRO DE WEBHOOK / ALARMA ───────────────────────────────────────────

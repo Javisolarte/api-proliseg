@@ -503,7 +503,15 @@ export class ControlAccesoService implements OnModuleInit {
       marcaStr.includes('hik') ||
       marcaStr.includes('ds-k') ||
       marcaStr.includes('ds-2cd') ||
-      marcaStr.includes('ds-');
+      marcaStr.includes('ds-') ||
+      origIp.includes('.78') ||
+      origIp.includes('.79') ||
+      String(targetIp).includes('.78') ||
+      String(targetIp).includes('.79') ||
+      target.port === 10078 ||
+      target.port === 10079 ||
+      port === 10078 ||
+      port === 10079;
 
     const isDahua = !isHikvision && (
       marcaStr.includes('dahua') ||
@@ -520,8 +528,9 @@ export class ControlAccesoService implements OnModuleInit {
       let resultado: { ok: boolean; mensaje: string; marca?: string; detalle?: any };
 
       if (isDahua) {
-        resultado = await this.controlPuertaDahua(target.ip, target.port, doorId, command, user, pass);
-      } else if (marca.includes('hikvision') || marca.includes('hik')) {
+        const resolvedSdkPort = this.resolveDahuaSdkPort(target.port, deviceConfig, target.via);
+        resultado = await this.controlPuertaDahua(target.ip, target.port, doorId, command, user, pass, resolvedSdkPort);
+      } else if (isHikvision || marca.includes('hikvision') || marca.includes('hik')) {
         resultado = await this.controlPuertaHikvision(target.ip, target.port, doorId, command, user, pass);
       } else {
         // Intento genérico: probamos Hikvision primero, luego Dahua
@@ -529,7 +538,8 @@ export class ControlAccesoService implements OnModuleInit {
           const resultado = await this.controlPuertaHikvision(target.ip, target.port, doorId, command, user, pass);
           return this.registrarResultadoPuerta(targetIp, doorId, command, options?.deviceId, { ...resultado, marca: 'Hikvision (auto-detectado)' }, options?.operator);
         } catch {
-          const resultado = await this.controlPuertaDahua(target.ip, target.port, doorId, command, user, pass);
+          const resolvedSdkPort = this.resolveDahuaSdkPort(target.port, deviceConfig, target.via);
+          const resultado = await this.controlPuertaDahua(target.ip, target.port, doorId, command, user, pass, resolvedSdkPort);
           return this.registrarResultadoPuerta(targetIp, doorId, command, options?.deviceId, { ...resultado, marca: 'Dahua (auto-detectado)' }, options?.operator);
         }
       }
@@ -1740,11 +1750,12 @@ export class ControlAccesoService implements OnModuleInit {
 
   private async controlPuertaDahua(
     ip: string, port: number, doorId: number,
-    command: string, user: string, pass: string
+    command: string, user: string, pass: string,
+    sdkPort?: number
   ): Promise<{ ok: boolean; mensaje: string; marca: string; detalle?: any }> {
     const validCommands = ['abrir', 'cerrar', 'siempre-abierta', 'siempre-cerrada'];
     const cmd = validCommands.includes(command) ? (command as any) : 'abrir';
-    return this.dahuaService.controlPuerta(ip, port, user, pass, cmd, doorId);
+    return this.dahuaService.controlPuerta(ip, port, user, pass, cmd, doorId, sdkPort);
   }
 
 
@@ -2191,7 +2202,15 @@ export class ControlAccesoService implements OnModuleInit {
         marcaStr.includes('hik') ||
         marcaStr.includes('ds-k') ||
         marcaStr.includes('ds-2cd') ||
-        marcaStr.includes('ds-');
+        marcaStr.includes('ds-') ||
+        origIp.includes('.78') ||
+        origIp.includes('.79') ||
+        String(targetIp).includes('.78') ||
+        String(targetIp).includes('.79') ||
+        rtspPort === 30078 ||
+        rtspPort === 30079 ||
+        Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_rtsp) === 30078 ||
+        Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_rtsp) === 30079;
 
       const isDahua = !isHikvision && (
         marcaStr.includes('dahua') ||
@@ -6220,10 +6239,20 @@ export class ControlAccesoService implements OnModuleInit {
       }
     }
 
+    const sdkPort = this.resolveDahuaSdkPort(httpPort, config, 'vpn');
+    let netSdkTest: any = null;
+    try {
+      netSdkTest = await this.dahuaService.controlPuertaNetSdk(ip, httpPort, user, pass, 'abrir', 1, sdkPort);
+    } catch (e: any) {
+      netSdkTest = { error: e.message };
+    }
+
     return {
       dispositivo: dev.nombre_identificador,
       target: `${ip}:${httpPort}`,
+      sdkPort,
       user,
+      netSdkTest,
       results
     };
   }
