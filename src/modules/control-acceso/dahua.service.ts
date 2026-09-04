@@ -168,6 +168,62 @@ export class DahuaService {
     }
   }
 
+  /**
+   * Genera el encabezado Authorization Digest para peticiones HTTP/CGI persistentes
+   */
+  async buildDigestAuthHeader(
+    method: string,
+    path: string,
+    user: string,
+    pass: string,
+    ip?: string,
+    port?: number,
+  ): Promise<string> {
+    const host = ip && port ? `${ip}:${port}` : null;
+    let cached = host ? this.digestCache.get(host) : null;
+
+    if (!cached && host) {
+      try {
+        await axios.request({ method: 'GET', url: `http://${host}${path}`, timeout: 4000 });
+      } catch (err: any) {
+        if (err?.response?.status === 401 && err?.response?.headers?.['www-authenticate']) {
+          const authHeader = err.response.headers['www-authenticate'];
+          const matchRealm = authHeader.match(/realm="([^"]+)"/);
+          const matchNonce = authHeader.match(/nonce="([^"]+)"/);
+          const matchQop = authHeader.match(/qop="([^"]+)"/);
+          if (matchRealm && matchNonce) {
+            const realm = matchRealm[1];
+            const nonce = matchNonce[1];
+            const qop = matchQop ? (matchQop[1].includes('auth') ? 'auth' : matchQop[1].split(',')[0].trim()) : '';
+            cached = { realm, nonce, qop };
+            this.digestCache.set(host, cached);
+          }
+        }
+      }
+    }
+
+    if (cached) {
+      const { realm, nonce, qop } = cached;
+      const nc = '00000001';
+      const cnonce = randomBytes(4).toString('hex');
+      const uri = path;
+      const ha1 = createHash('md5').update(`${user}:${realm}:${pass}`).digest('hex');
+      const ha2 = createHash('md5').update(`${method}:${uri}`).digest('hex');
+      let responseHash = '';
+      if (qop === 'auth') {
+        responseHash = createHash('md5').update(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`).digest('hex');
+      } else {
+        responseHash = createHash('md5').update(`${ha1}:${nonce}:${ha2}`).digest('hex');
+      }
+      let authStr = `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${responseHash}"`;
+      if (qop === 'auth') {
+        authStr += `, qop="${qop}", nc=${nc}, cnonce="${cnonce}"`;
+      }
+      return authStr;
+    }
+    return '';
+  }
+
   // ─── SISTEMA ────────────────────────────────────────────────────────────────
 
   /**
@@ -991,8 +1047,10 @@ export class DahuaService {
       eventName.includes('doorbell') ||
       eventName.includes('callnoanswerred') ||
       eventName.includes('callnoanswered') ||
+      eventName.includes('invite') ||
       eventType.includes('call') ||
-      eventType.includes('videotalk')
+      eventType.includes('videotalk') ||
+      eventType.includes('invite')
     );
 
     // Tipo de evento normalizado
@@ -1357,9 +1415,10 @@ export class DahuaService {
       const CLIENT_TalkSendData = lib.func(`int32_t ${callConv}CLIENT_TalkSendData(int64_t lTalkHandle, uint8_t *pDataBuf, uint32_t dwBufSize)`);
       const CLIENT_SetVolume = lib.func(`bool ${callConv}CLIENT_SetVolume(int64_t lTalkHandle, int nVolume)`);
       const CLIENT_SetDeviceMode = lib.func(`bool ${callConv}CLIENT_SetDeviceMode(int64_t lLoginID, int emType, void *pValue)`);
+      const CLIENT_GetLastError = lib.func(`uint32_t ${callConv}CLIENT_GetLastError()`);
 
       // Definir prototipo del callback de retorno de audio del Dahua
-      const AudioDataCallbackProto = koffi.proto(`void ${callConv}pfAudioDataCallBack(int64_t lTalkHandle, void *pDataBuf, uint32_t dwBufSize, uint8_t byAudioFlag, int64_t dwUser)`);
+      const AudioDataCallbackProto = koffi.proto(`void ${callConv}pfAudioDataCallBack(int64_t lTalkHandle, uint8_t *pDataBuf, uint32_t dwBufSize, uint8_t byAudioFlag, int64_t dwUser)`);
       const CLIENT_StartTalkEx = lib.func(`int64_t ${callConv}CLIENT_StartTalkEx(int64_t lLoginID, pfAudioDataCallBack *pfcb, int64_t dwUser)`);
 
       CLIENT_Init(null, 0);
@@ -1382,21 +1441,25 @@ export class DahuaService {
         encodeBuf.writeInt32LE(1, 0);    // encodeType = 1 (DH_TALK_G711a)
         encodeBuf.writeInt32LE(16, 4);   // nAudioBit = 16
         encodeBuf.writeInt32LE(8000, 8); // dwSampleRate = 8000 Hz
-        CLIENT_SetDeviceMode(loginId, 1, encodeBuf);
+        CLIENT_SetDeviceMode(loginId, 2, encodeBuf); // EM_USEDEV_TALK_ENCODE_TYPE = 2
 
         const transferBuf = Buffer.alloc(4);
-        transferBuf.writeInt32LE(0, 0); // DH_TALK_TRANSFER_MODE = 3 (0 = Directo)
-        CLIENT_SetDeviceMode(loginId, 3, transferBuf);
+        transferBuf.writeInt32LE(0, 0); // DH_TALK_TRANSFER_MODE = 4 (0 = Directo TCP)
+        CLIENT_SetDeviceMode(loginId, 4, transferBuf);
+
+        // Habilitar modo cliente para desmutear el altavoz
+        CLIENT_SetDeviceMode(loginId, 0, null); // EM_USEDEV_TALK_CLIENT_MODE = 0
       } catch {}
 
-      // 2. Registrar callback de audio obligatorio para evitar que el firmware Dahua corte la llamada
-      const audioCb = koffi.register(AudioDataCallbackProto, (handle: any, pBuf: any, size: number, flag: number, user: any) => {
+      // 2. Registrar callback de audio usando koffi.pointer(AudioDataCallbackProto)
+      const audioCb = koffi.register((handle: any, pBuf: any, size: number, flag: number, user: any) => {
         // Callback para stream de retorno
-      });
+      }, koffi.pointer(AudioDataCallbackProto));
 
       const talkHandle = CLIENT_StartTalkEx(loginId, audioCb, 0);
       if (!talkHandle || talkHandle === 0n || talkHandle === 0) {
-        this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] CLIENT_StartTalkEx falló`);
+        const lastErr = CLIENT_GetLastError();
+        this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] CLIENT_StartTalkEx falló (GetLastError: ${lastErr})`);
         try { koffi.unregister(audioCb); } catch {}
         CLIENT_Logout(loginId);
         CLIENT_Cleanup();
@@ -1496,5 +1559,234 @@ export class DahuaService {
       this.logger.error(`❌ [DAHUA-NETSDK-TALK] Error: ${e.message}`);
       return false;
     }
+  }
+
+  /**
+   * Inicia una sesión de audio para escuchar el micrófono del terminal Dahua (NetSDK).
+   * Los chunks de audio recibidos (G.711A 8000Hz) se envían a onAudioChunk para ser convertidos a MP3.
+   */
+  async openDahuaListenSession(
+    ip: string,
+    port: number,
+    user: string,
+    pass: string,
+    sdkPortOverride?: number,
+    onAudioChunk?: (chunk: Buffer) => void,
+  ): Promise<{ stop: () => void } | null> {
+    try {
+      const sdkPort = Number(sdkPortOverride || 0) || (port >= 10000 ? (20000 + (port % 10000)) : 37777);
+      const sessionKey = `listen_${ip}:${sdkPort}`;
+      this.logger.log(`🔊 [DAHUA-NETSDK-LISTEN] Abriendo micrófono de Dahua por NetSDK ${sessionKey}...`);
+
+      const prevSession = this.activeNetSdkSessions.get(sessionKey);
+      if (prevSession) {
+        try { prevSession(); } catch {}
+        this.activeNetSdkSessions.delete(sessionKey);
+      }
+
+      const koffi = require('koffi');
+      const fs = require('fs');
+      const path = require('path');
+
+      const linuxDllPaths = [
+        path.join(process.cwd(), 'libs', 'linux-x64', 'libdhnetsdk.so'),
+        path.join(process.cwd(), 'libs', 'libdhnetsdk.so'),
+        '/usr/lib/libdhnetsdk.so',
+        '/usr/local/lib/libdhnetsdk.so',
+      ];
+      const windowsDllPaths = [
+        'C:\\Program Files\\SmartPSSLite\\dhnetsdk.dll',
+        'C:\\Program Files (x86)\\SmartPSS\\dhnetsdk.dll',
+        path.join(process.cwd(), 'libs', 'dhnetsdk.dll'),
+      ];
+      const possibleDllPaths = process.platform === 'win32' ? windowsDllPaths : linuxDllPaths;
+      const dllPath = possibleDllPaths.find(p => fs.existsSync(p));
+      if (!dllPath) {
+        this.logger.error(`❌ [DAHUA-NETSDK-LISTEN] No se encontró librería NetSDK`);
+        return null;
+      }
+
+      try {
+        const libDir = path.dirname(dllPath);
+        ['libInfra.so', 'libNetFramework.so', 'libStream.so', 'libStreamSvr.so', 'libavnetsdk.so', 'libdhconfigsdk.so'].forEach(f => {
+          const fp = path.join(libDir, f);
+          if (fs.existsSync(fp)) { try { koffi.load(fp); } catch {} }
+        });
+      } catch {}
+
+      const lib = koffi.load(dllPath);
+      const isWin = process.platform === 'win32';
+      const callConv = isWin && process.arch === 'ia32' ? '__stdcall ' : '';
+
+      const CLIENT_Init = lib.func(`bool ${callConv}CLIENT_Init(void* fDisConnect, int64_t dwUser)`);
+      const CLIENT_Cleanup = lib.func(`void ${callConv}CLIENT_Cleanup()`);
+      const CLIENT_Login = lib.func(`int64_t ${callConv}CLIENT_Login(str pchDVRIP, uint16_t wDVRPort, str pchUserName, str pchPassword, void* lpDeviceInfo, _Out_ int* error)`);
+      const CLIENT_Logout = lib.func(`bool ${callConv}CLIENT_Logout(int64_t lLoginID)`);
+      const CLIENT_StopTalkEx = lib.func(`bool ${callConv}CLIENT_StopTalkEx(int64_t lTalkHandle)`);
+      const CLIENT_SetDeviceMode = lib.func(`bool ${callConv}CLIENT_SetDeviceMode(int64_t lLoginID, int emType, void *pValue)`);
+      const CLIENT_GetLastError = lib.func(`uint32_t ${callConv}CLIENT_GetLastError()`);
+
+      const AudioDataCallbackProto = koffi.proto(`void ${callConv}pfAudioDataCallBack(int64_t lTalkHandle, uint8_t *pDataBuf, uint32_t dwBufSize, uint8_t byAudioFlag, int64_t dwUser)`);
+      const CLIENT_StartTalkEx = lib.func(`int64_t ${callConv}CLIENT_StartTalkEx(int64_t lLoginID, pfAudioDataCallBack *pfcb, int64_t dwUser)`);
+
+      CLIENT_Init(null, 0);
+
+      const devInfo = Buffer.alloc(1024);
+      const errPtr = [0];
+      const loginId = CLIENT_Login(ip, sdkPort, user || 'admin', pass || 'elvado2025', devInfo, errPtr);
+
+      if (!loginId || loginId === 0n || loginId === 0) {
+        this.logger.warn(`⚠️ [DAHUA-NETSDK-LISTEN] Login falló en ${ip}:${sdkPort} (Error ${errPtr[0]})`);
+        CLIENT_Cleanup();
+        return null;
+      }
+
+      // Configurar modo de codificación DH_AUDIO_FORMAT_NET: G.711A (1), 16 bits, 8000 Hz
+      try {
+        const encodeBuf = Buffer.alloc(32);
+        encodeBuf.writeInt32LE(1, 0);
+        encodeBuf.writeInt32LE(16, 4);
+        encodeBuf.writeInt32LE(8000, 8);
+        CLIENT_SetDeviceMode(loginId, 2, encodeBuf); // EM_USEDEV_TALK_ENCODE_TYPE = 2
+
+        const transferBuf = Buffer.alloc(4);
+        transferBuf.writeInt32LE(0, 0);
+        CLIENT_SetDeviceMode(loginId, 4, transferBuf); // EM_USEDEV_TALK_TRANSFER_MODE = 4
+      } catch {}
+
+      const audioCb = koffi.register((handle: any, pBuf: any, size: number, flag: number, u: any) => {
+        if (pBuf && size > 0 && onAudioChunk) {
+          try {
+            const chunk = Buffer.from(koffi.decode(pBuf, koffi.array('uint8_t', size)));
+            onAudioChunk(chunk);
+          } catch {}
+        }
+      }, koffi.pointer(AudioDataCallbackProto));
+
+      const talkHandle = CLIENT_StartTalkEx(loginId, audioCb, 0);
+      if (!talkHandle || talkHandle === 0n || talkHandle === 0) {
+        const lastErr = CLIENT_GetLastError();
+        this.logger.warn(`⚠️ [DAHUA-NETSDK-LISTEN] CLIENT_StartTalkEx falló (GetLastError: ${lastErr})`);
+        try { koffi.unregister(audioCb); } catch {}
+        CLIENT_Logout(loginId);
+        CLIENT_Cleanup();
+        return null;
+      }
+
+      this.logger.log(`🎉 [DAHUA-NETSDK-LISTEN] Micrófono Dahua abierto (TalkHandle: ${talkHandle})`);
+
+      let closed = false;
+      const stop = () => {
+        if (closed) return;
+        closed = true;
+        this.logger.log(`🛑 [DAHUA-NETSDK-LISTEN] Cerrando sesión de micrófono Dahua`);
+        this.activeNetSdkSessions.delete(sessionKey);
+        try { CLIENT_StopTalkEx(talkHandle); } catch {}
+        try { koffi.unregister(audioCb); } catch {}
+        try { CLIENT_Logout(loginId); } catch {}
+        try { CLIENT_Cleanup(); } catch {}
+      };
+
+      this.activeNetSdkSessions.set(sessionKey, stop);
+      return { stop };
+    } catch (e: any) {
+      this.logger.error(`❌ [DAHUA-NETSDK-LISTEN] Error: ${e.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Conecta un stream HTTP persistente para escuchar eventos en tiempo real (llamadas y accesos) de Dahua.
+   */
+  async attachEventManagerStream(
+    ip: string,
+    port: number,
+    user: string,
+    pass: string,
+    onEvent: (eventPayload: any) => void,
+  ): Promise<{ stop: () => void }> {
+    let active = true;
+    let cancelTokenSource: any = null;
+
+    const connectStream = async () => {
+      if (!active) return;
+      try {
+        const axios = require('axios');
+        const authHeader = await this.buildDigestAuthHeader('GET', `/cgi-bin/eventManager.cgi?action=attach&codes=[CallNoAnswered,Invite,VideoTalk,AccessControl]`, user, pass, ip, port);
+        const headers: any = { 'Accept': 'multipart/x-mixed-replace,text/plain' };
+        if (authHeader) headers['Authorization'] = authHeader;
+
+        cancelTokenSource = axios.CancelToken.source();
+        const url = `http://${ip}:${port}/cgi-bin/eventManager.cgi?action=attach&codes=[CallNoAnswered,Invite,VideoTalk,AccessControl]`;
+
+        const response = await axios.get(url, {
+          headers,
+          responseType: 'stream',
+          cancelToken: cancelTokenSource.token,
+          timeout: 0,
+        });
+
+        this.logger.log(`📡 [DAHUA EVENT STREAM] Conectado exitosamente a ${ip}:${port}`);
+
+        let buffer = '';
+        response.data.on('data', (chunk: Buffer) => {
+          buffer += chunk.toString('latin1');
+          const lines = buffer.split('\r\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (line.includes('Code=') || line.includes('action=')) {
+              const parts = line.split(';');
+              const eventObj: any = {};
+              for (const part of parts) {
+                const eq = part.indexOf('=');
+                if (eq !== -1) {
+                  const k = part.substring(0, eq).trim();
+                  const v = part.substring(eq + 1).trim();
+                  if (k === 'data') {
+                    try { eventObj.Data = JSON.parse(v); } catch { eventObj.Data = v; }
+                  } else {
+                    eventObj[k] = v;
+                  }
+                }
+              }
+              if (eventObj.Code) {
+                onEvent(eventObj);
+              }
+            }
+          }
+        });
+
+        response.data.on('end', () => {
+          if (active) {
+            this.logger.warn(`⚠️ [DAHUA EVENT STREAM] Stream finalizado en ${ip}:${port}. Reconectando en 5s...`);
+            setTimeout(connectStream, 5000);
+          }
+        });
+
+        response.data.on('error', (err: any) => {
+          if (active) {
+            this.logger.debug(`[DAHUA EVENT STREAM] Error en stream ${ip}:${port}: ${err.message}. Reconectando en 5s...`);
+            setTimeout(connectStream, 5000);
+          }
+        });
+      } catch (err: any) {
+        if (active) {
+          this.logger.debug(`[DAHUA EVENT STREAM] Conexión stream rechazada en ${ip}:${port}: ${err.message}. Reconectando en 10s...`);
+          setTimeout(connectStream, 10000);
+        }
+      }
+    };
+
+    connectStream();
+
+    return {
+      stop: () => {
+        active = false;
+        if (cancelTokenSource) {
+          try { cancelTokenSource.cancel('Stream stopped'); } catch {}
+        }
+      }
+    };
   }
 }

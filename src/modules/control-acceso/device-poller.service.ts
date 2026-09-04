@@ -86,6 +86,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
    * Solo arranca si el dispositivo tiene configuracion_tecnica.push_disabled = true
    */
   private readonly fallbackTimers = new Map<string, NodeJS.Timeout>();
+  private readonly dahuaStreamSubscriptions = new Map<string, { stop: () => void }>();
   private readonly FALLBACK_POLL_MS = 3000; // 3s para detección en tiempo real de llamadas y eventos
 
   // ─── Ciclo de vida ────────────────────────────────────────────────────────
@@ -99,6 +100,10 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   onModuleDestroy() {
     this.fallbackTimers.forEach(t => clearInterval(t));
     this.fallbackTimers.clear();
+    this.dahuaStreamSubscriptions.forEach(s => {
+      try { s.stop(); } catch {}
+    });
+    this.dahuaStreamSubscriptions.clear();
   }
 
   // ─── API Pública ──────────────────────────────────────────────────────────
@@ -202,6 +207,10 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   async refreshDeviceList() {
     this.fallbackTimers.forEach(t => clearInterval(t));
     this.fallbackTimers.clear();
+    this.dahuaStreamSubscriptions.forEach(s => {
+      try { s.stop(); } catch {}
+    });
+    this.dahuaStreamSubscriptions.clear();
     this.devicesMap.clear();
     
     // Ejecutar en segundo plano sin await para no bloquear la respuesta HTTP
@@ -388,21 +397,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   private async registerDahuaWebhook(
     device: DeviceInfo, ip: string, port: number, user: string, pass: string, webhookBase: string
   ) {
-    const deviceIp = device.ip_direccion || ip;
-    const isVpn = this.isVpnIp(deviceIp);
-    const serverPort = process.env.PORT || '3000';
-
-    let gatewayIp = '10.8.0.1';
-    if (isVpn && deviceIp) {
-      const parts = deviceIp.split('.');
-      if (parts.length === 4) {
-        gatewayIp = `${parts[0]}.${parts[1]}.${parts[2]}.1`;
-      }
-    }
-
-    let webhookUrl = isVpn
-      ? `http://${gatewayIp}:${serverPort}/api/control-acceso/webhook/evento/dahua/${device.id}`
-      : `https://api.proliseg.com/api/control-acceso/webhook/evento/dahua/${device.id}`;
+    let webhookUrl = `https://api.proliseg.com/api/control-acceso/webhook/evento/dahua/${device.id}`;
 
     // Permitir personalizar el webhook desde configuracion_tecnica
     const customWebhookBase = device.configuracion_tecnica?.webhook_base;
@@ -416,17 +411,64 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     this.logger.log(`✅ [EventSystem] Webhook Dahua (AlarmServer) registrado → ${device.nombre_identificador}: ${webhookUrl}`);
   }
 
-  // ─── Fallback Polling (solo si no soporta webhook) ────────────────────────
+  // ─── Fallback Polling y Stream de Eventos ──────────────────────────────────
 
   private startFallbackPolling(device: DeviceInfo, ip: string, port: number, user: string, pass: string, marca: string) {
     if (this.fallbackTimers.has(device.id)) return;
-    this.logger.warn(`⚠️ [EventSystem] ${device.nombre_identificador} no soporta webhook → fallback polling ${this.FALLBACK_POLL_MS / 1000}s`);
+    this.logger.log(`📡 [EventSystem] Iniciando monitoreo continuo para ${device.nombre_identificador} (${this.FALLBACK_POLL_MS / 1000}s)`);
 
     const timer = setInterval(() => {
       this.fallbackPoll(device, ip, port, user, pass, marca).catch(() => {});
     }, this.FALLBACK_POLL_MS);
 
     this.fallbackTimers.set(device.id, timer);
+
+    // Si es Dahua, conectar stream de eventos en tiempo real (HTTP multipart/x-mixed-replace)
+    if (marca.includes('dahua') || marca.includes('dh')) {
+      if (!this.dahuaStreamSubscriptions.has(device.id)) {
+        this.dahuaService.attachEventManagerStream(ip, port, user, pass, (eventObj) => {
+          this.handleDahuaStreamEvent(device, ip, port, eventObj);
+        }).then(sub => {
+          if (sub) this.dahuaStreamSubscriptions.set(device.id, sub);
+        }).catch(err => {
+          this.logger.debug(`[EventSystem] attachEventManagerStream no pudo iniciar en ${device.nombre_identificador}: ${err.message}`);
+        });
+      }
+    }
+  }
+
+  private handleDahuaStreamEvent(device: DeviceInfo, ip: string, port: number, eventObj: any) {
+    const eventCode = String(eventObj.Code || eventObj.code || '').toLowerCase();
+    const action = String(eventObj.action || eventObj.Action || '').toLowerCase();
+    const isCallEvent = (
+      eventCode.includes('videotalk') ||
+      eventCode.includes('call') ||
+      eventCode.includes('invite') ||
+      eventCode.includes('ring') ||
+      eventCode.includes('doorbell') ||
+      eventCode.includes('callnoanswered')
+    );
+
+    if (isCallEvent && (action === 'start' || action === 'pulse' || !action)) {
+      const ringKey = `call_ring_dh_${device.id}_${Math.floor(Date.now() / 10000)}`;
+      if (!this.seenEventIds.has(ringKey)) {
+        this.seenEventIds.add(ringKey);
+        this.logger.log(`📞 [EventSystem] ¡TIMBRE ENTRANTE DAHUA STREAM! → ${device.nombre_identificador} (${eventObj.Code})`);
+        const callEvent: EventoAcceso = {
+          dispositivo_id: device.id,
+          tipo_evento: 'llamada',
+          nombre_dispositivo: device.nombre_identificador,
+          nombre_persona: 'Llamada Dahua Citófono',
+          documento_persona: 'LLAMADA',
+          metodo_acceso: 'intercom',
+          timestamp: new Date().toISOString(),
+          detalles_raw: { source: 'dahua_stream', event: eventObj, ip, port },
+        };
+        this.saveAndEmit(callEvent);
+      }
+    } else if (eventCode.includes('accesscontrol')) {
+      this.procesarWebhookDahua(eventObj, device.id);
+    }
   }
 
   private async fallbackPoll(device: DeviceInfo, ip: string, port: number, user: string, pass: string, marca: string) {
@@ -554,6 +596,34 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
   private async fallbackPollDahua(device: DeviceInfo, ip: string, port: number, user: string, pass: string) {
     try {
+      // 1. Chequeo de timbre/llamada en tiempo real para Dahua
+      try {
+        const statusResp = await this.dahuaService.cgi(
+          ip, port, user, pass, 'GET',
+          '/cgi-bin/eventManager.cgi?action=getEventStatus&code=VideoTalk',
+          null, 'text', 'application/x-www-form-urlencoded', 2000
+        );
+        const rawStatus = String(statusResp?.data || '');
+        if (rawStatus.toLowerCase().includes('true') || rawStatus.toLowerCase().includes('start')) {
+          const ringKey = `call_ring_dh_${device.id}_${Math.floor(Date.now() / 10000)}`;
+          if (!this.seenEventIds.has(ringKey)) {
+            this.seenEventIds.add(ringKey);
+            this.logger.log(`📞 [EventSystem] ¡TIMBRE ENTRANTE DAHUA (POLL)! → ${device.nombre_identificador}`);
+            const callEvent: EventoAcceso = {
+              dispositivo_id: device.id,
+              tipo_evento: 'llamada',
+              nombre_dispositivo: device.nombre_identificador,
+              nombre_persona: 'Llamada de Citófono Dahua',
+              documento_persona: 'LLAMADA',
+              metodo_acceso: 'intercom',
+              timestamp: new Date().toISOString(),
+              detalles_raw: { source: 'dahua_event_status', status: rawStatus, ip, port }
+            };
+            this.saveAndEmit(callEvent);
+          }
+        }
+      } catch {}
+
       if (!this.latestDbTimestamp.has(device.id)) {
         const { data } = await this.supabase
           .getClient()
