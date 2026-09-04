@@ -498,15 +498,23 @@ export class ControlAccesoService implements OnModuleInit {
       ''
     ).toLowerCase();
 
-    const isDahua =
+    const isHikvision =
+      marcaStr.includes('hikvision') ||
+      marcaStr.includes('hik') ||
+      marcaStr.includes('ds-k') ||
+      marcaStr.includes('ds-2cd') ||
+      marcaStr.includes('ds-');
+
+    const isDahua = !isHikvision && (
       marcaStr.includes('dahua') ||
       marcaStr.includes('asi32') ||
+      marcaStr.includes('asi') ||
       marcaStr.includes('vto') ||
-      origIp.startsWith('192.168.35.') ||
-      String(targetIp).startsWith('192.168.35.') ||
-      String(ip).startsWith('192.168.35.') ||
+      ((origIp.startsWith('192.168.35.') || String(targetIp).startsWith('192.168.35.') || String(ip).startsWith('192.168.35.')) &&
+       !origIp.includes('.78') && !origIp.includes('.79') && !String(targetIp).includes('.78') && !String(targetIp).includes('.79')) ||
       (port >= 10080 && port <= 10099) ||
-      (target.port >= 10080 && target.port <= 10099);
+      (target.port >= 10080 && target.port <= 10099)
+    );
 
     try {
       let resultado: { ok: boolean; mensaje: string; marca?: string; detalle?: any };
@@ -698,14 +706,23 @@ export class ControlAccesoService implements OnModuleInit {
     const marcaStr = String(
       dev?.marca || dev?.configuracion_tecnica?.marca || dev?.modelo || dev?.nombre_identificador || ''
     ).toLowerCase();
-    const isDahua =
+    const isHikvision =
+      marcaStr.includes('hikvision') ||
+      marcaStr.includes('hik') ||
+      marcaStr.includes('ds-k') ||
+      marcaStr.includes('ds-2cd') ||
+      marcaStr.includes('ds-');
+
+    const isDahua = !isHikvision && (
       marcaStr.includes('dahua') ||
       marcaStr.includes('asi32') ||
+      marcaStr.includes('asi') ||
       marcaStr.includes('vto') ||
-      origIp.startsWith('192.168.35.') ||
-      String(host).startsWith('192.168.35.') ||
+      ((origIp.startsWith('192.168.35.') || String(host).startsWith('192.168.35.')) &&
+       !origIp.includes('.78') && !origIp.includes('.79') && !String(host).includes('.78') && !String(host).includes('.79')) ||
       (port >= 10080 && port <= 10099) ||
-      (resolved.port >= 10080 && resolved.port <= 10099);
+      (resolved.port >= 10080 && resolved.port <= 10099)
+    );
     // Resolver puertos mapeados para audio Dahua.
     const mapped = config?.puertos_mapeados || {};
     const rtspPort = Number(
@@ -2169,14 +2186,23 @@ export class ControlAccesoService implements OnModuleInit {
       const marcaStr = String(
         dev.marca || dev.configuracion_tecnica?.marca || dev.modelo || dev.nombre_identificador || ''
       ).toLowerCase();
-      const isDahua =
+      const isHikvision =
+        marcaStr.includes('hikvision') ||
+        marcaStr.includes('hik') ||
+        marcaStr.includes('ds-k') ||
+        marcaStr.includes('ds-2cd') ||
+        marcaStr.includes('ds-');
+
+      const isDahua = !isHikvision && (
         marcaStr.includes('dahua') ||
         marcaStr.includes('asi32') ||
+        marcaStr.includes('asi') ||
         marcaStr.includes('vto') ||
-        origIp.startsWith('192.168.35.') ||
-        String(targetIp).startsWith('192.168.35.') ||
+        ((origIp.startsWith('192.168.35.') || String(targetIp).startsWith('192.168.35.')) &&
+         !origIp.includes('.78') && !origIp.includes('.79') && !String(targetIp).includes('.78') && !String(targetIp).includes('.79')) ||
         (rtspPort >= 30080 && rtspPort <= 30099) ||
-        (Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_http || 0) >= 10080 && Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_http || 0) <= 10099);
+        (Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_http || 0) >= 10080 && Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_http || 0) <= 10099)
+      );
 
       let rtspPath = '/Streaming/Channels/102'; // Default: Hikvision Sub-Stream
 
