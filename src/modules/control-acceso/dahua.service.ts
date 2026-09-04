@@ -277,8 +277,10 @@ export class DahuaService {
         'action=setConfig',
         'Encode[0].MainFormat[0].Video.Compression=H.264',
         'Encode[0].ExtraFormat[0].Video.Compression=H.264',
-        'Encode[0].MainFormat[0].Video.GOP=25',
-        'Encode[0].ExtraFormat[0].Video.GOP=25',
+        'Encode[0].MainFormat[0].Video.GOP=15',
+        'Encode[0].ExtraFormat[0].Video.GOP=15',
+        'Encode[0].MainFormat[0].Video.FPS=25',
+        'Encode[0].ExtraFormat[0].Video.FPS=25',
         'Encode[0].MainFormat[0].AudioEnable=true',
         'Encode[0].ExtraFormat[0].AudioEnable=true',
         'Encode[0].MainFormat[0].Audio.Compression=G.711A',
@@ -289,8 +291,10 @@ export class DahuaService {
         'Encode[0].ExtraFormat[0].Audio.Bitrate=64',
         'Encode[1].MainFormat[0].Video.Compression=H.264',
         'Encode[1].ExtraFormat[0].Video.Compression=H.264',
-        'Encode[1].MainFormat[0].Video.GOP=25',
-        'Encode[1].ExtraFormat[0].Video.GOP=25',
+        'Encode[1].MainFormat[0].Video.GOP=15',
+        'Encode[1].ExtraFormat[0].Video.GOP=15',
+        'Encode[1].MainFormat[0].Video.FPS=25',
+        'Encode[1].ExtraFormat[0].Video.FPS=25',
         'Encode[1].MainFormat[0].AudioEnable=true',
         'Encode[1].ExtraFormat[0].AudioEnable=true',
         'Encode[1].MainFormat[0].Audio.Compression=G.711A',
@@ -407,10 +411,23 @@ export class DahuaService {
 
     this.logger.log(`🚪 [DAHUA PUERTA] ${action} canal=${channel} en ${ip}:${port}`);
 
-    const resp = await this.cgi(
-      ip, port, user, pass, 'GET',
-      `/cgi-bin/accessControl.cgi?action=${action}&channel=${channel}`,
-    );
+    let resp: any;
+    try {
+      resp = await this.cgi(
+        ip, port, user, pass, 'GET',
+        `/cgi-bin/accessControl.cgi?action=${action}&channel=${channel}`,
+      );
+    } catch (err: any) {
+      if (channel === 1) {
+        this.logger.warn(`⚠️ [DAHUA PUERTA] Falló channel=1 (${err.message}), reintentando channel=0...`);
+        resp = await this.cgi(
+          ip, port, user, pass, 'GET',
+          `/cgi-bin/accessControl.cgi?action=${action}&channel=0`,
+        );
+      } else {
+        throw err;
+      }
+    }
 
     const body = String(resp.data || '').trim();
     this.logger.debug(`[DAHUA PUERTA] Respuesta raw: ${body}`);
@@ -418,7 +435,7 @@ export class DahuaService {
     // Dahua responde "OK" cuando es exitoso, o puede ser HTTP 200 con cuerpo vacío
     if (body.includes('OK') || body.includes('ok') || resp.status === 200) {
       this.logger.log(`✅ [DAHUA PUERTA] ${command} ejecutado correctamente en ${ip}:${port}`);
-      return { ok: true, mensaje: `Puerta ${channel} ejecutó "${command}" correctamente (Dahua)`, marca: 'Dahua' };
+      return { ok: true, mensaje: `Puerta ejecutó "${command}" correctamente (Dahua)`, marca: 'Dahua' };
     }
 
     throw new Error(`Respuesta inesperada de Dahua al ${command}: ${body}`);

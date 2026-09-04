@@ -461,37 +461,60 @@ export class ControlAccesoService implements OnModuleInit {
     let targetIp = ip;
     let deviceConfig: any = null;
  
+    let dev: any = null;
     if (options?.deviceId) {
-      const { data: dev } = await this.supabase
+      const { data } = await this.supabase
         .getClient()
         .from('dispositivos_iot')
-        .select('id, nombre_identificador, ip_direccion, credencial_usuario, credencial_password, configuracion_tecnica')
+        .select('*')
         .eq('id', options.deviceId)
         .maybeSingle();
- 
+      dev = data;
+
       if (dev) {
         deviceConfig = dev.configuracion_tecnica || {};
         targetIp = dev.ip_direccion || targetIp;
         user = dev.credencial_usuario || user;
         pass = dev.credencial_password || pass;
-        marca = deviceConfig?.marca?.toLowerCase() || marca;
-        port = Number(deviceConfig?.puerto || port);
+        marca = deviceConfig?.marca?.toLowerCase() || dev.marca?.toLowerCase() || marca;
+        port = Number(deviceConfig?.puertos_mapeados?.mapped_http || deviceConfig?.puerto || port);
       }
     }
- 
+
     if (!targetIp) {
       return { ok: false, mensaje: 'No hay IP o dispositivo destino para ejecutar el comando de puerta' };
     }
- 
+
     const target = await this.resolveDoorNetworkTarget(targetIp, port, deviceConfig);
- 
+
+    const origIp = String(deviceConfig?.puertos_mapeados?.original_ip || dev?.ip_direccion || targetIp || ip || '');
+    const marcaStr = String(
+      options?.marca ||
+      marca ||
+      deviceConfig?.marca ||
+      dev?.marca ||
+      dev?.modelo ||
+      dev?.nombre_identificador ||
+      ''
+    ).toLowerCase();
+
+    const isDahua =
+      marcaStr.includes('dahua') ||
+      marcaStr.includes('asi32') ||
+      marcaStr.includes('vto') ||
+      origIp.startsWith('192.168.35.') ||
+      String(targetIp).startsWith('192.168.35.') ||
+      String(ip).startsWith('192.168.35.') ||
+      (port >= 10080 && port <= 10099) ||
+      (target.port >= 10080 && target.port <= 10099);
+
     try {
       let resultado: { ok: boolean; mensaje: string; marca?: string; detalle?: any };
- 
-      if (marca.includes('hikvision') || marca.includes('hik')) {
-        resultado = await this.controlPuertaHikvision(target.ip, target.port, doorId, command, user, pass);
-      } else if (marca.includes('dahua') || marca.includes('dh')) {
+
+      if (isDahua) {
         resultado = await this.controlPuertaDahua(target.ip, target.port, doorId, command, user, pass);
+      } else if (marca.includes('hikvision') || marca.includes('hik')) {
+        resultado = await this.controlPuertaHikvision(target.ip, target.port, doorId, command, user, pass);
       } else {
         // Intento genérico: probamos Hikvision primero, luego Dahua
         try {
