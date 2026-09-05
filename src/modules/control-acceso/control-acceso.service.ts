@@ -6562,8 +6562,8 @@ export class ControlAccesoService implements OnModuleInit {
 
       const optionsMsg = [
         `OPTIONS sip:8001@${vpnIp}:${sipPort} SIP/2.0`,
-        `Via: SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK-test-${Date.now()};rport`,
-        `From: <sip:proliseg@127.0.0.1>;tag=test1234`,
+        `Via: SIP/2.0/UDP ${vpnIp}:${sipPort};branch=z9hG4bK-test-${Date.now()};rport`,
+        `From: <sip:proliseg@${vpnIp}>;tag=test1234`,
         `To: <sip:8001@${vpnIp}:${sipPort}>`,
         `Call-ID: test-${Date.now()}@proliseg`,
         `CSeq: 1 OPTIONS`,
@@ -6589,19 +6589,22 @@ export class ControlAccesoService implements OnModuleInit {
       });
     });
 
-    // 3. Consultar configuración SIP en Dahua vía CGI
+    // 3. Consultar configuración SIP en Dahua vía CGI y deshabilitar RouteEnable
     let sipCgiConfig: any = null;
+    let cgiSetResult: any = null;
     try {
       const getRes = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=getConfig&name=SIP');
       sipCgiConfig = String(getRes?.data || '').trim();
-      // Asegurar que RouteEnable sea false para que Dahua responda directamente al remitente SIP sin desviar a proxy inexistente
-      await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&SIP.RouteEnable=false&SIP.OutboundProxy=').catch(() => {});
+
+      // Probar ambas variantes de setConfig para Dahua (con table. y sin table.)
+      const set1 = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&table.SIP.RouteEnable=false&table.SIP.OutboundProxy=').catch((e: any) => e.message);
+      const set2 = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&SIP.RouteEnable=false&SIP.OutboundProxy=').catch((e: any) => e.message);
+      cgiSetResult = { set1: String(set1?.data || set1), set2: String(set2?.data || set2) };
     } catch (e: any) {
       sipCgiConfig = `Error CGI: ${e.message}`;
     }
 
-
-    // 4. Consultar y verificar reglas NAT en MikroTik
+    // 4. Consultar y verificar reglas NAT en MikroTik (dstnat + srcnat masquerade)
     let mikrotikRules: any[] = [];
     let natSyncResult: any = null;
     try {
@@ -6614,18 +6617,18 @@ export class ControlAccesoService implements OnModuleInit {
       const allRules = mtkRes.data || [];
       mikrotikRules = allRules.filter((r: any) =>
         r['to-addresses'] === localIp ||
+        r['dst-address'] === localIp ||
         r['dst-port'] === String(sipPort) ||
         r['dst-port'] === String(rtpPort) ||
         r['dst-port'] === String(httpPort) ||
         r['dst-port'] === String(sdkPort)
       );
 
-      // Si falta la regla SIP UDP 50095 o RTP UDP 40095, forzar creación directa en MikroTik
-      const hasSipUdp = allRules.some((r: any) => r['dst-port'] === String(sipPort) && r['protocol'] === 'udp');
-      const hasSipTcp = allRules.some((r: any) => r['dst-port'] === String(sipPort) && r['protocol'] === 'tcp');
-      const hasRtpUdp = allRules.some((r: any) => r['dst-port'] === String(rtpPort) && r['protocol'] === 'udp');
-
       const created: string[] = [];
+
+      // dst-nat para SIP y RTP
+      const hasSipUdp = allRules.some((r: any) => r.chain === 'dstnat' && r['dst-port'] === String(sipPort) && r['protocol'] === 'udp');
+      const hasRtpUdp = allRules.some((r: any) => r.chain === 'dstnat' && r['dst-port'] === String(rtpPort) && r['protocol'] === 'udp');
 
       if (!hasSipUdp) {
         await axios.put(mtkUrl, {
@@ -6633,16 +6636,7 @@ export class ControlAccesoService implements OnModuleInit {
           'dst-port': String(sipPort), 'to-addresses': localIp, 'to-ports': '5060',
           comment: `Proliseg Dahua SIP UDP: ${localIp}:5060`
         }, { auth: { username: 'admin', password: '1004192496' }, timeout: 5000 });
-        created.push(`SIP UDP ${sipPort}->5060`);
-      }
-
-      if (!hasSipTcp) {
-        await axios.put(mtkUrl, {
-          chain: 'dstnat', action: 'dst-nat', protocol: 'tcp',
-          'dst-port': String(sipPort), 'to-addresses': localIp, 'to-ports': '5060',
-          comment: `Proliseg Dahua SIP TCP: ${localIp}:5060`
-        }, { auth: { username: 'admin', password: '1004192496' }, timeout: 5000 });
-        created.push(`SIP TCP ${sipPort}->5060`);
+        created.push(`dst-nat SIP UDP ${sipPort}->5060`);
       }
 
       if (!hasRtpUdp) {
@@ -6651,13 +6645,37 @@ export class ControlAccesoService implements OnModuleInit {
           'dst-port': String(rtpPort), 'to-addresses': localIp, 'to-ports': '15000',
           comment: `Proliseg Dahua RTP UDP: ${localIp}:15000`
         }, { auth: { username: 'admin', password: '1004192496' }, timeout: 5000 });
-        created.push(`RTP UDP ${rtpPort}->15000`);
+        created.push(`dst-nat RTP UDP ${rtpPort}->15000`);
       }
 
-      natSyncResult = { status: 'ok', created, totalRulesForDevice: mikrotikRules.length };
+      // src-nat masquerade para permitir que los paquetes UDP de retorno salgan por MikroTik
+      const hasMasqUdpSip = allRules.some((r: any) => r.chain === 'srcnat' && r.action === 'masquerade' && r['dst-address'] === localIp && r['dst-port'] === '5060');
+      const hasMasqUdpRtp = allRules.some((r: any) => r.chain === 'srcnat' && r.action === 'masquerade' && r['dst-address'] === localIp && r['dst-port'] === '15000');
+      const hasGeneralMasq = allRules.some((r: any) => r.chain === 'srcnat' && r.action === 'masquerade' && (r['dst-address'] === '192.168.35.0/24' || !r['dst-address']));
+
+      if (!hasMasqUdpSip) {
+        await axios.put(mtkUrl, {
+          chain: 'srcnat', action: 'masquerade', protocol: 'udp',
+          'dst-address': localIp, 'dst-port': '5060',
+          comment: `Proliseg Dahua Masquerade SIP UDP: ${localIp}:5060`
+        }, { auth: { username: 'admin', password: '1004192496' }, timeout: 5000 }).catch(() => {});
+        created.push(`src-nat masquerade UDP 5060`);
+      }
+
+      if (!hasMasqUdpRtp) {
+        await axios.put(mtkUrl, {
+          chain: 'srcnat', action: 'masquerade', protocol: 'udp',
+          'dst-address': localIp, 'dst-port': '15000',
+          comment: `Proliseg Dahua Masquerade RTP UDP: ${localIp}:15000`
+        }, { auth: { username: 'admin', password: '1004192496' }, timeout: 5000 }).catch(() => {});
+        created.push(`src-nat masquerade UDP 15000`);
+      }
+
+      natSyncResult = { status: 'ok', created, totalRulesForDevice: mikrotikRules.length, hasGeneralMasq };
     } catch (mtkErr: any) {
       natSyncResult = { status: 'error', message: mtkErr.message };
     }
+
 
     return {
       dispositivo: dev.nombre_identificador,
