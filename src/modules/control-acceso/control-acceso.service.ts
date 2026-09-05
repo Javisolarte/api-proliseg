@@ -6332,76 +6332,9 @@ export class ControlAccesoService implements OnModuleInit {
       }
     }
 
-    // 2. Probar diagnóstico detallado de NetSDK (hablar)
+    // 2. Probar diagnóstico detallado de NetSDK (hablar y escuchar)
     try {
-      const fs = require('fs');
-      const path = require('path');
-      const isWin = process.platform === 'win32';
-      const linuxDllPaths = [
-        path.join(process.cwd(), 'libs', 'linux-x64', 'libdhnetsdk.so'),
-        path.join(process.cwd(), 'libs', 'libdhnetsdk.so'),
-        '/usr/lib/libdhnetsdk.so',
-        '/usr/local/lib/libdhnetsdk.so',
-      ];
-      const windowsDllPaths = [
-        'C:\\Program Files\\SmartPSSLite\\dhnetsdk.dll',
-        'C:\\Program Files (x86)\\SmartPSS\\dhnetsdk.dll',
-        path.join(process.cwd(), 'libs', 'dhnetsdk.dll'),
-      ];
-      const possibleDllPaths = isWin ? windowsDllPaths : linuxDllPaths;
-      const dllPath = possibleDllPaths.find((p: string) => fs.existsSync(p));
-
-      report.netSdkTalkTest = {
-        platform: process.platform,
-        arch: process.arch,
-        dllPath: dllPath || 'NO_ENCONTRADO',
-        cwd: process.cwd(),
-      };
-
-      if (dllPath) {
-        const koffi = require('koffi');
-        const lib = koffi.load(dllPath);
-        const callConv = isWin && process.arch === 'ia32' ? '__stdcall ' : '';
-        const CLIENT_Init = lib.func(`bool ${callConv}CLIENT_Init(void* fDisConnect, int64_t dwUser)`);
-        const CLIENT_Cleanup = lib.func(`void ${callConv}CLIENT_Cleanup()`);
-        const CLIENT_Login = lib.func(`int64_t ${callConv}CLIENT_Login(str pchDVRIP, uint16_t wDVRPort, str pchUserName, str pchPassword, void* lpDeviceInfo, _Out_ int* error)`);
-        const CLIENT_Logout = lib.func(`bool ${callConv}CLIENT_Logout(int64_t lLoginID)`);
-        const CLIENT_GetLastError = lib.func(`uint32_t ${callConv}CLIENT_GetLastError()`);
-        const AudioDataCallbackProto = koffi.proto(`void (int64_t, void*, uint32_t, uint8_t, int64_t)`);
-        const CLIENT_StartTalkEx = lib.func(`int64_t ${callConv}CLIENT_StartTalkEx(int64_t lLoginID, void *pfcb, int64_t dwUser)`);
-        const CLIENT_StopTalkEx = lib.func(`bool ${callConv}CLIENT_StopTalkEx(int64_t lTalkHandle)`);
-
-        CLIENT_Init(null, 0);
-        const devInfo = Buffer.alloc(1024);
-        const errPtr = [0];
-        const loginId = CLIENT_Login(ip, sdkPort, user, pass, devInfo, errPtr);
-        report.netSdkTalkTest.loginId = String(loginId);
-        report.netSdkTalkTest.errorCode = errPtr[0];
-        report.netSdkTalkTest.loginOk = Boolean(loginId && loginId !== 0n && loginId !== 0);
-
-        if (report.netSdkTalkTest.loginOk) {
-          try {
-            let receivedAudioChunks = 0;
-            const audioCb = koffi.register((handle: any, pBuf: any, size: number, flag: number, user: any) => {
-              receivedAudioChunks++;
-            }, koffi.pointer(AudioDataCallbackProto));
-            const talkHandle = CLIENT_StartTalkEx(loginId, audioCb, 0);
-            report.netSdkTalkTest.talkHandle = String(talkHandle);
-            report.netSdkTalkTest.talkOk = Boolean(talkHandle && talkHandle !== 0n && talkHandle !== 0);
-            report.netSdkTalkTest.talkLastError = CLIENT_GetLastError();
-
-            if (report.netSdkTalkTest.talkOk) {
-              await new Promise(r => setTimeout(r, 500));
-              CLIENT_StopTalkEx(talkHandle);
-            }
-            try { koffi.unregister(audioCb); } catch {}
-          } catch (talkErr: any) {
-            report.netSdkTalkTest.talkError = talkErr.message;
-          }
-          CLIENT_Logout(loginId);
-        }
-        CLIENT_Cleanup();
-      }
+      report.netSdkTalkTest = await this.dahuaService.testNetSdkTalk(ip, sdkPort, user, pass);
     } catch (sdkErr: any) {
       report.netSdkTalkTest = { error: sdkErr.message };
     }
@@ -6597,8 +6530,8 @@ export class ControlAccesoService implements OnModuleInit {
       sipCgiConfig = String(getRes?.data || '').trim();
 
       // Probar ambas variantes de setConfig para Dahua (con table. y sin table.)
-      const set1 = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&table.SIP.RouteEnable=false&table.SIP.OutboundProxy=').catch((e: any) => e.message);
-      const set2 = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&SIP.RouteEnable=false&SIP.OutboundProxy=').catch((e: any) => e.message);
+      const set1 = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&table.SIP.RouteEnable=false&table.SIP.OutboundProxy=&table.SIP.IsMainVTO=1').catch((e: any) => e.message);
+      const set2 = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&SIP.RouteEnable=false&SIP.OutboundProxy=&SIP.IsMainVTO=1').catch((e: any) => e.message);
       cgiSetResult = { set1: String(set1?.data || set1), set2: String(set2?.data || set2) };
     } catch (e: any) {
       sipCgiConfig = `Error CGI: ${e.message}`;

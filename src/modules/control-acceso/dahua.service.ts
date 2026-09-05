@@ -1600,6 +1600,51 @@ export class DahuaService {
   }
 
   /**
+   * Configura los parámetros de intercom/audio en el hardware Dahua según la especificación oficial NetSDK:
+   * 1. NET_TALK_ENCODE_TYPE (2) con struct NETDEV_TALKDECODE_INFO (76 bytes)
+   * 2. NET_TALK_SPEAK_PARAM (7) con struct NET_SPEAK_PARAM (40 bytes)
+   * 3. NET_TALK_TRANSFER_MODE (11) con struct NET_TALK_TRANSFER_PARAM (8 bytes)
+   */
+  public setupNetSdkTalkMode(loginId: any, encodeType: number = 2): boolean {
+    const sdk = this.netSdkFuncs;
+    if (!sdk) return false;
+
+    try {
+      // 1. NETDEV_TALKDECODE_INFO (76 bytes)
+      // encodeType: 1 = NET_TALK_PCM, 2 = NET_TALK_G711a, 4 = NET_TALK_G711u
+      const encodeBuf = Buffer.alloc(76, 0);
+      encodeBuf.writeInt32LE(encodeType, 0); // encodeType
+      encodeBuf.writeInt32LE(16, 4);          // nAudioBit = 16
+      encodeBuf.writeInt32LE(8000, 8);        // dwSampleRate = 8000 Hz
+      encodeBuf.writeInt32LE(25, 12);         // nPacketPeriod = 25 ms
+      const r1 = sdk.CLIENT_SetDeviceMode(loginId, 2, encodeBuf); // NET_TALK_ENCODE_TYPE = 2
+
+      // 2. NET_SPEAK_PARAM (40 bytes en x64)
+      const speakBuf = Buffer.alloc(40, 0);
+      speakBuf.writeInt32LE(40, 0);           // dwSize = 40
+      speakBuf.writeInt32LE(0, 4);            // nMode = 0 (0: intercom/talk, 1: broadcast)
+      speakBuf.writeInt32LE(0, 8);            // nSpeakerChannel = 0
+      speakBuf.writeInt32LE(0, 12);           // bEnableWait = 0
+      speakBuf.writeInt32LE(0, 16);           // nTalkDeviceMode = 0
+      speakBuf.writeInt32LE(0, 20);           // nIPSpeakerChannelCount = 0
+      speakBuf.writeInt32LE(0, 32);           // bEnableRender = 0
+      const r2 = sdk.CLIENT_SetDeviceMode(loginId, 7, speakBuf);  // NET_TALK_SPEAK_PARAM = 7
+
+      // 3. NET_TALK_TRANSFER_MODE (8 bytes)
+      const transferBuf = Buffer.alloc(8, 0);
+      transferBuf.writeInt32LE(8, 0);         // dwSize = 8
+      transferBuf.writeInt32LE(0, 4);         // bTransfer = 0 (conexión directa)
+      const r3 = sdk.CLIENT_SetDeviceMode(loginId, 11, transferBuf); // NET_TALK_TRANSFER_MODE = 11
+
+      this.logger.log(`🔧 [DAHUA-NETSDK] SetupTalkMode (codec=${encodeType}): Encode=${r1}, SpeakParam=${r2}, TransferMode=${r3}`);
+      return Boolean(r1);
+    } catch (e: any) {
+      this.logger.warn(`⚠️ [DAHUA-NETSDK] Error en setupNetSdkTalkMode: ${e.message}`);
+      return false;
+    }
+  }
+
+  /**
    * Transmite audio bidireccional directamente al altavoz del hardware Dahua usando NetSDK TCP (puerto 37777 / 20006).
    */
   async relayAudioNetSDK(
@@ -1642,47 +1687,44 @@ export class DahuaService {
       }
       const loginId = loginResult.loginId;
 
-      this.logger.log(`✅ [DAHUA-NETSDK-TALK] Login exitoso (ID: ${loginId}). Configurando códec de audio G.711A...`);
+      this.logger.log(`✅ [DAHUA-NETSDK-TALK] Login exitoso (ID: ${loginId}). Configurando códec y parámetros de audio...`);
 
-      // 1. Configurar modo de codificación DH_AUDIO_FORMAT_NET: G.711A (1), 16 bits, 8000 Hz
-      try {
-        const encodeBuf = Buffer.alloc(32);
-        encodeBuf.writeInt32LE(1, 0);    // encodeType = 1 (DH_TALK_G711a)
-        encodeBuf.writeInt32LE(16, 4);   // nAudioBit = 16
-        encodeBuf.writeInt32LE(8000, 8); // dwSampleRate = 8000 Hz
-        sdk.CLIENT_SetDeviceMode(loginId, 2, encodeBuf); // EM_USEDEV_TALK_ENCODE_TYPE = 2
-
-        const transferBuf = Buffer.alloc(4);
-        transferBuf.writeInt32LE(0, 0); // 0 = Transfer mode SERVER_CONN
-        sdk.CLIENT_SetDeviceMode(loginId, 4, transferBuf);
-
-        // Habilitar modo cliente para desmutear el altavoz
-        sdk.CLIENT_SetDeviceMode(loginId, 0, null); // EM_USEDEV_TALK_CLIENT_MODE = 0
-      } catch {}
+      // 1. Configurar parámetros de intercom NetSDK (G.711A = 2 por defecto, con fallback a PCM = 1)
+      let activeCodec = 2; // 2 = G711A, 1 = PCM
+      this.setupNetSdkTalkMode(loginId, 2);
 
       // 2. Registrar callback de audio usando koffi.pointer(AudioDataCallbackProto)
       const audioCb = koffi.register((handle: any, pBuf: any, size: number, flag: number, cbUser: any) => {
-        // Callback para stream de retorno (no utilizado en modo Talk)
+        // Callback para stream de retorno
       }, koffi.pointer(sdk.AudioDataCallbackProto));
 
-      const talkHandle = sdk.CLIENT_StartTalkEx(loginId, audioCb, 0);
+      let talkHandle = sdk.CLIENT_StartTalkEx(loginId, audioCb, 0);
       if (!talkHandle || talkHandle === 0n || talkHandle === 0) {
         const lastErr = sdk.CLIENT_GetLastError();
-        this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] CLIENT_StartTalkEx falló (GetLastError: ${lastErr})`);
-        try { koffi.unregister(audioCb); } catch {}
-        sdk.CLIENT_Logout(loginId);
-        return false;
+        this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] CLIENT_StartTalkEx con G.711A falló (GetLastError: ${lastErr}). Probando con PCM...`);
+        this.setupNetSdkTalkMode(loginId, 1);
+        talkHandle = sdk.CLIENT_StartTalkEx(loginId, audioCb, 0);
+        if (talkHandle && talkHandle !== 0n && talkHandle !== 0) {
+          activeCodec = 1;
+          this.logger.log(`✅ [DAHUA-NETSDK-TALK] CLIENT_StartTalkEx exitoso con PCM (Handle: ${talkHandle})`);
+        } else {
+          const pcmErr = sdk.CLIENT_GetLastError();
+          this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] CLIENT_StartTalkEx también falló con PCM (GetLastError: ${pcmErr})`);
+          try { koffi.unregister(audioCb); } catch {}
+          sdk.CLIENT_Logout(loginId);
+          return false;
+        }
       }
 
       try {
         sdk.CLIENT_SetVolume(talkHandle, 100);
       } catch {}
 
-      this.logger.log(`🎉 [DAHUA-NETSDK-TALK] Altavoz abierto en hardware Dahua (Handle: ${talkHandle})`);
+      this.logger.log(`🎉 [DAHUA-NETSDK-TALK] Altavoz abierto en hardware Dahua (Handle: ${talkHandle}, Codec: ${activeCodec === 2 ? 'G.711A' : 'PCM'})`);
 
-      // 3. Enviar ráfaga inicial de frames de confort (G.711A 0xd5) para enganchar de inmediato el DSP del hardware
+      // 3. Enviar ráfaga inicial de frames de confort para enganchar de inmediato el DSP del hardware
       try {
-        const initialBurst = Buffer.alloc(640, 0xd5);
+        const initialBurst = Buffer.alloc(640, activeCodec === 2 ? 0xd5 : 0x00);
         sdk.CLIENT_TalkSendData(talkHandle, initialBurst, initialBurst.length);
       } catch {}
 
@@ -1691,7 +1733,7 @@ export class DahuaService {
       const keepAliveInterval = setInterval(() => {
         if (Date.now() - lastAudioSent >= 200) {
           try {
-            const silenceFrame = Buffer.alloc(320, 0xd5);
+            const silenceFrame = Buffer.alloc(320, activeCodec === 2 ? 0xd5 : 0x00);
             sdk.CLIENT_TalkSendData(talkHandle, silenceFrame, silenceFrame.length);
           } catch {}
         }
@@ -1699,6 +1741,10 @@ export class DahuaService {
 
       const ffmpegPath = require('ffmpeg-static');
       const { spawn } = require('child_process');
+
+      const codecArgs = activeCodec === 2
+        ? ['-c:a', 'pcm_alaw', '-f', 'alaw']
+        : ['-c:a', 'pcm_s16le', '-f', 's16le'];
 
       const ffmpeg = spawn(ffmpegPath, [
         '-hide_banner',
@@ -1711,9 +1757,8 @@ export class DahuaService {
         '-i', 'pipe:0',
         '-ac', '1',
         '-ar', '8000',
-        '-c:a', 'pcm_alaw',
+        ...codecArgs,
         '-af', 'volume=4.5',
-        '-f', 'alaw',
         '-flush_packets', '1',
         'pipe:1',
       ]);
@@ -1812,18 +1857,8 @@ export class DahuaService {
       }
       const loginId = loginResult.loginId;
 
-      // Configurar modo de codificación DH_AUDIO_FORMAT_NET: G.711A (1), 16 bits, 8000 Hz
-      try {
-        const encodeBuf = Buffer.alloc(32);
-        encodeBuf.writeInt32LE(1, 0);
-        encodeBuf.writeInt32LE(16, 4);
-        encodeBuf.writeInt32LE(8000, 8);
-        sdk.CLIENT_SetDeviceMode(loginId, 2, encodeBuf); // EM_USEDEV_TALK_ENCODE_TYPE = 2
-
-        const transferBuf = Buffer.alloc(4);
-        transferBuf.writeInt32LE(0, 0);
-        sdk.CLIENT_SetDeviceMode(loginId, 4, transferBuf); // EM_USEDEV_TALK_TRANSFER_MODE = 4
-      } catch {}
+      // 1. Configurar modo de audio NetSDK (G.711A = 2 por defecto, con fallback a PCM = 1)
+      this.setupNetSdkTalkMode(loginId, 2);
 
       const audioCb = koffi.register((handle: any, pBuf: any, size: number, flag: number, u: any) => {
         if (pBuf && size > 0 && onAudioChunk) {
@@ -1834,13 +1869,19 @@ export class DahuaService {
         }
       }, koffi.pointer(sdk.AudioDataCallbackProto));
 
-      const talkHandle = sdk.CLIENT_StartTalkEx(loginId, audioCb, 0);
+      let talkHandle = sdk.CLIENT_StartTalkEx(loginId, audioCb, 0);
       if (!talkHandle || talkHandle === 0n || talkHandle === 0) {
         const lastErr = sdk.CLIENT_GetLastError();
-        this.logger.warn(`⚠️ [DAHUA-NETSDK-LISTEN] CLIENT_StartTalkEx falló (GetLastError: ${lastErr})`);
-        try { koffi.unregister(audioCb); } catch {}
-        try { sdk.CLIENT_Logout(loginId); } catch {}
-        return null;
+        this.logger.warn(`⚠️ [DAHUA-NETSDK-LISTEN] CLIENT_StartTalkEx con G711A falló (GetLastError: ${lastErr}). Probando PCM...`);
+        this.setupNetSdkTalkMode(loginId, 1);
+        talkHandle = sdk.CLIENT_StartTalkEx(loginId, audioCb, 0);
+        if (!talkHandle || talkHandle === 0n || talkHandle === 0) {
+          const pcmErr = sdk.CLIENT_GetLastError();
+          this.logger.warn(`⚠️ [DAHUA-NETSDK-LISTEN] CLIENT_StartTalkEx falló también con PCM (GetLastError: ${pcmErr})`);
+          try { koffi.unregister(audioCb); } catch {}
+          try { sdk.CLIENT_Logout(loginId); } catch {}
+          return null;
+        }
       }
 
       this.logger.log(`🎉 [DAHUA-NETSDK-LISTEN] Micrófono Dahua abierto (TalkHandle: ${talkHandle})`);
@@ -1862,6 +1903,111 @@ export class DahuaService {
       this.logger.error(`❌ [DAHUA-NETSDK-LISTEN] Error: ${e.message}`);
       return null;
     }
+  }
+
+  /**
+   * Ejecuta diagnóstico y prueba real de conexión de voz NetSDK en un dispositivo Dahua
+   */
+  async testNetSdkTalk(ip: string, sdkPort: number, user: string, pass: string): Promise<any> {
+    const ready = this.initNetSdk();
+    if (!ready || !this.netSdkFuncs) {
+      return {
+        ok: false,
+        error: 'NetSDK no disponible',
+        platform: process.platform,
+        arch: process.arch,
+        dllPath: this.netSdkDllPath,
+      };
+    }
+
+    const sdk = this.netSdkFuncs;
+    const loginResult = this.netSdkLogin(ip, sdkPort, user, pass);
+    if (!loginResult || !loginResult.loginId) {
+      return {
+        ok: false,
+        loginOk: false,
+        loginError: loginResult?.error,
+        ip,
+        sdkPort,
+      };
+    }
+
+    const loginId = loginResult.loginId;
+    const report: any = {
+      ok: false,
+      loginOk: true,
+      loginId: String(loginId),
+      tests: [],
+    };
+
+    const koffi = require('koffi');
+    const configs = [
+      { name: 'G711A_full', codec: 2, fullSetup: true },
+      { name: 'G711A_encode_only', codec: 2, fullSetup: false },
+      { name: 'PCM_full', codec: 1, fullSetup: true },
+      { name: 'PCM_encode_only', codec: 1, fullSetup: false },
+    ];
+
+    for (const cfg of configs) {
+      const testItem: any = { name: cfg.name, codec: cfg.codec };
+
+      // 1. Encode
+      const encodeBuf = Buffer.alloc(76, 0);
+      encodeBuf.writeInt32LE(cfg.codec, 0);
+      encodeBuf.writeInt32LE(16, 4);
+      encodeBuf.writeInt32LE(8000, 8);
+      encodeBuf.writeInt32LE(25, 12);
+      testItem.encodeOk = sdk.CLIENT_SetDeviceMode(loginId, 2, encodeBuf);
+      testItem.encodeErr = testItem.encodeOk ? 0 : sdk.CLIENT_GetLastError();
+
+      if (cfg.fullSetup) {
+        const speakBuf = Buffer.alloc(40, 0);
+        speakBuf.writeInt32LE(40, 0);
+        testItem.speakOk = sdk.CLIENT_SetDeviceMode(loginId, 7, speakBuf);
+        testItem.speakErr = testItem.speakOk ? 0 : sdk.CLIENT_GetLastError();
+
+        const transferBuf = Buffer.alloc(8, 0);
+        transferBuf.writeInt32LE(8, 0);
+        testItem.transferOk = sdk.CLIENT_SetDeviceMode(loginId, 11, transferBuf);
+        testItem.transferErr = testItem.transferOk ? 0 : sdk.CLIENT_GetLastError();
+      }
+
+      // Callback
+      let receivedPackets = 0;
+      let lastFlag = -1;
+      const audioCb = koffi.register((handle: any, pBuf: any, size: number, flag: number, cbUser: any) => {
+        receivedPackets++;
+        lastFlag = flag;
+      }, koffi.pointer(sdk.AudioDataCallbackProto));
+
+      const talkHandle = sdk.CLIENT_StartTalkEx(loginId, audioCb, 0);
+      testItem.talkHandle = String(talkHandle);
+      testItem.talkOk = Boolean(talkHandle && talkHandle !== 0n && talkHandle !== 0);
+      testItem.talkLastError = testItem.talkOk ? 0 : sdk.CLIENT_GetLastError();
+
+      if (testItem.talkOk) {
+        const burst = Buffer.alloc(320, cfg.codec === 2 ? 0xd5 : 0x00);
+        testItem.sendDataRet = sdk.CLIENT_TalkSendData(talkHandle, burst, burst.length);
+
+        await new Promise(r => setTimeout(r, 400));
+        testItem.receivedPackets = receivedPackets;
+        testItem.lastFlag = lastFlag;
+
+        sdk.CLIENT_StopTalkEx(talkHandle);
+        try { koffi.unregister(audioCb); } catch {}
+
+        report.tests.push(testItem);
+        report.ok = true;
+        report.successfulConfig = cfg.name;
+        break;
+      } else {
+        try { koffi.unregister(audioCb); } catch {}
+        report.tests.push(testItem);
+      }
+    }
+
+    sdk.CLIENT_Logout(loginId);
+    return report;
   }
 
   /**
