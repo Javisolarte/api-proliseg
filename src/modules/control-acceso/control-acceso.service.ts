@@ -6598,6 +6598,64 @@ export class ControlAccesoService implements OnModuleInit {
       sipCgiConfig = `Error CGI: ${e.message}`;
     }
 
+    // 4. Consultar y verificar reglas NAT en MikroTik
+    let mikrotikRules: any[] = [];
+    let natSyncResult: any = null;
+    try {
+      const mtkUrl = `http://${vpnIp}:80/rest/ip/firewall/nat`;
+      const mtkRes = await axios.get(mtkUrl, {
+        auth: { username: 'admin', password: '1004192496' },
+        timeout: 5000,
+        headers: { 'Accept': '*/*', 'User-Agent': 'curl/7.74.0' }
+      });
+      const allRules = mtkRes.data || [];
+      mikrotikRules = allRules.filter((r: any) =>
+        r['to-addresses'] === localIp ||
+        r['dst-port'] === String(sipPort) ||
+        r['dst-port'] === String(rtpPort) ||
+        r['dst-port'] === String(httpPort) ||
+        r['dst-port'] === String(sdkPort)
+      );
+
+      // Si falta la regla SIP UDP 50095 o RTP UDP 40095, forzar creación directa en MikroTik
+      const hasSipUdp = allRules.some((r: any) => r['dst-port'] === String(sipPort) && r['protocol'] === 'udp');
+      const hasSipTcp = allRules.some((r: any) => r['dst-port'] === String(sipPort) && r['protocol'] === 'tcp');
+      const hasRtpUdp = allRules.some((r: any) => r['dst-port'] === String(rtpPort) && r['protocol'] === 'udp');
+
+      const created: string[] = [];
+
+      if (!hasSipUdp) {
+        await axios.put(mtkUrl, {
+          chain: 'dstnat', action: 'dst-nat', protocol: 'udp',
+          'dst-port': String(sipPort), 'to-addresses': localIp, 'to-ports': '5060',
+          comment: `Proliseg Dahua SIP UDP: ${localIp}:5060`
+        }, { auth: { username: 'admin', password: '1004192496' }, timeout: 5000 });
+        created.push(`SIP UDP ${sipPort}->5060`);
+      }
+
+      if (!hasSipTcp) {
+        await axios.put(mtkUrl, {
+          chain: 'dstnat', action: 'dst-nat', protocol: 'tcp',
+          'dst-port': String(sipPort), 'to-addresses': localIp, 'to-ports': '5060',
+          comment: `Proliseg Dahua SIP TCP: ${localIp}:5060`
+        }, { auth: { username: 'admin', password: '1004192496' }, timeout: 5000 });
+        created.push(`SIP TCP ${sipPort}->5060`);
+      }
+
+      if (!hasRtpUdp) {
+        await axios.put(mtkUrl, {
+          chain: 'dstnat', action: 'dst-nat', protocol: 'udp',
+          'dst-port': String(rtpPort), 'to-addresses': localIp, 'to-ports': '15000',
+          comment: `Proliseg Dahua RTP UDP: ${localIp}:15000`
+        }, { auth: { username: 'admin', password: '1004192496' }, timeout: 5000 });
+        created.push(`RTP UDP ${rtpPort}->15000`);
+      }
+
+      natSyncResult = { status: 'ok', created, totalRulesForDevice: mikrotikRules.length };
+    } catch (mtkErr: any) {
+      natSyncResult = { status: 'error', message: mtkErr.message };
+    }
+
     return {
       dispositivo: dev.nombre_identificador,
       vpnIp,
@@ -6612,8 +6670,11 @@ export class ControlAccesoService implements OnModuleInit {
       tcpSipTest,
       udpOptionsTest,
       sipCgiConfig,
+      mikrotikRules,
+      natSyncResult,
     };
   }
+
 }
 
 
