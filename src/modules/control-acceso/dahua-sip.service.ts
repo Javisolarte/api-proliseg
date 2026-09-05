@@ -71,6 +71,9 @@ export class DahuaSipService {
           }
         }
       }
+      // En contenedor Docker donde la interfaz 10.8.0.x reside en el host y no en el container,
+      // anunciar targetIp o la IP del gateway VPN para que la terminal responda a través de la ruta válida del túnel
+      return targetIp;
     }
     // 2. Si hay interfaz 10.x.x.x o wg, seleccionarla
     for (const name of Object.keys(ifaces)) {

@@ -157,14 +157,24 @@ export class DahuaService {
       // Inicializar SDK UNA SOLA VEZ
       this.netSdkFuncs.CLIENT_Init(null, 0);
 
-      // Configurar timeouts de red (crítico para dispositivos detrás de NAT/VPN)
+      // Configurar timeouts y parámetros de red NET_PARAM (crítico para NAT / WAN / VPN)
       try {
-        const netParamBuf = Buffer.alloc(64);
-        netParamBuf.writeInt32LE(5000, 0);   // nConnectTime = 5000ms (default 1500ms)
-        netParamBuf.writeInt32LE(5000, 4);   // nGetConnInfoTime
-        netParamBuf.writeInt32LE(3, 8);      // nConnectTryNum = 3 reintentos
-        netParamBuf.writeInt32LE(5, 12);     // nSubConnectSpaceTime
-        netParamBuf.writeInt32LE(20000, 16); // nGetDevInfoTime = 20s
+        const netParamBuf = Buffer.alloc(64, 0);
+        netParamBuf.writeInt32LE(5000, 0);   // nWaittime = 5000ms
+        netParamBuf.writeInt32LE(5000, 4);   // nConnectTime = 5000ms
+        netParamBuf.writeInt32LE(3, 8);      // nConnectTryNum = 3
+        netParamBuf.writeInt32LE(10, 12);    // nSubConnectSpaceTime = 10ms
+        netParamBuf.writeInt32LE(5000, 16);  // nGetDevInfoTime = 5000ms
+        netParamBuf.writeInt32LE(256000, 20);// nConnectBufSize = 250KB
+        netParamBuf.writeInt32LE(5000, 24);  // nGetConnInfoTime = 5000ms
+        netParamBuf.writeInt32LE(3000, 28);  // nSearchRecordTime = 3000ms
+        netParamBuf.writeInt32LE(60000, 32); // nsubDisconnetTime = 60s
+        netParamBuf.writeUInt8(1, 36);       // byNetType = 1 (WAN / NAT Mode: fuerza transporte TCP para talk y streams)
+        netParamBuf.writeUInt8(4, 37);       // byPlaybackBufSize = 4MB
+        netParamBuf.writeUInt8(60, 38);      // bDetectDisconnTime = 60s
+        netParamBuf.writeUInt8(10, 39);      // bKeepLifeInterval = 10s
+        netParamBuf.writeInt32LE(2097152, 40);// nPicBufSize = 2MB
+        netParamBuf.writeInt16LE(60, 44);    // wBSIDLowPowerSubDisconnTime = 60s
         this.netSdkFuncs.CLIENT_SetNetworkParam(netParamBuf);
       } catch {}
 
@@ -1942,9 +1952,11 @@ export class DahuaService {
 
     const koffi = require('koffi');
     const configs = [
-      { name: 'G711A_full', codec: 2, fullSetup: true },
+      { name: 'G711A_full', codec: 2, fullSetup: true, transferMode: 0 },
+      { name: 'G711A_forward_chn0', codec: 2, fullSetup: true, transferMode: 1, channel: 0 },
+      { name: 'PCM_full', codec: 1, fullSetup: true, transferMode: 0 },
+      { name: 'PCM_forward_chn0', codec: 1, fullSetup: true, transferMode: 1, channel: 0 },
       { name: 'G711A_encode_only', codec: 2, fullSetup: false },
-      { name: 'PCM_full', codec: 1, fullSetup: true },
       { name: 'PCM_encode_only', codec: 1, fullSetup: false },
     ];
 
@@ -1968,8 +1980,16 @@ export class DahuaService {
 
         const transferBuf = Buffer.alloc(8, 0);
         transferBuf.writeInt32LE(8, 0);
+        transferBuf.writeInt32LE(cfg.transferMode || 0, 4);
         testItem.transferOk = sdk.CLIENT_SetDeviceMode(loginId, 11, transferBuf);
         testItem.transferErr = testItem.transferOk ? 0 : sdk.CLIENT_GetLastError();
+
+        if (cfg.transferMode === 1) {
+          const chnBuf = Buffer.alloc(4, 0);
+          chnBuf.writeInt32LE(cfg.channel || 0, 0);
+          testItem.chnOk = sdk.CLIENT_SetDeviceMode(loginId, 5, chnBuf);
+          testItem.chnErr = testItem.chnOk ? 0 : sdk.CLIENT_GetLastError();
+        }
       }
 
       // Callback
