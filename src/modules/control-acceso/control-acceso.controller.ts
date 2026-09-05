@@ -324,6 +324,14 @@ export class ControlAccesoController {
     return this.controlAccesoService.debugIntercomDevice(id);
   }
 
+  @Public()
+  @Get('test-dahua-sip/:id')
+  @ApiOperation({ summary: 'Diagnostico de conectividad SIP / RTP hacia terminal Dahua' })
+  async testDahuaSip(@Param('id') id: string) {
+    this.logger.log(`📞 [TEST-DAHUA-SIP] Probando conexión SIP con dispositivo: ${id}`);
+    return this.controlAccesoService.testDahuaSip(id);
+  }
+
 
   @Get('recopilacion/lugares')
   @ApiOperation({ summary: 'Lista lugares de recopilacion de datos' })

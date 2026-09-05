@@ -57,6 +57,99 @@ export class DahuaSipService {
   }
 
   /**
+   * Determina la IP local de la interfaz de red apropiada para comunicarse con el target.
+   */
+  public getLocalIpForTarget(targetIp: string): string {
+    const os = require('os');
+    const ifaces = os.networkInterfaces();
+    // 1. Si targetIp es de subred VPN 10.8.0.x, buscar la interfaz local que coincida
+    if (targetIp.startsWith('10.8.0.')) {
+      for (const name of Object.keys(ifaces)) {
+        for (const net of ifaces[name] || []) {
+          if (net.family === 'IPv4' && !net.internal && net.address.startsWith('10.8.0.')) {
+            return net.address;
+          }
+        }
+      }
+    }
+    // 2. Si hay interfaz 10.x.x.x o wg, seleccionarla
+    for (const name of Object.keys(ifaces)) {
+      for (const net of ifaces[name] || []) {
+        if (net.family === 'IPv4' && !net.internal && (net.address.startsWith('10.') || name.includes('wg'))) {
+          return net.address;
+        }
+      }
+    }
+    // 3. Primer IPv4 no local
+    for (const name of Object.keys(ifaces)) {
+      for (const net of ifaces[name] || []) {
+        if (net.family === 'IPv4' && !net.internal && net.address !== '127.0.0.1') {
+          return net.address;
+        }
+      }
+    }
+    return '127.0.0.1';
+  }
+
+  /**
+   * Extrae el valor de un header de un mensaje SIP.
+   */
+  private extractHeader(raw: string, headerName: string): string | null {
+    const lines = raw.split('\r\n');
+    const prefix = new RegExp(`^${headerName}:\\s*`, 'i');
+    for (const line of lines) {
+      if (prefix.test(line)) {
+        return line.replace(prefix, '').trim();
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Calcula el header de autorización SIP Digest (RFC 2617 / RFC 3261) ante un 401 Unauthorized.
+   */
+  public buildSipDigestAuth(
+    method: string,
+    uri: string,
+    authHeader: string,
+    user = '8001',
+    pass = '123456',
+  ): string | null {
+    const realmMatch = authHeader.match(/realm="([^"]+)"/i);
+    const nonceMatch = authHeader.match(/nonce="([^"]+)"/i);
+    const qopMatch = authHeader.match(/qop="?([^",]+)"?/i);
+    const opaqueMatch = authHeader.match(/opaque="([^"]+)"/i);
+
+    if (!realmMatch || !nonceMatch) return null;
+
+    const realm = realmMatch[1];
+    const nonce = nonceMatch[1];
+    const qop = qopMatch ? qopMatch[1] : undefined;
+    const opaque = opaqueMatch ? opaqueMatch[1] : undefined;
+    const nc = '00000001';
+    const cnonce = crypto.randomBytes(4).toString('hex');
+
+    const ha1 = crypto.createHash('md5').update(`${user}:${realm}:${pass}`).digest('hex');
+    const ha2 = crypto.createHash('md5').update(`${method}:${uri}`).digest('hex');
+
+    let response = '';
+    if (qop === 'auth') {
+      response = crypto.createHash('md5').update(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`).digest('hex');
+    } else {
+      response = crypto.createHash('md5').update(`${ha1}:${nonce}:${ha2}`).digest('hex');
+    }
+
+    let header = `Authorization: Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${response}", algorithm=MD5`;
+    if (qop) {
+      header += `, qop="${qop}", nc=${nc}, cnonce="${cnonce}"`;
+    }
+    if (opaque) {
+      header += `, opaque="${opaque}"`;
+    }
+    return header;
+  }
+
+  /**
    * Construye un mensaje SIP INVITE con SDP para códec G.711A (PCMA / 8000Hz).
    */
   private buildInvite(
@@ -69,6 +162,7 @@ export class DahuaSipService {
     targetSipPort: number,
     localRtpPort: number,
     user = '8001',
+    authHeader?: string,
   ): string {
     const sdp = [
       'v=0',
@@ -82,7 +176,7 @@ export class DahuaSipService {
       '',
     ].join('\r\n');
 
-    const headers = [
+    const headerLines = [
       `INVITE sip:${user}@${targetIp}:${targetSipPort} SIP/2.0`,
       `Via: SIP/2.0/UDP ${localIp}:${localSipPort};branch=z9hG4bK-${this.randomStr(8)};rport`,
       `From: <sip:operator@${localIp}:${localSipPort}>;tag=${fromTag}`,
@@ -92,14 +186,22 @@ export class DahuaSipService {
       `Contact: <sip:operator@${localIp}:${localSipPort}>`,
       'Max-Forwards: 70',
       'User-Agent: Proliseg-Intercom/1.0',
+    ];
+
+    if (authHeader) {
+      headerLines.push(authHeader);
+    }
+
+    headerLines.push(
       'Content-Type: application/sdp',
       `Content-Length: ${Buffer.byteLength(sdp, 'utf8')}`,
       '',
       sdp,
-    ].join('\r\n');
+    );
 
-    return headers;
+    return headerLines.join('\r\n');
   }
+
 
   /**
    * Construye un mensaje SIP ACK.
@@ -233,12 +335,16 @@ export class DahuaSipService {
       const { socket: sipSocket, port: localSipPort } = await this.createUdpSocket();
       const { socket: rtpSocket, port: localRtpPort } = await this.createUdpSocket();
 
+      const localIp = this.getLocalIpForTarget(targetIp);
       const callId = `${this.randomStr(12)}@proliseg`;
       const fromTag = this.randomStr(8);
       let cseq = 1;
       let remoteToTag = '';
       let remoteRtpPort = rtpPortFallback || 15000;
       let isSessionActive = false;
+      let hasAuthed = false;
+
+      this.logger.log(`📞 [DAHUA-SIP] Iniciando SIP desde IP local ${localIp}:${localSipPort} hacia ${targetIp}:${sipPort} (RTP local: ${localRtpPort})`);
 
       // Escuchar paquetes RTP entrantes desde el micrófono del Dahua
       rtpSocket.on('message', (msg) => {
@@ -253,7 +359,7 @@ export class DahuaSipService {
         callId,
         fromTag,
         cseq,
-        '0.0.0.0',
+        localIp,
         localSipPort,
         targetIp,
         sipPort,
@@ -279,7 +385,7 @@ export class DahuaSipService {
               fromTag,
               remoteToTag,
               cseq,
-              '0.0.0.0',
+              localIp,
               localSipPort,
               targetIp,
               sipPort,
@@ -299,9 +405,57 @@ export class DahuaSipService {
         sipSocket.on('message', (msgBuf) => {
           const respStr = msgBuf.toString('utf8');
           const parsed = this.parseSipMessage(respStr);
+          this.logger.log(`📩 [DAHUA-SIP] Respuesta SIP ${parsed.statusCode} desde ${sessionKey}`);
 
           if (parsed.statusCode === 100 || parsed.statusCode === 180) {
             this.logger.debug(`[DAHUA-SIP] Estado intermedio: ${parsed.statusCode} (${sessionKey})`);
+          } else if (parsed.statusCode === 401 && !hasAuthed) {
+            hasAuthed = true;
+            this.logger.log(`🔑 [DAHUA-SIP] Recibido 401 Unauthorized de ${sessionKey}, negociando Digest Auth...`);
+
+            const authHeaderVal = this.extractHeader(respStr, 'WWW-Authenticate');
+            if (authHeaderVal) {
+              const targetUri = `sip:${user}@${targetIp}:${sipPort}`;
+              // Intentar autenticación con credenciales estándar SIP Dahua (8001 / 123456)
+              const digestAuth = this.buildSipDigestAuth('INVITE', targetUri, authHeaderVal, user, '123456');
+
+              // 1. Enviar ACK al 401 requerido por RFC 3261
+              const ack401 = this.buildAck(
+                callId,
+                fromTag,
+                parsed.toTag || '',
+                cseq,
+                localIp,
+                localSipPort,
+                targetIp,
+                sipPort,
+                user,
+              );
+              try { sipSocket.send(ack401, sipPort, targetIp); } catch {}
+
+              // 2. Enviar nuevo INVITE autenticado con CSeq incrementado
+              cseq++;
+              if (digestAuth) {
+                const authedInvite = this.buildInvite(
+                  callId,
+                  fromTag,
+                  cseq,
+                  localIp,
+                  localSipPort,
+                  targetIp,
+                  sipPort,
+                  localRtpPort,
+                  user,
+                  digestAuth,
+                );
+                this.logger.log(`🚀 [DAHUA-SIP] Enviando segundo INVITE autenticado con Digest CSeq ${cseq} hacia ${sessionKey}`);
+                sipSocket.send(authedInvite, sipPort, targetIp);
+                return;
+              }
+            }
+            this.logger.warn(`⚠️ [DAHUA-SIP] No se pudo construir digest auth para ${sessionKey}`);
+            stop();
+            resolve(null);
           } else if (parsed.statusCode === 200) {
             if (timer) clearTimeout(timer);
             isSessionActive = true;
@@ -318,7 +472,7 @@ export class DahuaSipService {
               fromTag,
               remoteToTag,
               cseq,
-              '0.0.0.0',
+              localIp,
               localSipPort,
               targetIp,
               sipPort,
@@ -347,7 +501,7 @@ export class DahuaSipService {
 
             resolve({ stop });
           } else if (parsed.statusCode >= 400) {
-            this.logger.warn(`⚠️ [DAHUA-SIP] Respuesta SIP de error ${parsed.statusCode} desde ${sessionKey}`);
+            this.logger.warn(`⚠️ [DAHUA-SIP] Respuesta SIP de error final ${parsed.statusCode} desde ${sessionKey}`);
             stop();
             resolve(null);
           }
@@ -362,20 +516,21 @@ export class DahuaSipService {
           }
         });
 
-        // Timeout de espera de respuesta SIP (3.5 segundos)
+        // Timeout de espera de respuesta SIP (4.5 segundos)
         timer = setTimeout(() => {
           if (!isSessionActive) {
             this.logger.warn(`⏱️ [DAHUA-SIP] Timeout esperando respuesta SIP de ${sessionKey}`);
             stop();
             resolve(null);
           }
-        }, 3500);
+        }, 4500);
       });
     } catch (e: any) {
       this.logger.error(`❌ [DAHUA-SIP] Excepción al iniciar SIP: ${e.message}`);
       return null;
     }
   }
+
 
   /**
    * Transmite el audio del micrófono del operador hacia el altavoz del Dahua vía RTP SIP.

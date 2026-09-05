@@ -6486,7 +6486,136 @@ export class ControlAccesoService implements OnModuleInit {
       results
     };
   }
+
+  async testDahuaSip(dispositivoId: string): Promise<any> {
+    const { data: dev, error } = await this.supabase
+      .getClient()
+      .from('dispositivos_iot')
+      .select('*')
+      .eq('id', dispositivoId)
+      .single();
+
+    if (error || !dev) {
+      throw new Error(`Dispositivo no encontrado con ID: ${dispositivoId}`);
+    }
+
+    const config = dev.configuracion_tecnica || {};
+    const localIp = config.puertos_mapeados?.original_ip || dev.ip_direccion;
+    const vpnIp = dev.ip_direccion || '10.8.0.4';
+    const lastOctet = Number(String(localIp).split('.').pop() || '80');
+
+    const mapped = config.puertos_mapeados || {};
+    const sipPort = Number(mapped.mapped_sip || (50000 + lastOctet));
+    const rtpPort = Number(mapped.mapped_rtp || (40000 + lastOctet));
+    const httpPort = Number(mapped.mapped_http || config.puerto || (10000 + lastOctet));
+    const sdkPort = Number(mapped.mapped_sdk || (20000 + lastOctet));
+    const user = dev.credencial_usuario || 'admin';
+    const pass = dev.credencial_password || 'elvado2025';
+
+    const os = require('os');
+    const net = require('net');
+    const dgram = require('dgram');
+
+    const ifaces = os.networkInterfaces();
+    const localIps: string[] = [];
+    for (const name of Object.keys(ifaces)) {
+      for (const n of ifaces[name] || []) {
+        if (n.family === 'IPv4') localIps.push(`${name}: ${n.address}`);
+      }
+    }
+
+    // 1. Test TCP connect hacia puerto SIP
+    const tcpSipTest = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
+      const sock = new net.Socket();
+      sock.setTimeout(2500);
+      sock.on('connect', () => {
+        sock.destroy();
+        resolve({ ok: true });
+      });
+      sock.on('timeout', () => {
+        sock.destroy();
+        resolve({ ok: false, error: 'TCP timeout (2500ms)' });
+      });
+      sock.on('error', (err: any) => {
+        sock.destroy();
+        resolve({ ok: false, error: err.message });
+      });
+      sock.connect(sipPort, vpnIp);
+    });
+
+    // 2. Test UDP SIP OPTIONS hacia puerto SIP
+    const udpOptionsTest = await new Promise<{ sent: boolean; received?: string; error?: string }>((resolve) => {
+      const sock = dgram.createSocket('udp4');
+      let timer: any = null;
+
+      sock.on('message', (msg: Buffer, rinfo: any) => {
+        if (timer) clearTimeout(timer);
+        try { sock.close(); } catch {}
+        resolve({ sent: true, received: msg.toString('utf8').substring(0, 500) });
+      });
+
+      sock.on('error', (err: any) => {
+        if (timer) clearTimeout(timer);
+        try { sock.close(); } catch {}
+        resolve({ sent: false, error: err.message });
+      });
+
+      const optionsMsg = [
+        `OPTIONS sip:8001@${vpnIp}:${sipPort} SIP/2.0`,
+        `Via: SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK-test-${Date.now()};rport`,
+        `From: <sip:proliseg@127.0.0.1>;tag=test1234`,
+        `To: <sip:8001@${vpnIp}:${sipPort}>`,
+        `Call-ID: test-${Date.now()}@proliseg`,
+        `CSeq: 1 OPTIONS`,
+        `Max-Forwards: 70`,
+        `User-Agent: Proliseg-Diag/1.0`,
+        `Content-Length: 0`,
+        '',
+        '',
+      ].join('\r\n');
+
+      sock.send(optionsMsg, sipPort, vpnIp, (err: any) => {
+        if (err) {
+          if (timer) clearTimeout(timer);
+          try { sock.close(); } catch {}
+          resolve({ sent: false, error: err.message });
+          return;
+        }
+
+        timer = setTimeout(() => {
+          try { sock.close(); } catch {}
+          resolve({ sent: true, error: 'Timeout esperando respuesta UDP (2500ms)' });
+        }, 2500);
+      });
+    });
+
+    // 3. Consultar configuración SIP en Dahua vía CGI
+    let sipCgiConfig: any = null;
+    try {
+      const getRes = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=getConfig&name=SIP');
+      sipCgiConfig = String(getRes?.data || '').trim();
+    } catch (e: any) {
+      sipCgiConfig = `Error CGI: ${e.message}`;
+    }
+
+    return {
+      dispositivo: dev.nombre_identificador,
+      vpnIp,
+      localIp,
+      ports: {
+        http: httpPort,
+        sdk: sdkPort,
+        sip: sipPort,
+        rtp: rtpPort,
+      },
+      localNetworkInterfaces: localIps,
+      tcpSipTest,
+      udpOptionsTest,
+      sipCgiConfig,
+    };
+  }
 }
+
 
 
 
