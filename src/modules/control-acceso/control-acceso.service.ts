@@ -8,6 +8,7 @@ import * as dgram from 'dgram';
 import { DevicePollerService } from './device-poller.service';
 import { spawn } from 'child_process';
 import { DahuaService } from './dahua.service';
+import { DahuaSipService } from './dahua-sip.service';
 
 @Injectable()
 export class ControlAccesoService implements OnModuleInit {
@@ -24,6 +25,7 @@ export class ControlAccesoService implements OnModuleInit {
     private readonly supabase: SupabaseService,
     private readonly devicePoller: DevicePollerService,
     private readonly dahuaService: DahuaService,
+    private readonly dahuaSipService: DahuaSipService,
   ) { }
 
   async onModuleInit() {
@@ -739,6 +741,12 @@ export class ControlAccesoService implements OnModuleInit {
       mapped?.mapped_rtsp || config?.puerto_rtsp || mapped?.original_rtsp || 554
     );
     const sdkPort = isDahua ? this.resolveDahuaSdkPort(resolved.port, config, resolved.via) : undefined;
+    const sipPort = isDahua
+      ? Number(mapped?.mapped_sip || (resolved.port >= 10000 ? 50000 + (resolved.port % 10000) : 5060))
+      : undefined;
+    const rtpPort = isDahua
+      ? Number(mapped?.mapped_rtp || (resolved.port >= 10000 ? 40000 + (resolved.port % 10000) : 15000))
+      : undefined;
     return {
       host: resolved.ip,
       port: resolved.port,
@@ -748,6 +756,8 @@ export class ControlAccesoService implements OnModuleInit {
       isDahua,
       rtspPort,
       sdkPort,
+      sipPort,
+      rtpPort,
     };
   }
 
@@ -1135,12 +1145,39 @@ export class ControlAccesoService implements OnModuleInit {
 
   private async relayAudioToDeviceDahua(
     audioStream: NodeJS.ReadableStream,
-    target: { host: string; port: number; user: string; pass: string; via: string; rtspPort?: number; sdkPort?: number },
+    target: { host: string; port: number; user: string; pass: string; via: string; rtspPort?: number; sdkPort?: number; sipPort?: number; rtpPort?: number },
     deviceId?: string,
     operator?: any,
   ): Promise<any> {
-    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Iniciando llamada nativa NetSDK (CLIENT_StartTalkEx) en ${target.host}:${target.sdkPort || target.port}...`);
+    const sipPort = target.sipPort || (target.port >= 10000 ? 50000 + (target.port % 10000) : 5060);
+    const rtpPort = target.rtpPort || (target.port >= 10000 ? 40000 + (target.port % 10000) : 15000);
 
+    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Transmitiendo voz hacia Dahua en ${target.host} (SIP: ${sipPort}, RTP: ${rtpPort})...`);
+
+    // 1. Intentar comunicación SIP / RTP nativa
+    if (this.dahuaSipService) {
+      try {
+        const sipOk = await this.dahuaSipService.relayAudioToDahuaSip(
+          audioStream,
+          target.host,
+          sipPort,
+          rtpPort,
+          '8001',
+        );
+        if (sipOk) {
+          return {
+            ok: true,
+            mensaje: 'Audio transmitido al altavoz Dahua por protocolo SIP (RTP G.711A)',
+            detalle: { target: `${target.host}:${sipPort}`, via: 'SIP/RTP UDP' },
+            operador: operator || null,
+          };
+        }
+      } catch (sipErr: any) {
+        this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] SIP Talk error: ${sipErr.message}, probando fallback NetSDK...`);
+      }
+    }
+
+    // 2. Fallback NetSDK si SIP no respondió
     if (this.dahuaService) {
       try {
         const netSdkResult = await this.dahuaService.relayAudioNetSDK(
@@ -1166,7 +1203,7 @@ export class ControlAccesoService implements OnModuleInit {
 
     return {
       ok: false,
-      mensaje: 'No se pudo iniciar la sesión de llamada NetSDK con el terminal Dahua',
+      mensaje: 'No se pudo iniciar la sesión de llamada SIP/NetSDK con el terminal Dahua',
     };
   }
 
@@ -1355,14 +1392,14 @@ export class ControlAccesoService implements OnModuleInit {
 
   private async relayAudioFromDeviceDahua(
     res: any,
-    target: { host: string; port: number; user: string; pass: string; via: string; rtspPort?: number; sdkPort?: number },
+    target: { host: string; port: number; user: string; pass: string; via: string; rtspPort?: number; sdkPort?: number; sipPort?: number; rtpPort?: number },
   ): Promise<any> {
     const isVpn = this.isVpnIp(target.host);
     const rtspPort = target.rtspPort && target.rtspPort !== 554
       ? target.rtspPort
       : (target.port >= 10000 ? (30000 + (target.port % 10000)) : (target.rtspPort || 554));
 
-    this.logger.log(`🔊 [AUDIO-OUT-DAHUA] Escuchando audio desde Dahua en ${target.host}:${target.port} (SDK port: ${target.sdkPort || 37777}, RTSP port: ${rtspPort}, VPN: ${isVpn})`);
+    this.logger.log(`🔊 [AUDIO-OUT-DAHUA] Escuchando audio desde Dahua en ${target.host}:${target.port} (SIP port: ${target.sipPort || 5060}, RTP: ${target.rtpPort || 15000}, SDK: ${target.sdkPort || 37777})`);
 
     try {
       res.set({
@@ -1374,9 +1411,17 @@ export class ControlAccesoService implements OnModuleInit {
         'Access-Control-Allow-Origin': '*',
       });
 
-      // Si el dispositivo está detrás de VPN NAT, priorizar RTSP TCP (puerto mapeado directo)
+      // 1. Intentar protocolo SIP nativo del terminal Dahua (vía de audio principal para intercomunicadores ASI3203E-W)
+      if (this.dahuaSipService) {
+        this.logger.log(`⚡ [AUDIO-OUT-DAHUA] Iniciando sesión SIP para escuchar micrófono Dahua...`);
+        const sipStarted = await this.streamDahuaSipAudio(res, target);
+        if (sipStarted) return;
+        this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA] SIP no produjo datos, probando fallback RTSP/NetSDK...`);
+      }
+
+      // 2. Si el dispositivo está detrás de VPN NAT, intentar RTSP
       if (isVpn) {
-        this.logger.log(`⚡ [AUDIO-OUT-DAHUA] Dispositivo en VPN detectado (${target.host}). Priorizando RTSP->MP3 directo en puerto ${rtspPort}`);
+        this.logger.log(`⚡ [AUDIO-OUT-DAHUA] Probando RTSP directo en puerto ${rtspPort}`);
         const rtspStarted = await this.streamDahuaRtspAudio(res, target, rtspPort);
         if (rtspStarted) return;
 
@@ -1384,7 +1429,7 @@ export class ControlAccesoService implements OnModuleInit {
         const netSdkStarted = await this.streamDahuaNetSdkAudio(res, target);
         if (netSdkStarted) return;
       } else {
-        // En LAN local, intentar NetSDK Listen primero
+        // En LAN local, intentar NetSDK Listen
         const netSdkStarted = await this.streamDahuaNetSdkAudio(res, target);
         if (netSdkStarted) return;
 
@@ -1402,6 +1447,107 @@ export class ControlAccesoService implements OnModuleInit {
         res.status(200).send({ ok: true, mensaje: 'Audio no disponible en este modelo Dahua' });
       }
     }
+  }
+
+  private async streamDahuaSipAudio(
+    res: any,
+    target: { host: string; port: number; user: string; pass: string; sipPort?: number; rtpPort?: number },
+  ): Promise<boolean> {
+    if (!this.dahuaSipService) return false;
+
+    const sipPort = target.sipPort || (target.port >= 10000 ? 50000 + (target.port % 10000) : 5060);
+    const rtpPort = target.rtpPort || (target.port >= 10000 ? 40000 + (target.port % 10000) : 15000);
+
+    return new Promise(async (resolve) => {
+      let resolved = false;
+      let hasSentData = false;
+      let ffmpegProcess: any = null;
+
+      const finish = (result: boolean) => {
+        if (!resolved) {
+          resolved = true;
+          resolve(result);
+        }
+      };
+
+      try {
+        const sipSession = await this.dahuaSipService.openDahuaSipListenSession(
+          target.host,
+          sipPort,
+          rtpPort,
+          '8001',
+          (pcmAlawChunk: Buffer) => {
+            if (ffmpegProcess && !ffmpegProcess.killed && ffmpegProcess.stdin?.writable) {
+              try {
+                ffmpegProcess.stdin.write(pcmAlawChunk);
+              } catch {}
+            }
+          },
+        );
+
+        if (!sipSession) {
+          return finish(false);
+        }
+
+        this.logger.log(`🎉 [AUDIO-OUT-DAHUA-SIP] Sesión SIP negociada, iniciando transcodificador MP3`);
+
+        ffmpegProcess = spawn(this.getFfmpegBinary(), [
+          '-hide_banner',
+          '-loglevel', 'warning',
+          '-f', 'alaw',
+          '-ar', '8000',
+          '-ac', '1',
+          '-i', 'pipe:0',
+          '-c:a', 'libmp3lame',
+          '-b:a', '64k',
+          '-ar', '44100',
+          '-ac', '1',
+          '-f', 'mp3',
+          'pipe:1',
+        ]);
+
+        ffmpegProcess.stdout.on('data', () => {
+          if (!hasSentData) {
+            hasSentData = true;
+            this.logger.log(`🎉 [AUDIO-OUT-DAHUA-SIP] Transmitiendo audio MP3 en tiempo real desde Dahua SIP`);
+            finish(true);
+          }
+        });
+
+        ffmpegProcess.stdout.pipe(res);
+
+        ffmpegProcess.stderr.on('data', (chunk: any) => {
+          this.logger.debug(`[AUDIO-OUT-DAHUA-SIP] ffmpeg: ${chunk.toString().trim()}`);
+        });
+
+        ffmpegProcess.on('error', (err: any) => {
+          this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA-SIP] ffmpeg error: ${err.message}`);
+          if (!hasSentData) finish(false);
+        });
+
+        ffmpegProcess.on('exit', () => {
+          if (!hasSentData) finish(false);
+          else if (!res.writableEnded) res.end();
+        });
+
+        const timeout = setTimeout(() => {
+          if (!hasSentData) {
+            finish(false);
+          }
+        }, 4000);
+
+        res.on('close', () => {
+          clearTimeout(timeout);
+          this.logger.log(`🔇 [AUDIO-OUT-DAHUA-SIP] Cliente cerró conexión de audio SIP`);
+          try { sipSession.stop(); } catch {}
+          try { ffmpegProcess?.stdin?.end(); } catch {}
+          try { ffmpegProcess?.kill('SIGKILL'); } catch {}
+        });
+      } catch (err: any) {
+        this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA-SIP] Error al iniciar SIP: ${err.message}`);
+        finish(false);
+      }
+    });
   }
 
   private async streamDahuaRtspAudio(
