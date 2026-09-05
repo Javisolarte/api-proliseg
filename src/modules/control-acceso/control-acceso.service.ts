@@ -1357,7 +1357,12 @@ export class ControlAccesoService implements OnModuleInit {
     res: any,
     target: { host: string; port: number; user: string; pass: string; via: string; rtspPort?: number; sdkPort?: number },
   ): Promise<any> {
-    this.logger.log(`🔊 [AUDIO-OUT-DAHUA] Escuchando audio desde Dahua en ${target.host}:${target.port} (SDK port: ${target.sdkPort || 37777}, RTSP port: ${target.rtspPort || 554})`);
+    const isVpn = this.isVpnIp(target.host);
+    const rtspPort = target.rtspPort && target.rtspPort !== 554
+      ? target.rtspPort
+      : (target.port >= 10000 ? (30000 + (target.port % 10000)) : (target.rtspPort || 554));
+
+    this.logger.log(`🔊 [AUDIO-OUT-DAHUA] Escuchando audio desde Dahua en ${target.host}:${target.port} (SDK port: ${target.sdkPort || 37777}, RTSP port: ${rtspPort}, VPN: ${isVpn})`);
 
     try {
       res.set({
@@ -1369,71 +1374,53 @@ export class ControlAccesoService implements OnModuleInit {
         'Access-Control-Allow-Origin': '*',
       });
 
-      let netSdkSession: { stop: () => void } | null = null;
-      let ffmpegProcess: any = null;
+      // Si el dispositivo está detrás de VPN NAT, priorizar RTSP TCP (puerto mapeado directo)
+      if (isVpn) {
+        this.logger.log(`⚡ [AUDIO-OUT-DAHUA] Dispositivo en VPN detectado (${target.host}). Priorizando RTSP->MP3 directo en puerto ${rtspPort}`);
+        const rtspStarted = await this.streamDahuaRtspAudio(res, target, rtspPort);
+        if (rtspStarted) return;
 
-      if (this.dahuaService) {
-        try {
-          netSdkSession = await this.dahuaService.openDahuaListenSession(
-            target.host,
-            target.port,
-            target.user,
-            target.pass,
-            target.sdkPort,
-            (chunk: Buffer) => {
-              if (ffmpegProcess && !ffmpegProcess.killed && ffmpegProcess.stdin?.writable) {
-                try {
-                  ffmpegProcess.stdin.write(chunk);
-                } catch {}
-              }
-            },
-          );
+        this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA] RTSP no produjo datos, intentando NetSDK Listen como fallback...`);
+        const netSdkStarted = await this.streamDahuaNetSdkAudio(res, target);
+        if (netSdkStarted) return;
+      } else {
+        // En LAN local, intentar NetSDK Listen primero
+        const netSdkStarted = await this.streamDahuaNetSdkAudio(res, target);
+        if (netSdkStarted) return;
 
-          if (netSdkSession) {
-            this.logger.log(`🎉 [AUDIO-OUT-DAHUA] Sesión NetSDK activa para capturar audio del micrófono Dahua`);
-            ffmpegProcess = spawn(this.getFfmpegBinary(), [
-              '-hide_banner',
-              '-loglevel', 'warning',
-              '-f', 'alaw',
-              '-ar', '8000',
-              '-ac', '1',
-              '-i', 'pipe:0',
-              '-c:a', 'libmp3lame',
-              '-b:a', '64k',
-              '-ar', '44100',
-              '-ac', '1',
-              '-f', 'mp3',
-              'pipe:1',
-            ]);
-
-            ffmpegProcess.stdout.pipe(res);
-
-            ffmpegProcess.stderr.on('data', (chunk: any) => {
-              this.logger.debug(`[AUDIO-OUT-DAHUA-NETSDK] ffmpeg: ${chunk.toString().trim()}`);
-            });
-
-            ffmpegProcess.on('error', (err: any) => {
-              this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA-NETSDK] ffmpeg error: ${err.message}`);
-            });
-
-            res.on('close', () => {
-              this.logger.log(`🔇 [AUDIO-OUT-DAHUA] Cliente cerró conexión de audio (NetSDK)`);
-              try { netSdkSession?.stop(); } catch {}
-              try { ffmpegProcess?.stdin?.end(); } catch {}
-              try { ffmpegProcess?.kill('SIGKILL'); } catch {}
-            });
-            return;
-          }
-        } catch (sdkErr: any) {
-          this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA] NetSDK Listen error: ${sdkErr.message}, intentando fallback RTSP...`);
-        }
+        this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA] NetSDK Listen no disponible, intentando RTSP como fallback...`);
+        const rtspStarted = await this.streamDahuaRtspAudio(res, target, rtspPort);
+        if (rtspStarted) return;
       }
 
-      // Fallback RTSP si NetSDK no estuvo disponible
-      const rtspPort = target.rtspPort || 554;
+      if (!res.headersSent) {
+        res.status(200).send({ ok: true, mensaje: 'Audio no disponible en este modelo Dahua' });
+      }
+    } catch (err: any) {
+      this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA] No se pudo obtener audio stream de Dahua: ${err.message}`);
+      if (!res.headersSent) {
+        res.status(200).send({ ok: true, mensaje: 'Audio no disponible en este modelo Dahua' });
+      }
+    }
+  }
+
+  private async streamDahuaRtspAudio(
+    res: any,
+    target: { host: string; port: number; user: string; pass: string; rtspPort?: number },
+    rtspPort: number,
+  ): Promise<boolean> {
+    return new Promise((resolve) => {
+      let resolved = false;
+      const finish = (result: boolean) => {
+        if (!resolved) {
+          resolved = true;
+          resolve(result);
+        }
+      };
+
       const encodedPass = encodeURIComponent(target.pass);
 
-      // Asegurar que Audio esté habilitado en Dahua vía CGI antes de leer RTSP
+      // Asegurar en background que el canal de audio esté habilitado en Dahua vía CGI
       if (this.dahuaService) {
         this.dahuaService.asegurarFormatoH264(target.host, target.port, target.user, target.pass).catch(() => {});
       }
@@ -1445,36 +1432,42 @@ export class ControlAccesoService implements OnModuleInit {
         '-loglevel', 'warning',
         '-rtsp_transport', 'tcp',
         '-i', rtspUrl0,
-        '-vn',                                    // Sin video
-        '-acodec', 'libmp3lame',                  // Transcodificar a MP3 estándar
-        '-ab', '128k',                            // 128 kbps
-        '-ar', '44100',                           // 44.1 kHz tasa de muestreo estándar de navegador
-        '-ac', '1',                               // Mono
-        '-af', 'aresample=44100:async=1',         // Resample con sincro continua sin distorsión de volumen
+        '-vn',
+        '-acodec', 'libmp3lame',
+        '-ab', '128k',
+        '-ar', '44100',
+        '-ac', '1',
+        '-af', 'aresample=44100:async=1',
         '-f', 'mp3',
         'pipe:1',
       ]);
 
-      this.logger.log(`🔊 [AUDIO-OUT-DAHUA] Transcodificador RTSP->MP3 fallback iniciado para ${target.host}:${rtspPort}`);
+      this.logger.log(`🔊 [AUDIO-OUT-DAHUA-RTSP] ffmpeg RTSP->MP3 iniciado hacia ${target.host}:${rtspPort} (subtype=0)`);
 
       let hasSentData = false;
+
       currentFfmpeg.stdout.on('data', () => {
-        hasSentData = true;
+        if (!hasSentData) {
+          hasSentData = true;
+          this.logger.log(`🎉 [AUDIO-OUT-DAHUA-RTSP] Recibiendo stream de audio MP3 desde Dahua ${target.host}:${rtspPort}`);
+          finish(true);
+        }
       });
 
       currentFfmpeg.stdout.pipe(res, { end: false });
 
       currentFfmpeg.stderr.on('data', (chunk) => {
-        this.logger.debug(`[AUDIO-OUT-DAHUA] ffmpeg: ${chunk.toString().trim()}`);
+        this.logger.debug(`[AUDIO-OUT-DAHUA-RTSP] ffmpeg stderr: ${chunk.toString().trim()}`);
       });
 
       currentFfmpeg.on('error', (err) => {
-        this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA] ffmpeg error: ${err.message}`);
+        this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA-RTSP] ffmpeg error: ${err.message}`);
+        if (!hasSentData) finish(false);
       });
 
       currentFfmpeg.on('exit', (code) => {
         if (!hasSentData && !res.writableEnded) {
-          this.logger.log(`🔄 [AUDIO-OUT-DAHUA] Reintentando con subtype=1 en ${target.host}:${rtspPort}`);
+          this.logger.log(`🔄 [AUDIO-OUT-DAHUA-RTSP] subtype=0 cerró sin datos. Reintentando con subtype=1 en ${target.host}:${rtspPort}`);
           const rtspUrl1 = `rtsp://${target.user}:${encodedPass}@${target.host}:${rtspPort}/cam/realmonitor?channel=1&subtype=1`;
           const ffmpeg1 = spawn(this.getFfmpegBinary(), [
             '-hide_banner',
@@ -1491,21 +1484,112 @@ export class ControlAccesoService implements OnModuleInit {
             'pipe:1',
           ]);
           currentFfmpeg = ffmpeg1;
-          ffmpeg1.stdout.pipe(res);
+
+          ffmpeg1.stdout.on('data', () => {
+            if (!hasSentData) {
+              hasSentData = true;
+              this.logger.log(`🎉 [AUDIO-OUT-DAHUA-RTSP] Recibiendo stream de audio MP3 (subtype=1) desde ${target.host}:${rtspPort}`);
+              finish(true);
+            }
+          });
+
+          ffmpeg1.stdout.pipe(res, { end: false });
+
+          ffmpeg1.on('error', () => {
+            if (!hasSentData) finish(false);
+          });
+
+          ffmpeg1.on('exit', () => {
+            if (!hasSentData) {
+              finish(false);
+            } else if (!res.writableEnded) {
+              res.end();
+            }
+          });
         } else if (!res.writableEnded) {
           res.end();
         }
       });
 
+      // Timeout de seguridad de 5 segundos por si RTSP cuelga sin enviar paquetes
+      const timeout = setTimeout(() => {
+        if (!hasSentData) {
+          this.logger.warn(`⏱️ [AUDIO-OUT-DAHUA-RTSP] Timeout esperando datos de audio RTSP`);
+          try { currentFfmpeg?.kill('SIGKILL'); } catch {}
+          finish(false);
+        }
+      }, 5000);
+
       res.on('close', () => {
-        this.logger.log(`🔇 [AUDIO-OUT-DAHUA] Cliente cerró conexión de audio`);
+        clearTimeout(timeout);
+        this.logger.log(`🔇 [AUDIO-OUT-DAHUA] Conexión de audio cerrada por el cliente`);
         try { currentFfmpeg?.kill('SIGKILL'); } catch {}
       });
-    } catch (err: any) {
-      this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA] No se pudo obtener audio stream de Dahua: ${err.message}`);
-      if (!res.headersSent) {
-        res.status(200).send({ ok: true, mensaje: 'Audio no disponible en este modelo Dahua' });
-      }
+    });
+  }
+
+  private async streamDahuaNetSdkAudio(
+    res: any,
+    target: { host: string; port: number; user: string; pass: string; sdkPort?: number },
+  ): Promise<boolean> {
+    if (!this.dahuaService) return false;
+
+    try {
+      let ffmpegProcess: any = null;
+      const netSdkSession = await this.dahuaService.openDahuaListenSession(
+        target.host,
+        target.port,
+        target.user,
+        target.pass,
+        target.sdkPort,
+        (chunk: Buffer) => {
+          if (ffmpegProcess && !ffmpegProcess.killed && ffmpegProcess.stdin?.writable) {
+            try {
+              ffmpegProcess.stdin.write(chunk);
+            } catch {}
+          }
+        },
+      );
+
+      if (!netSdkSession) return false;
+
+      this.logger.log(`🎉 [AUDIO-OUT-DAHUA] Sesión NetSDK activa para capturar audio del micrófono Dahua`);
+      ffmpegProcess = spawn(this.getFfmpegBinary(), [
+        '-hide_banner',
+        '-loglevel', 'warning',
+        '-f', 'alaw',
+        '-ar', '8000',
+        '-ac', '1',
+        '-i', 'pipe:0',
+        '-c:a', 'libmp3lame',
+        '-b:a', '64k',
+        '-ar', '44100',
+        '-ac', '1',
+        '-f', 'mp3',
+        'pipe:1',
+      ]);
+
+      ffmpegProcess.stdout.pipe(res);
+
+      ffmpegProcess.stderr.on('data', (chunk: any) => {
+        this.logger.debug(`[AUDIO-OUT-DAHUA-NETSDK] ffmpeg: ${chunk.toString().trim()}`);
+      });
+
+      ffmpegProcess.on('error', (err: any) => {
+        this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA-NETSDK] ffmpeg error: ${err.message}`);
+      });
+
+      res.on('close', () => {
+        this.logger.log(`🔇 [AUDIO-OUT-DAHUA] Cliente cerró conexión de audio (NetSDK)`);
+        try { netSdkSession?.stop(); } catch {}
+        try { ffmpegProcess?.stdin?.end(); } catch {}
+        try { ffmpegProcess?.kill('SIGKILL'); } catch {}
+      });
+
+      return true;
+    } catch (sdkErr: any) {
+      this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA] NetSDK Listen error: ${sdkErr.message}`);
+      return false;
     }
   }
 

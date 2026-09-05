@@ -59,6 +59,141 @@ export class DahuaService {
   private readonly digestCache = new Map<string, { realm: string; nonce: string; qop?: string }>();
   private readonly activeNetSdkSessions = new Map<string, () => void>();
 
+  // ─── NetSDK Singleton ───────────────────────────────────────────────────────
+  // El SDK Dahua requiere que CLIENT_Init se llame UNA SOLA VEZ en el proceso.
+  // Múltiples llamadas a CLIENT_Init causan error 0x8000017c en CLIENT_StartTalkEx.
+  private netSdkLib: any = null;
+  private netSdkInitialized = false;
+  private netSdkInitLock = false;
+  private netSdkFuncs: {
+    CLIENT_Init: any;
+    CLIENT_Cleanup: any;
+    CLIENT_Login: any;
+    CLIENT_Logout: any;
+    CLIENT_ControlDevice: any;
+    CLIENT_StartTalkEx: any;
+    CLIENT_StopTalkEx: any;
+    CLIENT_TalkSendData: any;
+    CLIENT_SetVolume: any;
+    CLIENT_SetDeviceMode: any;
+    CLIENT_GetLastError: any;
+    CLIENT_SetNetworkParam: any;
+    AudioDataCallbackProto: any;
+  } | null = null;
+  private netSdkDllPath: string | null = null;
+
+  /**
+   * Inicializa el NetSDK Dahua una sola vez (singleton).
+   * Carga la librería nativa y define todas las funciones FFI necesarias.
+   * Retorna true si el SDK está listo para usar.
+   */
+  private initNetSdk(): boolean {
+    if (this.netSdkInitialized && this.netSdkFuncs) return true;
+    if (this.netSdkInitLock) {
+      // Otra llamada ya está inicializando, esperar un poco
+      for (let i = 0; i < 20 && this.netSdkInitLock; i++) {
+        // busy wait breve — solo ocurre durante arranque
+      }
+      return this.netSdkInitialized;
+    }
+    this.netSdkInitLock = true;
+
+    try {
+      const koffi = require('koffi');
+      const fs = require('fs');
+      const path = require('path');
+
+      const linuxDllPaths = [
+        path.join(process.cwd(), 'libs', 'linux-x64', 'libdhnetsdk.so'),
+        path.join(process.cwd(), 'libs', 'libdhnetsdk.so'),
+        '/usr/lib/libdhnetsdk.so',
+        '/usr/local/lib/libdhnetsdk.so',
+      ];
+      const windowsDllPaths = [
+        'C:\\Program Files\\SmartPSSLite\\dhnetsdk.dll',
+        'C:\\Program Files (x86)\\SmartPSS\\dhnetsdk.dll',
+        path.join(process.cwd(), 'libs', 'dhnetsdk.dll'),
+      ];
+      const possibleDllPaths = process.platform === 'win32' ? windowsDllPaths : linuxDllPaths;
+      this.netSdkDllPath = possibleDllPaths.find((p: string) => fs.existsSync(p)) || null;
+
+      if (!this.netSdkDllPath) {
+        this.logger.warn(`[DAHUA-NETSDK] Librería NetSDK no encontrada para ${process.platform}/${process.arch}`);
+        this.netSdkInitLock = false;
+        return false;
+      }
+
+      // Pre-cargar dependencias en Linux
+      if (process.platform !== 'win32') {
+        const libDir = path.dirname(this.netSdkDllPath);
+        for (const f of ['libInfra.so', 'libNetFramework.so', 'libStream.so', 'libStreamSvr.so', 'libavnetsdk.so', 'libdhconfigsdk.so']) {
+          const fp = path.join(libDir, f);
+          if (fs.existsSync(fp)) { try { koffi.load(fp); } catch {} }
+        }
+      }
+
+      this.netSdkLib = koffi.load(this.netSdkDllPath);
+      const isWin = process.platform === 'win32';
+      const cc = isWin && process.arch === 'ia32' ? '__stdcall ' : '';
+
+      const AudioDataCallbackProto = koffi.proto(`void (int64_t, uint8_t *, uint32_t, uint8_t, int64_t)`);
+
+      this.netSdkFuncs = {
+        CLIENT_Init: this.netSdkLib.func(`bool ${cc}CLIENT_Init(void* fDisConnect, int64_t dwUser)`),
+        CLIENT_Cleanup: this.netSdkLib.func(`void ${cc}CLIENT_Cleanup()`),
+        CLIENT_Login: this.netSdkLib.func(`int64_t ${cc}CLIENT_Login(str pchDVRIP, uint16_t wDVRPort, str pchUserName, str pchPassword, void* lpDeviceInfo, _Out_ int* error)`),
+        CLIENT_Logout: this.netSdkLib.func(`bool ${cc}CLIENT_Logout(int64_t lLoginID)`),
+        CLIENT_ControlDevice: this.netSdkLib.func(`bool ${cc}CLIENT_ControlDevice(int64_t lLoginID, int32_t emType, void* pParam, int32_t nWaitTime)`),
+        CLIENT_StartTalkEx: this.netSdkLib.func(`int64_t ${cc}CLIENT_StartTalkEx(int64_t lLoginID, void *pfcb, int64_t dwUser)`),
+        CLIENT_StopTalkEx: this.netSdkLib.func(`bool ${cc}CLIENT_StopTalkEx(int64_t lTalkHandle)`),
+        CLIENT_TalkSendData: this.netSdkLib.func(`int32_t ${cc}CLIENT_TalkSendData(int64_t lTalkHandle, uint8_t *pDataBuf, uint32_t dwBufSize)`),
+        CLIENT_SetVolume: this.netSdkLib.func(`bool ${cc}CLIENT_SetVolume(int64_t lTalkHandle, int nVolume)`),
+        CLIENT_SetDeviceMode: this.netSdkLib.func(`bool ${cc}CLIENT_SetDeviceMode(int64_t lLoginID, int emType, void *pValue)`),
+        CLIENT_GetLastError: this.netSdkLib.func(`uint32_t ${cc}CLIENT_GetLastError()`),
+        CLIENT_SetNetworkParam: this.netSdkLib.func(`void ${cc}CLIENT_SetNetworkParam(void *pNetParam)`),
+        AudioDataCallbackProto,
+      };
+
+      // Inicializar SDK UNA SOLA VEZ
+      this.netSdkFuncs.CLIENT_Init(null, 0);
+
+      // Configurar timeouts de red (crítico para dispositivos detrás de NAT/VPN)
+      try {
+        const netParamBuf = Buffer.alloc(64);
+        netParamBuf.writeInt32LE(5000, 0);   // nConnectTime = 5000ms (default 1500ms)
+        netParamBuf.writeInt32LE(5000, 4);   // nGetConnInfoTime
+        netParamBuf.writeInt32LE(3, 8);      // nConnectTryNum = 3 reintentos
+        netParamBuf.writeInt32LE(5, 12);     // nSubConnectSpaceTime
+        netParamBuf.writeInt32LE(20000, 16); // nGetDevInfoTime = 20s
+        this.netSdkFuncs.CLIENT_SetNetworkParam(netParamBuf);
+      } catch {}
+
+      this.netSdkInitialized = true;
+      this.logger.log(`✅ [DAHUA-NETSDK] SDK inicializado (singleton) desde ${this.netSdkDllPath}`);
+      return true;
+    } catch (err: any) {
+      this.logger.error(`❌ [DAHUA-NETSDK] Error al inicializar SDK: ${err.message}`);
+      return false;
+    } finally {
+      this.netSdkInitLock = false;
+    }
+  }
+
+  /**
+   * Login NetSDK al dispositivo Dahua. Usa el singleton.
+   * Retorna loginId o null si falla.
+   */
+  private netSdkLogin(ip: string, sdkPort: number, user: string, pass: string): { loginId: any; error: number } | null {
+    if (!this.initNetSdk() || !this.netSdkFuncs) return null;
+    const devInfo = Buffer.alloc(1024);
+    const errPtr = [0];
+    const loginId = this.netSdkFuncs.CLIENT_Login(ip, sdkPort, user, pass, devInfo, errPtr);
+    if (!loginId || loginId === 0n || loginId === 0) {
+      return { loginId: null, error: errPtr[0] };
+    }
+    return { loginId, error: 0 };
+  }
+
   /**
    * Ejecuta peticiones HTTP CGI autenticadas con Digest Auth nativo hacia dispositivos Dahua.
    */
@@ -480,25 +615,8 @@ export class DahuaService {
     channel = 1,
     sdkPort?: number,
   ): Promise<{ ok: boolean; mensaje: string; marca: string; detalle?: any } | null> {
-    const fs = require('fs');
-    const path = require('path');
-
-    const linuxDllPaths = [
-      path.join(process.cwd(), 'libs', 'linux-x64', 'libdhnetsdk.so'),
-      path.join(process.cwd(), 'libs', 'libdhnetsdk.so'),
-      '/usr/lib/libdhnetsdk.so',
-      '/usr/local/lib/libdhnetsdk.so',
-    ];
-    const windowsDllPaths = [
-      'C:\\Program Files\\SmartPSSLite\\dhnetsdk.dll',
-      'C:\\Program Files (x86)\\SmartPSS\\dhnetsdk.dll',
-      path.join(process.cwd(), 'libs', 'dhnetsdk.dll'),
-    ];
-    const possibleDllPaths = process.platform === 'win32' ? windowsDllPaths : linuxDllPaths;
-    const dllPath = possibleDllPaths.find((p: string) => fs.existsSync(p));
-
-    if (!dllPath) {
-      this.logger.warn(`[DAHUA-NETSDK-DOOR] Librería NetSDK no encontrada para ${process.platform}/${process.arch}`);
+    if (!this.initNetSdk() || !this.netSdkFuncs) {
+      this.logger.warn(`[DAHUA-NETSDK-DOOR] Librería NetSDK no disponible`);
       return null;
     }
 
@@ -507,41 +625,15 @@ export class DahuaService {
     );
 
     try {
-      const koffi = require('koffi');
-      const libDir = path.dirname(dllPath);
-      if (process.platform !== 'win32') {
-        const preloads = ['libInfra.so', 'libNetFramework.so', 'libStream.so', 'libStreamSvr.so', 'libavnetsdk.so', 'libdhconfigsdk.so'];
-        for (const f of preloads) {
-          const fp = path.join(libDir, f);
-          if (fs.existsSync(fp)) {
-            try { koffi.load(fp); } catch {}
-          }
-        }
-      }
+      const sdk = this.netSdkFuncs;
+      const loginResult = this.netSdkLogin(ip, targetSdkPort, user, pass);
 
-      const lib = koffi.load(dllPath);
-      const isWin = process.platform === 'win32';
-      const callConv = isWin && process.arch === 'ia32' ? '__stdcall ' : '';
-
-      const CLIENT_Init = lib.func(`bool ${callConv}CLIENT_Init(void* fDisConnect, int64_t dwUser)`);
-      const CLIENT_Cleanup = lib.func(`void ${callConv}CLIENT_Cleanup()`);
-      const CLIENT_Login = lib.func(`int64_t ${callConv}CLIENT_Login(str pchDVRIP, uint16_t wDVRPort, str pchUserName, str pchPassword, void* lpDeviceInfo, _Out_ int* error)`);
-      const CLIENT_Logout = lib.func(`bool ${callConv}CLIENT_Logout(int64_t lLoginID)`);
-      const CLIENT_ControlDevice = lib.func(`bool ${callConv}CLIENT_ControlDevice(int64_t lLoginID, int32_t emType, void* pParam, int32_t nWaitTime)`);
-      const CLIENT_GetLastError = lib.func(`uint32_t ${callConv}CLIENT_GetLastError()`);
-
-      CLIENT_Init(null, 0);
-
-      const devInfo = Buffer.alloc(1024);
-      const errPtr = [0];
-      const loginId = CLIENT_Login(ip, targetSdkPort, user, pass, devInfo, errPtr);
-
-      if (!loginId || loginId === 0n || loginId === 0) {
-        const code = errPtr[0];
-        CLIENT_Cleanup();
-        this.logger.warn(`⚠️ [DAHUA-NETSDK-DOOR] Login falló en ${ip}:${targetSdkPort} (Error ${code})`);
+      if (!loginResult || !loginResult.loginId) {
+        this.logger.warn(`⚠️ [DAHUA-NETSDK-DOOR] Login falló en ${ip}:${targetSdkPort} (Error ${loginResult?.error || 'unknown'})`);
         return null;
       }
+
+      const loginId = loginResult.loginId;
 
       // CtrlType: 260 = DH_CTRL_ACCESS_OPEN (0x104), 261 = DH_CTRL_ACCESS_CLOSE (0x105)
       const ctrlType = command === 'cerrar' ? 261 : 260;
@@ -562,20 +654,20 @@ export class DahuaService {
           paramBuf.writeUInt32LE(size, 0);
           paramBuf.writeInt32LE(chIdx, 4);
 
-          const ok = CLIENT_ControlDevice(loginId, ctrlType, paramBuf, 3000);
+          const ok = sdk.CLIENT_ControlDevice(loginId, ctrlType, paramBuf, 3000);
           if (ok) {
             success = true;
             usedChannel = chIdx;
             break;
           } else {
-            lastErr = CLIENT_GetLastError();
+            lastErr = sdk.CLIENT_GetLastError();
           }
         }
         if (success) break;
       }
 
-      CLIENT_Logout(loginId);
-      CLIENT_Cleanup();
+      sdk.CLIENT_Logout(loginId);
+      // NO llamar CLIENT_Cleanup — el singleton se mantiene vivo
 
       if (success) {
         this.logger.log(`✅ [DAHUA-NETSDK-DOOR] Comando "${command}" ejecutado con éxito en ${ip}:${targetSdkPort} (Canal ${usedChannel})`);
@@ -598,6 +690,7 @@ export class DahuaService {
       return null;
     }
   }
+
 
   // ─── REGISTRO DE WEBHOOK / ALARMA ───────────────────────────────────────────
 
@@ -1518,6 +1611,13 @@ export class DahuaService {
     sdkPortOverride?: number,
   ): Promise<boolean> {
     try {
+      if (!this.initNetSdk() || !this.netSdkFuncs) {
+        this.logger.error(`❌ [DAHUA-NETSDK-TALK] NetSDK no disponible`);
+        return false;
+      }
+
+      const koffi = require('koffi');
+      const sdk = this.netSdkFuncs;
       const sdkPort = Number(sdkPortOverride || 0) || (port >= 10000 ? (20000 + (port % 10000)) : 37777);
       const sessionKey = `${ip}:${sdkPort}`;
       this.logger.log(`🎙️ [DAHUA-NETSDK-TALK] Iniciando audio bidireccional por NetSDK TCP ${sessionKey}...`);
@@ -1528,84 +1628,19 @@ export class DahuaService {
         this.logger.log(`🔄 [DAHUA-NETSDK-TALK] Limpiando sesión previa para ${sessionKey}`);
         try { prevSession(); } catch {}
         this.activeNetSdkSessions.delete(sessionKey);
-      }
-
-      const koffi = require('koffi');
-      const fs = require('fs');
-      const path = require('path');
-
-      const linuxDllPaths = [
-        path.join(process.cwd(), 'libs', 'linux-x64', 'libdhnetsdk.so'),
-        path.join(process.cwd(), 'libs', 'libdhnetsdk.so'),
-        '/usr/lib/libdhnetsdk.so',
-        '/usr/local/lib/libdhnetsdk.so',
-      ];
-      const windowsDllPaths = [
-        'C:\\Program Files\\SmartPSSLite\\dhnetsdk.dll',
-        'C:\\Program Files (x86)\\SmartPSS\\dhnetsdk.dll',
-        path.join(process.cwd(), 'libs', 'dhnetsdk.dll'),
-      ];
-      const possibleDllPaths = process.platform === 'win32' ? windowsDllPaths : linuxDllPaths;
-
-      const dllPath = possibleDllPaths.find(p => fs.existsSync(p));
-      if (!dllPath) {
-        this.logger.error(`❌ [DAHUA-NETSDK-TALK] No se encontró librería NetSDK Dahua compatible para ${process.platform}/${process.arch}`);
-        return false;
+        // Dar tiempo al dispositivo para liberar el recurso
+        await new Promise(r => setTimeout(r, 500));
       }
 
       const userClean = user || 'admin';
       const passClean = pass || 'proliseg123';
 
-      this.logger.log(`🎙️ [DAHUA-NETSDK-TALK] Usando librería: ${dllPath}`);
-
-      // Pre-cargar librerías auxiliares en Linux para resolución completa de símbolos
-      try {
-        const libDir = path.dirname(dllPath);
-        const preloadList = [
-          'libInfra.so',
-          'libNetFramework.so',
-          'libStream.so',
-          'libStreamSvr.so',
-          'libavnetsdk.so',
-          'libdhconfigsdk.so',
-        ];
-        for (const f of preloadList) {
-          const fullPath = path.join(libDir, f);
-          if (fs.existsSync(fullPath)) {
-            try { koffi.load(fullPath); } catch {}
-          }
-        }
-      } catch {}
-
-      const lib = koffi.load(dllPath);
-
-      const isWin = process.platform === 'win32';
-      const callConv = isWin && process.arch === 'ia32' ? '__stdcall ' : '';
-
-      const CLIENT_Init = lib.func(`bool ${callConv}CLIENT_Init(void* fDisConnect, int64_t dwUser)`);
-      const CLIENT_Cleanup = lib.func(`void ${callConv}CLIENT_Cleanup()`);
-      const CLIENT_Login = lib.func(`int64_t ${callConv}CLIENT_Login(str pchDVRIP, uint16_t wDVRPort, str pchUserName, str pchPassword, void* lpDeviceInfo, _Out_ int* error)`);
-      const CLIENT_Logout = lib.func(`bool ${callConv}CLIENT_Logout(int64_t lLoginID)`);
-      const CLIENT_StopTalkEx = lib.func(`bool ${callConv}CLIENT_StopTalkEx(int64_t lTalkHandle)`);
-      const CLIENT_TalkSendData = lib.func(`int32_t ${callConv}CLIENT_TalkSendData(int64_t lTalkHandle, uint8_t *pDataBuf, uint32_t dwBufSize)`);
-      const CLIENT_SetVolume = lib.func(`bool ${callConv}CLIENT_SetVolume(int64_t lTalkHandle, int nVolume)`);
-      const CLIENT_SetDeviceMode = lib.func(`bool ${callConv}CLIENT_SetDeviceMode(int64_t lLoginID, int emType, void *pValue)`);
-      const CLIENT_GetLastError = lib.func(`uint32_t ${callConv}CLIENT_GetLastError()`);
-      // Definir prototipo anónimo del callback de retorno de audio del Dahua (evita colisión de tipos)
-      const AudioDataCallbackProto = koffi.proto(`void (int64_t, uint8_t *, uint32_t, uint8_t, int64_t)`);
-      const CLIENT_StartTalkEx = lib.func(`int64_t ${callConv}CLIENT_StartTalkEx(int64_t lLoginID, void *pfcb, int64_t dwUser)`);
-
-      CLIENT_Init(null, 0);
-
-      const devInfo = Buffer.alloc(1024);
-      const errPtr = [0];
-      const loginId = CLIENT_Login(ip, sdkPort, userClean, passClean, devInfo, errPtr);
-
-      if (!loginId || loginId === 0n || loginId === 0) {
-        this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] Login falló en ${ip}:${sdkPort} (Error ${errPtr[0]}) con usuario ${userClean}`);
-        CLIENT_Cleanup();
+      const loginResult = this.netSdkLogin(ip, sdkPort, userClean, passClean);
+      if (!loginResult || !loginResult.loginId) {
+        this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] Login falló en ${ip}:${sdkPort} (Error ${loginResult?.error || 'unknown'}) con usuario ${userClean}`);
         return false;
       }
+      const loginId = loginResult.loginId;
 
       this.logger.log(`✅ [DAHUA-NETSDK-TALK] Login exitoso (ID: ${loginId}). Configurando códec de audio G.711A...`);
 
@@ -1615,33 +1650,32 @@ export class DahuaService {
         encodeBuf.writeInt32LE(1, 0);    // encodeType = 1 (DH_TALK_G711a)
         encodeBuf.writeInt32LE(16, 4);   // nAudioBit = 16
         encodeBuf.writeInt32LE(8000, 8); // dwSampleRate = 8000 Hz
-        CLIENT_SetDeviceMode(loginId, 2, encodeBuf); // EM_USEDEV_TALK_ENCODE_TYPE = 2
+        sdk.CLIENT_SetDeviceMode(loginId, 2, encodeBuf); // EM_USEDEV_TALK_ENCODE_TYPE = 2
 
         const transferBuf = Buffer.alloc(4);
-        transferBuf.writeInt32LE(0, 0); // DH_TALK_TRANSFER_MODE = 4 (0 = Directo TCP)
-        CLIENT_SetDeviceMode(loginId, 4, transferBuf);
+        transferBuf.writeInt32LE(0, 0); // 0 = Transfer mode SERVER_CONN
+        sdk.CLIENT_SetDeviceMode(loginId, 4, transferBuf);
 
         // Habilitar modo cliente para desmutear el altavoz
-        CLIENT_SetDeviceMode(loginId, 0, null); // EM_USEDEV_TALK_CLIENT_MODE = 0
+        sdk.CLIENT_SetDeviceMode(loginId, 0, null); // EM_USEDEV_TALK_CLIENT_MODE = 0
       } catch {}
 
       // 2. Registrar callback de audio usando koffi.pointer(AudioDataCallbackProto)
-      const audioCb = koffi.register((handle: any, pBuf: any, size: number, flag: number, user: any) => {
-        // Callback para stream de retorno
-      }, koffi.pointer(AudioDataCallbackProto));
+      const audioCb = koffi.register((handle: any, pBuf: any, size: number, flag: number, cbUser: any) => {
+        // Callback para stream de retorno (no utilizado en modo Talk)
+      }, koffi.pointer(sdk.AudioDataCallbackProto));
 
-      const talkHandle = CLIENT_StartTalkEx(loginId, audioCb, 0);
+      const talkHandle = sdk.CLIENT_StartTalkEx(loginId, audioCb, 0);
       if (!talkHandle || talkHandle === 0n || talkHandle === 0) {
-        const lastErr = CLIENT_GetLastError();
+        const lastErr = sdk.CLIENT_GetLastError();
         this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] CLIENT_StartTalkEx falló (GetLastError: ${lastErr})`);
         try { koffi.unregister(audioCb); } catch {}
-        CLIENT_Logout(loginId);
-        CLIENT_Cleanup();
+        sdk.CLIENT_Logout(loginId);
         return false;
       }
 
       try {
-        CLIENT_SetVolume(talkHandle, 100);
+        sdk.CLIENT_SetVolume(talkHandle, 100);
       } catch {}
 
       this.logger.log(`🎉 [DAHUA-NETSDK-TALK] Altavoz abierto en hardware Dahua (Handle: ${talkHandle})`);
@@ -1649,7 +1683,7 @@ export class DahuaService {
       // 3. Enviar ráfaga inicial de frames de confort (G.711A 0xd5) para enganchar de inmediato el DSP del hardware
       try {
         const initialBurst = Buffer.alloc(640, 0xd5);
-        CLIENT_TalkSendData(talkHandle, initialBurst, initialBurst.length);
+        sdk.CLIENT_TalkSendData(talkHandle, initialBurst, initialBurst.length);
       } catch {}
 
       // 4. Heartbeat continuo para mantener el canal abierto incluso antes de que lleguen los chunks del navegador
@@ -1658,7 +1692,7 @@ export class DahuaService {
         if (Date.now() - lastAudioSent >= 200) {
           try {
             const silenceFrame = Buffer.alloc(320, 0xd5);
-            CLIENT_TalkSendData(talkHandle, silenceFrame, silenceFrame.length);
+            sdk.CLIENT_TalkSendData(talkHandle, silenceFrame, silenceFrame.length);
           } catch {}
         }
       }, 150);
@@ -1689,7 +1723,7 @@ export class DahuaService {
         lastAudioSent = Date.now();
         totalBytesSent += chunk.length;
         try {
-          const ret = CLIENT_TalkSendData(talkHandle, chunk, chunk.length);
+          const ret = sdk.CLIENT_TalkSendData(talkHandle, chunk, chunk.length);
           if (totalBytesSent % 6400 === 0 || totalBytesSent <= 1500) {
             this.logger.log(`🔊 [DAHUA-NETSDK-TALK] Enviados ${chunk.length} bytes de voz al parlante Dahua (Total: ${totalBytesSent} bytes, Ret: ${ret})`);
           }
@@ -1712,10 +1746,10 @@ export class DahuaService {
           try { clearInterval(keepAliveInterval); } catch {}
           try { ffmpeg.stdin.end(); } catch {}
           try { ffmpeg.kill('SIGKILL'); } catch {}
-          try { CLIENT_StopTalkEx(talkHandle); } catch {}
+          try { sdk.CLIENT_StopTalkEx(talkHandle); } catch {}
           try { koffi.unregister(audioCb); } catch {}
-          try { CLIENT_Logout(loginId); } catch {}
-          try { CLIENT_Cleanup(); } catch {}
+          try { sdk.CLIENT_Logout(loginId); } catch {}
+          // NO llamar CLIENT_Cleanup — el singleton se mantiene vivo
           this.logger.log(`✅ [DAHUA-NETSDK-TALK] Llamada finalizada y cerrada limpiamente`);
           resolve(true);
         };
@@ -1735,6 +1769,7 @@ export class DahuaService {
     }
   }
 
+
   /**
    * Inicia una sesión de audio para escuchar el micrófono del terminal Dahua (NetSDK).
    * Los chunks de audio recibidos (G.711A 8000Hz) se envían a onAudioChunk para ser convertidos a MP3.
@@ -1748,72 +1783,34 @@ export class DahuaService {
     onAudioChunk?: (chunk: Buffer) => void,
   ): Promise<{ stop: () => void } | null> {
     try {
+      if (!this.initNetSdk() || !this.netSdkFuncs) {
+        this.logger.error(`❌ [DAHUA-NETSDK-LISTEN] NetSDK no disponible`);
+        return null;
+      }
+
+      const koffi = require('koffi');
+      const sdk = this.netSdkFuncs;
       const sdkPort = Number(sdkPortOverride || 0) || (port >= 10000 ? (20000 + (port % 10000)) : 37777);
       const sessionKey = `listen_${ip}:${sdkPort}`;
       this.logger.log(`🔊 [DAHUA-NETSDK-LISTEN] Abriendo micrófono de Dahua por NetSDK ${sessionKey}...`);
 
       const prevSession = this.activeNetSdkSessions.get(sessionKey);
       if (prevSession) {
+        this.logger.log(`🔄 [DAHUA-NETSDK-LISTEN] Limpiando sesión previa para ${sessionKey}`);
         try { prevSession(); } catch {}
         this.activeNetSdkSessions.delete(sessionKey);
+        await new Promise(r => setTimeout(r, 500));
       }
 
-      const koffi = require('koffi');
-      const fs = require('fs');
-      const path = require('path');
+      const userClean = user || 'admin';
+      const passClean = pass || 'elvado2025';
 
-      const linuxDllPaths = [
-        path.join(process.cwd(), 'libs', 'linux-x64', 'libdhnetsdk.so'),
-        path.join(process.cwd(), 'libs', 'libdhnetsdk.so'),
-        '/usr/lib/libdhnetsdk.so',
-        '/usr/local/lib/libdhnetsdk.so',
-      ];
-      const windowsDllPaths = [
-        'C:\\Program Files\\SmartPSSLite\\dhnetsdk.dll',
-        'C:\\Program Files (x86)\\SmartPSS\\dhnetsdk.dll',
-        path.join(process.cwd(), 'libs', 'dhnetsdk.dll'),
-      ];
-      const possibleDllPaths = process.platform === 'win32' ? windowsDllPaths : linuxDllPaths;
-      const dllPath = possibleDllPaths.find(p => fs.existsSync(p));
-      if (!dllPath) {
-        this.logger.error(`❌ [DAHUA-NETSDK-LISTEN] No se encontró librería NetSDK`);
+      const loginResult = this.netSdkLogin(ip, sdkPort, userClean, passClean);
+      if (!loginResult || !loginResult.loginId) {
+        this.logger.warn(`⚠️ [DAHUA-NETSDK-LISTEN] Login falló en ${ip}:${sdkPort} (Error ${loginResult?.error || 'unknown'})`);
         return null;
       }
-
-      try {
-        const libDir = path.dirname(dllPath);
-        ['libInfra.so', 'libNetFramework.so', 'libStream.so', 'libStreamSvr.so', 'libavnetsdk.so', 'libdhconfigsdk.so'].forEach(f => {
-          const fp = path.join(libDir, f);
-          if (fs.existsSync(fp)) { try { koffi.load(fp); } catch {} }
-        });
-      } catch {}
-
-      const lib = koffi.load(dllPath);
-      const isWin = process.platform === 'win32';
-      const callConv = isWin && process.arch === 'ia32' ? '__stdcall ' : '';
-
-      const CLIENT_Init = lib.func(`bool ${callConv}CLIENT_Init(void* fDisConnect, int64_t dwUser)`);
-      const CLIENT_Cleanup = lib.func(`void ${callConv}CLIENT_Cleanup()`);
-      const CLIENT_Login = lib.func(`int64_t ${callConv}CLIENT_Login(str pchDVRIP, uint16_t wDVRPort, str pchUserName, str pchPassword, void* lpDeviceInfo, _Out_ int* error)`);
-      const CLIENT_Logout = lib.func(`bool ${callConv}CLIENT_Logout(int64_t lLoginID)`);
-      const CLIENT_StopTalkEx = lib.func(`bool ${callConv}CLIENT_StopTalkEx(int64_t lTalkHandle)`);
-      const CLIENT_SetDeviceMode = lib.func(`bool ${callConv}CLIENT_SetDeviceMode(int64_t lLoginID, int emType, void *pValue)`);
-      const CLIENT_GetLastError = lib.func(`uint32_t ${callConv}CLIENT_GetLastError()`);
-
-      const AudioDataCallbackProto = koffi.proto(`void (int64_t, uint8_t *, uint32_t, uint8_t, int64_t)`);
-      const CLIENT_StartTalkEx = lib.func(`int64_t ${callConv}CLIENT_StartTalkEx(int64_t lLoginID, void *pfcb, int64_t dwUser)`);
-
-      CLIENT_Init(null, 0);
-
-      const devInfo = Buffer.alloc(1024);
-      const errPtr = [0];
-      const loginId = CLIENT_Login(ip, sdkPort, user || 'admin', pass || 'elvado2025', devInfo, errPtr);
-
-      if (!loginId || loginId === 0n || loginId === 0) {
-        this.logger.warn(`⚠️ [DAHUA-NETSDK-LISTEN] Login falló en ${ip}:${sdkPort} (Error ${errPtr[0]})`);
-        CLIENT_Cleanup();
-        return null;
-      }
+      const loginId = loginResult.loginId;
 
       // Configurar modo de codificación DH_AUDIO_FORMAT_NET: G.711A (1), 16 bits, 8000 Hz
       try {
@@ -1821,11 +1818,11 @@ export class DahuaService {
         encodeBuf.writeInt32LE(1, 0);
         encodeBuf.writeInt32LE(16, 4);
         encodeBuf.writeInt32LE(8000, 8);
-        CLIENT_SetDeviceMode(loginId, 2, encodeBuf); // EM_USEDEV_TALK_ENCODE_TYPE = 2
+        sdk.CLIENT_SetDeviceMode(loginId, 2, encodeBuf); // EM_USEDEV_TALK_ENCODE_TYPE = 2
 
         const transferBuf = Buffer.alloc(4);
         transferBuf.writeInt32LE(0, 0);
-        CLIENT_SetDeviceMode(loginId, 4, transferBuf); // EM_USEDEV_TALK_TRANSFER_MODE = 4
+        sdk.CLIENT_SetDeviceMode(loginId, 4, transferBuf); // EM_USEDEV_TALK_TRANSFER_MODE = 4
       } catch {}
 
       const audioCb = koffi.register((handle: any, pBuf: any, size: number, flag: number, u: any) => {
@@ -1835,15 +1832,14 @@ export class DahuaService {
             onAudioChunk(chunk);
           } catch {}
         }
-      }, koffi.pointer(AudioDataCallbackProto));
+      }, koffi.pointer(sdk.AudioDataCallbackProto));
 
-      const talkHandle = CLIENT_StartTalkEx(loginId, audioCb, 0);
+      const talkHandle = sdk.CLIENT_StartTalkEx(loginId, audioCb, 0);
       if (!talkHandle || talkHandle === 0n || talkHandle === 0) {
-        const lastErr = CLIENT_GetLastError();
+        const lastErr = sdk.CLIENT_GetLastError();
         this.logger.warn(`⚠️ [DAHUA-NETSDK-LISTEN] CLIENT_StartTalkEx falló (GetLastError: ${lastErr})`);
         try { koffi.unregister(audioCb); } catch {}
-        CLIENT_Logout(loginId);
-        CLIENT_Cleanup();
+        try { sdk.CLIENT_Logout(loginId); } catch {}
         return null;
       }
 
@@ -1855,10 +1851,9 @@ export class DahuaService {
         closed = true;
         this.logger.log(`🛑 [DAHUA-NETSDK-LISTEN] Cerrando sesión de micrófono Dahua`);
         this.activeNetSdkSessions.delete(sessionKey);
-        try { CLIENT_StopTalkEx(talkHandle); } catch {}
+        try { sdk.CLIENT_StopTalkEx(talkHandle); } catch {}
         try { koffi.unregister(audioCb); } catch {}
-        try { CLIENT_Logout(loginId); } catch {}
-        try { CLIENT_Cleanup(); } catch {}
+        try { sdk.CLIENT_Logout(loginId); } catch {}
       };
 
       this.activeNetSdkSessions.set(sessionKey, stop);
