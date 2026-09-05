@@ -6594,9 +6594,12 @@ export class ControlAccesoService implements OnModuleInit {
     try {
       const getRes = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=getConfig&name=SIP');
       sipCgiConfig = String(getRes?.data || '').trim();
+      // Asegurar que RouteEnable sea false para que Dahua responda directamente al remitente SIP sin desviar a proxy inexistente
+      await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&SIP.RouteEnable=false&SIP.OutboundProxy=').catch(() => {});
     } catch (e: any) {
       sipCgiConfig = `Error CGI: ${e.message}`;
     }
+
 
     // 4. Consultar y verificar reglas NAT en MikroTik
     let mikrotikRules: any[] = [];
