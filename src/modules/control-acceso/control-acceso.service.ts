@@ -6590,17 +6590,31 @@ export class ControlAccesoService implements OnModuleInit {
       });
     });
 
-    // 3. Consultar configuración SIP en Dahua vía CGI y deshabilitar RouteEnable
+    // 3. Consultar configuración SIP en Dahua vía CGI y JSON-RPC, y deshabilitar UserEnable para modo VTO standalone
     let sipCgiConfig: any = null;
-    let cgiSetResult: any = null;
+    let sipCgiConfigAfter: any = null;
+    let cgiSetResult: any = {};
+    let rpcSetResult: any = {};
     try {
       const getRes = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=getConfig&name=SIP');
       sipCgiConfig = String(getRes?.data || '').trim();
 
-      // Probar ambas variantes de setConfig para Dahua (con table. y sin table.)
-      const set1 = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&table.SIP.RouteEnable=false&table.SIP.OutboundProxy=&table.SIP.IsMainVTO=1').catch((e: any) => e.message);
-      const set2 = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&SIP.RouteEnable=false&SIP.OutboundProxy=&SIP.IsMainVTO=1').catch((e: any) => e.message);
-      cgiSetResult = { set1: String(set1?.data || set1), set2: String(set2?.data || set2) };
+      // Probar setConfig vía CGI individualmente sin valores vacíos
+      cgiSetResult.userEnable = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&table.SIP.UserEnable=false').then((r: any) => String(r?.data || r)).catch((e: any) => e.message);
+      cgiSetResult.userEnableAlt = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&SIP.UserEnable=false').then((r: any) => String(r?.data || r)).catch((e: any) => e.message);
+      cgiSetResult.routeEnable = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&table.SIP.RouteEnable=false').then((r: any) => String(r?.data || r)).catch((e: any) => e.message);
+
+      // Probar setConfig vía JSON-RPC 2.0 (la API nativa de Dahua)
+      rpcSetResult = await this.dahuaService.rpcCall(vpnIp, httpPort, user, pass, 'configManager.setConfig', {
+        name: 'SIP',
+        table: {
+          UserEnable: false,
+          RouteEnable: false,
+        }
+      }).catch((e: any) => ({ error: e.message }));
+
+      const getResAfter = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=getConfig&name=SIP');
+      sipCgiConfigAfter = String(getResAfter?.data || '').trim();
     } catch (e: any) {
       sipCgiConfig = `Error CGI: ${e.message}`;
     }
@@ -6672,7 +6686,18 @@ export class ControlAccesoService implements OnModuleInit {
         created.push(`src-nat masquerade UDP 15000`);
       }
 
-      natSyncResult = { status: 'ok', created, totalRulesForDevice: mikrotikRules.length, hasGeneralMasq };
+      // src-nat masquerade para permitir que paquetes de salida por WireGuard lleven IP 10.8.0.4
+      const hasWgMasq = allRules.some((r: any) => r.chain === 'srcnat' && r.action === 'masquerade' && r['out-interface'] === 'wg-to-vps');
+      if (!hasWgMasq) {
+        await axios.put(mtkUrl, {
+          chain: 'srcnat', action: 'masquerade',
+          'out-interface': 'wg-to-vps',
+          comment: 'Proliseg masquerade WireGuard return'
+        }, { auth: { username: 'admin', password: '1004192496' }, timeout: 5000 }).catch(() => {});
+        created.push('src-nat masquerade out-interface=wg-to-vps');
+      }
+
+      natSyncResult = { status: 'ok', created, totalRulesForDevice: mikrotikRules.length, hasGeneralMasq, hasWgMasq: hasWgMasq || created.includes('src-nat masquerade out-interface=wg-to-vps') };
     } catch (mtkErr: any) {
       natSyncResult = { status: 'error', message: mtkErr.message };
     }
@@ -6681,10 +6706,11 @@ export class ControlAccesoService implements OnModuleInit {
     let mikrotikNetwork: any = {};
     try {
       const auth = { username: 'admin', password: '1004192496' };
-      const [addrRes, wgRes, routesRes] = await Promise.all([
+      const [addrRes, wgRes, routesRes, filterRes] = await Promise.all([
         axios.get(`http://${vpnIp}:80/rest/ip/address`, { auth, timeout: 4000 }).catch(e => ({ data: e.message })),
         axios.get(`http://${vpnIp}:80/rest/interface/wireguard/peers`, { auth, timeout: 4000 }).catch(e => ({ data: e.message })),
         axios.get(`http://${vpnIp}:80/rest/ip/route`, { auth, timeout: 4000 }).catch(e => ({ data: e.message })),
+        axios.get(`http://${vpnIp}:80/rest/ip/firewall/filter`, { auth, timeout: 4000 }).catch(e => ({ data: e.message })),
       ]);
       mikrotikNetwork = {
         addresses: addrRes.data,
@@ -6692,6 +6718,9 @@ export class ControlAccesoService implements OnModuleInit {
         routes: Array.isArray(routesRes.data)
           ? routesRes.data.map((r: any) => ({ dst: r['dst-address'], gateway: r.gateway, active: r.active }))
           : routesRes.data,
+        firewallFilter: Array.isArray(filterRes.data)
+          ? filterRes.data.map((f: any) => ({ chain: f.chain, action: f.action, comment: f.comment, in: f['in-interface'], out: f['out-interface'] }))
+          : filterRes.data,
       };
 
       // Si la ruta hacia la subred Docker (10.0.0.0/16) no existe en MikroTik, crearla automáticamente
@@ -6706,8 +6735,48 @@ export class ControlAccesoService implements OnModuleInit {
         });
         mikrotikNetwork.routeAdded = '10.0.0.0/16 -> wg-to-vps';
       }
+
+      // Asegurar reglas de firewall accept para el túnel WireGuard si el firewall tuviera drops
+      const filters = Array.isArray(filterRes.data) ? filterRes.data : [];
+      const hasWgInAccept = filters.some((f: any) => f.chain === 'forward' && f.action === 'accept' && f['in-interface'] === 'wg-to-vps');
+      if (!hasWgInAccept && filters.length > 0) {
+        await axios.put(`http://${vpnIp}:80/rest/ip/firewall/filter`, {
+          chain: 'forward',
+          'in-interface': 'wg-to-vps',
+          action: 'accept',
+          comment: 'Proliseg accept WireGuard traffic'
+        }, { auth, timeout: 5000 }).catch(() => {});
+        await axios.put(`http://${vpnIp}:80/rest/ip/firewall/filter`, {
+          chain: 'forward',
+          'out-interface': 'wg-to-vps',
+          action: 'accept',
+          comment: 'Proliseg accept WireGuard return'
+        }, { auth, timeout: 5000 }).catch(() => {});
+      }
     } catch (netErr: any) {
       mikrotikNetwork = { error: netErr.message };
+    }
+
+    // 6. Prueba en vivo de sesión SIP INVITE hacia Dahua
+    let sipSessionResult: any = null;
+    try {
+      this.logger.log(`[TEST-DAHUA-SIP] Probando openDahuaSipListenSession a ${vpnIp}:${sipPort}...`);
+      const sess = await this.dahuaSipService.openDahuaSipListenSession(
+        vpnIp,
+        sipPort,
+        rtpPort,
+        user,
+        undefined,
+        `${localIp}:5060`,
+      );
+      sipSessionResult = {
+        success: !!sess,
+      };
+      if (sess) {
+        setTimeout(() => sess.stop(), 1000);
+      }
+    } catch (sipErr: any) {
+      sipSessionResult = { error: sipErr.message };
     }
 
     return {
@@ -6724,9 +6793,13 @@ export class ControlAccesoService implements OnModuleInit {
       tcpSipTest,
       udpOptionsTest,
       sipCgiConfig,
+      cgiSetResult,
+      rpcSetResult,
+      sipCgiConfigAfter,
       mikrotikRules,
       natSyncResult,
       mikrotikNetwork,
+      sipSessionResult,
       dahuaSipLogs: this.dahuaSipService?.debugLogs || [],
     };
   }
