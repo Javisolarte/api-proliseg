@@ -758,6 +758,7 @@ export class ControlAccesoService implements OnModuleInit {
       sdkPort,
       sipPort,
       rtpPort,
+      localIp: origIp,
     };
   }
 
@@ -1157,12 +1158,14 @@ export class ControlAccesoService implements OnModuleInit {
     // 1. Intentar comunicación SIP / RTP nativa
     if (this.dahuaSipService) {
       try {
+        const targetDomain = (target as any).localIp ? `${(target as any).localIp}:5060` : undefined;
         const sipOk = await this.dahuaSipService.relayAudioToDahuaSip(
           audioStream,
           target.host,
           sipPort,
           rtpPort,
           '8001',
+          targetDomain,
         );
         if (sipOk) {
           return {
@@ -1471,6 +1474,7 @@ export class ControlAccesoService implements OnModuleInit {
       };
 
       try {
+        const targetDomain = (target as any).localIp ? `${(target as any).localIp}:5060` : undefined;
         const sipSession = await this.dahuaSipService.openDahuaSipListenSession(
           target.host,
           sipPort,
@@ -1483,6 +1487,7 @@ export class ControlAccesoService implements OnModuleInit {
               } catch {}
             }
           },
+          targetDomain,
         );
 
         if (!sipSession) {
@@ -6023,6 +6028,23 @@ export class ControlAccesoService implements OnModuleInit {
       await this.addMikrotikNatRule(srv.ip_publica, local_ip, mappedSipPort, srv.usuario, srv.password, mikrotikPort, '5060', 'udp');
       // 5. RTP Audio (15000 UDP)
       await this.addMikrotikNatRule(srv.ip_publica, local_ip, mappedRtpPort, srv.usuario, srv.password, mikrotikPort, '15000', 'udp');
+
+      // 6. Asegurar ruta en MikroTik para que el tráfico de retorno hacia el contenedor Docker (10.0.0.0/16) viaje por WireGuard
+      try {
+        const routesUrl = `http://${srv.ip_publica}:${mikrotikPort}/rest/ip/route`;
+        const routesRes = await axios.get(routesUrl, { auth: { username: srv.usuario, password: srv.password }, timeout: 4000 });
+        const hasRoute = Array.isArray(routesRes.data) && routesRes.data.some((r: any) => r['dst-address'] === '10.0.0.0/16');
+        if (!hasRoute) {
+          await axios.put(routesUrl, {
+            'dst-address': '10.0.0.0/16',
+            gateway: 'wg-to-vps',
+            comment: 'Proliseg Docker network return via WireGuard'
+          }, { auth: { username: srv.usuario, password: srv.password }, timeout: 5000 });
+          this.logger.log(`✅ [SYNC NAT] Ruta 10.0.0.0/16 añadida en MikroTik hacia wg-to-vps`);
+        }
+      } catch (rErr: any) {
+        this.logger.warn(`⚠️ [SYNC NAT] No se pudo verificar/añadir ruta 10.0.0.0/16 en MikroTik: ${rErr.message}`);
+      }
     } else {
       // ─── HIKVISION ───
       await this.addMikrotikNatRule(srv.ip_publica, local_ip, mappedSdkPort, srv.usuario, srv.password, mikrotikPort, '8000');
@@ -6516,32 +6538,37 @@ export class ControlAccesoService implements OnModuleInit {
         resolve({ sent: false, error: err.message });
       });
 
-      const optionsMsg = [
-        `OPTIONS sip:8001@${vpnIp}:${sipPort} SIP/2.0`,
-        `Via: SIP/2.0/UDP ${vpnIp}:${sipPort};branch=z9hG4bK-test-${Date.now()};rport`,
-        `From: <sip:proliseg@${vpnIp}>;tag=test1234`,
-        `To: <sip:8001@${vpnIp}:${sipPort}>`,
-        `Call-ID: test-${Date.now()}@proliseg`,
-        `CSeq: 1 OPTIONS`,
-        `Max-Forwards: 70`,
-        `User-Agent: Proliseg-Diag/1.0`,
-        `Content-Length: 0`,
-        '',
-        '',
-      ].join('\r\n');
+      const myIp = this.dahuaSipService?.getLocalIpForTarget(vpnIp) || '10.0.1.7';
+      sock.bind(0, '0.0.0.0', () => {
+        const boundPort = sock.address().port;
+        const inviteMsg = [
+          `INVITE sip:8001@${localIp}:5060 SIP/2.0`,
+          `Via: SIP/2.0/UDP ${myIp}:${boundPort};branch=z9hG4bK-diag-${Date.now()};rport`,
+          `From: <sip:operator@${myIp}:${boundPort}>;tag=diag123`,
+          `To: <sip:8001@${localIp}:5060>`,
+          `Call-ID: diag-${Date.now()}@proliseg`,
+          `CSeq: 1 INVITE`,
+          `Contact: <sip:operator@${myIp}:${boundPort}>`,
+          `Max-Forwards: 70`,
+          `User-Agent: Proliseg-Diag/1.0`,
+          `Content-Length: 0`,
+          '',
+          '',
+        ].join('\r\n');
 
-      sock.send(optionsMsg, sipPort, vpnIp, (err: any) => {
-        if (err) {
-          if (timer) clearTimeout(timer);
-          try { sock.close(); } catch {}
-          resolve({ sent: false, error: err.message });
-          return;
-        }
+        sock.send(inviteMsg, sipPort, vpnIp, (err: any) => {
+          if (err) {
+            if (timer) clearTimeout(timer);
+            try { sock.close(); } catch {}
+            resolve({ sent: false, error: err.message });
+            return;
+          }
 
-        timer = setTimeout(() => {
-          try { sock.close(); } catch {}
-          resolve({ sent: true, error: 'Timeout esperando respuesta UDP (2500ms)' });
-        }, 2500);
+          timer = setTimeout(() => {
+            try { sock.close(); } catch {}
+            resolve({ sent: true, error: 'Timeout esperando respuesta UDP (2500ms)' });
+          }, 2500);
+        });
       });
     });
 
@@ -6648,6 +6675,19 @@ export class ControlAccesoService implements OnModuleInit {
           ? routesRes.data.map((r: any) => ({ dst: r['dst-address'], gateway: r.gateway, active: r.active }))
           : routesRes.data,
       };
+
+      // Si la ruta hacia la subred Docker (10.0.0.0/16) no existe en MikroTik, crearla automáticamente
+      const hasDockerRoute = Array.isArray(routesRes.data) && routesRes.data.some((r: any) => r['dst-address'] === '10.0.0.0/16');
+      if (!hasDockerRoute) {
+        await axios.put(`http://${vpnIp}:80/rest/ip/route`, {
+          'dst-address': '10.0.0.0/16',
+          gateway: 'wg-to-vps',
+          comment: 'Proliseg Docker network return via WireGuard'
+        }, { auth, timeout: 5000 }).catch(e => {
+          this.logger.warn(`Error creando ruta 10.0.0.0/16: ${e.message}`);
+        });
+        mikrotikNetwork.routeAdded = '10.0.0.0/16 -> wg-to-vps';
+      }
     } catch (netErr: any) {
       mikrotikNetwork = { error: netErr.message };
     }

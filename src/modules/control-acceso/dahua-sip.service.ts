@@ -62,20 +62,15 @@ export class DahuaSipService {
   public getLocalIpForTarget(targetIp: string): string {
     const os = require('os');
     const ifaces = os.networkInterfaces();
-    // 1. Si targetIp es de subred VPN 10.8.0.x, buscar la interfaz local que coincida
-    if (targetIp.startsWith('10.8.0.')) {
-      for (const name of Object.keys(ifaces)) {
-        for (const net of ifaces[name] || []) {
-          if (net.family === 'IPv4' && !net.internal && net.address.startsWith('10.8.0.')) {
-            return net.address;
-          }
+    // 1. Si hay interfaz local de subred VPN 10.8.0.x, seleccionarla
+    for (const name of Object.keys(ifaces)) {
+      for (const net of ifaces[name] || []) {
+        if (net.family === 'IPv4' && !net.internal && net.address.startsWith('10.8.0.')) {
+          return net.address;
         }
       }
-      // En contenedor Docker donde la interfaz 10.8.0.x reside en el host y no en el container,
-      // anunciar targetIp o la IP del gateway VPN para que la terminal responda a través de la ruta válida del túnel
-      return targetIp;
     }
-    // 2. Si hay interfaz 10.x.x.x o wg, seleccionarla
+    // 2. Si estamos en contenedor Docker (ej: 10.0.1.7) o interfaz privada 10.x o wg, devolver su IP real
     for (const name of Object.keys(ifaces)) {
       for (const net of ifaces[name] || []) {
         if (net.family === 'IPv4' && !net.internal && (net.address.startsWith('10.') || name.includes('wg'))) {
@@ -83,7 +78,7 @@ export class DahuaSipService {
         }
       }
     }
-    // 3. Primer IPv4 no local
+    // 3. Primer IPv4 no local (ej: 172.x o 192.168.x)
     for (const name of Object.keys(ifaces)) {
       for (const net of ifaces[name] || []) {
         if (net.family === 'IPv4' && !net.internal && net.address !== '127.0.0.1') {
@@ -166,6 +161,7 @@ export class DahuaSipService {
     localRtpPort: number,
     user = '8001',
     authHeader?: string,
+    targetDomain?: string,
   ): string {
     const sdp = [
       'v=0',
@@ -179,11 +175,12 @@ export class DahuaSipService {
       '',
     ].join('\r\n');
 
+    const reqDomain = targetDomain || `${targetIp}:${targetSipPort}`;
     const headerLines = [
-      `INVITE sip:${user}@${targetIp}:${targetSipPort} SIP/2.0`,
+      `INVITE sip:${user}@${reqDomain} SIP/2.0`,
       `Via: SIP/2.0/UDP ${localIp}:${localSipPort};branch=z9hG4bK-${this.randomStr(8)};rport`,
       `From: <sip:operator@${localIp}:${localSipPort}>;tag=${fromTag}`,
-      `To: <sip:${user}@${targetIp}:${targetSipPort}>`,
+      `To: <sip:${user}@${reqDomain}>`,
       `Call-ID: ${callId}`,
       `CSeq: ${cseq} INVITE`,
       `Contact: <sip:operator@${localIp}:${localSipPort}>`,
@@ -219,12 +216,14 @@ export class DahuaSipService {
     targetIp: string,
     targetSipPort: number,
     user = '8001',
+    targetDomain?: string,
   ): string {
+    const reqDomain = targetDomain || `${targetIp}:${targetSipPort}`;
     return [
-      `ACK sip:${user}@${targetIp}:${targetSipPort} SIP/2.0`,
+      `ACK sip:${user}@${reqDomain} SIP/2.0`,
       `Via: SIP/2.0/UDP ${localIp}:${localSipPort};branch=z9hG4bK-${this.randomStr(8)};rport`,
       `From: <sip:operator@${localIp}:${localSipPort}>;tag=${fromTag}`,
-      `To: <sip:${user}@${targetIp}:${targetSipPort}>;tag=${toTag}`,
+      `To: <sip:${user}@${reqDomain}>;tag=${toTag}`,
       `Call-ID: ${callId}`,
       `CSeq: ${cseq} ACK`,
       'Max-Forwards: 70',
@@ -322,9 +321,10 @@ export class DahuaSipService {
     rtpPortFallback: number,
     user = '8001',
     onAudioChunk?: (pcmAlawChunk: Buffer) => void,
+    targetDomain?: string,
   ): Promise<{ stop: () => void } | null> {
     const sessionKey = `${targetIp}:${sipPort}`;
-    this.logger.log(`📞 [DAHUA-SIP] Iniciando llamada SIP a Dahua en ${sessionKey}...`);
+    this.logger.log(`📞 [DAHUA-SIP] Iniciando llamada SIP a Dahua en ${sessionKey} (Domain: ${targetDomain || 'default'})...`);
 
     // Limpiar sesión previa si existe
     const prev = this.activeSessions.get(sessionKey);
@@ -368,6 +368,8 @@ export class DahuaSipService {
         sipPort,
         localRtpPort,
         user,
+        undefined,
+        targetDomain,
       );
 
       return new Promise((resolve) => {
@@ -418,7 +420,8 @@ export class DahuaSipService {
 
             const authHeaderVal = this.extractHeader(respStr, 'WWW-Authenticate');
             if (authHeaderVal) {
-              const targetUri = `sip:${user}@${targetIp}:${sipPort}`;
+              const reqDomain = targetDomain || `${targetIp}:${sipPort}`;
+              const targetUri = `sip:${user}@${reqDomain}`;
               // Intentar autenticación con credenciales estándar SIP Dahua (8001 / 123456)
               const digestAuth = this.buildSipDigestAuth('INVITE', targetUri, authHeaderVal, user, '123456');
 
@@ -433,6 +436,7 @@ export class DahuaSipService {
                 targetIp,
                 sipPort,
                 user,
+                targetDomain,
               );
               try { sipSocket.send(ack401, sipPort, targetIp); } catch {}
 
@@ -450,6 +454,7 @@ export class DahuaSipService {
                   localRtpPort,
                   user,
                   digestAuth,
+                  targetDomain,
                 );
                 this.logger.log(`🚀 [DAHUA-SIP] Enviando segundo INVITE autenticado con Digest CSeq ${cseq} hacia ${sessionKey}`);
                 sipSocket.send(authedInvite, sipPort, targetIp);
@@ -463,7 +468,8 @@ export class DahuaSipService {
             if (timer) clearTimeout(timer);
             isSessionActive = true;
             remoteToTag = parsed.toTag || this.randomStr(6);
-            if (parsed.rtpPort) {
+            // Si rtpPortFallback no es el 15000 por defecto de LAN (ej: 40095 en VPN NAT), conservarlo para salir por MikroTik
+            if (parsed.rtpPort && (rtpPortFallback === 15000 || !rtpPortFallback)) {
               remoteRtpPort = parsed.rtpPort;
             }
 
@@ -480,6 +486,7 @@ export class DahuaSipService {
               targetIp,
               sipPort,
               user,
+              targetDomain,
             );
             try {
               sipSocket.send(ackMsg, sipPort, targetIp);
@@ -544,6 +551,7 @@ export class DahuaSipService {
     sipPort: number,
     rtpPortFallback: number,
     user = '8001',
+    targetDomain?: string,
   ): Promise<boolean> {
     const sessionKey = `${targetIp}:${sipPort}`;
     let active = this.activeSessions.get(sessionKey);
@@ -551,7 +559,7 @@ export class DahuaSipService {
     // Si no hay llamada activa, abrirla primero
     if (!active) {
       this.logger.log(`🎙️ [DAHUA-SIP-TALK] No hay sesión activa. Negociando SIP INVITE previa para hablar...`);
-      const listenSession = await this.openDahuaSipListenSession(targetIp, sipPort, rtpPortFallback, user);
+      const listenSession = await this.openDahuaSipListenSession(targetIp, sipPort, rtpPortFallback, user, undefined, targetDomain);
       if (!listenSession) {
         this.logger.warn(`❌ [DAHUA-SIP-TALK] No se pudo establecer la llamada SIP con Dahua`);
         return false;

@@ -1224,22 +1224,25 @@ export class DahuaService {
       id: 2,
     }, { timeout: 6000 });
 
-    if (!step2.data?.result) {
-      throw new Error(`Dahua RPC2 login rechazado`);
+    const activeSession = step2.data?.session !== undefined ? step2.data.session : sessionId;
+    const setCookie = step2.headers ? step2.headers['set-cookie'] : undefined;
+    const reqHeaders: any = { 'Content-Type': 'application/json' };
+    if (setCookie) {
+      reqHeaders['Cookie'] = Array.isArray(setCookie) ? setCookie.join('; ') : setCookie;
     }
 
     // Step 3: Execute method
     const rpcPayload: any = {
       method,
-      params,
-      session: sessionId,
+      params: params || {},
+      session: activeSession,
       id: 3,
     };
     if (objectId !== undefined) {
       rpcPayload.object = objectId;
     }
 
-    const methodResp = await axios.post(`${baseUrl}/RPC2`, rpcPayload, { timeout: 10000 });
+    const methodResp = await axios.post(`${baseUrl}/RPC2`, rpcPayload, { headers: reqHeaders, timeout: 10000 });
     return methodResp.data;
   }
 
