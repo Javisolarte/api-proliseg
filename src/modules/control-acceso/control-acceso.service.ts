@@ -6601,12 +6601,8 @@ export class ControlAccesoService implements OnModuleInit {
       const getRes = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=getConfig&name=SIP');
       sipCgiConfig = String(getRes?.data || '').trim();
 
-      // Probar setConfig vía CGI individualmente sin valores vacíos
-      cgiSetResult.userEnable = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&table.SIP.UserEnable=false').then((r: any) => String(r?.data || r)).catch((e: any) => e.message);
-      cgiSetResult.userEnableAlt = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&SIP.UserEnable=false').then((r: any) => String(r?.data || r)).catch((e: any) => e.message);
-      cgiSetResult.routeEnable = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&table.SIP.RouteEnable=false').then((r: any) => String(r?.data || r)).catch((e: any) => e.message);
 
-      // Configurar tabla SIP COMPLETA (para no borrar LocalSIPPort, IsMainVTO, etc.)
+      // Configurar tabla SIP COMPLETA con UserEnable: true para activar el stack SIP
       rpcSetResult = await this.dahuaService.rpcCall(vpnIp, httpPort, user, pass, 'configManager.setConfig', {
         name: 'SIP',
         table: {
@@ -6617,7 +6613,7 @@ export class ControlAccesoService implements OnModuleInit {
           LocalSIPPort: 5060,
           RegisterRealm: 'VDP',
           RouteEnable: false,
-          UserEnable: false,
+          UserEnable: true,
           UserID: '8001',
           UserType: 0,
         }
@@ -6626,40 +6622,25 @@ export class ControlAccesoService implements OnModuleInit {
       const getResAfter = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=getConfig&name=SIP');
       sipCgiConfigAfter = String(getResAfter?.data || '').trim();
 
-      // Obtener instancias de servicio de audio vía system.getService
-      const svcNames = ['VoipTalk', 'TalkDevManager', 'RemoteSpeak', 'speak', 'DigitalSpeaker', 'DoorBell', 'VTOManager'];
-      const svcInstances: any = {};
-      for (const s of svcNames) {
-        try {
-          const res = await this.dahuaService.rpcCall(vpnIp, httpPort, user, pass, 'system.getService', { name: s });
-          svcInstances[s] = res;
-        } catch (e: any) {
-          svcInstances[s] = e.response?.data || e.message;
-        }
+      // Listar TODOS los servicios reales expuestos por el dispositivo
+      try {
+        const allSvcRes = await this.dahuaService.rpcCall(vpnIp, httpPort, user, pass, 'system.listService', {});
+        extraConfigs.allServices = allSvcRes?.params?.service || allSvcRes?.params || allSvcRes;
+      } catch (e: any) {
+        extraConfigs.allServices = e.message;
       }
-      extraConfigs.svcInstances = svcInstances;
 
-      const svcMethods: any = {};
-      for (const s of ['VoipTalk', 'TalkDevManager', 'RemoteSpeak', 'speak', 'DigitalSpeaker', 'VTOManager']) {
+      // Consultar configuraciones clave de Audio/Intercom/Talk/VTO
+      const otherConfigs: any = {};
+      for (const c of ['Audio', 'Intercom', 'Talk', 'VTO', 'VoIP', 'VideoTalk', 'VTH', 'CommGlobal']) {
         try {
-          const mRes = await this.dahuaService.rpcCall(vpnIp, httpPort, user, pass, 'system.listMethod', { service: s });
-          svcMethods[s] = mRes?.params || mRes?.result || mRes;
-        } catch (e: any) {
-          svcMethods[s] = e.message;
-        }
+          const cRes = await this.dahuaService.rpcCall(vpnIp, httpPort, user, pass, 'configManager.getConfig', { name: c });
+          if (cRes?.result) {
+            otherConfigs[c] = cRes.params?.table || cRes.params;
+          }
+        } catch (e: any) {}
       }
-      extraConfigs.svcMethods = svcMethods;
-
-      const cgiProbes: any = {};
-      for (const p of ['/cgi-bin/audio.cgi', '/cgi-bin/talk.cgi', '/cgi-bin/intercom.cgi', '/cgi-bin/audioOut.cgi', '/cgi-bin/audioIn.cgi', '/cgi-bin/speaker.cgi', '/cgi-bin/voice.cgi', '/cgi-bin/broadcast.cgi']) {
-        try {
-          const res = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', p);
-          cgiProbes[p] = String(res?.data || res?.status || 'OK');
-        } catch (e: any) {
-          cgiProbes[p] = e.response?.status ? `Status ${e.response.status}` : e.message;
-        }
-      }
-      extraConfigs.cgiProbes = cgiProbes;
+      extraConfigs.otherConfigs = otherConfigs;
 
       const tcpSipPostBoot = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
         const sock = new net.Socket();
