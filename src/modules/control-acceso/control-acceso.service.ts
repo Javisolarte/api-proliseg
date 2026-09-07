@@ -6339,6 +6339,29 @@ export class ControlAccesoService implements OnModuleInit {
       report.netSdkTalkTest = { error: sdkErr.message };
     }
 
+    // 3. Probar JSON-RPC services y metodos disponibles en el firmware Dahua
+    report.rpcTests = {};
+    const rpcMethodsToTest = [
+      'system.listService',
+      'system.listMethod',
+      'magicBox.getAudioInCaps',
+      'magicBox.getAudioOutCaps',
+      'intercom.startTalk',
+      'intercom.getCallStatus',
+      'intercom.getCallingState',
+      'talk.startTalk',
+      'audioTalk.start',
+      'voiceBroadcast.start',
+    ];
+    for (const m of rpcMethodsToTest) {
+      try {
+        const rpcRes = await this.dahuaService.rpcCall(ip, httpPort, user, pass, m, {});
+        report.rpcTests[m] = { ok: true, result: rpcRes };
+      } catch (err: any) {
+        report.rpcTests[m] = { ok: false, error: err.message };
+      }
+    }
+
     return report;
   }
 
@@ -6609,6 +6632,25 @@ export class ControlAccesoService implements OnModuleInit {
       natSyncResult = { status: 'error', message: mtkErr.message };
     }
 
+    // 5. Diagnóstico de red MikroTik (direcciones IP, peers WireGuard y rutas)
+    let mikrotikNetwork: any = {};
+    try {
+      const auth = { username: 'admin', password: '1004192496' };
+      const [addrRes, wgRes, routesRes] = await Promise.all([
+        axios.get(`http://${vpnIp}:80/rest/ip/address`, { auth, timeout: 4000 }).catch(e => ({ data: e.message })),
+        axios.get(`http://${vpnIp}:80/rest/interface/wireguard/peers`, { auth, timeout: 4000 }).catch(e => ({ data: e.message })),
+        axios.get(`http://${vpnIp}:80/rest/ip/route`, { auth, timeout: 4000 }).catch(e => ({ data: e.message })),
+      ]);
+      mikrotikNetwork = {
+        addresses: addrRes.data,
+        wireguardPeers: wgRes.data,
+        routes: Array.isArray(routesRes.data)
+          ? routesRes.data.map((r: any) => ({ dst: r['dst-address'], gateway: r.gateway, active: r.active }))
+          : routesRes.data,
+      };
+    } catch (netErr: any) {
+      mikrotikNetwork = { error: netErr.message };
+    }
 
     return {
       dispositivo: dev.nombre_identificador,
@@ -6626,6 +6668,7 @@ export class ControlAccesoService implements OnModuleInit {
       sipCgiConfig,
       mikrotikRules,
       natSyncResult,
+      mikrotikNetwork,
     };
   }
 
