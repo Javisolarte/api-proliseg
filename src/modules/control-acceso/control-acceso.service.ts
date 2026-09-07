@@ -6605,46 +6605,33 @@ export class ControlAccesoService implements OnModuleInit {
       cgiSetResult.userEnableAlt = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&SIP.UserEnable=false').then((r: any) => String(r?.data || r)).catch((e: any) => e.message);
       cgiSetResult.routeEnable = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&table.SIP.RouteEnable=false').then((r: any) => String(r?.data || r)).catch((e: any) => e.message);
 
-      // Probar setConfig vía JSON-RPC 2.0 (la API nativa de Dahua)
+      // Configurar tabla SIP COMPLETA (para no borrar LocalSIPPort, IsMainVTO, etc.)
       rpcSetResult = await this.dahuaService.rpcCall(vpnIp, httpPort, user, pass, 'configManager.setConfig', {
         name: 'SIP',
         table: {
-          UserEnable: false,
+          AuthID: '8001',
+          AuthPassword: pass || '123456',
+          IsMainVTO: 1,
+          LocalRTPPort: 15000,
+          LocalSIPPort: 5060,
+          RegisterRealm: 'VDP',
           RouteEnable: false,
+          UserEnable: false,
+          UserID: '8001',
+          UserType: 0,
         }
       }).catch((e: any) => ({ error: e.message }));
 
       const getResAfter = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=getConfig&name=SIP');
       sipCgiConfigAfter = String(getResAfter?.data || '').trim();
 
-      // Descubrir configuraciones internas de Audio, Intercom y VoIP
-      const configNames = ['NetApp', 'TalkDev', 'VoipTalk', 'VTO', 'AudioIn', 'AudioOut', 'Intercom', 'Alarm', 'AccessControlGeneral'];
-      for (const cName of configNames) {
-        try {
-          const r = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', `/cgi-bin/configManager.cgi?action=getConfig&name=${cName}`);
-          if (r?.data && !String(r.data).includes('Error')) {
-            extraConfigs[cName] = String(r.data).trim().split('\r\n').slice(0, 15).join('\n');
-          }
-        } catch {}
+      // Listar métodos soportados por Dahua
+      try {
+        const listM = await this.dahuaService.rpcCall(vpnIp, httpPort, user, pass, 'system.listMethod', {});
+        extraConfigs.systemMethods = listM?.params?.methods || listM?.result || listM;
+      } catch (e: any) {
+        extraConfigs.systemMethodsErr = e.message;
       }
-      // Descubrir métodos RPC válidos para audio y talk
-      const testMethods = [
-        'VoipTalk.start', 'VoipTalk.call', 'VoipTalk.startTalk', 'VoipTalk.getStatus', 'VoipTalk.hangUp',
-        'TalkDevManager.start', 'TalkDevManager.startTalk', 'TalkDevManager.getStatus', 'TalkDevManager.getTalkFormat',
-        'RemoteSpeak.start', 'RemoteSpeak.speak', 'RemoteSpeak.sendAudio',
-        'DigitalSpeaker.play', 'DigitalSpeaker.getStatus',
-        'VTOManager.getStatus', 'VTOManager.call', 'VTOManager.startTalk'
-      ];
-      const rpcMethodProbes: any = {};
-      for (const m of testMethods) {
-        try {
-          const res = await this.dahuaService.rpcCall(vpnIp, httpPort, user, pass, m, {});
-          rpcMethodProbes[m] = res?.error ? (res.error.message || res.error) : (res?.result !== undefined ? res.result : 'OK');
-        } catch (e: any) {
-          rpcMethodProbes[m] = e.response?.data?.error?.message || e.message;
-        }
-      }
-      extraConfigs.rpcMethodProbes = rpcMethodProbes;
     } catch (e: any) {
       sipCgiConfig = `Error CGI: ${e.message}`;
     }
