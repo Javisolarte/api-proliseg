@@ -1576,7 +1576,8 @@ export class ControlAccesoService implements OnModuleInit {
         this.dahuaService.asegurarFormatoH264(target.host, target.port, target.user, target.pass).catch(() => {});
       }
 
-      const rtspUrl0 = `rtsp://${target.user}:${encodedPass}@${target.host}:${rtspPort}/cam/realmonitor?channel=1&subtype=0`;
+      // En terminales Dahua (ASI3203E), ExtraFormat[0] (subtype=1) tiene AudioEnable=true con G.711A
+      const rtspUrl0 = `rtsp://${target.user}:${encodedPass}@${target.host}:${rtspPort}/cam/realmonitor?channel=1&subtype=1`;
 
       let currentFfmpeg = spawn(this.getFfmpegBinary(), [
         '-hide_banner',
@@ -1593,7 +1594,7 @@ export class ControlAccesoService implements OnModuleInit {
         'pipe:1',
       ]);
 
-      this.logger.log(`🔊 [AUDIO-OUT-DAHUA-RTSP] ffmpeg RTSP->MP3 iniciado hacia ${target.host}:${rtspPort} (subtype=0)`);
+      this.logger.log(`🔊 [AUDIO-OUT-DAHUA-RTSP] ffmpeg RTSP->MP3 iniciado hacia ${target.host}:${rtspPort} (subtype=1)`);
 
       let hasSentData = false;
 
@@ -1618,8 +1619,8 @@ export class ControlAccesoService implements OnModuleInit {
 
       currentFfmpeg.on('exit', (code) => {
         if (!hasSentData && !res.writableEnded) {
-          this.logger.log(`🔄 [AUDIO-OUT-DAHUA-RTSP] subtype=0 cerró sin datos. Reintentando con subtype=1 en ${target.host}:${rtspPort}`);
-          const rtspUrl1 = `rtsp://${target.user}:${encodedPass}@${target.host}:${rtspPort}/cam/realmonitor?channel=1&subtype=1`;
+          this.logger.log(`🔄 [AUDIO-OUT-DAHUA-RTSP] subtype=1 cerró sin datos. Reintentando con subtype=0 en ${target.host}:${rtspPort}`);
+          const rtspUrl1 = `rtsp://${target.user}:${encodedPass}@${target.host}:${rtspPort}/cam/realmonitor?channel=1&subtype=0`;
           const ffmpeg1 = spawn(this.getFfmpegBinary(), [
             '-hide_banner',
             '-loglevel', 'warning',
@@ -6632,7 +6633,7 @@ export class ControlAccesoService implements OnModuleInit {
 
       // Consultar configuraciones clave de Audio/Intercom/Talk/VTO
       const otherConfigs: any = {};
-      for (const c of ['Audio', 'Intercom', 'Talk', 'VTO', 'VoIP', 'VideoTalk', 'VTH', 'CommGlobal']) {
+      for (const c of ['Audio', 'Intercom', 'Talk', 'VTO', 'VoIP', 'VideoTalk', 'VTH', 'CommGlobal', 'Encode']) {
         try {
           const cRes = await this.dahuaService.rpcCall(vpnIp, httpPort, user, pass, 'configManager.getConfig', { name: c });
           if (cRes?.result) {

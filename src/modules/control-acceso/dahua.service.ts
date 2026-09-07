@@ -71,8 +71,13 @@ export class DahuaService {
     CLIENT_Login: any;
     CLIENT_Logout: any;
     CLIENT_ControlDevice: any;
+    CLIENT_StartTalk: any;
+    CLIENT_StopTalk: any;
     CLIENT_StartTalkEx: any;
     CLIENT_StopTalkEx: any;
+    CLIENT_StartTalkChannel: any;
+    CLIENT_TalkChannelSendData: any;
+    CLIENT_StopTalkChannel: any;
     CLIENT_TalkSendData: any;
     CLIENT_SetVolume: any;
     CLIENT_SetDeviceMode: any;
@@ -144,8 +149,13 @@ export class DahuaService {
         CLIENT_Login: this.netSdkLib.func(`int64_t ${cc}CLIENT_Login(str pchDVRIP, uint16_t wDVRPort, str pchUserName, str pchPassword, void* lpDeviceInfo, _Out_ int* error)`),
         CLIENT_Logout: this.netSdkLib.func(`bool ${cc}CLIENT_Logout(int64_t lLoginID)`),
         CLIENT_ControlDevice: this.netSdkLib.func(`bool ${cc}CLIENT_ControlDevice(int64_t lLoginID, int32_t emType, void* pParam, int32_t nWaitTime)`),
+        CLIENT_StartTalk: this.netSdkLib.func(`int64_t ${cc}CLIENT_StartTalk(int64_t lLoginID, void *pfcb, int64_t dwUser)`),
+        CLIENT_StopTalk: this.netSdkLib.func(`bool ${cc}CLIENT_StopTalk(int64_t lTalkHandle)`),
         CLIENT_StartTalkEx: this.netSdkLib.func(`int64_t ${cc}CLIENT_StartTalkEx(int64_t lLoginID, void *pfcb, int64_t dwUser)`),
         CLIENT_StopTalkEx: this.netSdkLib.func(`bool ${cc}CLIENT_StopTalkEx(int64_t lTalkHandle)`),
+        CLIENT_StartTalkChannel: this.netSdkLib.func(`int64_t ${cc}CLIENT_StartTalkChannel(int64_t lLoginID, int32_t nChannel, void *pfcb, int64_t dwUser)`),
+        CLIENT_TalkChannelSendData: this.netSdkLib.func(`int32_t ${cc}CLIENT_TalkChannelSendData(int64_t lTalkHandle, uint8_t *pDataBuf, uint32_t dwBufSize)`),
+        CLIENT_StopTalkChannel: this.netSdkLib.func(`bool ${cc}CLIENT_StopTalkChannel(int64_t lTalkHandle)`),
         CLIENT_TalkSendData: this.netSdkLib.func(`int32_t ${cc}CLIENT_TalkSendData(int64_t lTalkHandle, uint8_t *pDataBuf, uint32_t dwBufSize)`),
         CLIENT_SetVolume: this.netSdkLib.func(`bool ${cc}CLIENT_SetVolume(int64_t lTalkHandle, int nVolume)`),
         CLIENT_SetDeviceMode: this.netSdkLib.func(`bool ${cc}CLIENT_SetDeviceMode(int64_t lLoginID, int emType, void *pValue)`),
@@ -1712,6 +1722,8 @@ export class DahuaService {
       }, koffi.pointer(sdk.AudioDataCallbackProto));
 
       let talkHandle = sdk.CLIENT_StartTalkEx(loginId, audioCb, 0);
+      let talkType: 'StartTalkEx' | 'StartTalk' | 'StartTalkChannel' = 'StartTalkEx';
+
       if (!talkHandle || talkHandle === 0n || talkHandle === 0) {
         const lastErr = sdk.CLIENT_GetLastError();
         this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] CLIENT_StartTalkEx con G.711A falló (GetLastError: ${lastErr}). Probando con PCM...`);
@@ -1719,13 +1731,30 @@ export class DahuaService {
         talkHandle = sdk.CLIENT_StartTalkEx(loginId, audioCb, 0);
         if (talkHandle && talkHandle !== 0n && talkHandle !== 0) {
           activeCodec = 1;
+          talkType = 'StartTalkEx';
           this.logger.log(`✅ [DAHUA-NETSDK-TALK] CLIENT_StartTalkEx exitoso con PCM (Handle: ${talkHandle})`);
         } else {
-          const pcmErr = sdk.CLIENT_GetLastError();
-          this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] CLIENT_StartTalkEx también falló con PCM (GetLastError: ${pcmErr})`);
-          try { koffi.unregister(audioCb); } catch {}
-          sdk.CLIENT_Logout(loginId);
-          return false;
+          // Fallback a CLIENT_StartTalk estándar
+          this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] Probando CLIENT_StartTalk estándar...`);
+          talkHandle = sdk.CLIENT_StartTalk(loginId, audioCb, 0);
+          if (talkHandle && talkHandle !== 0n && talkHandle !== 0) {
+            talkType = 'StartTalk';
+            this.logger.log(`✅ [DAHUA-NETSDK-TALK] CLIENT_StartTalk exitoso (Handle: ${talkHandle})`);
+          } else {
+            // Fallback a CLIENT_StartTalkChannel canal 0
+            this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] Probando CLIENT_StartTalkChannel canal 0...`);
+            talkHandle = sdk.CLIENT_StartTalkChannel(loginId, 0, audioCb, 0);
+            if (talkHandle && talkHandle !== 0n && talkHandle !== 0) {
+              talkType = 'StartTalkChannel';
+              this.logger.log(`✅ [DAHUA-NETSDK-TALK] CLIENT_StartTalkChannel(0) exitoso (Handle: ${talkHandle})`);
+            } else {
+              const chnErr = sdk.CLIENT_GetLastError();
+              this.logger.warn(`⚠️ [DAHUA-NETSDK-TALK] Todos los métodos talk NetSDK fallaron (GetLastError: ${chnErr})`);
+              try { koffi.unregister(audioCb); } catch {}
+              sdk.CLIENT_Logout(loginId);
+              return false;
+            }
+          }
         }
       }
 
@@ -1733,12 +1762,23 @@ export class DahuaService {
         sdk.CLIENT_SetVolume(talkHandle, 100);
       } catch {}
 
-      this.logger.log(`🎉 [DAHUA-NETSDK-TALK] Altavoz abierto en hardware Dahua (Handle: ${talkHandle}, Codec: ${activeCodec === 2 ? 'G.711A' : 'PCM'})`);
+      this.logger.log(`🎉 [DAHUA-NETSDK-TALK] Altavoz abierto en hardware Dahua (${talkType}, Handle: ${talkHandle}, Codec: ${activeCodec === 2 ? 'G.711A' : 'PCM'})`);
+
+      const sendTalkChunk = (data: Buffer) => {
+        try {
+          if (talkType === 'StartTalkChannel') {
+            return sdk.CLIENT_TalkChannelSendData(talkHandle, data, data.length);
+          }
+          return sdk.CLIENT_TalkSendData(talkHandle, data, data.length);
+        } catch {
+          return 0;
+        }
+      };
 
       // 3. Enviar ráfaga inicial de frames de confort para enganchar de inmediato el DSP del hardware
       try {
         const initialBurst = Buffer.alloc(640, activeCodec === 2 ? 0xd5 : 0x00);
-        sdk.CLIENT_TalkSendData(talkHandle, initialBurst, initialBurst.length);
+        sendTalkChunk(initialBurst);
       } catch {}
 
       // 4. Heartbeat continuo para mantener el canal abierto incluso antes de que lleguen los chunks del navegador
@@ -1747,7 +1787,7 @@ export class DahuaService {
         if (Date.now() - lastAudioSent >= 200) {
           try {
             const silenceFrame = Buffer.alloc(320, activeCodec === 2 ? 0xd5 : 0x00);
-            sdk.CLIENT_TalkSendData(talkHandle, silenceFrame, silenceFrame.length);
+            sendTalkChunk(silenceFrame);
           } catch {}
         }
       }, 150);
@@ -1781,9 +1821,9 @@ export class DahuaService {
         lastAudioSent = Date.now();
         totalBytesSent += chunk.length;
         try {
-          const ret = sdk.CLIENT_TalkSendData(talkHandle, chunk, chunk.length);
+          const ret = sendTalkChunk(chunk);
           if (totalBytesSent % 6400 === 0 || totalBytesSent <= 1500) {
-            this.logger.log(`🔊 [DAHUA-NETSDK-TALK] Enviados ${chunk.length} bytes de voz al parlante Dahua (Total: ${totalBytesSent} bytes, Ret: ${ret})`);
+            this.logger.log(`🔊 [DAHUA-NETSDK-TALK] Enviados ${chunk.length} bytes de voz al parlante Dahua (${talkType}, Total: ${totalBytesSent} bytes, Ret: ${ret})`);
           }
         } catch (err: any) {
           this.logger.warn(`[DAHUA-NETSDK-TALK] SendData warning: ${err.message}`);
@@ -1804,7 +1844,15 @@ export class DahuaService {
           try { clearInterval(keepAliveInterval); } catch {}
           try { ffmpeg.stdin.end(); } catch {}
           try { ffmpeg.kill('SIGKILL'); } catch {}
-          try { sdk.CLIENT_StopTalkEx(talkHandle); } catch {}
+          try {
+            if (talkType === 'StartTalkChannel') {
+              sdk.CLIENT_StopTalkChannel(talkHandle);
+            } else if (talkType === 'StartTalk') {
+              sdk.CLIENT_StopTalk(talkHandle);
+            } else {
+              sdk.CLIENT_StopTalkEx(talkHandle);
+            }
+          } catch {}
           try { koffi.unregister(audioCb); } catch {}
           try { sdk.CLIENT_Logout(loginId); } catch {}
           // NO llamar CLIENT_Cleanup — el singleton se mantiene vivo
@@ -1883,29 +1931,53 @@ export class DahuaService {
       }, koffi.pointer(sdk.AudioDataCallbackProto));
 
       let talkHandle = sdk.CLIENT_StartTalkEx(loginId, audioCb, 0);
+      let talkType: 'StartTalkEx' | 'StartTalk' | 'StartTalkChannel' = 'StartTalkEx';
+
       if (!talkHandle || talkHandle === 0n || talkHandle === 0) {
         const lastErr = sdk.CLIENT_GetLastError();
         this.logger.warn(`⚠️ [DAHUA-NETSDK-LISTEN] CLIENT_StartTalkEx con G711A falló (GetLastError: ${lastErr}). Probando PCM...`);
         this.setupNetSdkTalkMode(loginId, 1);
         talkHandle = sdk.CLIENT_StartTalkEx(loginId, audioCb, 0);
-        if (!talkHandle || talkHandle === 0n || talkHandle === 0) {
-          const pcmErr = sdk.CLIENT_GetLastError();
-          this.logger.warn(`⚠️ [DAHUA-NETSDK-LISTEN] CLIENT_StartTalkEx falló también con PCM (GetLastError: ${pcmErr})`);
-          try { koffi.unregister(audioCb); } catch {}
-          try { sdk.CLIENT_Logout(loginId); } catch {}
-          return null;
+        if (talkHandle && talkHandle !== 0n && talkHandle !== 0) {
+          talkType = 'StartTalkEx';
+        } else {
+          this.logger.warn(`⚠️ [DAHUA-NETSDK-LISTEN] Probando CLIENT_StartTalk estándar...`);
+          talkHandle = sdk.CLIENT_StartTalk(loginId, audioCb, 0);
+          if (talkHandle && talkHandle !== 0n && talkHandle !== 0) {
+            talkType = 'StartTalk';
+          } else {
+            this.logger.warn(`⚠️ [DAHUA-NETSDK-LISTEN] Probando CLIENT_StartTalkChannel(0)...`);
+            talkHandle = sdk.CLIENT_StartTalkChannel(loginId, 0, audioCb, 0);
+            if (talkHandle && talkHandle !== 0n && talkHandle !== 0) {
+              talkType = 'StartTalkChannel';
+            } else {
+              const pcmErr = sdk.CLIENT_GetLastError();
+              this.logger.warn(`⚠️ [DAHUA-NETSDK-LISTEN] Todos los métodos de listen NetSDK fallaron (GetLastError: ${pcmErr})`);
+              try { koffi.unregister(audioCb); } catch {}
+              try { sdk.CLIENT_Logout(loginId); } catch {}
+              return null;
+            }
+          }
         }
       }
 
-      this.logger.log(`🎉 [DAHUA-NETSDK-LISTEN] Micrófono Dahua abierto (TalkHandle: ${talkHandle})`);
+      this.logger.log(`🎉 [DAHUA-NETSDK-LISTEN] Micrófono Dahua abierto (${talkType}, TalkHandle: ${talkHandle})`);
 
       let closed = false;
       const stop = () => {
         if (closed) return;
         closed = true;
-        this.logger.log(`🛑 [DAHUA-NETSDK-LISTEN] Cerrando sesión de micrófono Dahua`);
+        this.logger.log(`🛑 [DAHUA-NETSDK-LISTEN] Cerrando sesión de micrófono Dahua (${talkType})`);
         this.activeNetSdkSessions.delete(sessionKey);
-        try { sdk.CLIENT_StopTalkEx(talkHandle); } catch {}
+        try {
+          if (talkType === 'StartTalkChannel') {
+            sdk.CLIENT_StopTalkChannel(talkHandle);
+          } else if (talkType === 'StartTalk') {
+            sdk.CLIENT_StopTalk(talkHandle);
+          } else {
+            sdk.CLIENT_StopTalkEx(talkHandle);
+          }
+        } catch {}
         try { koffi.unregister(audioCb); } catch {}
         try { sdk.CLIENT_Logout(loginId); } catch {}
       };
@@ -2003,25 +2075,46 @@ export class DahuaService {
         lastFlag = flag;
       }, koffi.pointer(sdk.AudioDataCallbackProto));
 
-      const talkHandle = sdk.CLIENT_StartTalkEx(loginId, audioCb, 0);
+      let talkHandle = sdk.CLIENT_StartTalkEx(loginId, audioCb, 0);
+      let apiUsed = 'StartTalkEx';
+      if (!talkHandle || talkHandle === 0n || talkHandle === 0) {
+        talkHandle = sdk.CLIENT_StartTalk(loginId, audioCb, 0);
+        if (talkHandle && talkHandle !== 0n && talkHandle !== 0) {
+          apiUsed = 'StartTalk';
+        } else {
+          talkHandle = sdk.CLIENT_StartTalkChannel(loginId, 0, audioCb, 0);
+          if (talkHandle && talkHandle !== 0n && talkHandle !== 0) {
+            apiUsed = 'StartTalkChannel';
+          }
+        }
+      }
+      testItem.apiUsed = apiUsed;
       testItem.talkHandle = String(talkHandle);
       testItem.talkOk = Boolean(talkHandle && talkHandle !== 0n && talkHandle !== 0);
       testItem.talkLastError = testItem.talkOk ? 0 : sdk.CLIENT_GetLastError();
 
       if (testItem.talkOk) {
         const burst = Buffer.alloc(320, cfg.codec === 2 ? 0xd5 : 0x00);
-        testItem.sendDataRet = sdk.CLIENT_TalkSendData(talkHandle, burst, burst.length);
+        testItem.sendDataRet = apiUsed === 'StartTalkChannel'
+          ? sdk.CLIENT_TalkChannelSendData(talkHandle, burst, burst.length)
+          : sdk.CLIENT_TalkSendData(talkHandle, burst, burst.length);
 
         await new Promise(r => setTimeout(r, 400));
         testItem.receivedPackets = receivedPackets;
         testItem.lastFlag = lastFlag;
 
-        sdk.CLIENT_StopTalkEx(talkHandle);
+        if (apiUsed === 'StartTalkChannel') {
+          sdk.CLIENT_StopTalkChannel(talkHandle);
+        } else if (apiUsed === 'StartTalk') {
+          sdk.CLIENT_StopTalk(talkHandle);
+        } else {
+          sdk.CLIENT_StopTalkEx(talkHandle);
+        }
         try { koffi.unregister(audioCb); } catch {}
 
         report.tests.push(testItem);
         report.ok = true;
-        report.successfulConfig = cfg.name;
+        report.successfulConfig = `${cfg.name}_${apiUsed}`;
         break;
       } else {
         try { koffi.unregister(audioCb); } catch {}
