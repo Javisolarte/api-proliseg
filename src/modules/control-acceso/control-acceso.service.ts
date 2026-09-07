@@ -1150,12 +1150,36 @@ export class ControlAccesoService implements OnModuleInit {
     deviceId?: string,
     operator?: any,
   ): Promise<any> {
+    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Transmitiendo voz hacia Dahua en ${target.host} (Port: ${target.port}, SdkPort: ${target.sdkPort || 'auto'})...`);
+
+    // 1. PRIORIDAD 1: NetSDK TCP (Modo forward TCP idéntico a SmartPSS / DMSS - audio instantáneo sin cuelgues SIP)
+    if (this.dahuaService) {
+      try {
+        const netSdkResult = await this.dahuaService.relayAudioNetSDK(
+          audioStream,
+          target.host,
+          target.port,
+          target.user,
+          target.pass,
+          target.sdkPort,
+        );
+        if (netSdkResult) {
+          return {
+            ok: true,
+            mensaje: 'Audio transmitido al altavoz Dahua por NetSDK TCP (SmartPSS mode)',
+            detalle: { target: `${target.host}:${target.sdkPort || target.port}`, via: 'NetSDK TCP (SmartPSS mode)' },
+            operador: operator || null,
+          };
+        }
+      } catch (sdkErr: any) {
+        this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] NetSDK Talk error: ${sdkErr.message}, probando fallback SIP...`);
+      }
+    }
+
+    // 2. FALLBACK SECUNDARIO: SIP / RTP nativo si NetSDK no estuvo disponible
     const sipPort = target.sipPort || (target.port >= 10000 ? 50000 + (target.port % 10000) : 5060);
     const rtpPort = target.rtpPort || (target.port >= 10000 ? 40000 + (target.port % 10000) : 15000);
 
-    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Transmitiendo voz hacia Dahua en ${target.host} (SIP: ${sipPort}, RTP: ${rtpPort})...`);
-
-    // 1. Intentar comunicación SIP / RTP nativa
     if (this.dahuaSipService) {
       try {
         const targetDomain = (target as any).localIp ? `${(target as any).localIp}:5060` : undefined;
@@ -1176,37 +1200,13 @@ export class ControlAccesoService implements OnModuleInit {
           };
         }
       } catch (sipErr: any) {
-        this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] SIP Talk error: ${sipErr.message}, probando fallback NetSDK...`);
-      }
-    }
-
-    // 2. Fallback NetSDK si SIP no respondió
-    if (this.dahuaService) {
-      try {
-        const netSdkResult = await this.dahuaService.relayAudioNetSDK(
-          audioStream,
-          target.host,
-          target.port,
-          target.user,
-          target.pass,
-          target.sdkPort,
-        );
-        if (netSdkResult) {
-          return {
-            ok: true,
-            mensaje: 'Audio transmitido al altavoz Dahua por NetSDK (CLIENT_StartTalkEx)',
-            detalle: { target: `${target.host}:${target.sdkPort || target.port}`, via: 'NetSDK TCP' },
-            operador: operator || null,
-          };
-        }
-      } catch (sdkErr: any) {
-        this.logger.error(`❌ [AUDIO-IN-DAHUA] NetSDK Talk error: ${sdkErr.message}`);
+        this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] SIP Talk error: ${sipErr.message}`);
       }
     }
 
     return {
       ok: false,
-      mensaje: 'No se pudo iniciar la sesión de llamada SIP/NetSDK con el terminal Dahua',
+      mensaje: 'No se pudo iniciar la sesión de transmisión de audio hacia el terminal Dahua',
     };
   }
 

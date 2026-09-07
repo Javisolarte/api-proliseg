@@ -569,19 +569,7 @@ export class DahuaService {
 
     const ch = channel ?? 1;
 
-    // 1. INTENTO PRIMARIO VÍA NETSDK (Requerido para ASI3203E-W y terminales modernos)
-    if (command === 'abrir' || command === 'cerrar') {
-      try {
-        const netSdkResult = await this.controlPuertaNetSdk(ip, port, user, pass, command, ch, sdkPort);
-        if (netSdkResult?.ok) {
-          return netSdkResult;
-        }
-      } catch (sdkErr: any) {
-        this.logger.warn(`⚠️ [DAHUA PUERTA] Intento NetSDK lanzó excepción: ${sdkErr.message}. Continuando a fallback CGI...`);
-      }
-    }
-
-    // 2. FALLBACK VÍA HTTP CGI (Para dispositivos que aceptan CGI o si NetSDK no está disponible)
+    // 1. INTENTO PRIMARIO VÍA HTTP CGI (Garantiza activación física del relay en ASI3203E-W y terminales Dahua)
     const candidates = [
       `/cgi-bin/accessControl.cgi?action=${action}&channel=${ch}&UserID=101&Type=Remote`,
       `/cgi-bin/accessControl.cgi?action=${action}&channel=${ch}&UserID=1&Type=Remote`,
@@ -600,7 +588,10 @@ export class DahuaService {
       );
     }
 
+    let cgiSuccess = false;
+    let cgiPathUsed = '';
     let lastError: any = null;
+
     for (const path of candidates) {
       try {
         const resp = await this.cgi(ip, port, user, pass, 'GET', path);
@@ -608,14 +599,39 @@ export class DahuaService {
         this.logger.debug(`[DAHUA PUERTA] ${path} -> respuesta: ${body}`);
 
         if (body.includes('OK') || body.includes('ok') || resp.status === 200) {
-          this.logger.log(`✅ [DAHUA PUERTA] ${command} ejecutado correctamente vía CGI en ${ip}:${port} (${path})`);
-          return { ok: true, mensaje: `Puerta ejecutó "${command}" correctamente (Dahua CGI)`, marca: 'Dahua', detalle: { path } };
+          this.logger.log(`✅ [DAHUA PUERTA] ${command} ejecutado físicamente vía CGI en ${ip}:${port} (${path})`);
+          cgiSuccess = true;
+          cgiPathUsed = path;
+          break;
         }
       } catch (err: any) {
         lastError = err;
         const errDetail = err?.response?.data || err.message;
         this.logger.warn(`⚠️ [DAHUA PUERTA] Candidato CGI ${path} falló: ${errDetail}`);
       }
+    }
+
+    // 2. ENVIAR ADEMÁS PULSO NETSDK EN CANAL 1 (Para firmware que sincroniza el relé por NetSDK)
+    let netSdkResult: any = null;
+    if (command === 'abrir' || command === 'cerrar') {
+      try {
+        netSdkResult = await this.controlPuertaNetSdk(ip, port, user, pass, command, ch, sdkPort);
+      } catch (sdkErr: any) {
+        this.logger.warn(`⚠️ [DAHUA PUERTA] NetSDK excepción: ${sdkErr.message}`);
+      }
+    }
+
+    if (cgiSuccess) {
+      return {
+        ok: true,
+        mensaje: `Puerta ejecutó "${command}" correctamente (Dahua CGI Relay activado)`,
+        marca: 'Dahua',
+        detalle: { path: cgiPathUsed, netSdkOk: netSdkResult?.ok ?? false },
+      };
+    }
+
+    if (netSdkResult?.ok) {
+      return netSdkResult;
     }
 
     const detailMsg = lastError?.response?.data ? String(lastError.response.data).trim() : (lastError?.message || 'Error desconocido');
@@ -658,13 +674,13 @@ export class DahuaService {
       // CtrlType: 260 = DH_CTRL_ACCESS_OPEN (0x104), 261 = DH_CTRL_ACCESS_CLOSE (0x105)
       const ctrlType = command === 'cerrar' ? 261 : 260;
 
-      // El índice de canal/puerta en Dahua normalmente es 0 para Puerta 1
-      const chIdx1 = Math.max(0, (channel || 1) - 1);
-      const chIdx2 = channel || 0;
-      const channelsToTry = [...new Set([chIdx1, chIdx2, 0, 1])];
+      // En terminales tipo ASI3203E-W el canal físico del relay es 1 (con fallback a 0)
+      const primaryCh = channel || 1;
+      const chIdx1 = Math.max(0, primaryCh - 1);
+      const channelsToTry = [...new Set([primaryCh, 1, chIdx1, 0])];
 
       let success = false;
-      let usedChannel = chIdx1;
+      let usedChannel = primaryCh;
       let lastErr = 0;
 
       for (const chIdx of channelsToTry) {
@@ -1646,20 +1662,31 @@ export class DahuaService {
       const speakBuf = Buffer.alloc(40, 0);
       speakBuf.writeInt32LE(40, 0);           // dwSize = 40
       speakBuf.writeInt32LE(0, 4);            // nMode = 0 (0: intercom/talk, 1: broadcast)
-      speakBuf.writeInt32LE(0, 8);            // nSpeakerChannel = 0
+      speakBuf.writeInt32LE(1, 8);            // nSpeakerChannel = 1 (altavoz principal de terminal)
       speakBuf.writeInt32LE(0, 12);           // bEnableWait = 0
       speakBuf.writeInt32LE(0, 16);           // nTalkDeviceMode = 0
       speakBuf.writeInt32LE(0, 20);           // nIPSpeakerChannelCount = 0
       speakBuf.writeInt32LE(0, 32);           // bEnableRender = 0
       const r2 = sdk.CLIENT_SetDeviceMode(loginId, 7, speakBuf);  // NET_TALK_SPEAK_PARAM = 7
 
-      // 3. NET_TALK_TRANSFER_MODE (8 bytes)
+      // 3. NET_TALK_TRANSFER_MODE (8 bytes) - Modo forward TCP idéntico a SmartPSS Lite
       const transferBuf = Buffer.alloc(8, 0);
       transferBuf.writeInt32LE(8, 0);         // dwSize = 8
-      transferBuf.writeInt32LE(0, 4);         // bTransfer = 0 (conexión directa)
+      transferBuf.writeInt32LE(1, 4);         // bTransfer = 1 (reenvío/forward sobre TCP NetSDK)
       const r3 = sdk.CLIENT_SetDeviceMode(loginId, 11, transferBuf); // NET_TALK_TRANSFER_MODE = 11
 
-      this.logger.log(`🔧 [DAHUA-NETSDK] SetupTalkMode (codec=${encodeType}): Encode=${r1}, SpeakParam=${r2}, TransferMode=${r3}`);
+      // 4. NET_TALK_CHANNEL (canal de audio 1)
+      const channelBuf = Buffer.alloc(8, 0);
+      channelBuf.writeInt32LE(8, 0);
+      channelBuf.writeInt32LE(1, 4);          // nChannel = 1
+      const r4 = sdk.CLIENT_SetDeviceMode(loginId, 5, channelBuf); // NET_TALK_CHANNEL = 5
+
+      // 5. Reset/sync de modo de audio antes de StartTalkEx (SmartPSS HandleStartTalk)
+      try {
+        sdk.CLIENT_SetDeviceMode(loginId, 1, null);
+      } catch {}
+
+      this.logger.log(`🔧 [DAHUA-NETSDK] SetupTalkMode (codec=${encodeType}): Encode=${r1}, SpeakParam=${r2}, TransferMode=${r3}, Channel=${r4}`);
       return Boolean(r1);
     } catch (e: any) {
       this.logger.warn(`⚠️ [DAHUA-NETSDK] Error en setupNetSdkTalkMode: ${e.message}`);
