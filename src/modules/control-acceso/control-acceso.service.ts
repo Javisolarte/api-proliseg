@@ -6639,12 +6639,37 @@ export class ControlAccesoService implements OnModuleInit {
       }
       extraConfigs.svcInstances = svcInstances;
 
-      try {
-        const listM = await this.dahuaService.rpcCall(vpnIp, httpPort, user, pass, 'system.listMethod', {});
-        extraConfigs.systemMethodsRaw = listM;
-      } catch (e: any) {
-        extraConfigs.systemMethodsErr = e.message;
+      const svcMethods: any = {};
+      for (const s of ['VoipTalk', 'TalkDevManager', 'RemoteSpeak', 'speak', 'DigitalSpeaker', 'VTOManager']) {
+        try {
+          const mRes = await this.dahuaService.rpcCall(vpnIp, httpPort, user, pass, 'system.listMethod', { service: s });
+          svcMethods[s] = mRes?.params || mRes?.result || mRes;
+        } catch (e: any) {
+          svcMethods[s] = e.message;
+        }
       }
+      extraConfigs.svcMethods = svcMethods;
+
+      const cgiProbes: any = {};
+      for (const p of ['/cgi-bin/audio.cgi', '/cgi-bin/talk.cgi', '/cgi-bin/intercom.cgi', '/cgi-bin/audioOut.cgi', '/cgi-bin/audioIn.cgi', '/cgi-bin/speaker.cgi', '/cgi-bin/voice.cgi', '/cgi-bin/broadcast.cgi']) {
+        try {
+          const res = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', p);
+          cgiProbes[p] = String(res?.data || res?.status || 'OK');
+        } catch (e: any) {
+          cgiProbes[p] = e.response?.status ? `Status ${e.response.status}` : e.message;
+        }
+      }
+      extraConfigs.cgiProbes = cgiProbes;
+
+      const tcpSipPostBoot = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
+        const sock = new net.Socket();
+        sock.setTimeout(2000);
+        sock.on('connect', () => { sock.destroy(); resolve({ ok: true }); });
+        sock.on('timeout', () => { sock.destroy(); resolve({ ok: false, error: 'Timeout' }); });
+        sock.on('error', (err: any) => { sock.destroy(); resolve({ ok: false, error: err.message }); });
+        sock.connect(sipPort, vpnIp);
+      });
+      extraConfigs.tcpSipPostBoot = tcpSipPostBoot;
     } catch (e: any) {
       sipCgiConfig = `Error CGI: ${e.message}`;
     }
