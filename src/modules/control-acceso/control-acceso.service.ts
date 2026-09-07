@@ -6718,18 +6718,17 @@ export class ControlAccesoService implements OnModuleInit {
         created.push(`dst-nat RTP UDP ${rtpPort}->15000`);
       }
 
-      // src-nat masquerade para permitir que los paquetes UDP de retorno salgan por MikroTik
-      const hasMasqUdpSip = allRules.some((r: any) => r.chain === 'srcnat' && r.action === 'masquerade' && r['dst-address'] === localIp && r['dst-port'] === '5060');
       const hasMasqUdpRtp = allRules.some((r: any) => r.chain === 'srcnat' && r.action === 'masquerade' && r['dst-address'] === localIp && r['dst-port'] === '15000');
       const hasGeneralMasq = allRules.some((r: any) => r.chain === 'srcnat' && r.action === 'masquerade' && (r['dst-address'] === '192.168.35.0/24' || !r['dst-address']));
 
-      if (!hasMasqUdpSip) {
-        await axios.put(mtkUrl, {
-          chain: 'srcnat', action: 'masquerade', protocol: 'udp',
-          'dst-address': localIp, 'dst-port': '5060',
-          comment: `Proliseg Dahua Masquerade SIP UDP: ${localIp}:5060`
+      // Para SIP UDP: NO enmascarar la IP origen entrante para que coincida exactamente con el Via: 10.0.1.7.
+      // Si existe regla de masquerade en 5060, desactivarla.
+      const masqSipRule = allRules.find((r: any) => r.chain === 'srcnat' && r.action === 'masquerade' && r['dst-address'] === localIp && r['dst-port'] === '5060' && r['protocol'] === 'udp' && r.disabled !== 'true');
+      if (masqSipRule && masqSipRule['.id']) {
+        await axios.patch(`http://${vpnIp}:80/rest/ip/firewall/nat/${masqSipRule['.id']}`, {
+          disabled: 'true'
         }, { auth: { username: 'admin', password: '1004192496' }, timeout: 5000 }).catch(() => {});
-        created.push(`src-nat masquerade UDP 5060`);
+        created.push(`desactivada regla masquerade 5060 (${masqSipRule['.id']})`);
       }
 
       if (!hasMasqUdpRtp) {
@@ -6791,9 +6790,11 @@ export class ControlAccesoService implements OnModuleInit {
         mikrotikNetwork.routeAdded = '10.0.0.0/16 -> wg-to-vps';
       }
 
-      // Asegurar reglas de firewall accept para el túnel WireGuard si el firewall tuviera drops
+      // Asegurar reglas de firewall accept para el túnel WireGuard (in y out por separado)
       const filters = Array.isArray(filterRes.data) ? filterRes.data : [];
       const hasWgInAccept = filters.some((f: any) => f.chain === 'forward' && f.action === 'accept' && f['in-interface'] === 'wg-to-vps');
+      const hasWgOutAccept = filters.some((f: any) => f.chain === 'forward' && f.action === 'accept' && f['out-interface'] === 'wg-to-vps');
+
       if (!hasWgInAccept && filters.length > 0) {
         await axios.put(`http://${vpnIp}:80/rest/ip/firewall/filter`, {
           chain: 'forward',
@@ -6801,12 +6802,16 @@ export class ControlAccesoService implements OnModuleInit {
           action: 'accept',
           comment: 'Proliseg accept WireGuard traffic'
         }, { auth, timeout: 5000 }).catch(() => {});
+      }
+
+      if (!hasWgOutAccept && filters.length > 0) {
         await axios.put(`http://${vpnIp}:80/rest/ip/firewall/filter`, {
           chain: 'forward',
           'out-interface': 'wg-to-vps',
           action: 'accept',
           comment: 'Proliseg accept WireGuard return'
         }, { auth, timeout: 5000 }).catch(() => {});
+        mikrotikNetwork.firewallRuleAdded = 'forward out-interface=wg-to-vps accept';
       }
     } catch (netErr: any) {
       mikrotikNetwork = { error: netErr.message };
