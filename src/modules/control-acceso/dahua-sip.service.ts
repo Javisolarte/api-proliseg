@@ -194,13 +194,13 @@ export class DahuaSipService {
     const headerLines = [
       `INVITE sip:${user}@${reqDomain} SIP/2.0`,
       `Via: SIP/2.0/UDP ${localIp}:${localSipPort};branch=z9hG4bK-${this.randomStr(8)};rport`,
-      `From: <sip:operator@${localIp}:${localSipPort}>;tag=${fromTag}`,
+      `From: <sip:888888@VDP>;tag=${fromTag}`,
       `To: <sip:${user}@${reqDomain}>`,
       `Call-ID: ${callId}`,
       `CSeq: ${cseq} INVITE`,
-      `Contact: <sip:operator@${localIp}:${localSipPort}>`,
+      `Contact: <sip:888888@${localIp}:${localSipPort}>`,
       'Max-Forwards: 70',
-      'User-Agent: Proliseg-Intercom/1.0',
+      'User-Agent: Dahua-VTH/1.0',
     ];
 
     if (authHeader) {
@@ -237,12 +237,12 @@ export class DahuaSipService {
     return [
       `ACK sip:${user}@${reqDomain} SIP/2.0`,
       `Via: SIP/2.0/UDP ${localIp}:${localSipPort};branch=z9hG4bK-${this.randomStr(8)};rport`,
-      `From: <sip:operator@${localIp}:${localSipPort}>;tag=${fromTag}`,
+      `From: <sip:888888@VDP>;tag=${fromTag}`,
       `To: <sip:${user}@${reqDomain}>;tag=${toTag}`,
       `Call-ID: ${callId}`,
       `CSeq: ${cseq} ACK`,
       'Max-Forwards: 70',
-      'User-Agent: Proliseg-Intercom/1.0',
+      'User-Agent: Dahua-VTH/1.0',
       'Content-Length: 0',
       '',
       '',
@@ -266,12 +266,12 @@ export class DahuaSipService {
     return [
       `BYE sip:${user}@${targetIp}:${targetSipPort} SIP/2.0`,
       `Via: SIP/2.0/UDP ${localIp}:${localSipPort};branch=z9hG4bK-${this.randomStr(8)};rport`,
-      `From: <sip:operator@${localIp}:${localSipPort}>;tag=${fromTag}`,
+      `From: <sip:888888@VDP>;tag=${fromTag}`,
       `To: <sip:${user}@${targetIp}:${targetSipPort}>;tag=${toTag}`,
       `Call-ID: ${callId}`,
       `CSeq: ${cseq} BYE`,
       'Max-Forwards: 70',
-      'User-Agent: Proliseg-Intercom/1.0',
+      'User-Agent: Dahua-VTH/1.0',
       'Content-Length: 0',
       '',
       '',
@@ -337,6 +337,7 @@ export class DahuaSipService {
     user = '8001',
     onAudioChunk?: (pcmAlawChunk: Buffer) => void,
     targetDomain?: string,
+    password?: string,
   ): Promise<{ stop: () => void } | null> {
     const sessionKey = `${targetIp}:${sipPort}`;
     this.log(`📞 [DAHUA-SIP] Iniciando llamada SIP a Dahua en ${sessionKey} (Domain: ${targetDomain || 'default'})...`);
@@ -437,8 +438,9 @@ export class DahuaSipService {
             if (authHeaderVal) {
               const reqDomain = targetDomain || `${targetIp}:${sipPort}`;
               const targetUri = `sip:${user}@${reqDomain}`;
-              // Intentar autenticación con credenciales estándar SIP Dahua (8001 / 123456)
-              const digestAuth = this.buildSipDigestAuth('INVITE', targetUri, authHeaderVal, user, '123456');
+              // Intentar autenticación con credenciales SIP Dahua
+              const digestAuth = this.buildSipDigestAuth('INVITE', targetUri, authHeaderVal, user, password || 'elvado2025')
+                || this.buildSipDigestAuth('INVITE', targetUri, authHeaderVal, user, '123456');
 
               // 1. Enviar ACK al 401 requerido por RFC 3261
               const ack401 = this.buildAck(

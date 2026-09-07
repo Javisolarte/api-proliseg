@@ -6560,15 +6560,16 @@ export class ControlAccesoService implements OnModuleInit {
       sock.bind(0, '0.0.0.0', () => {
         const boundPort = sock.address().port;
         const inviteMsg = [
-          `INVITE sip:8001@${localIp}:5060 SIP/2.0`,
+          `OPTIONS sip:8001@${localIp}:5060 SIP/2.0`,
           `Via: SIP/2.0/UDP ${myIp}:${boundPort};branch=z9hG4bK-diag-${Date.now()};rport`,
-          `From: <sip:operator@${myIp}:${boundPort}>;tag=diag123`,
+          `From: <sip:888888@VDP>;tag=diag123`,
           `To: <sip:8001@${localIp}:5060>`,
           `Call-ID: diag-${Date.now()}@proliseg`,
-          `CSeq: 1 INVITE`,
-          `Contact: <sip:operator@${myIp}:${boundPort}>`,
+          `CSeq: 1 OPTIONS`,
+          `Contact: <sip:888888@${myIp}:${boundPort}>`,
+          `Accept: application/sdp`,
           `Max-Forwards: 70`,
-          `User-Agent: Proliseg-Diag/1.0`,
+          `User-Agent: Dahua-VTH/1.0`,
           `Content-Length: 0`,
           '',
           '',
@@ -6785,6 +6786,7 @@ export class ControlAccesoService implements OnModuleInit {
         user,
         undefined,
         `${localIp}:5060`,
+        pass,
       );
       sipSessionResult = {
         success: !!sess,
