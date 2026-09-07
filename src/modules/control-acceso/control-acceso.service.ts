@@ -6363,24 +6363,42 @@ export class ControlAccesoService implements OnModuleInit {
 
     // 3. Probar JSON-RPC services y metodos disponibles en el firmware Dahua
     report.rpcTests = {};
-    const rpcMethodsToTest = [
-      'system.listService',
-      'system.listMethod',
-      'magicBox.getAudioInCaps',
-      'magicBox.getAudioOutCaps',
-      'intercom.startTalk',
-      'intercom.getCallStatus',
-      'intercom.getCallingState',
-      'talk.startTalk',
-      'audioTalk.start',
-      'voiceBroadcast.start',
-    ];
-    for (const m of rpcMethodsToTest) {
+    const audioServices = ['VoipTalk', 'TalkDevManager', 'speak', 'RemoteSpeak', 'DigitalSpeaker', 'DevBeep', 'DoorBell', 'VTOManager'];
+    report.serviceMethods = {};
+
+    for (const s of audioServices) {
       try {
-        const rpcRes = await this.dahuaService.rpcCall(ip, httpPort, user, pass, m, {});
-        report.rpcTests[m] = { ok: true, result: rpcRes };
+        // Prueba con { service: s }
+        const r1 = await this.dahuaService.rpcCall(ip, httpPort, user, pass, 'system.listMethod', { service: s });
+        if (r1?.result && r1?.params?.method) {
+          report.serviceMethods[s] = r1.params.method;
+          continue;
+        }
+        // Prueba con [s]
+        const r2 = await this.dahuaService.rpcCall(ip, httpPort, user, pass, 'system.listMethod', [s]);
+        if (r2?.result && r2?.params?.method) {
+          report.serviceMethods[s] = r2.params.method;
+          continue;
+        }
+        report.serviceMethods[s] = r1 || r2;
       } catch (err: any) {
-        report.rpcTests[m] = { ok: false, error: err.message };
+        report.serviceMethods[s] = { error: err.message };
+      }
+    }
+
+    // Probar llamadas directas de métodos candidatos
+    const directMethods = [
+      'VoipTalk.start', 'VoipTalk.getCallState', 'VoipTalk.hangUp',
+      'TalkDevManager.startTalk', 'TalkDevManager.start',
+      'speak.start', 'speak.sendData',
+      'RemoteSpeak.start', 'DigitalSpeaker.play', 'DevBeep.beep'
+    ];
+    for (const m of directMethods) {
+      try {
+        const res = await this.dahuaService.rpcCall(ip, httpPort, user, pass, m, {});
+        report.rpcTests[m] = res;
+      } catch (err: any) {
+        report.rpcTests[m] = { error: err.message };
       }
     }
 
@@ -6709,6 +6727,7 @@ export class ControlAccesoService implements OnModuleInit {
       mikrotikRules,
       natSyncResult,
       mikrotikNetwork,
+      dahuaSipLogs: this.dahuaSipService?.debugLogs || [],
     };
   }
 

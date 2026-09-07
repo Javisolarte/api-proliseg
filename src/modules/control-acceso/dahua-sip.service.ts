@@ -23,7 +23,22 @@ interface ActiveSipSession {
 @Injectable()
 export class DahuaSipService {
   private readonly logger = new Logger('DahuaSipService');
+  public readonly debugLogs: string[] = [];
   private activeSessions = new Map<string, ActiveSipSession>();
+
+  private log(msg: string) {
+    const timestamp = new Date().toISOString().substring(11, 19);
+    this.debugLogs.push(`[${timestamp}] ${msg}`);
+    if (this.debugLogs.length > 100) this.debugLogs.shift();
+    this.logger.log(msg);
+  }
+
+  private warn(msg: string) {
+    const timestamp = new Date().toISOString().substring(11, 19);
+    this.debugLogs.push(`[${timestamp}] WARN: ${msg}`);
+    if (this.debugLogs.length > 100) this.debugLogs.shift();
+    this.logger.warn(msg);
+  }
 
   /**
    * Obtiene la ruta al binario ffmpeg según el sistema operativo.
@@ -324,7 +339,7 @@ export class DahuaSipService {
     targetDomain?: string,
   ): Promise<{ stop: () => void } | null> {
     const sessionKey = `${targetIp}:${sipPort}`;
-    this.logger.log(`📞 [DAHUA-SIP] Iniciando llamada SIP a Dahua en ${sessionKey} (Domain: ${targetDomain || 'default'})...`);
+    this.log(`📞 [DAHUA-SIP] Iniciando llamada SIP a Dahua en ${sessionKey} (Domain: ${targetDomain || 'default'})...`);
 
     // Limpiar sesión previa si existe
     const prev = this.activeSessions.get(sessionKey);
@@ -347,7 +362,7 @@ export class DahuaSipService {
       let isSessionActive = false;
       let hasAuthed = false;
 
-      this.logger.log(`📞 [DAHUA-SIP] Iniciando SIP desde IP local ${localIp}:${localSipPort} hacia ${targetIp}:${sipPort} (RTP local: ${localRtpPort})`);
+      this.log(`📞 [DAHUA-SIP] Iniciando SIP desde IP local ${localIp}:${localSipPort} hacia ${targetIp}:${sipPort} (RTP local: ${localRtpPort})`);
 
       // Escuchar paquetes RTP entrantes desde el micrófono del Dahua
       rtpSocket.on('message', (msg) => {
@@ -380,7 +395,7 @@ export class DahuaSipService {
           if (closed) return;
           closed = true;
           if (timer) clearTimeout(timer);
-          this.logger.log(`🛑 [DAHUA-SIP] Finalizando llamada SIP con ${sessionKey}`);
+          this.log(`🛑 [DAHUA-SIP] Finalizando llamada SIP con ${sessionKey}`);
           this.activeSessions.delete(sessionKey);
 
           if (isSessionActive && remoteToTag) {
@@ -410,13 +425,13 @@ export class DahuaSipService {
         sipSocket.on('message', (msgBuf) => {
           const respStr = msgBuf.toString('utf8');
           const parsed = this.parseSipMessage(respStr);
-          this.logger.log(`📩 [DAHUA-SIP] Respuesta SIP ${parsed.statusCode} desde ${sessionKey}`);
+          this.log(`📩 [DAHUA-SIP] Respuesta SIP ${parsed.statusCode} desde ${sessionKey}`);
 
           if (parsed.statusCode === 100 || parsed.statusCode === 180) {
-            this.logger.debug(`[DAHUA-SIP] Estado intermedio: ${parsed.statusCode} (${sessionKey})`);
+            this.log(`[DAHUA-SIP] Estado intermedio: ${parsed.statusCode} (${sessionKey})`);
           } else if (parsed.statusCode === 401 && !hasAuthed) {
             hasAuthed = true;
-            this.logger.log(`🔑 [DAHUA-SIP] Recibido 401 Unauthorized de ${sessionKey}, negociando Digest Auth...`);
+            this.log(`🔑 [DAHUA-SIP] Recibido 401 Unauthorized de ${sessionKey}, negociando Digest Auth...`);
 
             const authHeaderVal = this.extractHeader(respStr, 'WWW-Authenticate');
             if (authHeaderVal) {
@@ -456,12 +471,12 @@ export class DahuaSipService {
                   digestAuth,
                   targetDomain,
                 );
-                this.logger.log(`🚀 [DAHUA-SIP] Enviando segundo INVITE autenticado con Digest CSeq ${cseq} hacia ${sessionKey}`);
+                this.log(`🚀 [DAHUA-SIP] Enviando segundo INVITE autenticado con Digest CSeq ${cseq} hacia ${sessionKey}`);
                 sipSocket.send(authedInvite, sipPort, targetIp);
                 return;
               }
             }
-            this.logger.warn(`⚠️ [DAHUA-SIP] No se pudo construir digest auth para ${sessionKey}`);
+            this.warn(`⚠️ [DAHUA-SIP] No se pudo construir digest auth para ${sessionKey}`);
             stop();
             resolve(null);
           } else if (parsed.statusCode === 200) {
@@ -473,7 +488,7 @@ export class DahuaSipService {
               remoteRtpPort = parsed.rtpPort;
             }
 
-            this.logger.log(`🎉 [DAHUA-SIP] Llamada conectada 200 OK con ${sessionKey}. Dahua RTP Port: ${remoteRtpPort}`);
+            this.log(`🎉 [DAHUA-SIP] Llamada conectada 200 OK con ${sessionKey}. Dahua RTP Port: ${remoteRtpPort}`);
 
             // Enviar ACK para confirmar la sesión
             const ackMsg = this.buildAck(
@@ -511,7 +526,7 @@ export class DahuaSipService {
 
             resolve({ stop });
           } else if (parsed.statusCode >= 400) {
-            this.logger.warn(`⚠️ [DAHUA-SIP] Respuesta SIP de error final ${parsed.statusCode} desde ${sessionKey}`);
+            this.warn(`⚠️ [DAHUA-SIP] Respuesta SIP de error final ${parsed.statusCode} desde ${sessionKey}`);
             stop();
             resolve(null);
           }
@@ -520,7 +535,7 @@ export class DahuaSipService {
         // Enviar INVITE
         sipSocket.send(inviteMsg, sipPort, targetIp, (err) => {
           if (err) {
-            this.logger.warn(`❌ [DAHUA-SIP] Error enviando INVITE a ${sessionKey}: ${err.message}`);
+            this.warn(`❌ [DAHUA-SIP] Error enviando INVITE a ${sessionKey}: ${err.message}`);
             stop();
             resolve(null);
           }
@@ -529,14 +544,14 @@ export class DahuaSipService {
         // Timeout de espera de respuesta SIP (4.5 segundos)
         timer = setTimeout(() => {
           if (!isSessionActive) {
-            this.logger.warn(`⏱️ [DAHUA-SIP] Timeout esperando respuesta SIP de ${sessionKey}`);
+            this.warn(`⏱️ [DAHUA-SIP] Timeout esperando respuesta SIP de ${sessionKey}`);
             stop();
             resolve(null);
           }
         }, 4500);
       });
     } catch (e: any) {
-      this.logger.error(`❌ [DAHUA-SIP] Excepción al iniciar SIP: ${e.message}`);
+      this.warn(`❌ [DAHUA-SIP] Excepción al iniciar SIP: ${e.message}`);
       return null;
     }
   }
