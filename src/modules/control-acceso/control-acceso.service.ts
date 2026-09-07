@@ -6595,6 +6595,7 @@ export class ControlAccesoService implements OnModuleInit {
     let sipCgiConfigAfter: any = null;
     let cgiSetResult: any = {};
     let rpcSetResult: any = {};
+    let extraConfigs: any = {};
     try {
       const getRes = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=getConfig&name=SIP');
       sipCgiConfig = String(getRes?.data || '').trim();
@@ -6615,6 +6616,35 @@ export class ControlAccesoService implements OnModuleInit {
 
       const getResAfter = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=getConfig&name=SIP');
       sipCgiConfigAfter = String(getResAfter?.data || '').trim();
+
+      // Descubrir configuraciones internas de Audio, Intercom y VoIP
+      const configNames = ['NetApp', 'TalkDev', 'VoipTalk', 'VTO', 'AudioIn', 'AudioOut', 'Intercom', 'Alarm', 'AccessControlGeneral'];
+      for (const cName of configNames) {
+        try {
+          const r = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', `/cgi-bin/configManager.cgi?action=getConfig&name=${cName}`);
+          if (r?.data && !String(r.data).includes('Error')) {
+            extraConfigs[cName] = String(r.data).trim().split('\r\n').slice(0, 15).join('\n');
+          }
+        } catch {}
+      }
+      // Descubrir métodos RPC válidos para audio y talk
+      const testMethods = [
+        'VoipTalk.start', 'VoipTalk.call', 'VoipTalk.startTalk', 'VoipTalk.getStatus', 'VoipTalk.hangUp',
+        'TalkDevManager.start', 'TalkDevManager.startTalk', 'TalkDevManager.getStatus', 'TalkDevManager.getTalkFormat',
+        'RemoteSpeak.start', 'RemoteSpeak.speak', 'RemoteSpeak.sendAudio',
+        'DigitalSpeaker.play', 'DigitalSpeaker.getStatus',
+        'VTOManager.getStatus', 'VTOManager.call', 'VTOManager.startTalk'
+      ];
+      const rpcMethodProbes: any = {};
+      for (const m of testMethods) {
+        try {
+          const res = await this.dahuaService.rpcCall(vpnIp, httpPort, user, pass, m, {});
+          rpcMethodProbes[m] = res?.error ? (res.error.message || res.error) : (res?.result !== undefined ? res.result : 'OK');
+        } catch (e: any) {
+          rpcMethodProbes[m] = e.response?.data?.error?.message || e.message;
+        }
+      }
+      extraConfigs.rpcMethodProbes = rpcMethodProbes;
     } catch (e: any) {
       sipCgiConfig = `Error CGI: ${e.message}`;
     }
@@ -6799,6 +6829,7 @@ export class ControlAccesoService implements OnModuleInit {
       mikrotikRules,
       natSyncResult,
       mikrotikNetwork,
+      extraConfigs,
       sipSessionResult,
       dahuaSipLogs: this.dahuaSipService?.debugLogs || [],
     };
