@@ -6626,10 +6626,22 @@ export class ControlAccesoService implements OnModuleInit {
       const getResAfter = await this.dahuaService.cgi(vpnIp, httpPort, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=getConfig&name=SIP');
       sipCgiConfigAfter = String(getResAfter?.data || '').trim();
 
-      // Listar métodos soportados por Dahua
+      // Obtener instancias de servicio de audio vía system.getService
+      const svcNames = ['VoipTalk', 'TalkDevManager', 'RemoteSpeak', 'speak', 'DigitalSpeaker', 'DoorBell', 'VTOManager'];
+      const svcInstances: any = {};
+      for (const s of svcNames) {
+        try {
+          const res = await this.dahuaService.rpcCall(vpnIp, httpPort, user, pass, 'system.getService', { name: s });
+          svcInstances[s] = res;
+        } catch (e: any) {
+          svcInstances[s] = e.response?.data || e.message;
+        }
+      }
+      extraConfigs.svcInstances = svcInstances;
+
       try {
         const listM = await this.dahuaService.rpcCall(vpnIp, httpPort, user, pass, 'system.listMethod', {});
-        extraConfigs.systemMethods = listM?.params?.methods || listM?.result || listM;
+        extraConfigs.systemMethodsRaw = listM;
       } catch (e: any) {
         extraConfigs.systemMethodsErr = e.message;
       }
