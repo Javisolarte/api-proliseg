@@ -569,24 +569,29 @@ export class DahuaService {
 
     const ch = channel ?? 1;
 
-    // 1. INTENTO PRIMARIO VÍA HTTP CGI (Garantiza activación física del relay en ASI3203E-W y terminales Dahua)
-    const candidates = [
-      `/cgi-bin/accessControl.cgi?action=${action}&channel=${ch}&UserID=101&Type=Remote`,
-      `/cgi-bin/accessControl.cgi?action=${action}&channel=${ch}&UserID=1&Type=Remote`,
-      `/cgi-bin/accessControl.cgi?action=${action}&channel=${ch}&Type=Remote`,
-      `/cgi-bin/accessControl.cgi?action=${action}&channel=${ch}`,
-      `/cgi-bin/alarmOut.cgi?action=setStatus&channel=${ch}&status=1`,
-      `/cgi-bin/alarmOut.cgi?action=setStatus&channel=0&status=1`,
-    ];
-
-    if (ch !== 0) {
-      candidates.push(
-        `/cgi-bin/accessControl.cgi?action=${action}&channel=0&UserID=101&Type=Remote`,
-        `/cgi-bin/accessControl.cgi?action=${action}&channel=0&UserID=1&Type=Remote`,
-        `/cgi-bin/accessControl.cgi?action=${action}&channel=0&Type=Remote`,
-        `/cgi-bin/accessControl.cgi?action=${action}&channel=0`,
-      );
+    // 1. INTENTO PRIMARIO VÍA NETSDK (Activación instantánea <50ms en hardware ASI3203E-W y terminales Dahua)
+    let netSdkResult: any = null;
+    if (command === 'abrir' || command === 'cerrar') {
+      try {
+        netSdkResult = await this.controlPuertaNetSdk(ip, port, user, pass, command, ch, sdkPort);
+        if (netSdkResult?.ok) {
+          this.logger.log(`⚡ [DAHUA PUERTA] ${command} ejecutado con éxito vía NetSDK en ${ip} (Canal ${netSdkResult.detalle?.channelIndex ?? 0})`);
+          return netSdkResult;
+        }
+      } catch (sdkErr: any) {
+        this.logger.warn(`⚠️ [DAHUA PUERTA] NetSDK excepción: ${sdkErr.message}`);
+      }
     }
+
+    // 2. INTENTO SECUNDARIO VÍA HTTP CGI (Para dispositivos como .83 que requieren comando CGI directo)
+    const candidates = [
+      `/cgi-bin/accessControl.cgi?action=${action}&channel=1&UserID=101&Type=Remote`,
+      `/cgi-bin/accessControl.cgi?action=${action}&channel=1&Type=Remote`,
+      `/cgi-bin/accessControl.cgi?action=${action}&channel=1`,
+      `/cgi-bin/accessControl.cgi?action=${action}&channel=0&UserID=101&Type=Remote`,
+      `/cgi-bin/accessControl.cgi?action=${action}&channel=0&Type=Remote`,
+      `/cgi-bin/accessControl.cgi?action=${action}&channel=0`,
+    ];
 
     let cgiSuccess = false;
     let cgiPathUsed = '';
@@ -594,11 +599,11 @@ export class DahuaService {
 
     for (const path of candidates) {
       try {
-        const resp = await this.cgi(ip, port, user, pass, 'GET', path);
+        const resp = await this.cgi(ip, port, user, pass, 'GET', path, undefined, 'text', 'application/x-www-form-urlencoded', 2500);
         const body = String(resp.data || '').trim();
         this.logger.debug(`[DAHUA PUERTA] ${path} -> respuesta: ${body}`);
 
-        if (body.includes('OK') || body.includes('ok') || resp.status === 200) {
+        if (body.includes('OK') || body.includes('ok')) {
           this.logger.log(`✅ [DAHUA PUERTA] ${command} ejecutado físicamente vía CGI en ${ip}:${port} (${path})`);
           cgiSuccess = true;
           cgiPathUsed = path;
@@ -611,27 +616,17 @@ export class DahuaService {
       }
     }
 
-    // 2. ENVIAR ADEMÁS PULSO NETSDK EN CANAL 1 (Para firmware que sincroniza el relé por NetSDK)
-    let netSdkResult: any = null;
-    if (command === 'abrir' || command === 'cerrar') {
-      try {
-        netSdkResult = await this.controlPuertaNetSdk(ip, port, user, pass, command, ch, sdkPort);
-      } catch (sdkErr: any) {
-        this.logger.warn(`⚠️ [DAHUA PUERTA] NetSDK excepción: ${sdkErr.message}`);
-      }
-    }
-
     if (cgiSuccess) {
       return {
         ok: true,
         mensaje: `Puerta ejecutó "${command}" correctamente (Dahua CGI Relay activado)`,
         marca: 'Dahua',
-        detalle: { path: cgiPathUsed, netSdkOk: netSdkResult?.ok ?? false },
+        detalle: { path: cgiPathUsed, method: 'CGI' },
       };
     }
 
-    if (netSdkResult?.ok) {
-      return netSdkResult;
+    if (lastError?.message?.includes('ECONNREFUSED')) {
+      throw new Error(`Dispositivo ${ip}:${port} tiene el servicio HTTP cerrado o no dispone de relé de control de acceso activo`);
     }
 
     const detailMsg = lastError?.response?.data ? String(lastError.response.data).trim() : (lastError?.message || 'Error desconocido');
@@ -674,13 +669,13 @@ export class DahuaService {
       // CtrlType: 260 = DH_CTRL_ACCESS_OPEN (0x104), 261 = DH_CTRL_ACCESS_CLOSE (0x105)
       const ctrlType = command === 'cerrar' ? 261 : 260;
 
-      // En terminales tipo ASI3203E-W el canal físico del relay es 1 (con fallback a 0)
-      const primaryCh = channel || 1;
-      const chIdx1 = Math.max(0, primaryCh - 1);
-      const channelsToTry = [...new Set([primaryCh, 1, chIdx1, 0])];
+      // En terminales tipo ASI3203E-W el canal físico del relay en NetSDK es 0 (primario para Puerta 1)
+      const primaryCh = channel ?? 1;
+      const chIdx0 = Math.max(0, primaryCh - 1);
+      const channelsToTry = [...new Set([chIdx0, 0, primaryCh, 1])];
 
       let success = false;
-      let usedChannel = primaryCh;
+      let usedChannel = chIdx0;
       let lastErr = 0;
 
       for (const chIdx of channelsToTry) {
@@ -690,7 +685,7 @@ export class DahuaService {
           paramBuf.writeUInt32LE(size, 0);
           paramBuf.writeInt32LE(chIdx, 4);
 
-          const ok = sdk.CLIENT_ControlDevice(loginId, ctrlType, paramBuf, 3000);
+          const ok = sdk.CLIENT_ControlDevice(loginId, ctrlType, paramBuf, 1500);
           if (ok) {
             success = true;
             usedChannel = chIdx;

@@ -1405,14 +1405,8 @@ export class ControlAccesoService implements OnModuleInit {
     this.logger.log(`🔊 [AUDIO-OUT-DAHUA] Escuchando audio desde Dahua en ${target.host}:${target.port} (SIP port: ${target.sipPort || 5060}, RTP: ${target.rtpPort || 15000}, SDK: ${target.sdkPort || 37777})`);
 
     try {
-      res.set({
-        'Content-Type': 'audio/mpeg',
-        'Transfer-Encoding': 'chunked',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache',
-        'Expires': '0',
-        'Access-Control-Allow-Origin': '*',
-      });
+      // Los headers de audio/mpeg se asignan únicamente cuando el stream de audio empieza a fluir
+      // para evitar colisiones de Content-Length si se envía respuesta JSON de fallback.
 
       // 1. Intentar protocolo SIP nativo del terminal Dahua (vía de audio principal para intercomunicadores ASI3203E-W)
       if (this.dahuaSipService) {
@@ -1576,8 +1570,8 @@ export class ControlAccesoService implements OnModuleInit {
         this.dahuaService.asegurarFormatoH264(target.host, target.port, target.user, target.pass).catch(() => {});
       }
 
-      // En terminales Dahua (ASI3203E), ExtraFormat[0] (subtype=1) tiene AudioEnable=true con G.711A
-      const rtspUrl0 = `rtsp://${target.user}:${encodedPass}@${target.host}:${rtspPort}/cam/realmonitor?channel=1&subtype=1`;
+      // En terminales Dahua (ASI3203E), MainFormat[0] (subtype=0) es el stream activo principal con audio
+      const rtspUrl0 = `rtsp://${target.user}:${encodedPass}@${target.host}:${rtspPort}/cam/realmonitor?channel=1&subtype=0`;
 
       let currentFfmpeg = spawn(this.getFfmpegBinary(), [
         '-hide_banner',
@@ -1602,6 +1596,15 @@ export class ControlAccesoService implements OnModuleInit {
         if (!hasSentData) {
           hasSentData = true;
           this.logger.log(`🎉 [AUDIO-OUT-DAHUA-RTSP] Recibiendo stream de audio MP3 desde Dahua ${target.host}:${rtspPort}`);
+          if (!res.headersSent) {
+            res.set({
+              'Content-Type': 'audio/mpeg',
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+              'Pragma': 'no-cache',
+              'Expires': '0',
+              'Access-Control-Allow-Origin': '*',
+            });
+          }
           finish(true);
         }
       });
