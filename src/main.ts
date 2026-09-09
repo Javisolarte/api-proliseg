@@ -28,11 +28,65 @@ async function bootstrap() {
   app.use(compression());
   app.set("trust proxy", true);
 
+  // 📁 Almacenamiento Local SSD de Alta Velocidad (/storage)
+  const express = require('express');
+  const fs = require('fs');
+  const path = require('path');
+  const storageDir = process.env.STORAGE_PATH || path.join(process.cwd(), 'storage');
+  if (!fs.existsSync(storageDir)) {
+    fs.mkdirSync(storageDir, { recursive: true });
+  }
+
+  // 1. Servir desde el SSD local con caché inmutable y streaming
+  app.use(
+    '/storage',
+    express.static(storageDir, {
+      maxAge: '30d',
+      immutable: true,
+      fallthrough: true, // Si el archivo no existe aún en disco local, salta al fallback
+    })
+  );
+
+  // 2. Fallback transparente a Supabase Storage: CERO imágenes rotas durante la transición
+  app.use('/storage', (req: any, res: any) => {
+    const supabaseUrl = (process.env.SUPABASE_URL || 'https://ttkubmwrwgqxjdafpgji.supabase.co').replace(/\/+$/, '');
+    const cleanPath = req.path.replace(/^\/+/, '');
+    const targetUrl = `${supabaseUrl}/storage/v1/object/public/${cleanPath}`;
+    res.redirect(307, targetUrl);
+  });
+
+  // 3. Endpoint de sincronización seguro para migración
+  app.use('/api/storage-sync/upload', express.json({ limit: '50mb' }), async (req: any, res: any) => {
+    const secret = req.headers['x-sync-secret'];
+    const expectedSecret = process.env.STORAGE_SYNC_SECRET || 'proliseg-sync-storage-secret-2026';
+    if (secret !== expectedSecret) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { bucket, filePath, base64 } = req.body;
+    if (!bucket || !filePath || !base64) {
+      return res.status(400).json({ error: 'Missing parameters' });
+    }
+
+    try {
+      const cleanPath = filePath.replace(/^\/+/, '');
+      const fullPath = path.join(storageDir, bucket, cleanPath);
+      const dir = path.dirname(fullPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      await fs.promises.writeFile(fullPath, Buffer.from(base64, 'base64'));
+      return res.json({ success: true, path: `${bucket}/${cleanPath}` });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   // ✅ Configurar límites de carga para permitir fotos
   app.use(require('body-parser').json({ limit: '10mb' }));
   app.use(require('body-parser').urlencoded({ limit: '10mb', extended: true }));
 
-  app.setGlobalPrefix("api", { exclude: ["/"] });
+  app.setGlobalPrefix("api", { exclude: ["/", "storage"] });
 
   app.useGlobalPipes(
     new ValidationPipe({

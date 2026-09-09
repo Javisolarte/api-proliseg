@@ -2,11 +2,14 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
+import { LocalStorageClient } from '../../common/storage/local-storage-client';
+
 @Injectable()
 export class SupabaseService implements OnModuleInit {
   private readonly logger = new Logger(SupabaseService.name);
   private supabaseClient: SupabaseClient; // Cliente estándar (anon)
   private supabaseAdmin: SupabaseClient;  // Cliente admin (service role)
+  private localStorageClient: LocalStorageClient;
 
   constructor(private readonly configService: ConfigService) { }
 
@@ -29,7 +32,18 @@ export class SupabaseService implements OnModuleInit {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    this.logger.log('✅ Supabase clients initialized successfully');
+    // Inicializar almacenamiento local SSD
+    this.localStorageClient = new LocalStorageClient();
+    Object.defineProperty(this.supabaseClient, 'storage', {
+      get: () => this.localStorageClient,
+      configurable: true,
+    });
+    Object.defineProperty(this.supabaseAdmin, 'storage', {
+      get: () => this.localStorageClient,
+      configurable: true,
+    });
+
+    this.logger.log('✅ Supabase clients & Local SSD Storage initialized successfully');
   }
 
   /** Retorna cliente anónimo (RLS activo) */
