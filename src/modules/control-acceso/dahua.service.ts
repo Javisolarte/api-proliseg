@@ -1932,7 +1932,7 @@ export class DahuaService {
     }
 
     return new Promise((resolve) => {
-      const uri = `rtsp://${ip}:${rtspPort}/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif`;
+      const uri = `rtsp://${ip}:${rtspPort}/cam/realmonitor?channel=1&subtype=0`;
       let cseq = 1;
       let authHeader: string | null = null;
       let sessionId: string | null = null;
@@ -2074,7 +2074,7 @@ export class DahuaService {
               '-ar', '8000',
               '-c:a', 'pcm_alaw',
               '-f', 'alaw',
-              '-af', 'volume=2.5',
+              '-af', 'volume=4.5,alimiter=limit=0.95',
               'pipe:1'
             ]);
 
