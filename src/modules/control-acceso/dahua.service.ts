@@ -58,6 +58,7 @@ export class DahuaService {
   private readonly logger = new Logger(DahuaService.name);
   private readonly digestCache = new Map<string, { realm: string; nonce: string; qop?: string }>();
   private readonly activeNetSdkSessions = new Map<string, () => void>();
+  private readonly activeRtspSessions = new Map<string, () => void>();
 
   // ─── NetSDK Singleton ───────────────────────────────────────────────────────
   // El SDK Dahua requiere que CLIENT_Init se llame UNA SOLA VEZ en el proceso.
@@ -1905,6 +1906,215 @@ export class DahuaService {
       this.logger.error(`❌ [DAHUA-NETSDK-TALK] Error: ${e.message}`);
       return false;
     }
+  }
+
+  /**
+   * Transmite audio del operador directamente al altavoz del hardware Dahua
+   * utilizando el estándar ONVIF Profile T Audio Backchannel sobre RTSP TCP (trackID=5).
+   * Compatible nativamente con todos los terminales de control de acceso y videoporteros Dahua (ASI / VTO).
+   */
+  async relayAudioRtspBackchannel(
+    audioStream: NodeJS.ReadableStream,
+    ip: string,
+    rtspPort: number,
+    user: string,
+    pass: string,
+  ): Promise<boolean> {
+    const sessionKey = `${ip}:${rtspPort}`;
+    this.logger.log(`🎙️ [DAHUA-ONVIF-BACKCHANNEL] Iniciando transmisión hacia altavoz Dahua en ${sessionKey}...`);
+
+    // Limpiar sesión previa si estuviera abierta
+    const prevSession = this.activeRtspSessions.get(sessionKey);
+    if (prevSession) {
+      try { prevSession(); } catch {}
+      this.activeRtspSessions.delete(sessionKey);
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    return new Promise((resolve) => {
+      const uri = `rtsp://${ip}:${rtspPort}/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif`;
+      let cseq = 1;
+      let authHeader: string | null = null;
+      let sessionId: string | null = null;
+      let interleavedRtpChannel = 10;
+      let client: any = null;
+      let ffmpeg: any = null;
+      let isCleanedUp = false;
+
+      const buildDigestAuth = (method: string, targetUri: string, authH: string): string => {
+        const realmMatch = authH.match(/realm="([^"]+)"/i);
+        const nonceMatch = authH.match(/nonce="([^"]+)"/i);
+        const realm = realmMatch ? realmMatch[1] : '';
+        const nonce = nonceMatch ? nonceMatch[1] : '';
+        const ha1 = createHash('md5').update(`${user}:${realm}:${pass}`).digest('hex');
+        const ha2 = createHash('md5').update(`${method}:${targetUri}`).digest('hex');
+        const response = createHash('md5').update(`${ha1}:${nonce}:${ha2}`).digest('hex');
+        return `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${targetUri}", response="${response}"`;
+      };
+
+      const createRtpPacket = (payload: Buffer, seq: number, ts: number, ssrc: number): Buffer => {
+        const rtp = Buffer.alloc(12 + payload.length);
+        rtp[0] = 0x80;
+        rtp[1] = 8; // PT=8 (PCMA G.711A)
+        rtp.writeUInt16BE(seq & 0xffff, 2);
+        rtp.writeUInt32BE(ts >>> 0, 4);
+        rtp.writeUInt32BE(ssrc >>> 0, 8);
+        payload.copy(rtp, 12);
+        return rtp;
+      };
+
+      const createRtpTcpFrame = (channel: number, rtpPacket: Buffer): Buffer => {
+        const header = Buffer.alloc(4);
+        header[0] = 0x24; // '$'
+        header[1] = channel;
+        header.writeUInt16BE(rtpPacket.length, 2);
+        return Buffer.concat([header, rtpPacket]);
+      };
+
+      const cleanUp = (reason?: string) => {
+        if (isCleanedUp) return;
+        isCleanedUp = true;
+        this.activeRtspSessions.delete(sessionKey);
+        this.logger.log(`🛑 [DAHUA-ONVIF-BACKCHANNEL] Sesión cerrada (${reason || 'fin'})`);
+
+        if (ffmpeg) {
+          try { ffmpeg.kill(); } catch {}
+        }
+        if (client) {
+          if (sessionId && authHeader) {
+            try {
+              const authTear = buildDigestAuth('TEARDOWN', uri, authHeader);
+              const req = `TEARDOWN ${uri} RTSP/1.0\r\nCSeq: ${cseq++}\r\nUser-Agent: Prolicontrol\r\nAuthorization: ${authTear}\r\nSession: ${sessionId}\r\n\r\n`;
+              client.write(req);
+            } catch {}
+          }
+          setTimeout(() => {
+            try { client.end(); client.destroy(); } catch {}
+          }, 300);
+        }
+        resolve(true);
+      };
+
+      this.activeRtspSessions.set(sessionKey, () => cleanUp('reemplazo de sesion'));
+
+      try {
+        const net = require('net');
+        client = net.createConnection({ host: ip, port: rtspPort }, () => {
+          this.logger.log(`🔌 [DAHUA-ONVIF-BACKCHANNEL] Conexión TCP RTSP establecida con ${sessionKey}`);
+          const req = `DESCRIBE ${uri} RTSP/1.0\r\nCSeq: ${cseq++}\r\nUser-Agent: Prolicontrol\r\nAccept: application/sdp\r\nRequire: www.onvif.org/ver20/backchannel\r\n\r\n`;
+          client.write(req);
+        });
+
+        let step = 'DESCRIBE';
+        let buffer = '';
+
+        client.on('data', (chunk: Buffer) => {
+          if (chunk[0] === 0x24) return; // Interleaved RTCP/RTP desde Dahua
+
+          buffer += chunk.toString();
+
+          if (buffer.includes('401 Unauthorized') && !authHeader) {
+            const authLine = buffer.split('\r\n').find((l: string) => l.startsWith('WWW-Authenticate:'));
+            if (!authLine) return;
+            authHeader = authLine;
+            const digest = buildDigestAuth('DESCRIBE', uri, authHeader);
+            buffer = '';
+            const req = `DESCRIBE ${uri} RTSP/1.0\r\nCSeq: ${cseq++}\r\nUser-Agent: Prolicontrol\r\nAuthorization: ${digest}\r\nAccept: application/sdp\r\nRequire: www.onvif.org/ver20/backchannel\r\n\r\n`;
+            client.write(req);
+            return;
+          }
+
+          if (buffer.includes('200 OK') && step === 'DESCRIBE') {
+            step = 'SETUP';
+            buffer = '';
+            const setupUri = `${uri}/trackID=5`;
+            const authSetup = buildDigestAuth('SETUP', setupUri, authHeader!);
+            this.logger.log(`🔧 [DAHUA-ONVIF-BACKCHANNEL] Negociando SETUP trackID=5 (Audio Backchannel)...`);
+            const req = `SETUP ${setupUri} RTSP/1.0\r\nCSeq: ${cseq++}\r\nUser-Agent: Prolicontrol\r\nAuthorization: ${authSetup}\r\nRequire: www.onvif.org/ver20/backchannel\r\nTransport: RTP/AVP/TCP;unicast;interleaved=10-11\r\n\r\n`;
+            client.write(req);
+            return;
+          }
+
+          if (buffer.includes('200 OK') && step === 'SETUP') {
+            step = 'PLAY';
+            const sessMatch = buffer.match(/Session:\s*([^;\r\n]+)/i);
+            if (sessMatch) sessionId = sessMatch[1].trim();
+
+            const transMatch = buffer.match(/interleaved=(\d+)-(\d+)/i);
+            if (transMatch) interleavedRtpChannel = parseInt(transMatch[1], 10);
+            buffer = '';
+
+            const authPlay = buildDigestAuth('PLAY', uri, authHeader!);
+            this.logger.log(`▶️ [DAHUA-ONVIF-BACKCHANNEL] Iniciando PLAY (Session: ${sessionId})...`);
+            const req = `PLAY ${uri} RTSP/1.0\r\nCSeq: ${cseq++}\r\nUser-Agent: Prolicontrol\r\nAuthorization: ${authPlay}\r\nSession: ${sessionId}\r\nRequire: www.onvif.org/ver20/backchannel\r\n\r\n`;
+            client.write(req);
+            return;
+          }
+
+          if (buffer.includes('200 OK') && step === 'PLAY') {
+            step = 'STREAMING';
+            this.logger.log(`🎉 [DAHUA-ONVIF-BACKCHANNEL] Canal de audio abierto exitosamente hacia el altavoz Dahua!`);
+
+            const { spawn } = require('child_process');
+            let ffmpegBinary = 'ffmpeg';
+            if (process.platform === 'win32') {
+              try {
+                const ffmpegStatic = require('ffmpeg-static');
+                const fs = require('fs');
+                if (ffmpegStatic && fs.existsSync(ffmpegStatic)) ffmpegBinary = ffmpegStatic;
+                else ffmpegBinary = 'ffmpeg.exe';
+              } catch { ffmpegBinary = 'ffmpeg.exe'; }
+            }
+
+            ffmpeg = spawn(ffmpegBinary, [
+              '-hide_banner',
+              '-loglevel', 'error',
+              '-i', 'pipe:0',
+              '-ac', '1',
+              '-ar', '8000',
+              '-c:a', 'pcm_alaw',
+              '-f', 'alaw',
+              '-af', 'volume=2.5',
+              'pipe:1'
+            ]);
+
+            audioStream.pipe(ffmpeg.stdin, { end: false });
+
+            let seq = 1;
+            let ts = 0;
+            const ssrc = 0x5a1b2c3d;
+            let rtpBuffer = Buffer.alloc(0);
+            const CHUNK_SIZE = 160;
+
+            ffmpeg.stdout.on('data', (audioChunk: Buffer) => {
+              rtpBuffer = Buffer.concat([rtpBuffer, audioChunk]);
+              while (rtpBuffer.length >= CHUNK_SIZE) {
+                const frame = rtpBuffer.slice(0, CHUNK_SIZE);
+                rtpBuffer = rtpBuffer.slice(CHUNK_SIZE);
+
+                const rtp = createRtpPacket(frame, seq++, ts, ssrc);
+                ts += CHUNK_SIZE;
+                if (!isCleanedUp && client && !client.destroyed) {
+                  client.write(createRtpTcpFrame(interleavedRtpChannel, rtp));
+                }
+              }
+            });
+
+            audioStream.on('close', () => cleanUp('audioStream close'));
+            (audioStream as any).on('end', () => cleanUp('audioStream end'));
+            audioStream.on('error', (err: any) => cleanUp(`audioStream error: ${err?.message || err}`));
+          }
+        });
+
+        client.on('error', (err: any) => {
+          this.logger.warn(`⚠️ [DAHUA-ONVIF-BACKCHANNEL] Error de socket: ${err.message}`);
+          cleanUp('socket error');
+        });
+      } catch (err: any) {
+        this.logger.error(`❌ [DAHUA-ONVIF-BACKCHANNEL] Error: ${err.message}`);
+        cleanUp('exception');
+      }
+    });
   }
 
 

@@ -1152,7 +1152,33 @@ export class ControlAccesoService implements OnModuleInit {
   ): Promise<any> {
     this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Transmitiendo voz hacia Dahua en ${target.host} (Port: ${target.port}, SdkPort: ${target.sdkPort || 'auto'})...`);
 
-    // 1. PRIORIDAD 1: NetSDK TCP (Modo forward TCP idéntico a SmartPSS / DMSS - audio instantáneo sin cuelgues SIP)
+    const rtspPort = target.rtspPort || (target.port >= 10000 ? 30000 + (target.port % 10000) : 554);
+
+    // 1. PRIORIDAD 1: ONVIF Profile T RTSP Audio Backchannel (trackID=5)
+    // Transmisión directa sobre TCP RTSP al altavoz del hardware Dahua (SmartPSS/DMSS compatible)
+    if (this.dahuaService) {
+      try {
+        const rtspOk = await this.dahuaService.relayAudioRtspBackchannel(
+          audioStream,
+          target.host,
+          rtspPort,
+          target.user,
+          target.pass,
+        );
+        if (rtspOk) {
+          return {
+            ok: true,
+            mensaje: 'Audio transmitido al altavoz Dahua por ONVIF RTSP Backchannel (trackID=5)',
+            detalle: { target: `${target.host}:${rtspPort}`, via: 'ONVIF RTSP Backchannel (trackID=5)' },
+            operador: operator || null,
+          };
+        }
+      } catch (rtspErr: any) {
+        this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] RTSP Backchannel error: ${rtspErr.message}, probando fallback NetSDK...`);
+      }
+    }
+
+    // 2. FALLBACK 2: NetSDK TCP
     if (this.dahuaService) {
       try {
         const netSdkResult = await this.dahuaService.relayAudioNetSDK(
