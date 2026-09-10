@@ -1436,12 +1436,12 @@ export class ControlAccesoService implements OnModuleInit {
       }
 
       if (!res.headersSent) {
-        res.status(200).send({ ok: true, mensaje: 'Audio no disponible en este modelo Dahua' });
+        res.status(404).send({ ok: false, mensaje: 'Audio en vivo no disponible en este modelo Dahua' });
       }
     } catch (err: any) {
       this.logger.warn(`⚠️ [AUDIO-OUT-DAHUA] No se pudo obtener audio stream de Dahua: ${err.message}`);
       if (!res.headersSent) {
-        res.status(200).send({ ok: true, mensaje: 'Audio no disponible en este modelo Dahua' });
+        res.status(404).send({ ok: false, mensaje: 'Audio en vivo no disponible en este modelo Dahua' });
       }
     }
   }
