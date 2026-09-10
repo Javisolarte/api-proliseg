@@ -66,6 +66,18 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   /** Cache in-memoria para evitar consultas repetitivas de dispositivos */
   private readonly devicesMap = new Map<string, DeviceInfo>();
 
+  /** Cooldown de llamadas para evitar rebotes de eventos de timbre tras contestar o colgar */
+  private readonly callCooldowns = new Map<string, number>();
+
+  public setCallCooldown(deviceId: string, durationMs: number = 25000) {
+    this.callCooldowns.set(deviceId, Date.now() + durationMs);
+  }
+
+  public isCallInCooldown(deviceId: string): boolean {
+    const expire = this.callCooldowns.get(deviceId) || 0;
+    return Date.now() < expire;
+  }
+
   private markAsSeen(eventId: string) {
     this.seenEventIds.add(eventId);
     if (this.seenEventIds.size > 5000) {
@@ -450,7 +462,10 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     );
 
     if (isCallEvent && (action === 'start' || action === 'pulse' || !action)) {
-      const ringKey = `call_ring_dh_${device.id}_${Math.floor(Date.now() / 10000)}`;
+      if (this.isCallInCooldown(device.id)) {
+        return;
+      }
+      const ringKey = `call_ring_dh_${device.id}_${Math.floor(Date.now() / 20000)}`;
       if (!this.seenEventIds.has(ringKey)) {
         this.seenEventIds.add(ringKey);
         this.logger.log(`📞 [EventSystem] ¡TIMBRE ENTRANTE DAHUA STREAM! → ${device.nombre_identificador} (${eventObj.Code})`);
@@ -571,7 +586,10 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         }
         const callState = cs?.CallStatus?.status || cs?.status;
         if (callState === 'ring') {
-          const ringKey = `call_ring_${device.id}_${Math.floor(Date.now() / 10000)}`;
+          if (this.isCallInCooldown(device.id)) {
+            return;
+          }
+          const ringKey = `call_ring_${device.id}_${Math.floor(Date.now() / 20000)}`;
           if (!this.seenEventIds.has(ringKey)) {
             this.seenEventIds.add(ringKey);
             this.logger.log(`📞 [EventSystem] ¡TIMBRE ENTRANTE EN TIEMPO REAL! → ${device.nombre_identificador} (${callState})`);
@@ -605,7 +623,10 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         );
         const rawStatus = String(statusResp?.data || '');
         if (rawStatus.toLowerCase().includes('true') || rawStatus.toLowerCase().includes('start')) {
-          const ringKey = `call_ring_dh_${device.id}_${Math.floor(Date.now() / 10000)}`;
+          if (this.isCallInCooldown(device.id)) {
+            return;
+          }
+          const ringKey = `call_ring_dh_${device.id}_${Math.floor(Date.now() / 20000)}`;
           if (!this.seenEventIds.has(ringKey)) {
             this.seenEventIds.add(ringKey);
             this.logger.log(`📞 [EventSystem] ¡TIMBRE ENTRANTE DAHUA (POLL)! → ${device.nombre_identificador}`);

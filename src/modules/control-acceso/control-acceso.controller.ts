@@ -57,8 +57,14 @@ export class ControlAccesoController {
 
   @Post('dispositivos/:id/colgar')
   @ApiOperation({ summary: 'Cuelga o cancela una llamada de citófono en el dispositivo de hardware' })
-  async colgarLlamada(@Param('id') id: string) {
-    return this.controlAccesoService.colgarLlamadaDispositivo(id);
+  async colgarLlamada(@Param('id') id: string, @CurrentUser() operator?: any) {
+    return this.controlAccesoService.colgarLlamadaDispositivo(id, operator);
+  }
+
+  @Post('dispositivos/:id/contestar')
+  @ApiOperation({ summary: 'Contesta una llamada de citófono en el dispositivo de hardware y sincroniza todos los clientes' })
+  async contestarLlamada(@Param('id') id: string, @CurrentUser() operator?: any) {
+    return this.controlAccesoService.contestarLlamadaDispositivo(id, operator);
   }
 
   @Put('audio-in')

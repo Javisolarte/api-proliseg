@@ -560,7 +560,7 @@ export class ControlAccesoService implements OnModuleInit {
     }
   }
 
-  async colgarLlamadaDispositivo(deviceId: string) {
+  async colgarLlamadaDispositivo(deviceId: string, operator?: any) {
     try {
       const { data: dev } = await this.supabase
         .getSupabaseAdminClient()
@@ -570,6 +570,21 @@ export class ControlAccesoService implements OnModuleInit {
         .single();
 
       if (!dev) return { ok: false, mensaje: 'Dispositivo no encontrado' };
+
+      // 1. Activar cooldown en el poller para evitar rebotes de eventos de timbre
+      this.devicePoller.setCallCooldown(deviceId, 25000);
+
+      // 2. Notificar inmediatamente a todos los clientes que la llamada finalizó
+      this.devicePoller.saveAndEmit({
+        dispositivo_id: deviceId,
+        tipo_evento: 'llamada_finalizada',
+        nombre_dispositivo: dev.nombre_identificador,
+        nombre_persona: operator?.email || 'Operador',
+        documento_persona: 'LLAMADA_FINALIZADA',
+        metodo_acceso: 'intercom',
+        timestamp: new Date().toISOString(),
+        detalles_raw: { operador: operator?.email || 'Operador', accion: 'colgar' }
+      });
 
       const user = dev.credencial_usuario || 'admin';
       const pass = dev.credencial_password || '';
@@ -620,6 +635,81 @@ export class ControlAccesoService implements OnModuleInit {
       return { ok: true, sent, mensaje: 'Señal de colgar enviada al hardware' };
     } catch (err: any) {
       this.logger.warn(`Error al colgar llamada en hardware: ${err.message}`);
+      return { ok: false, mensaje: err.message };
+    }
+  }
+
+  async contestarLlamadaDispositivo(deviceId: string, operator?: any) {
+    try {
+      const { data: dev } = await this.supabase
+        .getSupabaseAdminClient()
+        .from('dispositivos_iot')
+        .select('*')
+        .eq('id', deviceId)
+        .single();
+
+      if (!dev) return { ok: false, mensaje: 'Dispositivo no encontrado' };
+
+      // 1. Activar cooldown en el poller para que no se sigan emitiendo eventos de timbrado
+      this.devicePoller.setCallCooldown(deviceId, 20000);
+
+      // 2. Notificar inmediatamente a todos los clientes que la llamada fue atendida
+      this.devicePoller.saveAndEmit({
+        dispositivo_id: deviceId,
+        tipo_evento: 'llamada_contestada',
+        nombre_dispositivo: dev.nombre_identificador,
+        nombre_persona: operator?.email || 'Operador',
+        documento_persona: 'LLAMADA_CONTESTADA',
+        metodo_acceso: 'intercom',
+        timestamp: new Date().toISOString(),
+        detalles_raw: { operador: operator?.email || 'Operador', accion: 'contestar' }
+      });
+
+      const user = dev.credencial_usuario || 'admin';
+      const pass = dev.credencial_password || '';
+      const resolved = await this.resolveDoorNetworkTarget(
+        dev.ip_direccion,
+        dev.configuracion_tecnica?.puerto || 80,
+        dev.configuracion_tecnica
+      );
+
+      const base = `http://${resolved.ip}:${resolved.port}`;
+      this.logger.log(`📞 [INTERCOM] Enviando señal de contestar (answer) a ${dev.nombre_identificador} (${base})...`);
+
+      const payloadJson = JSON.stringify({ CallSignal: { cmdType: 'answer' } });
+      let sent = false;
+      try {
+        await this.devicePoller.executeDigestRequest(
+          'PUT',
+          `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
+          user,
+          pass,
+          payloadJson,
+          'application/json',
+          3000
+        );
+        sent = true;
+        this.logger.log(`📞 [INTERCOM] Señal "answer" aceptada por ${dev.nombre_identificador}`);
+      } catch {
+        try {
+          const xml = `<?xml version="1.0" encoding="UTF-8"?><CallSignal><cmdType>answer</cmdType></CallSignal>`;
+          await this.devicePoller.executeDigestRequest(
+            'PUT',
+            `${base}/ISAPI/VideoIntercom/callSignal`,
+            user,
+            pass,
+            xml,
+            'application/xml',
+            3000
+          );
+          sent = true;
+          this.logger.log(`📞 [INTERCOM] Señal XML "answer" aceptada por ${dev.nombre_identificador}`);
+        } catch {}
+      }
+
+      return { ok: true, sent, mensaje: 'Llamada contestada' };
+    } catch (err: any) {
+      this.logger.warn(`Error al contestar llamada en hardware: ${err.message}`);
       return { ok: false, mensaje: err.message };
     }
   }
