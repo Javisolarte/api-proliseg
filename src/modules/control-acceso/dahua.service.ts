@@ -569,22 +569,14 @@ export class DahuaService {
 
     const ch = channel ?? 1;
 
-    // 1. INTENTO PRIMARIO VÍA NETSDK (Activación instantánea <50ms en hardware ASI3203E-W y terminales Dahua)
-    let netSdkResult: any = null;
-    if (command === 'abrir' || command === 'cerrar') {
-      try {
-        netSdkResult = await this.controlPuertaNetSdk(ip, port, user, pass, command, ch, sdkPort);
-        if (netSdkResult?.ok) {
-          this.logger.log(`⚡ [DAHUA PUERTA] ${command} ejecutado con éxito vía NetSDK en ${ip} (Canal ${netSdkResult.detalle?.channelIndex ?? 0})`);
-          return netSdkResult;
-        }
-      } catch (sdkErr: any) {
-        this.logger.warn(`⚠️ [DAHUA PUERTA] NetSDK excepción: ${sdkErr.message}`);
-      }
-    }
-
-    // 2. INTENTO SECUNDARIO VÍA HTTP CGI (Para dispositivos como .83 que requieren comando CGI directo)
+    // 1. INTENTO PRIMARIO VÍA HTTP CGI NATIVO
+    // Para terminales ASI (ASI3203E-W, ASI7213X, etc.) el comando CGI en canal físico 1
+    // es el método verificado que conmuta físicamente el relé de la cerradura.
     const candidates = [
+      `/cgi-bin/accessControl.cgi?action=${action}&channel=${ch}&UserID=101&Type=Remote`,
+      `/cgi-bin/accessControl.cgi?action=${action}&channel=${ch}&Type=Remote`,
+      `/cgi-bin/accessControl.cgi?action=${action}&channel=${ch}`,
+      `/cgi-bin/accessControl.cgi?action=${action}&channel=${ch}&status=open`,
       `/cgi-bin/accessControl.cgi?action=${action}&channel=1&UserID=101&Type=Remote`,
       `/cgi-bin/accessControl.cgi?action=${action}&channel=1&Type=Remote`,
       `/cgi-bin/accessControl.cgi?action=${action}&channel=1`,
@@ -616,13 +608,30 @@ export class DahuaService {
       }
     }
 
+    // Si CGI tuvo éxito, también enviar pulso por NetSDK de respaldo (si aplica abrir/cerrar) sin bloquear
     if (cgiSuccess) {
+      if (command === 'abrir' || command === 'cerrar') {
+        this.controlPuertaNetSdk(ip, port, user, pass, command, ch, sdkPort).catch(() => {});
+      }
       return {
         ok: true,
         mensaje: `Puerta ejecutó "${command}" correctamente (Dahua CGI Relay activado)`,
         marca: 'Dahua',
         detalle: { path: cgiPathUsed, method: 'CGI' },
       };
+    }
+
+    // 2. INTENTO SECUNDARIO VÍA NETSDK (Para equipos VTO o donde CGI no responda)
+    if (command === 'abrir' || command === 'cerrar') {
+      try {
+        const netSdkResult = await this.controlPuertaNetSdk(ip, port, user, pass, command, ch, sdkPort);
+        if (netSdkResult?.ok) {
+          this.logger.log(`⚡ [DAHUA PUERTA] ${command} ejecutado con éxito vía NetSDK en ${ip} (Canal ${netSdkResult.detalle?.channelIndex ?? ch})`);
+          return netSdkResult;
+        }
+      } catch (sdkErr: any) {
+        this.logger.warn(`⚠️ [DAHUA PUERTA] NetSDK excepción: ${sdkErr.message}`);
+      }
     }
 
     if (lastError?.message?.includes('ECONNREFUSED')) {
@@ -669,10 +678,11 @@ export class DahuaService {
       // CtrlType: 260 = DH_CTRL_ACCESS_OPEN (0x104), 261 = DH_CTRL_ACCESS_CLOSE (0x105)
       const ctrlType = command === 'cerrar' ? 261 : 260;
 
-      // En terminales tipo ASI3203E-W el canal físico del relay en NetSDK es 0 (primario para Puerta 1)
+      // En terminales tipo ASI3203E-W el canal físico principal de la puerta 1 es 1.
+      // Priorizamos canal directo (1) y luego base-0 (0).
       const primaryCh = channel ?? 1;
       const chIdx0 = Math.max(0, primaryCh - 1);
-      const channelsToTry = [...new Set([chIdx0, 0, primaryCh, 1])];
+      const channelsToTry = [...new Set([primaryCh, 1, chIdx0, 0])];
 
       let success = false;
       let usedChannel = chIdx0;
