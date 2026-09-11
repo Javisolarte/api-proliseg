@@ -572,6 +572,18 @@ export class DahuaService {
 
     const ch = channel ?? 1;
 
+    // 0. BYPASS DIRECTO VÍA NETSDK PARA CONTROLADORAS MULTI-PUERTA O DISPOSITIVOS SIN HTTP
+    // Controladoras como Dahua ASC2204C (puerto 10090 / 20090) no disponen de servidor web CGI.
+    // Ir directo a NetSDK evita demoras y timeouts de 5-7s causados por puertos HTTP cerrados.
+    const isOnlyNetSdk = port === 10090 || sdkPort === 20090;
+    if (isOnlyNetSdk && (command === 'abrir' || command === 'cerrar')) {
+      const netSdkResult = await this.controlPuertaNetSdk(ip, port, user, pass, command, ch, sdkPort);
+      if (netSdkResult?.ok) {
+        this.logger.log(`⚡ [DAHUA PUERTA] ${command} ejecutado DIRECTO vía NetSDK en ${ip} (Canal ${netSdkResult.detalle?.channelIndex ?? ch})`);
+        return netSdkResult;
+      }
+    }
+
     // 1. INTENTO PRIMARIO VÍA HTTP CGI NATIVO
     // Para terminales ASI (ASI3203E-W, ASI7213X, etc.) el comando CGI en canal físico 1
     // es el método verificado que conmuta físicamente el relé de la cerradura.
