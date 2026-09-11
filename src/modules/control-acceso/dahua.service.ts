@@ -84,6 +84,7 @@ export class DahuaService {
     CLIENT_SetDeviceMode: any;
     CLIENT_GetLastError: any;
     CLIENT_SetNetworkParam: any;
+    CLIENT_QueryDevState: any;
     AudioDataCallbackProto: any;
   } | null = null;
   private netSdkDllPath: string | null = null;
@@ -162,6 +163,7 @@ export class DahuaService {
         CLIENT_SetDeviceMode: this.netSdkLib.func(`bool ${cc}CLIENT_SetDeviceMode(int64_t lLoginID, int emType, void *pValue)`),
         CLIENT_GetLastError: this.netSdkLib.func(`uint32_t ${cc}CLIENT_GetLastError()`),
         CLIENT_SetNetworkParam: this.netSdkLib.func(`void ${cc}CLIENT_SetNetworkParam(void *pNetParam)`),
+        CLIENT_QueryDevState: this.netSdkLib.func(`bool ${cc}CLIENT_QueryDevState(int64_t lLoginID, int32_t nType, uint8_t *pBuf, int32_t nBufLen, _Out_ int32_t *pRetLen, int32_t waittime)`),
         AudioDataCallbackProto,
       };
 
@@ -679,24 +681,38 @@ export class DahuaService {
       // CtrlType: 260 = DH_CTRL_ACCESS_OPEN (0x104), 261 = DH_CTRL_ACCESS_CLOSE (0x105)
       const ctrlType = command === 'cerrar' ? 261 : 260;
 
-      // En terminales tipo ASI3203E-W el canal físico principal de la puerta 1 es 1.
-      // Priorizamos canal directo (1) y luego base-0 (0).
+      // En controladoras multi-puerta (como ASC2204C de 4 puertas), los canales son base-0:
+      // Puerta 1 -> Canal 0
+      // Puerta 2 -> Canal 1
+      // Puerta 3 -> Canal 2
+      // Puerta 4 -> Canal 3
       const primaryCh = channel ?? 1;
-      const chIdx0 = Math.max(0, primaryCh - 1);
-      const channelsToTry = [...new Set([primaryCh, 1, chIdx0, 0])];
+      const targetCh = primaryCh > 0 ? primaryCh - 1 : 0;
+      const channelsToTry = [targetCh, primaryCh];
 
       let success = false;
-      let usedChannel = chIdx0;
+      let usedChannel = targetCh;
       let lastErr = 0;
 
       for (const chIdx of channelsToTry) {
-        // Struct tagNET_CTRL_ACCESS_OPEN: dwSize (offset 0), nChannelID (offset 4)
-        for (const size of [8, 128]) {
-          const paramBuf = Buffer.alloc(size);
+        // Struct tagNET_CTRL_ACCESS_OPEN:
+        // offset 0x00 (4B): dwSize (52 bytes = 0x34)
+        // offset 0x04 (4B): nChannelID (chIdx)
+        // offset 0x08 (8B): emOpenMethod (0)
+        // offset 0x10 (32B): szUserID ('admin\0')
+        // offset 0x30 (4B): emOpenDoorType (1 = EM_OPEN_DOOR_TYPE_REMOTE)
+        for (const size of [52, 128, 8]) {
+          const paramBuf = Buffer.alloc(size, 0);
           paramBuf.writeUInt32LE(size, 0);
           paramBuf.writeInt32LE(chIdx, 4);
+          if (size >= 48) {
+            paramBuf.write((user || 'admin') + '\0', 16, 'ascii');
+          }
+          if (size >= 52) {
+            paramBuf.writeInt32LE(1, 48); // 1 = Remote open
+          }
 
-          const ok = sdk.CLIENT_ControlDevice(loginId, ctrlType, paramBuf, 1500);
+          const ok = sdk.CLIENT_ControlDevice(loginId, ctrlType, paramBuf, 2000);
           if (ok) {
             success = true;
             usedChannel = chIdx;
@@ -729,6 +745,50 @@ export class DahuaService {
       }
     } catch (err: any) {
       this.logger.warn(`⚠️ [DAHUA-NETSDK-DOOR] Excepción en llamada NetSDK: ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Consulta el estado de una o todas las puertas de un controlador Dahua (tipo ASC / NetSDK).
+   * Utiliza CLIENT_QueryDevState con tipo 345 (DH_DEVSTATE_DOOR_STATE).
+   * No altera ningún relé ni abre puertas.
+   */
+  async consultarEstadoPuertasNetSdk(
+    ip: string,
+    httpPort: number,
+    user: string,
+    pass: string,
+    channel = 0,
+    sdkPort?: number,
+  ): Promise<{ canal: number; estado: number; descripcion: string } | null> {
+    if (!this.initNetSdk() || !this.netSdkFuncs?.CLIENT_QueryDevState) return null;
+    const targetSdkPort = Number(sdkPort || (httpPort >= 10000 ? 20000 + (httpPort % 10000) : 37777));
+    try {
+      const login = this.netSdkLogin(ip, targetSdkPort, user, pass);
+      if (!login?.loginId) return null;
+      const buf = Buffer.alloc(12, 0);
+      buf.writeUInt32LE(12, 0);
+      buf.writeInt32LE(channel, 4);
+      const retLen = [0];
+      const ok = this.netSdkFuncs.CLIENT_QueryDevState(login.loginId, 345, buf, 12, retLen, 2000);
+      this.netSdkFuncs.CLIENT_Logout(login.loginId);
+      if (ok) {
+        const state = buf.readInt32LE(8);
+        const textos: Record<number, string> = {
+          0: 'Desconocido',
+          1: 'Abierta',
+          2: 'Cerrada',
+          3: 'Forzada / Alarma',
+        };
+        return {
+          canal: channel,
+          estado: state,
+          descripcion: textos[state] || 'Desconocido',
+        };
+      }
+      return null;
+    } catch {
       return null;
     }
   }

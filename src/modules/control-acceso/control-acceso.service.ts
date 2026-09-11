@@ -528,21 +528,22 @@ export class ControlAccesoService implements OnModuleInit {
 
     try {
       let resultado: { ok: boolean; mensaje: string; marca?: string; detalle?: any };
+      const targetDoorId = Number(deviceConfig?.numero_puerta ?? deviceConfig?.canal_puerta ?? doorId ?? 1);
 
       if (isDahua) {
         const resolvedSdkPort = this.resolveDahuaSdkPort(target.port, deviceConfig, target.via);
-        resultado = await this.controlPuertaDahua(target.ip, target.port, doorId, command, user, pass, resolvedSdkPort);
+        resultado = await this.controlPuertaDahua(target.ip, target.port, targetDoorId, command, user, pass, resolvedSdkPort);
       } else if (isHikvision || marca.includes('hikvision') || marca.includes('hik')) {
-        resultado = await this.controlPuertaHikvision(target.ip, target.port, doorId, command, user, pass);
+        resultado = await this.controlPuertaHikvision(target.ip, target.port, targetDoorId, command, user, pass);
       } else {
         // Intento genérico: probamos Hikvision primero, luego Dahua
         try {
-          const resultado = await this.controlPuertaHikvision(target.ip, target.port, doorId, command, user, pass);
-          return this.registrarResultadoPuerta(targetIp, doorId, command, options?.deviceId, { ...resultado, marca: 'Hikvision (auto-detectado)' }, options?.operator);
+          const resultado = await this.controlPuertaHikvision(target.ip, target.port, targetDoorId, command, user, pass);
+          return this.registrarResultadoPuerta(targetIp, targetDoorId, command, options?.deviceId, { ...resultado, marca: 'Hikvision (auto-detectado)' }, options?.operator);
         } catch {
           const resolvedSdkPort = this.resolveDahuaSdkPort(target.port, deviceConfig, target.via);
-          const resultado = await this.controlPuertaDahua(target.ip, target.port, doorId, command, user, pass, resolvedSdkPort);
-          return this.registrarResultadoPuerta(targetIp, doorId, command, options?.deviceId, { ...resultado, marca: 'Dahua (auto-detectado)' }, options?.operator);
+          const resultado = await this.controlPuertaDahua(target.ip, target.port, targetDoorId, command, user, pass, resolvedSdkPort);
+          return this.registrarResultadoPuerta(targetIp, targetDoorId, command, options?.deviceId, { ...resultado, marca: 'Dahua (auto-detectado)' }, options?.operator);
         }
       }
  
