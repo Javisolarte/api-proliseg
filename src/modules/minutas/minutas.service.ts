@@ -18,6 +18,7 @@ export class MinutasService {
           empleados(id, nombre_completo)
         ),
         puestos_trabajo(id, nombre, direccion),
+        usuario_creador:usuarios_externos!minutas_creada_por_fkey(id, nombre_completo, cedula),
         usuario_entrante:usuarios_externos!minutas_turno_entrante_fkey(id, nombre_completo),
         usuario_saliente:usuarios_externos!minutas_turno_saliente_fkey(id, nombre_completo)
       `)

@@ -491,7 +491,49 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     if (marca.includes('dahua') || marca.includes('dh')) {
       return this.fallbackPollDahua(device, ip, port, user, pass);
     }
-    // ── Hikvision ISAPI (sin cambios) ─────────────────────────────────────────
+    // ── Hikvision ISAPI ───────────────────────────────────────────────────────
+    const base = `http://${ip}:${port}`;
+
+    // 1. Detección en tiempo real de timbrado activo vía VideoIntercom/callStatus (PRIORITARIO E INDEPENDIENTE)
+    try {
+      const csResp = await this.executeDigestRequest(
+        'GET',
+        `${base}/ISAPI/VideoIntercom/callStatus?format=json`,
+        user,
+        pass,
+        null,
+        'application/json',
+        2500,
+        'json'
+      );
+      let cs = csResp?.data;
+      if (typeof cs === 'string') {
+        try { cs = JSON.parse(cs); } catch {}
+      }
+      const callState = cs?.CallStatus?.status || cs?.status;
+      if (callState === 'ring') {
+        if (!this.isCallInCooldown(device.id)) {
+          const ringKey = `call_ring_${device.id}_${Math.floor(Date.now() / 20000)}`;
+          if (!this.seenEventIds.has(ringKey)) {
+            this.seenEventIds.add(ringKey);
+            this.logger.log(`📞 [EventSystem] ¡TIMBRE ENTRANTE EN TIEMPO REAL! → ${device.nombre_identificador} (${callState})`);
+            const callEvent: EventoAcceso = {
+              dispositivo_id: device.id,
+              tipo_evento: 'llamada',
+              nombre_dispositivo: device.nombre_identificador,
+              nombre_persona: 'Llamada de Citófono',
+              documento_persona: 'LLAMADA',
+              metodo_acceso: 'intercom',
+              timestamp: new Date().toISOString(),
+              detalles_raw: { source: 'VideoIntercom/callStatus', status: callState, ip, port }
+            };
+            this.saveAndEmit(callEvent);
+          }
+        }
+      }
+    } catch {}
+
+    // 2. Consulta de eventos de acceso (AcsEvent)
     try {
       if (!this.latestDbTimestamp.has(device.id)) {
         const { data } = await this.supabase
@@ -505,8 +547,6 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         const lastTimestamp = data?.[0]?.timestamp || new Date(0).toISOString();
         this.latestDbTimestamp.set(device.id, lastTimestamp);
       }
-
-      const base = `http://${ip}:${port}`;
 
       const resp = await this.executeDigestRequest(
         'POST',
@@ -567,47 +607,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         const evento = this.buildEventoAcceso(device, info, eventTimeStr);
         this.saveAndEmit(evento);
       }
-
-      // Detección en tiempo real de timbrado activo vía VideoIntercom/callStatus
-      try {
-        const csResp = await this.executeDigestRequest(
-          'GET',
-          `${base}/ISAPI/VideoIntercom/callStatus`,
-          user,
-          pass,
-          null,
-          'application/json',
-          2500,
-          'json'
-        );
-        let cs = csResp?.data;
-        if (typeof cs === 'string') {
-          try { cs = JSON.parse(cs); } catch {}
-        }
-        const callState = cs?.CallStatus?.status || cs?.status;
-        if (callState === 'ring') {
-          if (this.isCallInCooldown(device.id)) {
-            return;
-          }
-          const ringKey = `call_ring_${device.id}_${Math.floor(Date.now() / 20000)}`;
-          if (!this.seenEventIds.has(ringKey)) {
-            this.seenEventIds.add(ringKey);
-            this.logger.log(`📞 [EventSystem] ¡TIMBRE ENTRANTE EN TIEMPO REAL! → ${device.nombre_identificador} (${callState})`);
-            const callEvent: EventoAcceso = {
-              dispositivo_id: device.id,
-              tipo_evento: 'llamada',
-              nombre_dispositivo: device.nombre_identificador,
-              nombre_persona: 'Llamada de Citófono',
-              documento_persona: 'LLAMADA',
-              metodo_acceso: 'intercom',
-              timestamp: new Date().toISOString(),
-              detalles_raw: { source: 'VideoIntercom/callStatus', status: callState, ip, port }
-            };
-            this.saveAndEmit(callEvent);
-          }
-        }
-      } catch {}
-    } catch (err) { /* offline — silencioso */ }
+    } catch (err) { /* AcsEvent silencioso */ }
   }
 
   // ─── Fallback Polling exclusivo para Dahua — usa CGI, NO ISAPI ─────────────

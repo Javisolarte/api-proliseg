@@ -397,8 +397,24 @@ export class ControlAccesoService implements OnModuleInit {
     if (opts.dispositivoId) query = query.eq('dispositivo_id', opts.dispositivoId);
     if (opts.desde) query = query.gte('timestamp', opts.desde);
 
-    const { data, error } = await query;
-    if (error) throw error;
+    let { data, error } = await query;
+    if (error) {
+      this.logger.warn(`⚠️ [HISTORIAL] Error en query con join persona: ${error.message}. Reintentando con consulta base desacoplada...`);
+      let fbQuery = this.supabase
+        .getClient()
+        .from('dispositivos_eventos_historico')
+        .select(`
+          *,
+          dispositivo:dispositivos_iot(nombre_identificador, ip_direccion)
+        `)
+        .order('timestamp', { ascending: false })
+        .limit(opts.limit || 50);
+      if (opts.dispositivoId) fbQuery = fbQuery.eq('dispositivo_id', opts.dispositivoId);
+      if (opts.desde) fbQuery = fbQuery.gte('timestamp', opts.desde);
+      const { data: fbData, error: fbErr } = await fbQuery;
+      if (fbErr) throw fbErr;
+      data = fbData;
+    }
 
     const rows = data || [];
     const unlinkedRows = rows.filter(row => !row.persona && (row.documento_persona || row.detalles_raw?.cardNo || row.detalles_raw?.CardNo || row.detalles_raw?.cardNumber || row.codigo_tarjeta));
@@ -4058,19 +4074,19 @@ export class ControlAccesoService implements OnModuleInit {
     }
   }
 
-  private async compressImageBuffer(inputBuffer: Buffer, maxSizeBytes: number = 150000): Promise<Buffer> {
+  private async compressImageBuffer(inputBuffer: Buffer, maxSizeBytes: number = 100000): Promise<Buffer> {
     if (inputBuffer.length <= maxSizeBytes) {
       return inputBuffer;
     }
 
-    this.logger.log(`🔄 [IMAGE-COMPRESS] Comprimiendo imagen de rostro pesada (${(inputBuffer.length / 1024).toFixed(1)} KB)...`);
+    this.logger.log(`🔄 [IMAGE-COMPRESS] Comprimiendo imagen de rostro (${(inputBuffer.length / 1024).toFixed(1)} KB)...`);
     
     return new Promise((resolve) => {
       const { spawn } = require('child_process');
       const ffmpeg = spawn('ffmpeg', [
         '-i', 'pipe:0',             // Leer de stdin
-        '-vf', 'scale=640:-1',      // Escalar ancho a máximo 640px (mantiene ratio)
-        '-q:v', '5',                // Calidad JPEG (2 a 31, 5 es muy buena relación compresión/calidad)
+        '-vf', 'scale=480:-1',      // Escalar ancho a máximo 480px (ideal para biometría facial Hikvision)
+        '-q:v', '7',                // Calidad JPEG equilibrada (< 100KB garantizado)
         '-f', 'image2',             // Forzar formato de imagen
         '-c:v', 'mjpeg',            // Codec MJPEG (compatible con JPG)
         'pipe:1'                    // Escribir a stdout
@@ -4120,12 +4136,12 @@ export class ControlAccesoService implements OnModuleInit {
     }
 
     const cleanUserId = /^\d+$/.test(userId) ? Number(userId) : userId;
-    const userIds = [userId];
-    if (typeof cleanUserId === 'number') {
-      userIds.push(cleanUserId as any);
+    const userIds = [String(cleanUserId)];
+    if (typeof cleanUserId === 'number' && String(cleanUserId) !== String(userId)) {
+      userIds.push(String(userId));
     }
 
-    const libTypes = ['staticFD', 'blackFD', 'normalFD'];
+    const libTypes = ['blackFD', 'normalFD', 'staticFD'];
     const payloads: { label: string; method: string; data: Buffer; headers: Record<string, string> }[] = [];
     const boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW';
 
@@ -4154,9 +4170,8 @@ export class ControlAccesoService implements OnModuleInit {
     };
 
     for (const uId of userIds) {
-      const idStr = typeof uId === 'number' ? 'númerico' : 'string';
       for (const libType of libTypes) {
-        // Variante 1: Multipart estándar (FaceDataRecord como JSON block, FaceImage como binario) - COMPATIBILIDAD CONFIRMADA
+        // Variante 1: Multipart estándar (FaceDataRecord como JSON block, img como binario) - PRIORIDAD NATIVA HIKVISION
         const multipart1 = buildMultipart(boundary, [
           {
             headers: {
@@ -4165,39 +4180,8 @@ export class ControlAccesoService implements OnModuleInit {
             },
             body: {
               faceLibType: libType,
-              FDLibID: '1',
               FDID: '1',
-              FPID: uId
-            }
-          },
-          {
-            headers: {
-              'Content-Disposition': 'form-data; name="FaceImage"; filename="face.jpg"',
-              'Content-Type': 'image/jpeg'
-            },
-            body: imgBuffer
-          }
-        ]);
-
-        payloads.push({
-          label: `Multipart (FaceDataRecord + FaceImage, ID: ${idStr}, lib: ${libType})`,
-          method: 'post',
-          data: multipart1,
-          headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` }
-        });
-
-        // Variante 2: Multipart alternativa (faceDataRecord minúscula + img minúscula)
-        const multipart2 = buildMultipart(boundary, [
-          {
-            headers: {
-              'Content-Disposition': 'form-data; name="faceDataRecord"',
-              'Content-Type': 'application/json'
-            },
-            body: {
-              faceLibType: libType,
-              FDLibID: '1',
-              FDID: '1',
-              FPID: uId
+              FPID: String(uId)
             }
           },
           {
@@ -4210,7 +4194,37 @@ export class ControlAccesoService implements OnModuleInit {
         ]);
 
         payloads.push({
-          label: `Multipart (faceDataRecord + img, ID: ${idStr}, lib: ${libType})`,
+          label: `Multipart (FaceDataRecord + img, ID: ${uId}, lib: ${libType})`,
+          method: 'post',
+          data: multipart1,
+          headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` }
+        });
+
+        // Variante 2: Multipart alternativa con FaceImage
+        const multipart2 = buildMultipart(boundary, [
+          {
+            headers: {
+              'Content-Disposition': 'form-data; name="FaceDataRecord"',
+              'Content-Type': 'application/json'
+            },
+            body: {
+              faceLibType: libType,
+              FDLibID: '1',
+              FDID: '1',
+              FPID: String(uId)
+            }
+          },
+          {
+            headers: {
+              'Content-Disposition': 'form-data; name="FaceImage"; filename="face.jpg"',
+              'Content-Type': 'image/jpeg'
+            },
+            body: imgBuffer
+          }
+        ]);
+
+        payloads.push({
+          label: `Multipart (FaceDataRecord + FaceImage, ID: ${uId}, lib: ${libType})`,
           method: 'post',
           data: multipart2,
           headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` }
@@ -4244,7 +4258,7 @@ export class ControlAccesoService implements OnModuleInit {
         ]);
 
         payloads.push({
-          label: `Multipart (Flat Params + img, ID: ${idStr}, lib: ${libType})`,
+          label: `Multipart (Flat Params + img, ID: ${uId}, lib: ${libType})`,
           method: 'post',
           data: multipart3,
           headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` }
@@ -4254,32 +4268,29 @@ export class ControlAccesoService implements OnModuleInit {
 
     // JSON Base64 como último recurso
     for (const uId of userIds) {
-      const idStr = typeof uId === 'number' ? 'númerico' : 'string';
       for (const libType of libTypes) {
-        // Flat JSON
         payloads.push({
-          label: `Flat JSON (ID: ${idStr}, lib: ${libType})`,
+          label: `Flat JSON (ID: ${uId}, lib: ${libType})`,
           method: 'post',
           data: JSON.stringify({
             faceLibType: libType,
             FDLibID: '1',
             FDID: '1',
-            FPID: uId,
+            FPID: String(uId),
             faceData: faceData
           }) as any,
           headers: { 'Content-Type': 'application/json' }
         });
 
-        // Wrapped JSON
         payloads.push({
-          label: `Wrapped JSON (ID: ${idStr}, lib: ${libType})`,
+          label: `Wrapped JSON (ID: ${uId}, lib: ${libType})`,
           method: 'post',
           data: JSON.stringify({
             FaceDataRecord: {
               faceLibType: libType,
               FDLibID: '1',
               FDID: '1',
-              FPID: uId,
+              FPID: String(uId),
               faceData: faceData
             }
           }) as any,
@@ -4314,7 +4325,6 @@ export class ControlAccesoService implements OnModuleInit {
           { deviceId, headers: payload.headers }
         );
         this.logger.log(`✅ [HARDWARE ROSTRO OK] Sincronizado correctamente con ${payload.label}`);
-        // Guardar el formato exitoso en la caché
         this.faceUploadFormatCache.set(ip, payload.label);
         return response;
       } catch (err) {
@@ -4324,6 +4334,18 @@ export class ControlAccesoService implements OnModuleInit {
         if (err.response && err.response.data) {
           const rData = err.response.data;
           errMsg = typeof rData === 'object' ? JSON.stringify(rData) : String(rData);
+
+          // Si el hardware indica que el rostro ya está enrolado para este usuario, es un éxito idiopotente
+          if (
+            rData.subStatusCode === 'deviceUserAlreadyExistFace' ||
+            rData.errorCode === 1610641412 ||
+            errMsg.includes('deviceUserAlreadyExistFace')
+          ) {
+            this.logger.log(`✅ [HARDWARE ROSTRO OK] El rostro del usuario ${userId} ya existe en el dispositivo (${ip}). Sincronizado.`);
+            this.faceUploadFormatCache.set(ip, payload.label);
+            return { ok: true, ya_existia: true, message: 'Rostro ya enrolado' };
+          }
+
           if (
             rData.subStatusCode === 'badJsonContent' ||
             rData.errorMsg === 'saveFacePic' ||
@@ -4340,8 +4362,8 @@ export class ControlAccesoService implements OnModuleInit {
           throw err;
         }
 
-        // Esperar 1 segundo antes del siguiente intento para no saturar al biométrico
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        // Esperar brevemente antes del siguiente intento para no saturar al biométrico
+        await new Promise((resolve) => setTimeout(resolve, 300));
       }
     }
 
@@ -5860,7 +5882,19 @@ export class ControlAccesoService implements OnModuleInit {
     if (filters?.dispositivo_id) query = query.eq('dispositivo_id', filters.dispositivo_id);
 
     const { data, error } = await query;
-    if (error) throw error;
+    if (error) {
+      this.logger.warn(`⚠️ [VISITAS] Error con join residente: ${error.message}. Ejecutando consulta desacoplada...`);
+      let fallbackQuery = (admin as any)
+        .from('visitas_acceso')
+        .select(`*, dispositivo:dispositivos_iot(id, nombre_identificador, ip_direccion)`)
+        .order('created_at', { ascending: false })
+        .limit(filters?.limit || 200);
+      if (filters?.estado) fallbackQuery = fallbackQuery.eq('estado', filters.estado);
+      if (filters?.dispositivo_id) fallbackQuery = fallbackQuery.eq('dispositivo_id', filters.dispositivo_id);
+      const { data: fbData, error: fbErr } = await fallbackQuery;
+      if (fbErr) throw fbErr;
+      return fbData || [];
+    }
     return data || [];
   }
 
