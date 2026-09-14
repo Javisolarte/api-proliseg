@@ -13,14 +13,28 @@ export class SupabaseService implements OnModuleInit {
 
   constructor(private readonly configService: ConfigService) {}
 
+  private getResolvedUrl(): string {
+    const rawUrl = this.configService.get<string>('INTERNAL_SUPABASE_URL') || this.configService.get<string>('SUPABASE_URL');
+    if (process.env.INTERNAL_SUPABASE_URL) {
+      return process.env.INTERNAL_SUPABASE_URL;
+    }
+    // ⚡ Aceleración de Red Interna: Bypass Cloudflare hacia Kong local en el VPS
+    if (process.env.NODE_ENV === 'production' && rawUrl?.includes('supabase.proliseg.com')) {
+      return 'http://supabase-kong:8000';
+    }
+    return rawUrl || '';
+  }
+
   onModuleInit() {
-    const supabaseUrl = this.configService.get<string>('SUPABASE_URL');
+    const supabaseUrl = this.getResolvedUrl();
     const supabaseAnonKey = this.configService.get<string>('SUPABASE_ANON_KEY');
     const supabaseServiceRoleKey = this.configService.get<string>('SUPABASE_SERVICE_ROLE_KEY');
 
     if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey) {
       throw new Error('❌ Supabase configuration keys are missing (URL, ANON_KEY, SERVICE_ROLE_KEY)');
     }
+
+    this.logger.log(`⚡ Supabase Service conectando a: ${supabaseUrl}`);
 
     // Cliente normal (RLS activado)
     this.supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
@@ -60,7 +74,7 @@ export class SupabaseService implements OnModuleInit {
 
   /** Crea un cliente con token de usuario autenticado */
   getClientWithAuth(token: string): SupabaseClient {
-    const supabaseUrl = this.configService.get<string>('SUPABASE_URL');
+    const supabaseUrl = this.getResolvedUrl();
     const supabaseAnonKey = this.configService.get<string>('SUPABASE_ANON_KEY');
 
     if (!supabaseUrl || !supabaseAnonKey) {
