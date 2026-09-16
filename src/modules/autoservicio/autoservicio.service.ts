@@ -66,8 +66,18 @@ export class AutoservicioService {
 
     async getClienteByUserId(userId: number) {
         const supabase = this.supabaseService.getClient();
-        const { data: cliente } = await supabase.from('clientes').select('*').eq('usuario_id', userId).single();
-        if (!cliente) throw new NotFoundException('No se encontrÃ³ registro de cliente asociado a este usuario');
+        let { data: cliente } = await supabase.from('clientes').select('*').eq('usuario_id', userId).maybeSingle();
+        if (!cliente) {
+            // Soporte integral para residentes vinculados a la copropiedad/cliente
+            const { data: residente } = await supabase.from('residentes').select('cliente_id, puesto_id').eq('usuario_id', userId).maybeSingle();
+            if (residente?.cliente_id) {
+                const { data: clienteRes } = await supabase.from('clientes').select('*').eq('id', residente.cliente_id).maybeSingle();
+                if (clienteRes) {
+                    cliente = { ...clienteRes, isResidente: true, puesto_id: residente.puesto_id };
+                }
+            }
+        }
+        if (!cliente) throw new NotFoundException('No se encontró registro de cliente o copropiedad asociado a este usuario');
         return cliente;
     }
 
@@ -292,6 +302,10 @@ export class AutoservicioService {
             .select('*')
             .eq('creada_por', userId)
             .order('created_at', { ascending: false });
+
+        if ((cliente as any).isResidente) {
+            query = query.eq('usuario_cliente_id', userId);
+        }
 
         if (error) throw error;
         return data;
@@ -671,30 +685,34 @@ export class AutoservicioService {
     }
 
     async createPqrsCliente(userId: number, dto: any) {
-        const cliente = await this.getClienteByUserId(userId);
+        const cliente: any = await this.getClienteByUserId(userId);
         const supabase = this.supabaseService.getClient();
 
-        // Validar si contrato/puesto pertenecen al cliente si se envÃ­an
-        if (dto.contrato_id) {
+        // Extraer archivos o propiedades no serializables en tabla pqrsf
+        const { archivos, file, files, ...safeDto } = dto;
+
+        // Validar si contrato/puesto pertenecen al cliente si se envían
+        if (safeDto.contrato_id) {
             const { data: contrato } = await supabase
                 .from('contratos')
                 .select('id')
-                .eq('id', dto.contrato_id)
+                .eq('id', safeDto.contrato_id)
                 .eq('cliente_id', cliente.id)
                 .single();
             if (!contrato) throw new ForbiddenException('El contrato especificado no pertenece a su cuenta');
         }
 
-        // TODO: Validar puesto si se envÃ­a (aunque puesto depende de contrato, doble check es bueno)
+        const insertPayload: any = {
+            ...safeDto,
+            cliente_id: cliente.id,
+            usuario_cliente_id: userId,
+            puesto_id: safeDto.puesto_id || cliente.puesto_id || undefined,
+            fecha_creacion: new Date().toISOString()
+        };
 
         const { data, error } = await supabase
             .from('pqrsf')
-            .insert({
-                ...dto,
-                cliente_id: cliente.id,
-                usuario_cliente_id: userId,
-                fecha_creacion: new Date().toISOString()
-            })
+            .insert(insertPayload)
             .select()
             .single();
 
