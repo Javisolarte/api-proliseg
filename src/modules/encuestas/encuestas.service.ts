@@ -403,7 +403,7 @@ export class EncuestasService {
         const rowsDetalle = respuestasDetalle.map(d => ({
           respuesta_id: respuestaId,
           pregunta_id: d.pregunta_id,
-          valor_respuesta: d.valor_respuesta,
+          valor_respuesta: (d.valor_respuesta !== undefined && d.valor_respuesta !== null) ? d.valor_respuesta : '',
           puntaje_obtenido: d.puntaje_obtenido,
           es_correcta: d.es_correcta
         }));
