@@ -303,10 +303,6 @@ export class AutoservicioService {
             .eq('creada_por', userId)
             .order('created_at', { ascending: false });
 
-        if ((cliente as any).isResidente) {
-            query = query.eq('usuario_cliente_id', userId);
-        }
-
         if (error) throw error;
         return data;
     }
@@ -647,6 +643,9 @@ export class AutoservicioService {
         if (filters?.estado) query = query.eq('estado', filters.estado);
         if (filters?.fechaInicio) query = query.gte('created_at', filters.fechaInicio);
         if (filters?.fechaFin) query = query.lte('created_at', filters.fechaFin);
+        if ((cliente as any).isResidente) {
+            query = query.eq('usuario_cliente_id', userId);
+        }
 
         const { data, error } = await query;
 
