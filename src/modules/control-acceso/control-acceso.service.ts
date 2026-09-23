@@ -143,17 +143,24 @@ export class ControlAccesoService implements OnModuleInit {
     const ids = (data || []).map((device: any) => device.id);
     if (!ids.length) return data || [];
 
-    const { data: permisos } = await this.supabase
-      .getClient()
-      .from('acceso_permisos_dispositivos')
-      .select('dispositivo_id')
-      .in('dispositivo_id', ids)
-      .eq('activo', true);
-
-    const counts = (permisos || []).reduce((acc: Record<string, number>, permiso: any) => {
-      acc[permiso.dispositivo_id] = (acc[permiso.dispositivo_id] || 0) + 1;
-      return acc;
-    }, {});
+    // Contar de manera exacta los permisos activos por cada dispositivo sin verse truncado
+    // por el límite estricto de 1000 filas de PostgREST
+    const counts: Record<string, number> = {};
+    await Promise.all(
+      ids.map(async (devId: string) => {
+        try {
+          const { count, error: countErr } = await this.supabase
+            .getClient()
+            .from('acceso_permisos_dispositivos')
+            .select('id', { count: 'exact', head: true })
+            .eq('dispositivo_id', devId)
+            .eq('activo', true);
+          counts[devId] = (!countErr && count !== null) ? count : 0;
+        } catch {
+          counts[devId] = 0;
+        }
+      })
+    );
 
     return (data || []).map((device: any) => ({
       ...device,
@@ -2136,30 +2143,56 @@ export class ControlAccesoService implements OnModuleInit {
     let personaIds: string[] | null = null;
 
     if (opts.dispositivoId) {
-      const { data: permisos, error: permisosError } = await this.supabase
-        .getClient()
-        .from('acceso_permisos_dispositivos')
-        .select('persona_id')
-        .eq('dispositivo_id', opts.dispositivoId)
-        .eq('activo', true);
+      let allPermisos: any[] = [];
+      let from = 0;
+      const step = 1000;
+      let hasMore = true;
+      while (hasMore) {
+        const { data: page, error: permisosError } = await this.supabase
+          .getClient()
+          .from('acceso_permisos_dispositivos')
+          .select('persona_id')
+          .eq('dispositivo_id', opts.dispositivoId)
+          .eq('activo', true)
+          .range(from, from + step - 1);
 
-      if (permisosError) throw permisosError;
-      personaIds = (permisos || []).map((permiso: any) => permiso.persona_id).filter(Boolean);
+        if (permisosError) throw permisosError;
+        if (page && page.length) {
+          allPermisos = allPermisos.concat(page);
+          if (page.length < step) hasMore = false;
+          else from += step;
+        } else {
+          hasMore = false;
+        }
+      }
+      personaIds = allPermisos.map((permiso: any) => permiso.persona_id).filter(Boolean);
       if (!personaIds.length) return [];
     }
 
-    let query = this.supabase
-      .getClient()
-      .from('personas_gestion_acceso')
-      .select('*')
-      .order('nombre_completo', { ascending: true });
-
-    if (personaIds) query = query.in('id', personaIds);
-
-    const { data, error } = await query;
-    if (error) throw error;
-
-    const personas = data || [];
+    let personas: any[] = [];
+    if (personaIds) {
+      const chunkSize = 200;
+      for (let i = 0; i < personaIds.length; i += chunkSize) {
+        const chunk = personaIds.slice(i, i + chunkSize);
+        const { data, error } = await this.supabase
+          .getClient()
+          .from('personas_gestion_acceso')
+          .select('*')
+          .in('id', chunk);
+        if (error) throw error;
+        if (data) personas = personas.concat(data);
+      }
+      personas.sort((a: any, b: any) => (a.nombre_completo || '').localeCompare(b.nombre_completo || ''));
+    } else {
+      const { data, error } = await this.supabase
+        .getClient()
+        .from('personas_gestion_acceso')
+        .select('*')
+        .order('nombre_completo', { ascending: true })
+        .limit(1000);
+      if (error) throw error;
+      personas = data || [];
+    }
     const residentIds = personas
       .filter((p: any) => p.entidad_tipo === 'residente' && p.entidad_id)
       .map((p: any) => p.entidad_id);
