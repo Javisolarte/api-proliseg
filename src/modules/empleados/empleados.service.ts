@@ -640,10 +640,9 @@ export class EmpleadosService {
       throw new BadRequestException('El archivo PDF o documento es obligatorio');
     }
 
-    const supabase = this.supabaseService.getClient();
     const admin = this.supabaseService.getSupabaseAdminClient();
 
-    const { data: emp, error: empErr } = await supabase
+    const { data: emp, error: empErr } = await admin
       .from('empleados')
       .select('id, cedula, nombre_completo, documentos_carpetas')
       .eq('id', empleadoId)
@@ -687,12 +686,29 @@ export class EmpleadosService {
       }
     }
 
-    if (categoria === 'hoja-vida' || categoria === 'hoja_vida') {
+    const updatePayload: any = {
+      updated_at: new Date().toISOString()
+    };
+
+    if (categoria === 'hoja-vida' || categoria === 'hoja_vida' || subclave === 'hv' || subclave === 'hoja_vida') {
       docsCarpetas.hoja_vida = [fileUrl];
-    } else if (categoria === 'curso-vigilancia') {
+      if (!docsCarpetas['hoja-vida']) docsCarpetas['hoja-vida'] = {};
+      docsCarpetas['hoja-vida']['hv'] = fileUrl;
+      if (!docsCarpetas['hoja_vida']) docsCarpetas['hoja_vida'] = {};
+      docsCarpetas['hoja_vida']['hv'] = fileUrl;
+      updatePayload.hoja_de_vida_url = fileUrl;
+    } else if (categoria === 'curso-vigilancia' || categoria === 'curso_vigilancia' || subclave === 'curso') {
       docsCarpetas.curso_vigilancia = [fileUrl];
-    } else if (categoria === 'cedula') {
+      if (!docsCarpetas['curso-vigilancia']) docsCarpetas['curso-vigilancia'] = {};
+      docsCarpetas['curso-vigilancia']['curso'] = fileUrl;
+      if (!docsCarpetas['curso_vigilancia']) docsCarpetas['curso_vigilancia'] = {};
+      docsCarpetas['curso_vigilancia']['curso'] = fileUrl;
+      updatePayload.tiene_curso_vigilancia = true;
+    } else if (categoria === 'cedula' || subclave === 'cedula') {
       docsCarpetas.cedula = [fileUrl];
+      if (!docsCarpetas['cedula']) docsCarpetas['cedula'] = {};
+      docsCarpetas['cedula']['cedula'] = fileUrl;
+      updatePayload.cedula_pdfurl = fileUrl;
     } else if (categoria === 'pruebas') {
       if (!docsCarpetas.pruebas) docsCarpetas.pruebas = {};
       docsCarpetas.pruebas[subclave] = fileUrl;
@@ -702,9 +718,19 @@ export class EmpleadosService {
     } else if (categoria === 'certificados') {
       if (!docsCarpetas.certificados) docsCarpetas.certificados = {};
       docsCarpetas.certificados[subclave] = fileUrl;
-    } else if (categoria === 'documentos-empresa') {
+      if (subclave === 'certificado-bancario' || subclave === 'bancario') {
+        updatePayload.certificado_bancario_url = fileUrl;
+      }
+    } else if (categoria === 'certificados-medicos' || categoria === 'certificados_medicos') {
+      if (!docsCarpetas.certificados_medicos) docsCarpetas.certificados_medicos = {};
+      docsCarpetas.certificados_medicos[subclave] = fileUrl;
+      if (!docsCarpetas['certificados-medicos']) docsCarpetas['certificados-medicos'] = {};
+      docsCarpetas['certificados-medicos'][subclave] = fileUrl;
+    } else if (categoria === 'documentos-empresa' || categoria === 'documentos_empresa') {
       if (!docsCarpetas.documentos_empresa) docsCarpetas.documentos_empresa = {};
       docsCarpetas.documentos_empresa[subclave] = fileUrl;
+      if (!docsCarpetas['documentos-empresa']) docsCarpetas['documentos-empresa'] = {};
+      docsCarpetas['documentos-empresa'][subclave] = fileUrl;
     } else if (categoria === 'documentos-varios') {
       if (!Array.isArray(docsCarpetas.documentos_varios)) docsCarpetas.documentos_varios = [];
       if (!docsCarpetas.documentos_varios.includes(fileUrl)) {
@@ -718,22 +744,12 @@ export class EmpleadosService {
       docsCarpetas[categoria][subclave] = fileUrl;
     }
 
-    const updatePayload: any = {
-      documentos_carpetas: docsCarpetas,
-      updated_at: new Date().toISOString()
-    };
+    updatePayload.documentos_carpetas = docsCarpetas;
+    const cleanPayload = this.filterValidColumns(updatePayload);
 
-    if (categoria === 'hoja-vida' || categoria === 'hoja_vida') {
-      updatePayload.hoja_de_vida_url = fileUrl;
-    } else if (subclave === 'certificado-bancario' || subclave === 'bancario') {
-      updatePayload.certificado_bancario_url = fileUrl;
-    } else if (categoria === 'cedula' || subclave === 'cedula') {
-      updatePayload.cedula_pdfurl = fileUrl;
-    }
-
-    const { data: updated, error: updateErr } = await supabase
+    const { data: updated, error: updateErr } = await admin
       .from('empleados')
-      .update(updatePayload)
+      .update(cleanPayload)
       .eq('id', empleadoId)
       .select()
       .single();
@@ -747,7 +763,73 @@ export class EmpleadosService {
     return {
       ok: true,
       file_url: fileUrl,
-      documentos_carpetas: updated.documentos_carpetas
+      documentos_carpetas: updated?.documentos_carpetas || docsCarpetas
+    };
+  }
+
+  // 🔹 Eliminar un documento específico de las carpetas estructuradas
+  async deleteDocumentoCarpeta(
+    empleadoId: number,
+    categoria: string,
+    subclave: string
+  ) {
+    const admin = this.supabaseService.getSupabaseAdminClient();
+    this.logger.debug(`🗑️ [deleteDocumentoCarpeta] Borrando documento empleado ${empleadoId}, cat: ${categoria}, sub: ${subclave}`);
+
+    const { data: empleado, error: fetchErr } = await admin
+      .from('empleados')
+      .select('id, documentos_carpetas, hoja_de_vida_url, tiene_curso_vigilancia, cedula_pdfurl, certificado_bancario_url')
+      .eq('id', empleadoId)
+      .single();
+
+    if (fetchErr || !empleado) {
+      throw new NotFoundException('Empleado no encontrado');
+    }
+
+    const docs = empleado.documentos_carpetas || {};
+    const catNorm = categoria.replace(/-/g, '_');
+    const catAlt = categoria.replace(/_/g, '-');
+
+    if (docs[categoria]) delete docs[categoria][subclave];
+    if (docs[catNorm]) delete docs[catNorm][subclave];
+    if (docs[catAlt]) delete docs[catAlt][subclave];
+
+    const updatePayload: any = {
+      documentos_carpetas: docs,
+      updated_at: new Date().toISOString()
+    };
+
+    if (categoria === 'hoja_vida' || categoria === 'hoja-vida' || subclave === 'hv') {
+      updatePayload.hoja_de_vida_url = null;
+    }
+    if (categoria === 'curso_vigilancia' || categoria === 'curso-vigilancia' || subclave === 'curso') {
+      updatePayload.tiene_curso_vigilancia = false;
+    }
+    if (categoria === 'cedula' || subclave === 'cedula') {
+      updatePayload.cedula_pdfurl = null;
+    }
+    if (subclave === 'certificado-bancario' || subclave === 'bancario') {
+      updatePayload.certificado_bancario_url = null;
+    }
+
+    const cleanPayload = this.filterValidColumns(updatePayload);
+    const { data: updated, error: updateErr } = await admin
+      .from('empleados')
+      .update(cleanPayload)
+      .eq('id', empleadoId)
+      .select()
+      .single();
+
+    if (updateErr) {
+      this.logger.error(`❌ Error al eliminar documento: ${updateErr.message}`);
+      throw updateErr;
+    }
+
+    return {
+      ok: true,
+      message: 'Documento eliminado exitosamente',
+      documentos_carpetas: docs,
+      data: updated
     };
   }
 }

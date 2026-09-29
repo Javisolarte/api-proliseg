@@ -243,4 +243,18 @@ export class EmpleadosController {
   ) {
     return this.empleadosService.uploadDocumentoCarpeta(id, categoria, subclave, file);
   }
+
+  /**
+   * 🔹 Eliminar documento individual de carpeta estructurada
+   */
+  @Delete(":id/documentos-carpetas/:categoria/:subclave")
+  @RequirePermissions("empleados")
+  @ApiOperation({ summary: "Eliminar documento individual de carpeta estructurada" })
+  async deleteDocumentoCarpeta(
+    @Param("id", ParseIntPipe) id: number,
+    @Param("categoria") categoria: string,
+    @Param("subclave") subclave: string
+  ) {
+    return this.empleadosService.deleteDocumentoCarpeta(id, categoria, subclave);
+  }
 }
