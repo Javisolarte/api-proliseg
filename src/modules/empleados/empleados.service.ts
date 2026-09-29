@@ -292,16 +292,19 @@ export class EmpleadosService {
       }
     }
 
+    const rawInsertPayload: any = {
+      ...createEmpleadoDto,
+      ...fileUrls,
+      tipo_vigilante_id: createEmpleadoDto.rol === 'vigilante' ? createEmpleadoDto.tipo_vigilante_id : null,
+      creado_por: userId,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    const cleanInsertPayload = this.filterValidColumns(rawInsertPayload);
+
     const { data, error } = await supabase
       .from("empleados")
-      .insert({
-        ...createEmpleadoDto,
-        ...fileUrls,
-        tipo_vigilante_id: createEmpleadoDto.rol === 'vigilante' ? createEmpleadoDto.tipo_vigilante_id : null,
-        creado_por: userId,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
+      .insert(cleanInsertPayload)
       .select()
       .single();
 
@@ -312,6 +315,39 @@ export class EmpleadosService {
 
     this.logger.debug(`✅ Empleado creado: ${JSON.stringify(data, null, 2)}`);
     return data;
+  }
+
+  // 🔹 Columnas válidas en tabla empleados para blindar inserciones y actualizaciones contra PGRST204
+  private readonly validEmpleadoColumns = new Set([
+    'id', 'usuario_id', 'nombre_completo', 'cedula', 'fecha_expedicion', 'fecha_nacimiento',
+    'telefono', 'correo', 'direccion', 'departamento', 'ciudad', 'estado_civil',
+    'genero', 'eps_id', 'arl_id', 'fondo_pension_id', 'fecha_afiliacion_eps',
+    'fecha_fin_eps', 'fecha_afiliacion_arl', 'fecha_fin_arl', 'fecha_afiliacion_pension',
+    'fecha_fin_pension', 'hoja_de_vida_url', 'activo', 'foto_perfil_url',
+    'cedula_pdfurl', 'certificados_urls', 'documentos_adicionales_urls',
+    'fecha_ultima_actualizacion_foto', 'verificado_documentos', 'verificado_por',
+    'fecha_verificacion', 'rol', 'creado_por', 'actualizado_por', 'asignado',
+    'nivel_confianza', 'riesgo_ausencia', 'rendimiento_promedio', 'ultima_evaluacion',
+    'formacion_academica', 'edad', 'contrato_personal_id', 'rh', 'lugar_expedicion',
+    'telefono_2', 'tiene_discapacidad', 'descripcion_discapacidad', 'experiencia',
+    'observaciones', 'tipo_vigilante_id', 'tiene_curso_vigilancia',
+    'tipo_curso_vigilancia_id', 'fecha_vencimiento_curso', 'deleted_at',
+    'deleted_by', 'deletion_reason', 'firma_digital_base64', 'cargo_oficial',
+    'numero_cuenta', 'entidad_bancaria', 'tipo_cuenta', 'certificado_bancario_url',
+    'sede_id', 'orden', 'fecha_examen_medico', 'fecha_ingreso',
+    'fecha_proximas_vacaciones', 'dias_vacaciones_disponibles', 'documentos_carpetas',
+    'documento_seleccion_url', 'fecha_salida', 'motivo_salida', 'observacion_salida',
+    'created_at', 'updated_at'
+  ]);
+
+  private filterValidColumns(rawPayload: Record<string, any>): Record<string, any> {
+    const cleanPayload: Record<string, any> = {};
+    for (const key of Object.keys(rawPayload)) {
+      if (this.validEmpleadoColumns.has(key) && rawPayload[key] !== undefined) {
+        cleanPayload[key] = rawPayload[key];
+      }
+    }
+    return cleanPayload;
   }
 
   // 🔹 Actualizar empleado
@@ -392,9 +428,11 @@ export class EmpleadosService {
       payload.tipo_vigilante_id = updateEmpleadoDto.rol === 'vigilante' ? updateEmpleadoDto.tipo_vigilante_id : null;
     }
 
+    const cleanUpdatePayload = this.filterValidColumns(payload);
+
     const { data, error } = await supabase
       .from("empleados")
-      .update(payload)
+      .update(cleanUpdatePayload)
       .eq("id", id)
       .select()
       .single();
