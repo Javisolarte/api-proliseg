@@ -653,6 +653,8 @@ export class EmpleadosService {
       docsCarpetas.hoja_vida = [fileUrl];
     } else if (categoria === 'curso-vigilancia') {
       docsCarpetas.curso_vigilancia = [fileUrl];
+    } else if (categoria === 'cedula') {
+      docsCarpetas.cedula = [fileUrl];
     } else if (categoria === 'pruebas') {
       if (!docsCarpetas.pruebas) docsCarpetas.pruebas = {};
       docsCarpetas.pruebas[subclave] = fileUrl;
