@@ -4581,6 +4581,55 @@ export class ControlAccesoService implements OnModuleInit {
     return { ok: false, error: lastError?.message };
   }
 
+  async eliminarTarjetaDeHardware(ip: string, userId: string, cardNo: string, deviceId?: string): Promise<any> {
+    if (!cardNo) return { ok: true, message: 'No card provided' };
+    const cleanCard = String(cardNo).trim();
+    if (!cleanCard) return { ok: true, message: 'No card provided' };
+
+    const cleanUserId = String(userId).trim();
+    this.logger.log(`🚫 [HARDWARE CARD INHIBIT] Inhabilitando/eliminando tarjeta '${cleanCard}' para ${cleanUserId} en ${ip}...`);
+
+    const isapiPath = `/ISAPI/AccessControl/CardInfo/Delete?format=json`;
+    const deleteBody = {
+      CardInfoDelCond: {
+        CardNoList: [
+          {
+            cardNo: cleanCard,
+          },
+        ],
+      },
+    };
+
+    try {
+      await this.proxyRequestDynamic(ip, 'put', isapiPath, deleteBody, { deviceId });
+      this.logger.log(`✅ [HARDWARE CARD INHIBIT] Tarjeta '${cleanCard}' removida de hardware en ${ip} vía PUT`);
+      return { ok: true };
+    } catch (err) {
+      this.logger.warn(`⚠️ [HARDWARE CARD INHIBIT] Falló PUT CardInfo/Delete, probando POST: ${err.message}`);
+      try {
+        await this.proxyRequestDynamic(ip, 'post', isapiPath, deleteBody, { deviceId });
+        this.logger.log(`✅ [HARDWARE CARD INHIBIT] Tarjeta '${cleanCard}' removida de hardware en ${ip} vía POST`);
+        return { ok: true };
+      } catch (err2) {
+        try {
+          const modifyBody = {
+            CardInfo: {
+              employeeNo: cleanUserId,
+              cardNo: cleanCard,
+              cardType: 'disabledCard',
+            },
+          };
+          await this.proxyRequestDynamic(ip, 'put', '/ISAPI/AccessControl/CardInfo/Modify?format=json', modifyBody, { deviceId });
+          this.logger.log(`✅ [HARDWARE CARD INHIBIT] Tarjeta '${cleanCard}' marcada como disabledCard en ${ip}`);
+          return { ok: true };
+        } catch (err3) {
+          this.logger.warn(`⚠️ [HARDWARE CARD INHIBIT] No se pudo inhabilitar tarjeta ${cleanCard} en ${ip}: ${err3.message}`);
+          return { ok: false, error: err3.message };
+        }
+      }
+    }
+  }
+
   async eliminarUsuarioDeHardware(ip: string, userId: string, deviceId?: string): Promise<any> {
     const isapiPath = `/ISAPI/AccessControl/UserInfo/Delete?format=json`;
     const cleanUserId = /^\d+$/.test(userId) ? Number(userId) : userId;
@@ -4744,7 +4793,12 @@ export class ControlAccesoService implements OnModuleInit {
     await this.crearUsuarioEnHardware(ip, persona.documento_identidad, persona.nombre_completo, dispositivoId);
 
     if (persona.codigo_tarjeta) {
-      await this.registrarTarjetaEnHardware(ip, persona.documento_identidad, persona.codigo_tarjeta, dispositivoId);
+      if (persona.tarjeta_activa === false) {
+        this.logger.log(`🔒 [HARDWARE SYNC] Tag ${persona.codigo_tarjeta} está inhabilitado para ${persona.documento_identidad}, removiendo de ${ip}`);
+        await this.eliminarTarjetaDeHardware(ip, persona.documento_identidad, persona.codigo_tarjeta, dispositivoId);
+      } else {
+        await this.registrarTarjetaEnHardware(ip, persona.documento_identidad, persona.codigo_tarjeta, dispositivoId);
+      }
     }
 
     const { data: facial } = await admin
@@ -4821,7 +4875,7 @@ export class ControlAccesoService implements OnModuleInit {
       resultado = await this.dahuaService.agregarPersona(ip, port, user, pass, {
         userId: String(persona.documento_identidad).slice(0, 20),
         nombre: persona.nombre_completo || `Usuario ${persona.documento_identidad}`,
-        codigoTarjeta: persona.codigo_tarjeta || undefined,
+        codigoTarjeta: persona.tarjeta_activa === false ? undefined : (persona.codigo_tarjeta || undefined),
         pin: persona.pin_seguridad || undefined,
         habilitado: persona.activo !== false,
         fotoBase64,
@@ -4902,6 +4956,7 @@ export class ControlAccesoService implements OnModuleInit {
       codigo_tarjeta: rec.codigo_tarjeta ? String(rec.codigo_tarjeta).trim() : null,
       tarjeta_entregada: !!rec.tarjeta_entregada,
       tarjeta_fecha_entrega: rec.tarjeta_fecha_entrega || null,
+      tarjeta_activa: rec.tarjeta_activa !== false,
     };
 
     if (rec.correo_electronico) {
@@ -6152,6 +6207,7 @@ export class ControlAccesoService implements OnModuleInit {
 
     const tagCode = input.codigo_tarjeta ? String(input.codigo_tarjeta).trim() : (input.codigo_tag ? String(input.codigo_tag).trim() : null);
     const entregada = input.tarjeta_entregada !== undefined ? !!input.tarjeta_entregada : (input.tag_entregado !== undefined ? !!input.tag_entregado : false);
+    const tagActivo = input.tarjeta_activa !== undefined ? !!input.tarjeta_activa : (input.tag_activo !== undefined ? !!input.tag_activo : true);
     let fechaEntrega = input.tarjeta_fecha_entrega || input.tag_fecha_entrega || null;
     if (entregada && !fechaEntrega) {
       fechaEntrega = new Date().toISOString();
@@ -6173,6 +6229,7 @@ export class ControlAccesoService implements OnModuleInit {
       codigo_tarjeta: tagCode,
       tarjeta_entregada: entregada,
       tarjeta_fecha_entrega: fechaEntrega,
+      tarjeta_activa: tagActivo,
     };
     const { data, error } = await admin
       .from('control_acceso_recoleccion_registros')
@@ -6182,13 +6239,14 @@ export class ControlAccesoService implements OnModuleInit {
       .single();
     if (error) throw error;
 
-    // Si ya existe en personas_gestion_acceso, mantener actualizada la tarjeta y entrega
+    // Si ya existe en personas_gestion_acceso, mantener actualizada la tarjeta, entrega y estado
     if (input.cedula) {
       try {
         const updatePersona: any = {};
         if (tagCode !== undefined) updatePersona.codigo_tarjeta = tagCode;
         if (entregada !== undefined) updatePersona.tarjeta_entregada = entregada;
         if (fechaEntrega !== undefined) updatePersona.tarjeta_fecha_entrega = fechaEntrega;
+        if (tagActivo !== undefined) updatePersona.tarjeta_activa = tagActivo;
 
         if (Object.keys(updatePersona).length > 0) {
           await admin
@@ -6198,6 +6256,39 @@ export class ControlAccesoService implements OnModuleInit {
         }
       } catch (pErr) {
         this.logger.warn(`⚠️ [RECOPILACION UPDATE] No se pudo sincronizar tarjeta en personas_gestion_acceso: ${pErr.message}`);
+      }
+    }
+
+    return data;
+  }
+
+  async toggleEstadoTagRecopilacion(id: number, activo: boolean) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const { data: rec, error: fErr } = await admin
+      .from('control_acceso_recoleccion_registros')
+      .select('id, cedula, codigo_tarjeta')
+      .eq('id', id)
+      .single();
+
+    if (fErr || !rec) throw new Error(`Registro de recopilación ${id} no encontrado`);
+
+    const { data, error } = await admin
+      .from('control_acceso_recoleccion_registros')
+      .update({ tarjeta_activa: !!activo })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    if (rec.cedula) {
+      try {
+        await admin
+          .from('personas_gestion_acceso')
+          .update({ tarjeta_activa: !!activo })
+          .eq('documento_identidad', String(rec.cedula).trim());
+      } catch (pErr) {
+        this.logger.warn(`⚠️ [TOGGLE TAG] No se pudo actualizar estado en personas_gestion_acceso: ${pErr.message}`);
       }
     }
 

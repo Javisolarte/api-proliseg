@@ -393,6 +393,12 @@ export class ControlAccesoController {
     return this.controlAccesoService.updateRegistroRecopilacion(Number(id), body);
   }
 
+  @Put('recopilacion/registros/:id/toggle-tag')
+  @ApiOperation({ summary: 'Habilita o inhabilita el tag RFID de un registro de recopilacion' })
+  async toggleTagRecopilacion(@Param('id') id: string, @Body('activo') activo: boolean) {
+    return this.controlAccesoService.toggleEstadoTagRecopilacion(Number(id), activo);
+  }
+
   @Delete('recopilacion/registros/:id')
   @ApiOperation({ summary: 'Elimina un registro de recopilación' })
   async deleteRegistroRecopilacion(@Param('id') id: string) {
