@@ -6205,10 +6205,14 @@ export class ControlAccesoService implements OnModuleInit {
   async updateRegistroRecopilacion(id: number, input: any) {
     const admin = this.supabase.getSupabaseAdminClient();
 
-    const tagCode = input.codigo_tarjeta ? String(input.codigo_tarjeta).trim() : (input.codigo_tag ? String(input.codigo_tag).trim() : null);
+    const tagCode = input.codigo_tarjeta && String(input.codigo_tarjeta).trim() ? String(input.codigo_tarjeta).trim() : (input.codigo_tag && String(input.codigo_tag).trim() ? String(input.codigo_tag).trim() : null);
     const entregada = input.tarjeta_entregada !== undefined ? !!input.tarjeta_entregada : (input.tag_entregado !== undefined ? !!input.tag_entregado : false);
     const tagActivo = input.tarjeta_activa !== undefined ? !!input.tarjeta_activa : (input.tag_activo !== undefined ? !!input.tag_activo : true);
     let fechaEntrega = input.tarjeta_fecha_entrega || input.tag_fecha_entrega || null;
+    if (typeof fechaEntrega === 'string') {
+      fechaEntrega = fechaEntrega.trim();
+      if (!fechaEntrega) fechaEntrega = null;
+    }
     if (entregada && !fechaEntrega) {
       fechaEntrega = new Date().toISOString();
     } else if (!entregada) {
@@ -6216,16 +6220,16 @@ export class ControlAccesoService implements OnModuleInit {
     }
 
     const payload: any = {
-      nombre_completo: input.nombre_completo,
-      cedula: input.cedula,
-      telefono: input.telefono,
-      telefono2: input.telefono2 || null,
-      correo_electronico: input.correo_electronico || null,
-      apartamento: input.apartamento || null,
-      torre: input.torre || null,
+      nombre_completo: input.nombre_completo ? String(input.nombre_completo).trim() : input.nombre_completo,
+      cedula: input.cedula ? String(input.cedula).trim() : input.cedula,
+      telefono: input.telefono ? String(input.telefono).trim() : input.telefono,
+      telefono2: input.telefono2 && String(input.telefono2).trim() ? String(input.telefono2).trim() : null,
+      correo_electronico: input.correo_electronico && String(input.correo_electronico).trim() ? String(input.correo_electronico).trim() : null,
+      apartamento: input.apartamento && String(input.apartamento).trim() ? String(input.apartamento).trim() : null,
+      torre: input.torre && String(input.torre).trim() ? String(input.torre).trim() : null,
       tiene_vehiculo: !!input.tiene_vehiculo,
-      placa_vehiculo: input.tiene_vehiculo ? (input.placa_vehiculo || null) : null,
-      color_vehiculo: input.tiene_vehiculo ? (input.color_vehiculo || null) : null,
+      placa_vehiculo: input.tiene_vehiculo && input.placa_vehiculo && String(input.placa_vehiculo).trim() ? String(input.placa_vehiculo).trim() : null,
+      color_vehiculo: input.tiene_vehiculo && input.color_vehiculo && String(input.color_vehiculo).trim() ? String(input.color_vehiculo).trim() : null,
       codigo_tarjeta: tagCode,
       tarjeta_entregada: entregada,
       tarjeta_fecha_entrega: fechaEntrega,
