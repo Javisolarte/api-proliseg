@@ -4538,20 +4538,47 @@ export class ControlAccesoService implements OnModuleInit {
 
   async registrarTarjetaEnHardware(ip: string, userId: string, cardNo: string, deviceId?: string): Promise<any> {
     if (!cardNo) return { ok: true, message: 'No card provided' };
-    const isapiPath = `/ISAPI/AccessControl/CardInfo/Record?format=json`;
+    const cleanCard = String(cardNo).trim();
+    if (!cleanCard) return { ok: true, message: 'No card provided' };
+
+    const cleanUserId = String(userId).trim();
+    this.logger.log(`💳 [HARDWARE CARD SYNC] Registrando tarjeta '${cleanCard}' para usuario ${cleanUserId} en ${ip}...`);
+
     const body = {
       CardInfo: {
-        employeeNo: userId,
-        cardNo: cardNo,
+        employeeNo: cleanUserId,
+        cardNo: cleanCard,
         cardType: 'normalCard',
       },
     };
-    try {
-      return await this.proxyRequestDynamic(ip, 'post', isapiPath, body, { deviceId });
-    } catch (error) {
-      this.logger.warn(`⚠️ [HARDWARE] POST CardInfo/Record falló, probando PUT: ${error.message}`);
-      return this.proxyRequestDynamic(ip, 'put', isapiPath, body, { deviceId });
+
+    const attempts = [
+      { method: 'post' as const, path: '/ISAPI/AccessControl/CardInfo/Record?format=json' },
+      { method: 'put' as const, path: '/ISAPI/AccessControl/CardInfo/Record?format=json' },
+      { method: 'post' as const, path: '/ISAPI/AccessControl/CardInfo/SetUp?format=json' },
+      { method: 'put' as const, path: '/ISAPI/AccessControl/CardInfo/SetUp?format=json' },
+      { method: 'put' as const, path: '/ISAPI/AccessControl/CardInfo/Modify?format=json' },
+    ];
+
+    let lastError: any = null;
+    for (const attempt of attempts) {
+      try {
+        const res = await this.proxyRequestDynamic(ip, attempt.method, attempt.path, body, { deviceId });
+        this.logger.log(`✅ [HARDWARE CARD SYNC] Tarjeta '${cleanCard}' registrada exitosamente para ${cleanUserId} en ${ip} vía ${attempt.method.toUpperCase()} ${attempt.path}`);
+        return res;
+      } catch (err) {
+        lastError = err;
+        const msg = String(err?.message || '');
+        if (msg.toLowerCase().includes('already') || msg.toLowerCase().includes('exist')) {
+          this.logger.log(`ℹ️ [HARDWARE CARD SYNC] Tarjeta '${cleanCard}' ya existía o estaba asignada en ${ip}: ${msg}`);
+          return { ok: true, note: 'Card already exists' };
+        }
+        this.logger.warn(`⚠️ [HARDWARE CARD SYNC] Falló ${attempt.method.toUpperCase()} ${attempt.path} para tarjeta ${cleanCard}: ${err.message}`);
+      }
     }
+
+    this.logger.error(`❌ [HARDWARE CARD SYNC] No se pudo registrar tarjeta ${cleanCard} en ${ip}: ${lastError?.message}`);
+    return { ok: false, error: lastError?.message };
   }
 
   async eliminarUsuarioDeHardware(ip: string, userId: string, deviceId?: string): Promise<any> {
@@ -4872,6 +4899,9 @@ export class ControlAccesoService implements OnModuleInit {
       lista_estado: 'blanca',
       entidad_tipo: 'residente',
       activo: true,
+      codigo_tarjeta: rec.codigo_tarjeta ? String(rec.codigo_tarjeta).trim() : null,
+      tarjeta_entregada: !!rec.tarjeta_entregada,
+      tarjeta_fecha_entrega: rec.tarjeta_fecha_entrega || null,
     };
 
     if (rec.correo_electronico) {
@@ -6119,7 +6149,17 @@ export class ControlAccesoService implements OnModuleInit {
 
   async updateRegistroRecopilacion(id: number, input: any) {
     const admin = this.supabase.getSupabaseAdminClient();
-    const payload = {
+
+    const tagCode = input.codigo_tarjeta ? String(input.codigo_tarjeta).trim() : (input.codigo_tag ? String(input.codigo_tag).trim() : null);
+    const entregada = input.tarjeta_entregada !== undefined ? !!input.tarjeta_entregada : (input.tag_entregado !== undefined ? !!input.tag_entregado : false);
+    let fechaEntrega = input.tarjeta_fecha_entrega || input.tag_fecha_entrega || null;
+    if (entregada && !fechaEntrega) {
+      fechaEntrega = new Date().toISOString();
+    } else if (!entregada) {
+      fechaEntrega = null;
+    }
+
+    const payload: any = {
       nombre_completo: input.nombre_completo,
       cedula: input.cedula,
       telefono: input.telefono,
@@ -6130,6 +6170,9 @@ export class ControlAccesoService implements OnModuleInit {
       tiene_vehiculo: !!input.tiene_vehiculo,
       placa_vehiculo: input.tiene_vehiculo ? (input.placa_vehiculo || null) : null,
       color_vehiculo: input.tiene_vehiculo ? (input.color_vehiculo || null) : null,
+      codigo_tarjeta: tagCode,
+      tarjeta_entregada: entregada,
+      tarjeta_fecha_entrega: fechaEntrega,
     };
     const { data, error } = await admin
       .from('control_acceso_recoleccion_registros')
@@ -6138,6 +6181,26 @@ export class ControlAccesoService implements OnModuleInit {
       .select()
       .single();
     if (error) throw error;
+
+    // Si ya existe en personas_gestion_acceso, mantener actualizada la tarjeta y entrega
+    if (input.cedula) {
+      try {
+        const updatePersona: any = {};
+        if (tagCode !== undefined) updatePersona.codigo_tarjeta = tagCode;
+        if (entregada !== undefined) updatePersona.tarjeta_entregada = entregada;
+        if (fechaEntrega !== undefined) updatePersona.tarjeta_fecha_entrega = fechaEntrega;
+
+        if (Object.keys(updatePersona).length > 0) {
+          await admin
+            .from('personas_gestion_acceso')
+            .update(updatePersona)
+            .eq('documento_identidad', String(input.cedula).trim());
+        }
+      } catch (pErr) {
+        this.logger.warn(`⚠️ [RECOPILACION UPDATE] No se pudo sincronizar tarjeta en personas_gestion_acceso: ${pErr.message}`);
+      }
+    }
+
     return data;
   }
 
