@@ -618,48 +618,191 @@ export class ControlAccesoService implements OnModuleInit {
         dev.configuracion_tecnica
       );
 
-      const base = `http://${resolved.ip}:${resolved.port}`;
-      this.logger.log(`📞 [INTERCOM] Enviando señal de colgar a ${dev.nombre_identificador} (${base})...`);
-      
-      const signals = ['hangUp', 'reject', 'cancle', 'cancel'];
+      const marca = ((dev.marca || dev.tipo_dispositivo || dev.modelo || '') as string).toLowerCase();
+      const isDahua = marca.includes('dahua') || marca.includes('dh');
+
       let sent = false;
-      for (const sig of signals) {
-        const payloadJson = JSON.stringify({ CallSignal: { cmdType: sig } });
-        try {
-          await this.devicePoller.executeDigestRequest(
-            'PUT',
-            `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
-            user,
-            pass,
-            payloadJson,
-            'application/json',
-            3000
-          );
-          sent = true;
-          this.logger.log(`📞 [INTERCOM] Señal "${sig}" aceptada por ${dev.nombre_identificador}`);
-          break;
-        } catch {
+      if (isDahua) {
+        this.logger.log(`📞 [INTERCOM] Enviando señal de colgar a Dahua ${dev.nombre_identificador}...`);
+        const endpoints = [
+          '/cgi-bin/intercom.cgi?action=hangUp',
+          '/cgi-bin/console.cgi?action=hangUp',
+          '/cgi-bin/vto.cgi?action=hangUp'
+        ];
+        for (const ep of endpoints) {
           try {
-            const xml = `<?xml version="1.0" encoding="UTF-8"?><CallSignal><cmdType>${sig}</cmdType></CallSignal>`;
+            await this.dahuaService.cgi(resolved.ip, resolved.port, user, pass, 'GET', ep, undefined, 'text', undefined, 2500);
+            sent = true;
+            this.logger.log(`📞 [INTERCOM] Dahua llamada colgada vía ${ep} en ${dev.nombre_identificador}`);
+            break;
+          } catch {}
+        }
+      } else {
+        const base = `http://${resolved.ip}:${resolved.port}`;
+        this.logger.log(`📞 [INTERCOM] Enviando señal de colgar a Hikvision ${dev.nombre_identificador} (${base})...`);
+        const signals = ['hangUp', 'reject', 'cancle', 'cancel'];
+        for (const sig of signals) {
+          const payloadJson = JSON.stringify({ CallSignal: { cmdType: sig } });
+          try {
             await this.devicePoller.executeDigestRequest(
               'PUT',
-              `${base}/ISAPI/VideoIntercom/callSignal`,
+              `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
               user,
               pass,
-              xml,
-              'application/xml',
+              payloadJson,
+              'application/json',
               3000
             );
             sent = true;
-            this.logger.log(`📞 [INTERCOM] Señal XML "${sig}" aceptada por ${dev.nombre_identificador}`);
+            this.logger.log(`📞 [INTERCOM] Señal "${sig}" aceptada por ${dev.nombre_identificador}`);
             break;
-          } catch {}
+          } catch {
+            try {
+              const xml = `<?xml version="1.0" encoding="UTF-8"?><CallSignal><cmdType>${sig}</cmdType></CallSignal>`;
+              await this.devicePoller.executeDigestRequest(
+                'PUT',
+                `${base}/ISAPI/VideoIntercom/callSignal`,
+                user,
+                pass,
+                xml,
+                'application/xml',
+                3000
+              );
+              sent = true;
+              this.logger.log(`📞 [INTERCOM] Señal XML "${sig}" aceptada por ${dev.nombre_identificador}`);
+              break;
+            } catch {}
+          }
         }
       }
       return { ok: true, sent, mensaje: 'Señal de colgar enviada al hardware' };
     } catch (err: any) {
       this.logger.warn(`Error al colgar llamada en hardware: ${err.message}`);
       return { ok: false, mensaje: err.message };
+    }
+  }
+
+  /**
+   * Silencia el timbre en el hardware físico de citofonía exterior (Hikvision y Dahua).
+   * Se ejecuta automáticamente al contestar la llamada o al iniciar a hablar por el micrófono.
+   */
+  async silenciarTimbreHardware(deviceId: string): Promise<boolean> {
+    try {
+      const { data: dev } = await this.supabase
+        .getSupabaseAdminClient()
+        .from('dispositivos_iot')
+        .select('*')
+        .eq('id', deviceId)
+        .single();
+
+      if (!dev) return false;
+
+      // Cooldown de 25s en poller para que no se sigan emitiendo eventos de timbrado
+      this.devicePoller.setCallCooldown(deviceId, 25000);
+
+      const user = dev.credencial_usuario || 'admin';
+      const pass = dev.credencial_password || '';
+      const resolved = await this.resolveDoorNetworkTarget(
+        dev.ip_direccion,
+        dev.configuracion_tecnica?.puerto || 80,
+        dev.configuracion_tecnica
+      );
+
+      const marca = ((dev.marca || dev.tipo_dispositivo || dev.modelo || '') as string).toLowerCase();
+      const isDahua = marca.includes('dahua') || marca.includes('dh');
+
+      if (isDahua) {
+        let dahuaSent = false;
+        const endpoints = [
+          '/cgi-bin/intercom.cgi?action=answer',
+          '/cgi-bin/intercom.cgi?action=hangUp',
+          '/cgi-bin/console.cgi?action=hangUp',
+          '/cgi-bin/vto.cgi?action=hangUp'
+        ];
+        for (const ep of endpoints) {
+          try {
+            await this.dahuaService.cgi(resolved.ip, resolved.port, user, pass, 'GET', ep, undefined, 'text', undefined, 2000);
+            dahuaSent = true;
+            this.logger.log(`📞 [INTERCOM] Dahua timbre silenciado vía ${ep} en ${dev.nombre_identificador}`);
+            break;
+          } catch {}
+        }
+        return dahuaSent;
+      }
+
+      // Hikvision Door Station
+      const base = `http://${resolved.ip}:${resolved.port}`;
+      let hikSent = false;
+
+      // 1. Intentar responder (answer)
+      try {
+        await this.devicePoller.executeDigestRequest(
+          'PUT',
+          `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
+          user,
+          pass,
+          JSON.stringify({ CallSignal: { cmdType: 'answer' } }),
+          'application/json',
+          2500
+        );
+        hikSent = true;
+        this.logger.log(`📞 [INTERCOM] Señal "answer" aceptada en ${dev.nombre_identificador}`);
+      } catch {
+        try {
+          await this.devicePoller.executeDigestRequest(
+            'PUT',
+            `${base}/ISAPI/VideoIntercom/callSignal`,
+            user,
+            pass,
+            `<?xml version="1.0" encoding="UTF-8"?><CallSignal><cmdType>answer</cmdType></CallSignal>`,
+            'application/xml',
+            2500
+          );
+          hikSent = true;
+          this.logger.log(`📞 [INTERCOM] Señal XML "answer" aceptada en ${dev.nombre_identificador}`);
+        } catch {}
+      }
+
+      // 2. Si es una estación exterior de puerta (Door Station) que rechaza 'answer'
+      // por ser la llamante, enviar 'cancle' / 'hangUp' para cancelar el timbrado físico del altavoz
+      if (!hikSent) {
+        for (const sig of ['cancle', 'hangUp', 'reject', 'cancel']) {
+          try {
+            await this.devicePoller.executeDigestRequest(
+              'PUT',
+              `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
+              user,
+              pass,
+              JSON.stringify({ CallSignal: { cmdType: sig } }),
+              'application/json',
+              2000
+            );
+            hikSent = true;
+            this.logger.log(`📞 [INTERCOM] Timbre físico silenciado con "${sig}" en ${dev.nombre_identificador}`);
+            break;
+          } catch {
+            try {
+              await this.devicePoller.executeDigestRequest(
+                'PUT',
+                `${base}/ISAPI/VideoIntercom/callSignal`,
+                user,
+                pass,
+                `<?xml version="1.0" encoding="UTF-8"?><CallSignal><cmdType>${sig}</cmdType></CallSignal>`,
+                'application/xml',
+                2000
+              );
+              hikSent = true;
+              this.logger.log(`📞 [INTERCOM] Timbre físico XML silenciado con "${sig}" en ${dev.nombre_identificador}`);
+              break;
+            } catch {}
+          }
+        }
+      }
+
+      return hikSent;
+    } catch (err: any) {
+      this.logger.warn(`No se pudo silenciar timbre de hardware: ${err.message}`);
+      return false;
     }
   }
 
@@ -675,7 +818,7 @@ export class ControlAccesoService implements OnModuleInit {
       if (!dev) return { ok: false, mensaje: 'Dispositivo no encontrado' };
 
       // 1. Activar cooldown en el poller para que no se sigan emitiendo eventos de timbrado
-      this.devicePoller.setCallCooldown(deviceId, 20000);
+      this.devicePoller.setCallCooldown(deviceId, 25000);
 
       // 2. Notificar inmediatamente a todos los clientes que la llamada fue atendida
       this.devicePoller.saveAndEmit({
@@ -689,49 +832,10 @@ export class ControlAccesoService implements OnModuleInit {
         detalles_raw: { operador: operator?.email || 'Operador', accion: 'contestar' }
       });
 
-      const user = dev.credencial_usuario || 'admin';
-      const pass = dev.credencial_password || '';
-      const resolved = await this.resolveDoorNetworkTarget(
-        dev.ip_direccion,
-        dev.configuracion_tecnica?.puerto || 80,
-        dev.configuracion_tecnica
-      );
+      this.logger.log(`📞 [INTERCOM] Contestando y silenciando timbre físico de ${dev.nombre_identificador}...`);
+      const sent = await this.silenciarTimbreHardware(deviceId);
 
-      const base = `http://${resolved.ip}:${resolved.port}`;
-      this.logger.log(`📞 [INTERCOM] Enviando señal de contestar (answer) a ${dev.nombre_identificador} (${base})...`);
-
-      const payloadJson = JSON.stringify({ CallSignal: { cmdType: 'answer' } });
-      let sent = false;
-      try {
-        await this.devicePoller.executeDigestRequest(
-          'PUT',
-          `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
-          user,
-          pass,
-          payloadJson,
-          'application/json',
-          3000
-        );
-        sent = true;
-        this.logger.log(`📞 [INTERCOM] Señal "answer" aceptada por ${dev.nombre_identificador}`);
-      } catch {
-        try {
-          const xml = `<?xml version="1.0" encoding="UTF-8"?><CallSignal><cmdType>answer</cmdType></CallSignal>`;
-          await this.devicePoller.executeDigestRequest(
-            'PUT',
-            `${base}/ISAPI/VideoIntercom/callSignal`,
-            user,
-            pass,
-            xml,
-            'application/xml',
-            3000
-          );
-          sent = true;
-          this.logger.log(`📞 [INTERCOM] Señal XML "answer" aceptada por ${dev.nombre_identificador}`);
-        } catch {}
-      }
-
-      return { ok: true, sent, mensaje: 'Llamada contestada' };
+      return { ok: true, sent, mensaje: 'Llamada contestada y timbre silenciado en hardware' };
     } catch (err: any) {
       this.logger.warn(`Error al contestar llamada en hardware: ${err.message}`);
       return { ok: false, mensaje: err.message };
@@ -1015,6 +1119,13 @@ export class ControlAccesoService implements OnModuleInit {
     const baseIsapi = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}`;
 
     this.logger.log(`🎙️ [AUDIO-IN] Target resolved: host=${target.host}:${target.port}, user=${target.user}, passLength=${target.pass?.length || 0}, isDahua=${target.isDahua}`);
+
+    // Silenciar automáticamente el timbre en hardware al iniciar a transmitir voz por el micrófono
+    if (deviceId) {
+      this.silenciarTimbreHardware(deviceId).catch((err) => {
+        this.logger.debug(`[AUDIO-IN] Silenciar timbre en background: ${err?.message}`);
+      });
+    }
 
     if (target.isDahua) {
       return this.relayAudioToDeviceDahua(audioStream, target, deviceId, operator);
