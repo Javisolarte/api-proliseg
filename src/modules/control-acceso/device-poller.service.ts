@@ -964,6 +964,176 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     this.checkQrAutoOpen(evento).catch((error) => {
       this.logger.error(`❌ [QR AUTO-OPEN ERROR]: ${error.message}`);
     });
+
+    this.checkAsistenciaIot(evento).catch((error) => {
+      this.logger.warn(`⚠️ [ASISTENCIA IOT EVENT ERROR]: ${error.message}`);
+    });
+  }
+
+  private async checkAsistenciaIot(evento: EventoAcceso) {
+    if (!evento.dispositivo_id) return;
+    const docOrName = evento.documento_persona || evento.codigo_tarjeta;
+    if (!docOrName && !evento.nombre_persona) return;
+
+    try {
+      // 1. Verificar si el dispositivo tiene IoT activo en algún puesto
+      const { data: config } = await this.supabase
+        .getSupabaseAdminClient()
+        .from('puestos_asistencia_iot_config')
+        .select('puesto_id, iot_activo, tolerancia_minutos')
+        .eq('dispositivo_iot_id', evento.dispositivo_id)
+        .eq('iot_activo', true)
+        .maybeSingle();
+
+      if (!config) return;
+
+      const puestoId = config.puesto_id;
+      const toleranciaMin = config.tolerancia_minutos || 10;
+
+      // 2. Buscar funcionario en asistencia_iot_personal
+      let queryPersonal = this.supabase
+        .getSupabaseAdminClient()
+        .from('asistencia_iot_personal')
+        .select('*, horario:puestos_horarios_asistencia(*)')
+        .eq('puesto_id', puestoId)
+        .eq('activo', true);
+
+      if (docOrName && docOrName !== 'LLAMADA' && docOrName !== 'DESCONOCIDO') {
+        queryPersonal = queryPersonal.eq('cedula', docOrName);
+      } else if (evento.nombre_persona) {
+        queryPersonal = queryPersonal.ilike('nombre_completo', `%${evento.nombre_persona}%`);
+      } else {
+        return;
+      }
+
+      const { data: persona } = await queryPersonal.maybeSingle();
+      if (!persona) return;
+
+      const eventDate = evento.timestamp ? new Date(evento.timestamp) : new Date();
+      const hoyStr = eventDate.toISOString().split('T')[0];
+      const eventTimeMin = eventDate.getHours() * 60 + eventDate.getMinutes();
+
+      // Horario asignado o por defecto
+      let horario = persona.horario;
+      if (!horario) {
+        const { data: horarios } = await this.supabase
+          .getSupabaseAdminClient()
+          .from('puestos_horarios_asistencia')
+          .select('*')
+          .eq('puesto_id', puestoId)
+          .eq('activo', true);
+
+        if (horarios && horarios.length > 0) {
+          horario = horarios.reduce((prev: any, curr: any) => {
+            const [phH, phM] = prev.hora_entrada.split(':').map(Number);
+            const [chH, chM] = curr.hora_entrada.split(':').map(Number);
+            const diffPrev = Math.abs(eventTimeMin - (phH * 60 + phM));
+            const diffCurr = Math.abs(eventTimeMin - (chH * 60 + chM));
+            return diffCurr < diffPrev ? curr : prev;
+          });
+        }
+      }
+
+      const horaEntradaProg = horario?.hora_entrada || '08:00:00';
+      const horaSalidaProg = horario?.hora_salida || '17:00:00';
+      const [eh, em] = horaEntradaProg.split(':').map(Number);
+      const [sh, sm] = horaSalidaProg.split(':').map(Number);
+      const progEntradaMin = eh * 60 + em;
+      const progSalidaMin = sh * 60 + sm;
+
+      // Verificar si ya tiene entrada hoy
+      const { data: regHoy } = await this.supabase
+        .getSupabaseAdminClient()
+        .from('asistencia_iot_registros')
+        .select('*')
+        .eq('puesto_id', puestoId)
+        .eq('personal_id', persona.id)
+        .eq('fecha', hoyStr)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (regHoy) {
+        // Anti-rebote: Si aún está en tiempo de bloqueo, ignorar
+        if (regHoy.bloqueado_hasta && eventDate.getTime() < new Date(regHoy.bloqueado_hasta).getTime()) {
+          return;
+        }
+
+        // Evaluar salida si han pasado al menos 30 min desde la entrada y no tiene salida
+        if (!regHoy.hora_salida_real && eventTimeMin > progEntradaMin + 30) {
+          let estadoSalida = 'cumplido';
+          if (eventTimeMin < progSalidaMin - toleranciaMin) {
+            estadoSalida = 'anticipado';
+          } else if (eventTimeMin > progSalidaMin + 30) {
+            estadoSalida = 'extra';
+          }
+
+          await this.supabase
+            .getSupabaseAdminClient()
+            .from('asistencia_iot_registros')
+            .update({
+              hora_salida_real: eventDate.toISOString(),
+              estado_salida: estadoSalida,
+              foto_salida_url: evento.foto_evidencia_url || persona.foto_rostro_url,
+              estado_general: 'finalizado',
+            })
+            .eq('id', regHoy.id);
+        }
+        return;
+      }
+
+      // NUEVA ENTRADA
+      let estadoEntrada = 'a_tiempo';
+      let minutosTardanza = 0;
+      const diffEntrada = eventTimeMin - progEntradaMin;
+
+      if (diffEntrada < -toleranciaMin) {
+        estadoEntrada = 'temprano';
+      } else if (diffEntrada <= toleranciaMin) {
+        estadoEntrada = 'a_tiempo';
+      } else {
+        estadoEntrada = 'tarde';
+        minutosTardanza = diffEntrada;
+      }
+
+      // Anti-rebote: Bloquear hasta ventana de salida (o 2 horas)
+      let bloqueoDate = new Date(eventDate.getTime() + 2 * 60 * 60 * 1000);
+      if (progSalidaMin > eventTimeMin) {
+        const dSalida = new Date(eventDate);
+        dSalida.setHours(sh, sm - toleranciaMin, 0, 0);
+        if (dSalida.getTime() > eventDate.getTime()) {
+          bloqueoDate = dSalida;
+        }
+      }
+
+      await this.supabase
+        .getSupabaseAdminClient()
+        .from('asistencia_iot_registros')
+        .insert({
+          puesto_id: puestoId,
+          personal_id: persona.id,
+          dispositivo_id: evento.dispositivo_id,
+          horario_id: horario?.id || null,
+          fecha: hoyStr,
+          hora_entrada_programada: horaEntradaProg,
+          hora_entrada_real: eventDate.toISOString(),
+          estado_entrada: estadoEntrada,
+          minutos_tardanza: minutosTardanza,
+          foto_entrada_url: evento.foto_evidencia_url || persona.foto_rostro_url,
+          hora_salida_programada: horaSalidaProg,
+          bloqueado_hasta: bloqueoDate.toISOString(),
+          estado_general: 'presente',
+          metodo_marcacion: evento.metodo_acceso || 'facial',
+          detalles_raw: {
+            evento_raw: evento.tipo_evento,
+            dispositivo: evento.nombre_dispositivo,
+          },
+        });
+
+      this.logger.log(`✅ [Asistencia IoT Poller] Marcación automática: ${persona.nombre_completo} (${estadoEntrada})`);
+    } catch (e: any) {
+      this.logger.warn(`⚠️ [checkAsistenciaIot Error]: ${e.message}`);
+    }
   }
 
   private async enrichQrEvent(evento: EventoAcceso) {

@@ -132,6 +132,7 @@ import { ControlAccesoModule } from './modules/control-acceso/control-acceso.mod
 import { AlarmasReceptorModule } from './modules/alarmas-receptor/alarmas-receptor.module';
 import { ControlRondasModule } from './modules/control-rondas/control-rondas.module';
 import { FacturacionModule } from './modules/facturacion/facturacion.module';
+import { AsistenciaIotModule } from './modules/asistencia-iot/asistencia-iot.module';
 
 @Module({
   imports: [
@@ -281,6 +282,7 @@ import { FacturacionModule } from './modules/facturacion/facturacion.module';
     AlarmasReceptorModule,
     ControlRondasModule,
     FacturacionModule,
+    AsistenciaIotModule,
   ],
   controllers: [AppController],
   providers: [
