@@ -1,4 +1,5 @@
 import { IsBoolean, IsNotEmpty, IsOptional, IsString, IsNumber, IsArray } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class UpdatePuestoIotConfigDto {
   @IsBoolean()
@@ -62,12 +63,13 @@ export class CreateEnlaceDto {
   nombre_enlace: string;
 
   @IsOptional()
-  @IsNumber()
-  horario_id?: number;
+  @Transform(({ value }) => (value === '' || value === null || value === 'null' || value === undefined ? null : Number(value)))
+  horario_id?: number | null;
 
   @IsOptional()
   @IsString()
-  codigo_seguridad?: string;
+  @Transform(({ value }) => (value === '' || value === null ? null : String(value).trim()))
+  codigo_seguridad?: string | null;
 }
 
 export class RegistroPublicoPersonalDto {

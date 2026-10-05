@@ -1,4 +1,5 @@
 import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import { createClient } from '@supabase/supabase-js';
 import { SupabaseService } from '../supabase/supabase.service';
 import { DahuaService } from '../control-acceso/dahua.service';
 import {
@@ -14,6 +15,7 @@ import * as crypto from 'crypto';
 @Injectable()
 export class AsistenciaIotService {
   private readonly logger = new Logger(AsistenciaIotService.name);
+  private _vpsStorage: any = null;
 
   constructor(
     private readonly supabase: SupabaseService,
@@ -22,6 +24,52 @@ export class AsistenciaIotService {
 
   private get adminClient() {
     return this.supabase.getSupabaseAdminClient();
+  }
+
+  /**
+   * Conexión directa al Supabase Storage nativo de la VPS (evita almacenamiento local)
+   */
+  private get vpsStorage() {
+    if (!this._vpsStorage) {
+      const url = process.env.SUPABASE_URL || 'https://ttkubmwrwgqxjdafpgji.supabase.co';
+      const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '';
+      const client = createClient(url, key, {
+        auth: { autoRefreshToken: false, persistSession: false },
+      });
+      this._vpsStorage = client.storage;
+    }
+    return this._vpsStorage;
+  }
+
+  /**
+   * Resuelve el puesto ya sea que el frontend envíe el ID primario de BD (ej: 78)
+   * o el código de puesto asignado (ej: 1035 para Corponariño).
+   */
+  private async resolveRealPuesto(puestoIdOrCode: number): Promise<any> {
+    if (!puestoIdOrCode) return null;
+
+    // 1. Intentar por ID primario
+    const { data: byId } = await this.adminClient
+      .from('puestos_trabajo')
+      .select('id, nombre, direccion, ciudad, codigo_puesto')
+      .eq('id', puestoIdOrCode)
+      .maybeSingle();
+
+    if (byId) return byId;
+
+    // 2. Si no coincide, intentar por codigo_puesto
+    const { data: byCode } = await this.adminClient
+      .from('puestos_trabajo')
+      .select('id, nombre, direccion, ciudad, codigo_puesto')
+      .eq('codigo_puesto', String(puestoIdOrCode))
+      .maybeSingle();
+
+    return byCode || null;
+  }
+
+  private async resolveRealPuestoId(puestoIdOrCode: number): Promise<number> {
+    const puesto = await this.resolveRealPuesto(puestoIdOrCode);
+    return puesto ? puesto.id : puestoIdOrCode;
   }
 
   // ==========================================================================
@@ -107,24 +155,19 @@ export class AsistenciaIotService {
   }
 
   async getPuestoConfig(puestoId: number) {
-    const { data: puesto } = await this.adminClient
-      .from('puestos_trabajo')
-      .select('id, nombre, direccion, ciudad, codigo_puesto')
-      .eq('id', puestoId)
-      .maybeSingle();
-
+    const puesto = await this.resolveRealPuesto(puestoId);
     if (!puesto) throw new NotFoundException('Puesto no encontrado');
 
     const { data: config } = await this.adminClient
       .from('puestos_asistencia_iot_config')
       .select('*, dispositivo:dispositivos_iot(id, nombre_identificador, ip_direccion, estado)')
-      .eq('puesto_id', puestoId)
+      .eq('puesto_id', puesto.id)
       .maybeSingle();
 
     return {
       puesto,
       config: config || {
-        puesto_id: puestoId,
+        puesto_id: puesto.id,
         iot_activo: false,
         dispositivo_iot_id: null,
         tolerancia_minutos: 10,
@@ -133,8 +176,9 @@ export class AsistenciaIotService {
   }
 
   async updatePuestoConfig(puestoId: number, dto: UpdatePuestoIotConfigDto) {
+    const realPuestoId = await this.resolveRealPuestoId(puestoId);
     const payload = {
-      puesto_id: puestoId,
+      puesto_id: realPuestoId,
       iot_activo: dto.iot_activo,
       dispositivo_iot_id: dto.dispositivo_iot_id || null,
       tolerancia_minutos: dto.tolerancia_minutos || 10,
@@ -148,7 +192,7 @@ export class AsistenciaIotService {
       .single();
 
     if (error) {
-      this.logger.error(`Error actualizando config IoT puesto ${puestoId}: ${error.message}`);
+      this.logger.error(`Error actualizando config IoT puesto ${realPuestoId}: ${error.message}`);
       throw error;
     }
     return data;
@@ -169,49 +213,73 @@ export class AsistenciaIotService {
   // ==========================================================================
 
   async getHorarios(puestoId: number) {
+    const realPuestoId = await this.resolveRealPuestoId(puestoId);
     const { data, error } = await this.adminClient
       .from('puestos_horarios_asistencia')
       .select('*')
-      .eq('puesto_id', puestoId)
+      .eq('puesto_id', realPuestoId)
       .eq('activo', true)
-      .order('hora_entrada');
+      .order('nombre_horario');
 
     if (error) throw error;
     return data || [];
   }
 
   async createHorario(puestoId: number, dto: CreateHorarioDto) {
+    const realPuestoId = await this.resolveRealPuestoId(puestoId);
+    const payload: any = {
+      puesto_id: realPuestoId,
+      nombre_horario: dto.nombre_horario,
+      hora_entrada: dto.hora_entrada,
+      hora_salida: dto.hora_salida,
+      es_jornada_partida: !!dto.es_jornada_partida,
+      hora_entrada_2: dto.hora_entrada_2 || null,
+      hora_salida_2: dto.hora_salida_2 || null,
+      tolerancia_entrada_minutos: dto.tolerancia_entrada_minutos ?? 10,
+      tolerancia_salida_minutos: dto.tolerancia_salida_minutos ?? 10,
+      dias_semana: dto.dias_semana || [1, 2, 3, 4, 5, 6],
+      activo: dto.activo ?? true,
+    };
+
     const { data, error } = await this.adminClient
       .from('puestos_horarios_asistencia')
-      .insert({
-        puesto_id: puestoId,
-        nombre_horario: dto.nombre_horario,
-        hora_entrada: dto.hora_entrada,
-        hora_salida: dto.hora_salida,
-        tolerancia_entrada_minutos: dto.tolerancia_entrada_minutos ?? 10,
-        tolerancia_salida_minutos: dto.tolerancia_salida_minutos ?? 10,
-        dias_semana: dto.dias_semana || [1, 2, 3, 4, 5, 6],
-        activo: dto.activo ?? true,
-      })
+      .insert(payload)
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      this.logger.error(`Error creando horario: ${error.message}`);
+      throw error;
+    }
     return data;
   }
 
   async updateHorario(id: number, dto: Partial<CreateHorarioDto>) {
+    const payload: any = {
+      ...dto,
+      updated_at: new Date().toISOString(),
+    };
+    if (dto.es_jornada_partida !== undefined) {
+      payload.es_jornada_partida = !!dto.es_jornada_partida;
+    }
+    if (dto.hora_entrada_2 !== undefined) {
+      payload.hora_entrada_2 = dto.hora_entrada_2 || null;
+    }
+    if (dto.hora_salida_2 !== undefined) {
+      payload.hora_salida_2 = dto.hora_salida_2 || null;
+    }
+
     const { data, error } = await this.adminClient
       .from('puestos_horarios_asistencia')
-      .update({
-        ...dto,
-        updated_at: new Date().toISOString(),
-      })
+      .update(payload)
       .eq('id', id)
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      this.logger.error(`Error actualizando horario ${id}: ${error.message}`);
+      throw error;
+    }
     return data;
   }
 
@@ -230,23 +298,28 @@ export class AsistenciaIotService {
   // ==========================================================================
 
   async getEnlaces(puestoId: number) {
+    const realPuestoId = await this.resolveRealPuestoId(puestoId);
     const { data, error } = await this.adminClient
       .from('asistencia_iot_enlaces')
-      .select('*, horario:puestos_horarios_asistencia(id, nombre_horario, hora_entrada, hora_salida)')
-      .eq('puesto_id', puestoId)
+      .select('*, horario:puestos_horarios_asistencia(id, nombre_horario, hora_entrada, hora_salida, es_jornada_partida, hora_entrada_2, hora_salida_2)')
+      .eq('puesto_id', realPuestoId)
       .eq('activo', true)
       .order('created_at', { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+      this.logger.error(`Error obteniendo enlaces del puesto ${realPuestoId}: ${error.message}`);
+      throw error;
+    }
     return data || [];
   }
 
   async createEnlace(puestoId: number, dto: CreateEnlaceDto, creadoPor?: number) {
+    const realPuestoId = await this.resolveRealPuestoId(puestoId);
     const token = crypto.randomBytes(16).toString('hex');
     const { data, error } = await this.adminClient
       .from('asistencia_iot_enlaces')
       .insert({
-        puesto_id: puestoId,
+        puesto_id: realPuestoId,
         horario_id: dto.horario_id || null,
         nombre_enlace: dto.nombre_enlace,
         codigo_seguridad: dto.codigo_seguridad || null,
@@ -254,10 +327,13 @@ export class AsistenciaIotService {
         creado_por: creadoPor || null,
         activo: true,
       })
-      .select('*, horario:puestos_horarios_asistencia(id, nombre_horario, hora_entrada, hora_salida)')
+      .select('*, horario:puestos_horarios_asistencia(id, nombre_horario, hora_entrada, hora_salida, es_jornada_partida, hora_entrada_2, hora_salida_2)')
       .single();
 
-    if (error) throw error;
+    if (error) {
+      this.logger.error(`Error creando enlace para puesto ${realPuestoId}: ${error.message}`);
+      throw error;
+    }
     return data;
   }
 
@@ -284,10 +360,10 @@ export class AsistenciaIotService {
       throw new NotFoundException('El enlace de registro no existe o ha expirado');
     }
 
-    // Horarios del puesto disponibles
+    // Horarios del puesto disponibles (incluyendo jornada partida)
     const { data: horarios } = await this.adminClient
       .from('puestos_horarios_asistencia')
-      .select('id, nombre_horario, hora_entrada, hora_salida')
+      .select('id, nombre_horario, hora_entrada, hora_salida, es_jornada_partida, hora_entrada_2, hora_salida_2')
       .eq('puesto_id', enlace.puesto_id)
       .eq('activo', true)
       .order('hora_entrada');
@@ -368,10 +444,11 @@ export class AsistenciaIotService {
   // ==========================================================================
 
   async getPersonal(puestoId: number) {
+    const realPuestoId = await this.resolveRealPuestoId(puestoId);
     const { data, error } = await this.adminClient
       .from('asistencia_iot_personal')
-      .select('*, horario:puestos_horarios_asistencia(id, nombre_horario, hora_entrada, hora_salida)')
-      .eq('puesto_id', puestoId)
+      .select('*, horario:puestos_horarios_asistencia(id, nombre_horario, hora_entrada, hora_salida, es_jornada_partida, hora_entrada_2, hora_salida_2)')
+      .eq('puesto_id', realPuestoId)
       .eq('activo', true)
       .order('nombre_completo');
 
@@ -380,8 +457,9 @@ export class AsistenciaIotService {
   }
 
   async createPersonalManual(puestoId: number, dto: CreatePersonalManualDto) {
+    const realPuestoId = await this.resolveRealPuestoId(puestoId);
     const payload = {
-      puesto_id: puestoId,
+      puesto_id: realPuestoId,
       horario_id: dto.horario_id || null,
       nombre_completo: dto.nombre_completo.trim(),
       cedula: dto.cedula.trim(),
@@ -395,12 +473,12 @@ export class AsistenciaIotService {
     const { data, error } = await this.adminClient
       .from('asistencia_iot_personal')
       .upsert(payload, { onConflict: 'puesto_id,cedula' })
-      .select('*, horario:puestos_horarios_asistencia(id, nombre_horario, hora_entrada, hora_salida)')
+      .select('*, horario:puestos_horarios_asistencia(id, nombre_horario, hora_entrada, hora_salida, es_jornada_partida, hora_entrada_2, hora_salida_2)')
       .single();
 
     if (error) throw error;
 
-    this.sincronizarHardwarePuesto(puestoId, data).catch(() => null);
+    this.sincronizarHardwarePuesto(realPuestoId, data).catch(() => null);
     return data;
   }
 
@@ -419,10 +497,11 @@ export class AsistenciaIotService {
   // ==========================================================================
 
   async getRegistros(puestoId: number, fechaInicio?: string, fechaFin?: string) {
+    const realPuestoId = await this.resolveRealPuestoId(puestoId);
     let query = this.adminClient
       .from('asistencia_iot_registros')
-      .select('*, personal:asistencia_iot_personal(id, nombre_completo, cedula, cargo, foto_rostro_url), horario:puestos_horarios_asistencia(id, nombre_horario, hora_entrada, hora_salida)')
-      .eq('puesto_id', puestoId)
+      .select('*, personal:asistencia_iot_personal(id, nombre_completo, cedula, cargo, foto_rostro_url), horario:puestos_horarios_asistencia(id, nombre_horario, hora_entrada, hora_salida, es_jornada_partida, hora_entrada_2, hora_salida_2)')
+      .eq('puesto_id', realPuestoId)
       .order('hora_entrada_real', { ascending: false });
 
     if (fechaInicio) query = query.gte('fecha', fechaInicio);
@@ -644,6 +723,7 @@ export class AsistenciaIotService {
   }
 
   async registrarMarcacionManual(puestoId: number, dto: ProcesarMarcacionManualDto) {
+    const realPuestoId = await this.resolveRealPuestoId(puestoId);
     const { data: persona } = await this.adminClient
       .from('asistencia_iot_personal')
       .select('*, horario:puestos_horarios_asistencia(*)')
@@ -667,7 +747,7 @@ export class AsistenciaIotService {
       const { data, error } = await this.adminClient
         .from('asistencia_iot_registros')
         .insert({
-          puesto_id: puestoId,
+          puesto_id: realPuestoId,
           personal_id: persona.id,
           fecha: hoyStr,
           hora_entrada_programada: horaEntradaProg,
@@ -689,7 +769,7 @@ export class AsistenciaIotService {
       const { data: reg } = await this.adminClient
         .from('asistencia_iot_registros')
         .select('*')
-        .eq('puesto_id', puestoId)
+        .eq('puesto_id', realPuestoId)
         .eq('personal_id', persona.id)
         .eq('fecha', hoyStr)
         .order('created_at', { ascending: false })
@@ -719,16 +799,13 @@ export class AsistenciaIotService {
   // ==========================================================================
 
   async getReportePuesto(puestoId: number, fechaInicio: string, fechaFin: string) {
-    const { data: puesto } = await this.adminClient
-      .from('puestos_trabajo')
-      .select('id, nombre, direccion, ciudad, codigo_puesto')
-      .eq('id', puestoId)
-      .single();
+    const puesto = await this.resolveRealPuesto(puestoId);
+    if (!puesto) throw new NotFoundException('Puesto no encontrado');
 
     const { data: registros, error } = await this.adminClient
       .from('asistencia_iot_registros')
-      .select('*, personal:asistencia_iot_personal(id, nombre_completo, cedula, cargo), horario:puestos_horarios_asistencia(nombre_horario)')
-      .eq('puesto_id', puestoId)
+      .select('*, personal:asistencia_iot_personal(id, nombre_completo, cedula, cargo), horario:puestos_horarios_asistencia(nombre_horario, es_jornada_partida)')
+      .eq('puesto_id', puesto.id)
       .gte('fecha', fechaInicio)
       .lte('fecha', fechaFin)
       .order('fecha', { ascending: true })
@@ -857,30 +934,32 @@ export class AsistenciaIotService {
       const ext = mime.includes('png') ? 'png' : 'jpg';
       const fileName = `puesto_${puestoId}/${cedula}_${Date.now()}.${ext}`;
 
-      const { error: uploadError } = await this.adminClient.storage
+      // Subida directa al bucket Supabase Storage en la VPS
+      const { error: uploadError } = await this.vpsStorage
         .from('asistencia-iot-faces')
         .upload(fileName, buffer, { contentType: mime, upsert: true });
 
       if (uploadError) {
-        // Fallback a bucket existente control-acceso-faces si asistencia-iot-faces no estuviera creado aún
-        const { error: fallbackErr } = await this.adminClient.storage
+        this.logger.warn(`Fallback de subida a control-acceso-faces: ${uploadError.message}`);
+        const { error: fallbackErr } = await this.vpsStorage
           .from('control-acceso-faces')
           .upload(fileName, buffer, { contentType: mime, upsert: true });
 
         if (fallbackErr) throw fallbackErr;
-        const { data: pubFallback } = this.adminClient.storage
+        const { data: pubFallback } = this.vpsStorage
           .from('control-acceso-faces')
           .getPublicUrl(fileName);
         return pubFallback.publicUrl;
       }
 
-      const { data: pub } = this.adminClient.storage
+      const { data: pub } = this.vpsStorage
         .from('asistencia-iot-faces')
         .getPublicUrl(fileName);
 
+      this.logger.log(`✅ Foto facial almacenada en Supabase Storage VPS: ${pub.publicUrl}`);
       return pub.publicUrl;
     } catch (e: any) {
-      this.logger.warn(`Error al subir foto a Supabase storage: ${e.message}`);
+      this.logger.warn(`Error al subir foto a Supabase storage VPS: ${e.message}`);
       return base64Data; // fallback
     }
   }
