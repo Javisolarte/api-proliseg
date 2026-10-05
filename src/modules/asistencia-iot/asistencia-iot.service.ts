@@ -29,53 +29,63 @@ export class AsistenciaIotService {
   // ==========================================================================
 
   async getPuestosList() {
-    const { data: puestos, error } = await this.adminClient
+    let query = this.adminClient
       .from('puestos_trabajo')
       .select('id, nombre, direccion, ciudad, codigo_puesto, activo')
-      .eq('activo', true)
+      .is('deleted_at', null)
       .order('nombre');
+
+    const { data: puestos, error } = await query;
 
     if (error) {
       this.logger.error(`Error listando puestos: ${error.message}`);
       throw error;
     }
 
-    // Obtener configuraciones IoT
-    const { data: configs } = await this.adminClient
-      .from('puestos_asistencia_iot_config')
-      .select('*, dispositivo:dispositivos_iot(id, nombre_identificador, ip_direccion, estado)');
+    // Obtener configuraciones IoT de forma segura
+    let configs: any[] = [];
+    try {
+      const { data } = await this.adminClient
+        .from('puestos_asistencia_iot_config')
+        .select('*, dispositivo:dispositivos_iot(id, nombre_identificador, ip_direccion, estado)');
+      if (data) configs = data;
+    } catch {}
 
     const configMap = new Map((configs || []).map((c: any) => [c.puesto_id, c]));
 
     // Contar personal por puesto
-    const { data: personalCounts } = await this.adminClient
-      .from('asistencia_iot_personal')
-      .select('puesto_id')
-      .eq('activo', true);
-
     const countMap: Record<number, number> = {};
-    (personalCounts || []).forEach((p: any) => {
-      countMap[p.puesto_id] = (countMap[p.puesto_id] || 0) + 1;
-    });
+    try {
+      const { data: personalCounts } = await this.adminClient
+        .from('asistencia_iot_personal')
+        .select('puesto_id')
+        .eq('activo', true);
+
+      (personalCounts || []).forEach((p: any) => {
+        countMap[p.puesto_id] = (countMap[p.puesto_id] || 0) + 1;
+      });
+    } catch {}
 
     const hoy = new Date().toISOString().split('T')[0];
-    const { data: asistenciasHoy } = await this.adminClient
-      .from('asistencia_iot_registros')
-      .select('puesto_id, estado_entrada')
-      .eq('fecha', hoy);
-
     const hoyMap: Record<number, { total: number; a_tiempo: number; tarde: number }> = {};
-    (asistenciasHoy || []).forEach((a: any) => {
-      if (!hoyMap[a.puesto_id]) {
-        hoyMap[a.puesto_id] = { total: 0, a_tiempo: 0, tarde: 0 };
-      }
-      hoyMap[a.puesto_id].total++;
-      if (a.estado_entrada === 'a_tiempo' || a.estado_entrada === 'temprano') {
-        hoyMap[a.puesto_id].a_tiempo++;
-      } else {
-        hoyMap[a.puesto_id].tarde++;
-      }
-    });
+    try {
+      const { data: asistenciasHoy } = await this.adminClient
+        .from('asistencia_iot_registros')
+        .select('puesto_id, estado_entrada')
+        .eq('fecha', hoy);
+
+      (asistenciasHoy || []).forEach((a: any) => {
+        if (!hoyMap[a.puesto_id]) {
+          hoyMap[a.puesto_id] = { total: 0, a_tiempo: 0, tarde: 0 };
+        }
+        hoyMap[a.puesto_id].total++;
+        if (a.estado_entrada === 'a_tiempo' || a.estado_entrada === 'temprano') {
+          hoyMap[a.puesto_id].a_tiempo++;
+        } else {
+          hoyMap[a.puesto_id].tarde++;
+        }
+      });
+    } catch {}
 
     return (puestos || []).map((p: any) => {
       const cfg = configMap.get(p.id) || null;
