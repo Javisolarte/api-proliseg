@@ -313,9 +313,18 @@ export class AsistenciaIotService {
     return data || [];
   }
 
-  async createEnlace(puestoId: number, dto: CreateEnlaceDto, creadoPor?: number) {
+  async createEnlace(puestoId: number, dto: CreateEnlaceDto, creadoPor?: any) {
     const realPuestoId = await this.resolveRealPuestoId(puestoId);
     const token = crypto.randomBytes(16).toString('hex');
+    let userIdNum: number | null = null;
+    if (typeof creadoPor === 'number' && !isNaN(creadoPor)) {
+      userIdNum = creadoPor;
+    } else if (creadoPor && typeof creadoPor === 'object' && creadoPor.id) {
+      userIdNum = Number(creadoPor.id);
+    } else if (creadoPor && !isNaN(Number(creadoPor))) {
+      userIdNum = Number(creadoPor);
+    }
+
     const { data, error } = await this.adminClient
       .from('asistencia_iot_enlaces')
       .insert({
@@ -324,7 +333,7 @@ export class AsistenciaIotService {
         nombre_enlace: dto.nombre_enlace,
         codigo_seguridad: dto.codigo_seguridad || null,
         token_publico: token,
-        creado_por: creadoPor || null,
+        creado_por: userIdNum,
         activo: true,
       })
       .select('*, horario:puestos_horarios_asistencia(id, nombre_horario, hora_entrada, hora_salida, es_jornada_partida, hora_entrada_2, hora_salida_2)')

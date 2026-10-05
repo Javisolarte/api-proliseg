@@ -107,9 +107,10 @@ export class AsistenciaIotController {
   createEnlace(
     @Param('puestoId', ParseIntPipe) puestoId: number,
     @Body() dto: CreateEnlaceDto,
-    @CurrentUser('id') userId?: number,
+    @CurrentUser() user?: any,
   ) {
-    return this.service.createEnlace(puestoId, dto, userId);
+    const userId = typeof user === 'object' ? user?.id : user;
+    return this.service.createEnlace(puestoId, dto, userId ? Number(userId) : undefined);
   }
 
   @Delete('enlaces/:id')
