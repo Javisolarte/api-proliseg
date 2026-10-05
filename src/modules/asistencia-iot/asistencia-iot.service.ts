@@ -506,19 +506,38 @@ export class AsistenciaIotService {
       }
     }
 
-    const horaEntradaProg = horario?.hora_entrada || '08:00:00';
-    const horaSalidaProg = horario?.hora_salida || '17:00:00';
+    let horaEntradaProg = horario?.hora_entrada || '08:00:00';
+    let horaSalidaProg = horario?.hora_salida || '17:00:00';
+    let tramoActual = 'unico';
+
+    // Soporte para Jornada Partida / Discontinua (ej: 8:00 a 12:00 y 14:00 a 18:00)
+    if (horario?.es_jornada_partida && horario?.hora_entrada_2 && horario?.hora_salida_2) {
+      const sal1Min = this.timeStringToMinutes(horario.hora_salida);
+      const ent2Min = this.timeStringToMinutes(horario.hora_entrada_2);
+      const midPoint = Math.floor((sal1Min + ent2Min) / 2); // ej: 13:00 (1:00 PM)
+
+      if (eventTimeMinutes >= midPoint) {
+        tramoActual = 'tarde';
+        horaEntradaProg = horario.hora_entrada_2;
+        horaSalidaProg = horario.hora_salida_2;
+      } else {
+        tramoActual = 'mañana';
+        horaEntradaProg = horario.hora_entrada;
+        horaSalidaProg = horario.hora_salida;
+      }
+    }
 
     const progEntradaMin = this.timeStringToMinutes(horaEntradaProg);
     const progSalidaMin = this.timeStringToMinutes(horaSalidaProg);
 
-    // Verificar si ya tiene registro para hoy en este horario
+    // Verificar si ya tiene registro para hoy en este tramo horario
     const { data: regHoy } = await this.adminClient
       .from('asistencia_iot_registros')
       .select('*')
       .eq('puesto_id', puestoId)
       .eq('personal_id', persona.id)
       .eq('fecha', hoyStr)
+      .eq('tramo_horario', tramoActual)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -554,7 +573,7 @@ export class AsistenciaIotService {
           .select()
           .single();
 
-        this.logger.log(`✅ [Asistencia IoT] Salida registrada: ${persona.nombre_completo} (${estadoSalida})`);
+        this.logger.log(`✅ [Asistencia IoT] Salida registrada: ${persona.nombre_completo} [${tramoActual}] (${estadoSalida})`);
         return updated;
       }
 
@@ -599,6 +618,7 @@ export class AsistenciaIotService {
         personal_id: persona.id,
         dispositivo_id: dispositivo_id,
         horario_id: horario?.id || null,
+        tramo_horario: tramoActual,
         fecha: hoyStr,
         hora_entrada_programada: horaEntradaProg,
         hora_entrada_real: eventDate.toISOString(),

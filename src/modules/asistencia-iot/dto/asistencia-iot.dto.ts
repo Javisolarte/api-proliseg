@@ -28,6 +28,18 @@ export class CreateHorarioDto {
   hora_salida: string; // HH:mm:ss
 
   @IsOptional()
+  @IsBoolean()
+  es_jornada_partida?: boolean;
+
+  @IsOptional()
+  @IsString()
+  hora_entrada_2?: string; // HH:mm:ss (ej: 14:00:00)
+
+  @IsOptional()
+  @IsString()
+  hora_salida_2?: string; // HH:mm:ss (ej: 18:00:00)
+
+  @IsOptional()
   @IsNumber()
   tolerancia_entrada_minutos?: number;
 
