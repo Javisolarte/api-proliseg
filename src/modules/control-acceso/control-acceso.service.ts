@@ -618,8 +618,35 @@ export class ControlAccesoService implements OnModuleInit {
         dev.configuracion_tecnica
       );
 
-      const marca = ((dev.marca || dev.tipo_dispositivo || dev.modelo || '') as string).toLowerCase();
-      const isDahua = marca.includes('dahua') || marca.includes('dh');
+      const origIp = String(dev.configuracion_tecnica?.puertos_mapeados?.original_ip || dev.ip_direccion || resolved.ip || '');
+      const marcaStr = String(
+        dev.configuracion_tecnica?.marca || dev.configuracion_tecnica?.modelo || dev.nombre_identificador || ''
+      ).toLowerCase();
+
+      const isHikvision =
+        marcaStr.includes('hikvision') ||
+        marcaStr.includes('hik') ||
+        marcaStr.includes('ds-k') ||
+        marcaStr.includes('ds-2cd') ||
+        origIp.includes('.78') ||
+        origIp.includes('.79') ||
+        String(resolved.ip).includes('.78') ||
+        String(resolved.ip).includes('.79') ||
+        Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_rtsp) === 30078 ||
+        Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_rtsp) === 30079 ||
+        Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) === 20078 ||
+        Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) === 20079;
+
+      const isDahua = !isHikvision && (
+        marcaStr.includes('dahua') ||
+        marcaStr.includes('dh') ||
+        marcaStr.includes('asi32') ||
+        marcaStr.includes('asi') ||
+        marcaStr.includes('vto') ||
+        ((origIp.startsWith('192.168.35.') || String(dev.ip_direccion).startsWith('192.168.35.')) &&
+         !origIp.includes('.78') && !origIp.includes('.79')) ||
+        (Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) >= 20080 && Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) <= 20099)
+      );
 
       let sent = false;
       if (isDahua) {
@@ -627,16 +654,25 @@ export class ControlAccesoService implements OnModuleInit {
         const endpoints = [
           '/cgi-bin/intercom.cgi?action=hangUp',
           '/cgi-bin/console.cgi?action=hangUp',
-          '/cgi-bin/vto.cgi?action=hangUp'
+          '/cgi-bin/vto.cgi?action=hangUp',
+          '/cgi-bin/intercom.cgi?action=cancel',
+          '/cgi-bin/intercom.cgi?action=reject',
+          '/cgi-bin/intercom.cgi?action=hangUp&channel=1',
+          '/cgi-bin/intercom.cgi?action=hangUp&channel=0'
         ];
         for (const ep of endpoints) {
           try {
-            await this.dahuaService.cgi(resolved.ip, resolved.port, user, pass, 'GET', ep, undefined, 'text', undefined, 2500);
+            await this.dahuaService.cgi(resolved.ip, resolved.port, user, pass, 'GET', ep, undefined, 'text', undefined, 2000);
             sent = true;
             this.logger.log(`📞 [INTERCOM] Dahua llamada colgada vía ${ep} en ${dev.nombre_identificador}`);
             break;
           } catch {}
         }
+        try {
+          await this.dahuaService.rpcCall(resolved.ip, resolved.port, user, pass, 'VoipTalk.hangUp', {});
+          sent = true;
+          this.logger.log(`📞 [INTERCOM] Dahua VoipTalk.hangUp RPC exitoso en ${dev.nombre_identificador}`);
+        } catch {}
       } else {
         const base = `http://${resolved.ip}:${resolved.port}`;
         this.logger.log(`📞 [INTERCOM] Enviando señal de colgar a Hikvision ${dev.nombre_identificador} (${base})...`);
@@ -708,16 +744,47 @@ export class ControlAccesoService implements OnModuleInit {
         dev.configuracion_tecnica
       );
 
-      const marca = ((dev.marca || dev.tipo_dispositivo || dev.modelo || '') as string).toLowerCase();
-      const isDahua = marca.includes('dahua') || marca.includes('dh');
+      const origIp = String(dev.configuracion_tecnica?.puertos_mapeados?.original_ip || dev.ip_direccion || resolved.ip || '');
+      const marcaStr = String(
+        dev.configuracion_tecnica?.marca || dev.configuracion_tecnica?.modelo || dev.nombre_identificador || ''
+      ).toLowerCase();
+
+      const isHikvision =
+        marcaStr.includes('hikvision') ||
+        marcaStr.includes('hik') ||
+        marcaStr.includes('ds-k') ||
+        marcaStr.includes('ds-2cd') ||
+        origIp.includes('.78') ||
+        origIp.includes('.79') ||
+        String(resolved.ip).includes('.78') ||
+        String(resolved.ip).includes('.79') ||
+        Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_rtsp) === 30078 ||
+        Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_rtsp) === 30079 ||
+        Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) === 20078 ||
+        Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) === 20079;
+
+      const isDahua = !isHikvision && (
+        marcaStr.includes('dahua') ||
+        marcaStr.includes('dh') ||
+        marcaStr.includes('asi32') ||
+        marcaStr.includes('asi') ||
+        marcaStr.includes('vto') ||
+        ((origIp.startsWith('192.168.35.') || String(dev.ip_direccion).startsWith('192.168.35.')) &&
+         !origIp.includes('.78') && !origIp.includes('.79')) ||
+        (Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) >= 20080 && Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) <= 20099)
+      );
 
       if (isDahua) {
         let dahuaSent = false;
         const endpoints = [
-          '/cgi-bin/intercom.cgi?action=answer',
           '/cgi-bin/intercom.cgi?action=hangUp',
           '/cgi-bin/console.cgi?action=hangUp',
-          '/cgi-bin/vto.cgi?action=hangUp'
+          '/cgi-bin/vto.cgi?action=hangUp',
+          '/cgi-bin/intercom.cgi?action=cancel',
+          '/cgi-bin/intercom.cgi?action=reject',
+          '/cgi-bin/intercom.cgi?action=hangUp&channel=1',
+          '/cgi-bin/intercom.cgi?action=hangUp&channel=0',
+          '/cgi-bin/intercom.cgi?action=answer'
         ];
         for (const ep of endpoints) {
           try {
@@ -727,6 +794,11 @@ export class ControlAccesoService implements OnModuleInit {
             break;
           } catch {}
         }
+        try {
+          await this.dahuaService.rpcCall(resolved.ip, resolved.port, user, pass, 'VoipTalk.hangUp', {});
+          dahuaSent = true;
+          this.logger.log(`📞 [INTERCOM] Dahua VoipTalk.hangUp RPC silenciado en ${dev.nombre_identificador}`);
+        } catch {}
         return dahuaSent;
       }
 
@@ -834,6 +906,7 @@ export class ControlAccesoService implements OnModuleInit {
 
       this.logger.log(`📞 [INTERCOM] Contestando y silenciando timbre físico de ${dev.nombre_identificador}...`);
       const sent = await this.silenciarTimbreHardware(deviceId);
+      await this.colgarLlamadaDispositivo(deviceId, operator).catch(() => {});
 
       return { ok: true, sent, mensaje: 'Llamada contestada y timbre silenciado en hardware' };
     } catch (err: any) {
