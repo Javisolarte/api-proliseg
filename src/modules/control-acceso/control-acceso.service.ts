@@ -19,6 +19,7 @@ export class ControlAccesoService implements OnModuleInit {
   private digestChallengeCache = new Map<string, { realm: string; nonce: string; qop?: string; opaque?: string }>();
   private deviceCodecCache = new Map<string, string>();
   private faceUploadFormatCache = new Map<string, string>();
+  private userCreateFormatCache = new Map<string, any>();
   private readonly audioTalkChannelId = 1;
 
   constructor(
@@ -4539,6 +4540,7 @@ export class ControlAccesoService implements OnModuleInit {
     this.logger.log(`👤 [HARDWARE ROSTRO] Sincronizando rostro de usuario ${userId} en ${ip} (${payloads.length} variantes)...`);
 
     let lastError: any = null;
+    let consecutiveTimeouts = 0;
     for (let i = 0; i < payloads.length; i++) {
       const payload = payloads[i];
       try {
@@ -4548,7 +4550,7 @@ export class ControlAccesoService implements OnModuleInit {
           payload.method,
           isapiPath,
           payload.data,
-          { deviceId, headers: payload.headers }
+          { deviceId, headers: payload.headers, customTimeout: 5000 }
         );
         this.logger.log(`✅ [HARDWARE ROSTRO OK] Sincronizado correctamente con ${payload.label}`);
         this.faceUploadFormatCache.set(ip, payload.label);
@@ -4580,6 +4582,16 @@ export class ControlAccesoService implements OnModuleInit {
             isValidationError = true;
           }
         }
+
+        const isTimeout = err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT' || err?.code === 'ECONNREFUSED' || errMsg.toLowerCase().includes('timeout');
+        if (isTimeout) {
+          consecutiveTimeouts++;
+          if (consecutiveTimeouts >= 2) {
+            this.logger.warn(`⚠️ [HARDWARE ROSTRO ABORT] Dispositivo ${ip} no responde en red. Abortando intentos de foto.`);
+            break;
+          }
+        }
+
         this.logger.warn(`⚠️ [HARDWARE ROSTRO TRY FAIL] Variante fallida ${i + 1}/${payloads.length} (${payload.label}): ${errMsg}`);
 
         // Si falló el formato que ya sabíamos que funcionaba por una validación de imagen, abortamos de inmediato
@@ -4589,7 +4601,7 @@ export class ControlAccesoService implements OnModuleInit {
         }
 
         // Esperar brevemente antes del siguiente intento para no saturar al biométrico
-        await new Promise((resolve) => setTimeout(resolve, 300));
+        await new Promise((resolve) => setTimeout(resolve, 200));
       }
     }
 
@@ -4608,81 +4620,146 @@ export class ControlAccesoService implements OnModuleInit {
   }
 
   async crearUsuarioEnHardware(ip: string, userId: string, nombre: string, deviceId?: string): Promise<any> {
-    const paths = [
-      `/ISAPI/AccessControl/UserInfo/Record?format=json`,
-      `/ISAPI/AccessControl/UserInfo/SetUp?format=json`
-    ];
     const sanitizedNombre = this.sanitizeHardwareName(nombre);
-    
-    // Convertir a número si el ID de usuario es puramente numérico, para soportar firmwares más antiguos/estrictos
     const cleanUserId = /^\d+$/.test(userId) ? Number(userId) : userId;
-    const employeeIds = [userId];
+
+    // Helper para verificar si un error significa que el usuario ya existe (Idempotencia)
+    const isAlreadyExistsError = (err: any): boolean => {
+      const msg = `${err?.message || ''} ${err?.response?.data ? JSON.stringify(err.response.data) : ''}`.toLowerCase();
+      return (
+        msg.includes('already') ||
+        msg.includes('exist') ||
+        msg.includes('duplicate') ||
+        msg.includes('deviceuseralreadyexist') ||
+        msg.includes('useralreadyexist') ||
+        err?.response?.data?.subStatusCode === 'deviceUserAlreadyExist' ||
+        err?.response?.data?.subStatusCode === 'userAlreadyExist' ||
+        err?.response?.data?.errorCode === 1610641412
+      );
+    };
+
+    // Helper para detectar fallos de red irrecuperables
+    const isNetworkError = (err: any): boolean => {
+      const code = err?.code;
+      const msg = String(err?.message || '').toLowerCase();
+      return (
+        code === 'ECONNABORTED' ||
+        code === 'ETIMEDOUT' ||
+        code === 'ECONNREFUSED' ||
+        code === 'EHOSTUNREACH' ||
+        code === 'ENOTFOUND' ||
+        msg.includes('timeout')
+      );
+    };
+
+    // 1. Probar formato en caché si ya existe para este dispositivo/IP
+    const cached = this.userCreateFormatCache.get(ip);
+    if (cached) {
+      try {
+        this.logger.log(`⚡ [HARDWARE SYNC CACHE] Intentando formato en caché para ${ip}: ${cached.label}`);
+        const res = await this.proxyRequestDynamic(ip, cached.method, cached.path, cached.buildBody(userId, sanitizedNombre), {
+          deviceId,
+          customTimeout: 3500,
+        });
+        this.logger.log(`✅ [HARDWARE SYNC CACHE OK] Usuario ${userId} creado en ${ip} usando formato en caché`);
+        return res;
+      } catch (cachedErr) {
+        if (isAlreadyExistsError(cachedErr)) {
+          this.logger.log(`ℹ️ [HARDWARE SYNC] Usuario ${userId} ya existe en ${ip} (vía caché). Sincronizado.`);
+          return { ok: true, ya_existia: true };
+        }
+        this.logger.warn(`⚠️ [HARDWARE SYNC CACHE MISS] Formato en caché falló para ${ip}: ${cachedErr.message}. Probando candidatos...`);
+        this.userCreateFormatCache.delete(ip);
+      }
+    }
+
+    // 2. Definir candidatos de alta probabilidad (ordenados de más estándar a más permisivo)
+    const candidates: Array<{
+      label: string;
+      method: 'post' | 'put';
+      path: string;
+      buildBody: (uId: string, name: string) => any;
+    }> = [
+      // Candidato 1: POST Record con validez y RightPlan (Estándar Hikvision DS-K1T)
+      {
+        label: 'POST Record (Completo, ID string)',
+        method: 'post' as const,
+        path: '/ISAPI/AccessControl/UserInfo/Record?format=json',
+        buildBody: (uId: string, name: string) => ({
+          UserInfo: {
+            employeeNo: String(uId),
+            name,
+            userType: 'normal',
+            Valid: {
+              enable: true,
+              beginTime: '2026-01-01T00:00:00',
+              endTime: '2036-12-31T23:59:59',
+              timeType: 'local',
+            },
+            doorRight: '1',
+            RightPlan: [{ doorNo: 1, planTemplateNo: '1' }],
+          },
+        }),
+      },
+      // Candidato 2: PUT SetUp con validez y RightPlan
+      {
+        label: 'PUT SetUp (Completo, ID string)',
+        method: 'put' as const,
+        path: '/ISAPI/AccessControl/UserInfo/SetUp?format=json',
+        buildBody: (uId: string, name: string) => ({
+          UserInfo: {
+            employeeNo: String(uId),
+            name,
+            userType: 'normal',
+            Valid: {
+              enable: true,
+              beginTime: '2026-01-01T00:00:00',
+              endTime: '2036-12-31T23:59:59',
+              timeType: 'local',
+            },
+            doorRight: '1',
+            RightPlan: [{ doorNo: 1, planTemplateNo: 1 }],
+          },
+        }),
+      },
+      // Candidato 3: PUT SetUp simplificado (sin puertas ni planes, compatible con firmwares de portería/intercom)
+      {
+        label: 'PUT SetUp (Simplificado, ID string)',
+        method: 'put' as const,
+        path: '/ISAPI/AccessControl/UserInfo/SetUp?format=json',
+        buildBody: (uId: string, name: string) => ({
+          UserInfo: {
+            employeeNo: String(uId),
+            name,
+            userType: 'normal',
+          },
+        }),
+      },
+      // Candidato 4: POST Record simplificado
+      {
+        label: 'POST Record (Simplificado, ID string)',
+        method: 'post' as const,
+        path: '/ISAPI/AccessControl/UserInfo/Record?format=json',
+        buildBody: (uId: string, name: string) => ({
+          UserInfo: {
+            employeeNo: String(uId),
+            name,
+            userType: 'normal',
+          },
+        }),
+      },
+    ];
+
+    // Si el ID es numérico, añadir candidato numérico
     if (typeof cleanUserId === 'number') {
-      employeeIds.push(cleanUserId as any);
-    }
-
-    const payloads: any[] = [];
-    for (const empId of employeeIds) {
-      const isNumeric = typeof empId === 'number';
-      const idStr = isNumeric ? 'numérico' : 'string';
-
-      // Formato 1: Completo con planTemplateNo como string
-      payloads.push({
-        _label: `Formato 1 (${idStr}, planTemplateNo string)`,
-        body: {
+      candidates.push({
+        label: 'POST Record (ID numérico)',
+        method: 'post' as const,
+        path: '/ISAPI/AccessControl/UserInfo/Record?format=json',
+        buildBody: (_uId: string, name: string) => ({
           UserInfo: {
-            employeeNo: empId,
-            name: sanitizedNombre,
-            userType: 'normal',
-            Valid: {
-              enable: true,
-              beginTime: '2026-01-01T00:00:00',
-              endTime: '2036-12-31T23:59:59',
-              timeType: 'local',
-            },
-            doorRight: '1',
-            RightPlan: [
-              {
-                doorNo: 1,
-                planTemplateNo: '1',
-              },
-            ],
-          },
-        }
-      });
-
-      // Formato 2: Con planTemplateNo como número
-      payloads.push({
-        _label: `Formato 2 (${idStr}, planTemplateNo number)`,
-        body: {
-          UserInfo: {
-            employeeNo: empId,
-            name: sanitizedNombre,
-            userType: 'normal',
-            Valid: {
-              enable: true,
-              beginTime: '2026-01-01T00:00:00',
-              endTime: '2036-12-31T23:59:59',
-              timeType: 'local',
-            },
-            doorRight: '1',
-            RightPlan: [
-              {
-                doorNo: 1,
-                planTemplateNo: 1,
-              },
-            ],
-          },
-        }
-      });
-
-      // Formato 3: Simplificado (con Valid pero sin configuración de puertas)
-      payloads.push({
-        _label: `Formato 3 (${idStr}, sin puertas)`,
-        body: {
-          UserInfo: {
-            employeeNo: empId,
-            name: sanitizedNombre,
+            employeeNo: cleanUserId,
+            name,
             userType: 'normal',
             Valid: {
               enable: true,
@@ -4691,42 +4768,50 @@ export class ControlAccesoService implements OnModuleInit {
               timeType: 'local',
             },
           },
-        }
-      });
-
-      // Formato 4: Ultra simplificado (sin validez ni puertas, para evitar cualquier rechazo por hora/zona)
-      payloads.push({
-        _label: `Formato 4 (${idStr}, ultra simplificado)`,
-        body: {
-          UserInfo: {
-            employeeNo: empId,
-            name: sanitizedNombre,
-            userType: 'normal',
-          },
-        }
+        }),
       });
     }
 
-    const methods = ['post', 'put'] as const;
     let lastError: any = null;
+    let consecutiveTimeouts = 0;
 
-    // Ejecutar matriz de reintentos cruzando todos los criterios
-    for (const path of paths) {
-      for (const payload of payloads) {
-        for (const method of methods) {
-          try {
-            this.logger.log(`👤 [HARDWARE SYNC] Intentando crear usuario ${userId} en ${ip} via ${method.toUpperCase()} ${path} - ${payload._label}`);
-            return await this.proxyRequestDynamic(ip, method, path, payload.body, { deviceId });
-          } catch (err) {
-            lastError = err;
-            this.logger.warn(`⚠️ [HARDWARE SYNC] Falló ${method.toUpperCase()} ${path} con ${payload._label}: ${err.message}`);
+    for (const cand of candidates) {
+      try {
+        this.logger.log(`👤 [HARDWARE SYNC] Probando crear usuario ${userId} en ${ip} vía ${cand.label}`);
+        const res = await this.proxyRequestDynamic(
+          ip,
+          cand.method,
+          cand.path,
+          cand.buildBody(userId, sanitizedNombre),
+          { deviceId, customTimeout: 3500 }
+        );
+        this.logger.log(`✅ [HARDWARE SYNC OK] Usuario ${userId} creado exitosamente en ${ip} con ${cand.label}`);
+        this.userCreateFormatCache.set(ip, cand);
+        return res;
+      } catch (err) {
+        lastError = err;
+
+        if (isAlreadyExistsError(err)) {
+          this.logger.log(`ℹ️ [HARDWARE SYNC] Usuario ${userId} ya existe en ${ip} (${cand.label}). Éxito idempotente.`);
+          this.userCreateFormatCache.set(ip, cand);
+          return { ok: true, ya_existia: true, message: 'Usuario ya existía en biométrico' };
+        }
+
+        if (isNetworkError(err)) {
+          consecutiveTimeouts++;
+          this.logger.warn(`⚠️ [HARDWARE SYNC] Timeout/Error de red con ${ip} (${consecutiveTimeouts}/2): ${err.message}`);
+          if (consecutiveTimeouts >= 2) {
+            this.logger.error(`❌ [HARDWARE SYNC] Dispositivo en ${ip} no responde a conexión de red. Abortando intentos.`);
+            break;
           }
+        } else {
+          this.logger.warn(`⚠️ [HARDWARE SYNC] Falló ${cand.label} en ${ip}: ${err.message}`);
         }
       }
     }
 
-    this.logger.error(`❌ [HARDWARE SYNC FAIL] No se pudo registrar el usuario ${userId} en ${ip} usando ninguna de las 32 combinaciones.`);
-    throw lastError || new Error('Error al registrar usuario en el biométrico');
+    this.logger.error(`❌ [HARDWARE SYNC FAIL] No se pudo registrar usuario ${userId} en ${ip}: ${lastError?.message}`);
+    throw lastError || new Error(`No se pudo registrar usuario en el biométrico ${ip}`);
   }
 
   async registrarTarjetaEnHardware(ip: string, userId: string, cardNo: string, deviceId?: string): Promise<any> {
@@ -4754,23 +4839,31 @@ export class ControlAccesoService implements OnModuleInit {
     ];
 
     let lastError: any = null;
+    let consecutiveTimeouts = 0;
     for (const attempt of attempts) {
       try {
-        const res = await this.proxyRequestDynamic(ip, attempt.method, attempt.path, body, { deviceId });
+        const res = await this.proxyRequestDynamic(ip, attempt.method, attempt.path, body, { deviceId, customTimeout: 3000 });
         this.logger.log(`✅ [HARDWARE CARD SYNC] Tarjeta '${cleanCard}' registrada exitosamente para ${cleanUserId} en ${ip} vía ${attempt.method.toUpperCase()} ${attempt.path}`);
         return res;
       } catch (err) {
         lastError = err;
-        const msg = String(err?.message || '');
-        if (msg.toLowerCase().includes('already') || msg.toLowerCase().includes('exist')) {
+        const msg = String(err?.message || '') + (err?.response?.data ? JSON.stringify(err.response.data) : '');
+        if (msg.toLowerCase().includes('already') || msg.toLowerCase().includes('exist') || msg.toLowerCase().includes('duplicate')) {
           this.logger.log(`ℹ️ [HARDWARE CARD SYNC] Tarjeta '${cleanCard}' ya existía o estaba asignada en ${ip}: ${msg}`);
           return { ok: true, note: 'Card already exists' };
+        }
+        if (err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT' || err?.code === 'ECONNREFUSED' || msg.toLowerCase().includes('timeout')) {
+          consecutiveTimeouts++;
+          if (consecutiveTimeouts >= 2) {
+            this.logger.warn(`⚠️ [HARDWARE CARD SYNC ABORT] Dispositivo ${ip} sin respuesta de red. Cancelando reintentos de tarjeta.`);
+            break;
+          }
         }
         this.logger.warn(`⚠️ [HARDWARE CARD SYNC] Falló ${attempt.method.toUpperCase()} ${attempt.path} para tarjeta ${cleanCard}: ${err.message}`);
       }
     }
 
-    this.logger.error(`❌ [HARDWARE CARD SYNC] No se pudo registrar tarjeta ${cleanCard} en ${ip}: ${lastError?.message}`);
+    this.logger.warn(`⚠️ [HARDWARE CARD SYNC] No se pudo registrar tarjeta ${cleanCard} en ${ip}: ${lastError?.message}`);
     return { ok: false, error: lastError?.message };
   }
 
@@ -5009,16 +5102,19 @@ export class ControlAccesoService implements OnModuleInit {
         if (fotoUrl.startsWith('data:image/')) {
           base64Photo = fotoUrl.split(',')[1] || '';
         } else {
-          const response = await axios.get(fotoUrl, { responseType: 'arraybuffer', timeout: 15000 });
+          const response = await axios.get(fotoUrl, { responseType: 'arraybuffer', timeout: 5000 });
           base64Photo = Buffer.from(response.data).toString('base64');
         }
 
         if (base64Photo) {
-          await this.uploadRostro(ip, persona.documento_identidad, base64Photo, dispositivoId);
+          try {
+            await this.uploadRostro(ip, persona.documento_identidad, base64Photo, dispositivoId);
+          } catch (rostroErr) {
+            this.logger.warn(`⚠️ [HARDWARE SYNC] No se pudo subir foto de rostro a ${ip}: ${rostroErr.message}. Usuario y tarjeta permanecen registrados.`);
+          }
         }
       } catch (err) {
-        this.logger.error(`❌ [HARDWARE SYNC] No se pudo subir foto de rostro a ${ip}: ${err.message}`);
-        throw new Error(`Error al sincronizar rostro en hardware: ${err.message}`);
+        this.logger.warn(`⚠️ [HARDWARE SYNC] No se pudo obtener foto de rostro (${fotoUrl}): ${err.message}`);
       }
     }
 
@@ -5140,21 +5236,12 @@ export class ControlAccesoService implements OnModuleInit {
       throw new Error(`Registro de recopilación ${registroId} no encontrado: ${recErr?.message}`);
     }
 
-    const personaInput: any = {
-      nombre_completo: rec.nombre_completo,
-      documento_identidad: rec.cedula,
-      lista_estado: 'blanca',
-      entidad_tipo: 'residente',
-      activo: true,
-      codigo_tarjeta: rec.codigo_tarjeta ? String(rec.codigo_tarjeta).trim() : null,
-      tarjeta_entregada: !!rec.tarjeta_entregada,
-      tarjeta_fecha_entrega: rec.tarjeta_fecha_entrega || null,
-      tarjeta_activa: rec.tarjeta_activa !== false,
-    };
+    let residentResult: any = null;
 
-    if (rec.correo_electronico) {
+    // Auto-aprovisionar cuenta de residente si tiene correo y cédula (solo 1 vez)
+    if (rec.correo_electronico && rec.cedula) {
       try {
-        const residentResult = await this.asegurarCuentaResidente({
+        residentResult = await this.asegurarCuentaResidente({
           cedula: rec.cedula,
           nombre_completo: rec.nombre_completo,
           correo: rec.correo_electronico,
@@ -5162,41 +5249,73 @@ export class ControlAccesoService implements OnModuleInit {
           telefono2: rec.telefono2 || null,
           torre: rec.torre || null,
           apartamento: rec.apartamento || null,
+          puesto_id: rec.lugar?.creado_por || null,
         });
 
-        if (residentResult?.residente?.id) {
-          personaInput.entidad_tipo = 'residente';
-          personaInput.entidad_id = residentResult.residente.id;
+        // Sincronizar información del vehículo si aplica
+        if (residentResult?.residente?.id && rec.placa_vehiculo) {
+          const placaUpper = String(rec.placa_vehiculo).trim().toUpperCase();
+          try {
+            const { data: existingVehRes } = await admin
+              .from('residentes_vehiculos')
+              .select('id')
+              .eq('residente_id', residentResult.residente.id)
+              .eq('placa', placaUpper)
+              .maybeSingle();
 
-          if (rec.placa_vehiculo) {
-            try {
-              const placaNormal = String(rec.placa_vehiculo).toUpperCase().trim();
-              const { data: existingVeh } = await admin
+            if (!existingVehRes) {
+              await admin
                 .from('residentes_vehiculos')
-                .select('id')
-                .eq('residente_id', residentResult.residente.id)
-                .eq('placa', placaNormal)
-                .maybeSingle();
-
-              if (!existingVeh) {
-                await admin
-                  .from('residentes_vehiculos')
-                  .insert({
-                    residente_id: residentResult.residente.id,
-                    placa: placaNormal,
-                    color: rec.color_vehiculo || null,
-                    tipo_vehiculo: 'carro'
-                  });
-              }
-            } catch (vehErr) {
-              this.logger.warn(`⚠️ [VEHICULO AUTO-CREATION] FAILED in sync: ${vehErr.message}`);
+                .insert({
+                  residente_id: residentResult.residente.id,
+                  placa: placaUpper,
+                  color: rec.color_vehiculo || null,
+                  tipo_vehiculo: 'carro'
+                });
             }
+
+            const { data: existingVeh } = await admin
+              .from('vehiculos')
+              .select('id')
+              .eq('placa', placaUpper)
+              .maybeSingle();
+
+            const vehPayload = {
+              tipo: 'carro',
+              placa: placaUpper,
+              marca: 'Genérico',
+              modelo: 'Genérico',
+              color: rec.color_vehiculo || null,
+              tarjeta_propietario: rec.cedula,
+              activo: true
+            };
+
+            if (!existingVeh) {
+              await admin.from('vehiculos').insert(vehPayload);
+            } else {
+              await admin.from('vehiculos').update(vehPayload).eq('placa', placaUpper);
+            }
+          } catch (vehErr) {
+            this.logger.warn(`⚠️ [VEHICULO SYNC] Error sincronizando vehículo ${placaUpper}: ${vehErr.message}`);
           }
         }
       } catch (authErr) {
-        this.logger.warn(`⚠️ [RESIDENT AUTO-PROVISION IN SYNC] FAILED for ${rec.cedula}: ${authErr.message}`);
+        this.logger.warn(`⚠️ [RESIDENT AUTO-PROVISION] FAILED for ${rec.cedula}: ${authErr.message}`);
       }
     }
+
+    const personaInput: any = {
+      nombre_completo: rec.nombre_completo,
+      documento_identidad: rec.cedula,
+      lista_estado: 'blanca',
+      entidad_tipo: 'residente',
+      entidad_id: residentResult?.residente?.id || null,
+      activo: true,
+      codigo_tarjeta: rec.codigo_tarjeta ? String(rec.codigo_tarjeta).trim() : null,
+      tarjeta_entregada: !!rec.tarjeta_entregada,
+      tarjeta_fecha_entrega: rec.tarjeta_fecha_entrega || null,
+      tarjeta_activa: rec.tarjeta_activa !== false,
+    };
 
     const { data: persona, error: pErr } = await admin
       .from('personas_gestion_acceso')
@@ -5233,72 +5352,7 @@ export class ControlAccesoService implements OnModuleInit {
       await this.vincularPersonaDispositivos(persona.id, dispositivoIds);
     }
 
-    let residentResult: any = null;
-    if (rec.correo_electronico && rec.cedula) {
-      try {
-        residentResult = await this.asegurarCuentaResidente({
-          cedula: rec.cedula,
-          nombre_completo: rec.nombre_completo,
-          correo: rec.correo_electronico,
-          telefono: rec.telefono,
-          telefono2: rec.telefono2,
-          torre: rec.torre,
-          apartamento: rec.apartamento,
-          puesto_id: rec.lugar?.creado_por || null,
-        });
-
-        if (residentResult?.residente?.id) {
-          await admin
-            .from('personas_gestion_acceso')
-            .update({ entidad_tipo: 'residente', entidad_id: residentResult.residente.id })
-            .eq('id', persona.id);
-
-          // Sincronizar información del vehículo si aplica
-          if (rec.tiene_vehiculo && rec.placa_vehiculo) {
-            try {
-              const placaUpper = String(rec.placa_vehiculo).trim().toUpperCase();
-              const { data: existingVeh } = await admin
-                .from('vehiculos')
-                .select('id')
-                .eq('placa', placaUpper)
-                .maybeSingle();
-
-              const vehPayload = {
-                tipo: 'carro',
-                placa: placaUpper,
-                marca: 'Genérico',
-                modelo: 'Genérico',
-                color: rec.color_vehiculo || null,
-                tarjeta_propietario: rec.cedula,
-                activo: true
-              };
-
-              if (!existingVeh) {
-                await admin
-                  .from('vehiculos')
-                  .insert(vehPayload);
-                this.logger.log(`🚗 [VEHICULO SYNC] Creado vehículo ${placaUpper} para residente ${rec.cedula}`);
-              } else {
-                await admin
-                  .from('vehiculos')
-                  .update({
-                    color: rec.color_vehiculo || null,
-                    tarjeta_propietario: rec.cedula,
-                    activo: true
-                  })
-                  .eq('placa', placaUpper);
-                this.logger.log(`🚗 [VEHICULO SYNC] Actualizado vehículo ${placaUpper} para residente ${rec.cedula}`);
-              }
-            } catch (vehErr) {
-              this.logger.error(`❌ [VEHICULO SYNC ERROR] No se pudo sincronizar vehículo: ${vehErr.message}`);
-            }
-          }
-        }
-      } catch (authErr) {
-        this.logger.warn(`⚠️ [RESIDENT AUTO-PROVISION] FAILED for ${rec.cedula}: ${authErr.message}`);
-      }
-    }
-
+    // 3. Empujar a hardware con manejo de errores no bloqueante
     if (dispositivoIds && dispositivoIds.length > 0) {
       await Promise.all(
         dispositivoIds.map(async (devId) => {
