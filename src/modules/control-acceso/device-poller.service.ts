@@ -555,17 +555,21 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           detalles_raw: { source: 'VideoIntercom/callStatus', status: callState, ip, port }
         });
       } else if (callState === 'idle' && (prevCallState === 'ring' || prevCallState === 'onCall')) {
-        this.logger.log(`📞 [EventSystem] Llamada finalizada/colgada en hardware → ${device.nombre_identificador}`);
-        this.saveAndEmit({
-          dispositivo_id: device.id,
-          tipo_evento: 'llamada_finalizada',
-          nombre_dispositivo: device.nombre_identificador,
-          nombre_persona: 'Llamada Finalizada',
-          documento_persona: 'LLAMADA_FINALIZADA',
-          metodo_acceso: 'intercom',
-          timestamp: new Date().toISOString(),
-          detalles_raw: { source: 'VideoIntercom/callStatus', status: callState, ip, port }
-        });
+        if (!this.isCallInCooldown(device.id)) {
+          this.logger.log(`📞 [EventSystem] Llamada finalizada/colgada en hardware → ${device.nombre_identificador}`);
+          this.saveAndEmit({
+            dispositivo_id: device.id,
+            tipo_evento: 'llamada_finalizada',
+            nombre_dispositivo: device.nombre_identificador,
+            nombre_persona: 'Llamada Finalizada',
+            documento_persona: 'LLAMADA_FINALIZADA',
+            metodo_acceso: 'intercom',
+            timestamp: new Date().toISOString(),
+            detalles_raw: { source: 'VideoIntercom/callStatus', status: callState, ip, port }
+          });
+        } else {
+          this.logger.log(`📞 [EventSystem] Dispositivo en idle durante cooldown activo (llamada en curso en plataforma) → ${device.nombre_identificador}`);
+        }
       }
     } catch {}
 
@@ -808,7 +812,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           headers: {
             Authorization: header,
             'Content-Type': contentType,
-            'Accept': 'application/xml'
+            'Accept': contentType === 'application/json' ? 'application/json' : 'application/xml'
           },
           timeout,
           responseType

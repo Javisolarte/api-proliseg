@@ -818,13 +818,13 @@ export class ControlAccesoService implements OnModuleInit {
       }
 
       // Hikvision Door Station:
-      // Cuando la estación exterior timbra (llamante), enviar 'deviceOnCall' y 'answer'
-      // para que la tablet (Hik-Connect / indoor) y el citófono sepan que la llamada fue atendida.
-      // Además, enviar 'reject' y 'cancel' para cortar de inmediato el timbrado residual 'tuuu, tuuu'.
+      // Cuando la estación exterior timbra (llamante), enviar 'cancel' silencia de inmediato
+      // el timbrado físico en el altavoz del hardware y detiene la llamada en Hik-Connect sin
+      // reproducir el anuncio de 'no contestan' (que ocurría por enviar bellTimeout).
       const base = `http://${resolved.ip}:${resolved.port}`;
       let hikSent = false;
 
-      const signalsToSilence = ['deviceOnCall', 'answer', 'reject', 'cancel', 'bellTimeout'];
+      const signalsToSilence = ['cancel', 'hangUp', 'reject'];
       for (const sig of signalsToSilence) {
         try {
           await this.devicePoller.executeDigestRequest(
@@ -834,10 +834,11 @@ export class ControlAccesoService implements OnModuleInit {
             pass,
             JSON.stringify({ CallSignal: { cmdType: sig } }),
             'application/json',
-            1500
+            2000
           );
           hikSent = true;
-          this.logger.log(`📞 [INTERCOM] Señal "${sig}" enviada exitosamente a ${dev.nombre_identificador}`);
+          this.logger.log(`📞 [INTERCOM] Timbre físico silenciado con "${sig}" en ${dev.nombre_identificador}`);
+          break;
         } catch {
           try {
             const xml = `<?xml version="1.0" encoding="UTF-8"?><CallSignal version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema"><cmdType>${sig}</cmdType></CallSignal>`;
@@ -848,10 +849,11 @@ export class ControlAccesoService implements OnModuleInit {
               pass,
               xml,
               'application/xml',
-              1500
+              2000
             );
             hikSent = true;
-            this.logger.log(`📞 [INTERCOM] Señal XML "${sig}" enviada a ${dev.nombre_identificador}`);
+            this.logger.log(`📞 [INTERCOM] Timbre físico XML silenciado con "${sig}" en ${dev.nombre_identificador}`);
+            break;
           } catch {}
         }
       }
