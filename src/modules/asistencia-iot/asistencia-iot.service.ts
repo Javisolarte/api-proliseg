@@ -1,7 +1,12 @@
-import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException, OnModuleInit } from '@nestjs/common';
 import { createClient } from '@supabase/supabase-js';
+import axios from 'axios';
 import { SupabaseService } from '../supabase/supabase.service';
 import { DahuaService } from '../control-acceso/dahua.service';
+import { DevicePollerService } from '../control-acceso/device-poller.service';
+
+/** Colombia (America/Bogota) no tiene horario de verano: UTC-5 fijo */
+const OFFSET_COLOMBIA_MS = -5 * 60 * 60 * 1000;
 import {
   UpdatePuestoIotConfigDto,
   CreateHorarioDto,
@@ -13,14 +18,32 @@ import {
 import * as crypto from 'crypto';
 
 @Injectable()
-export class AsistenciaIotService {
+export class AsistenciaIotService implements OnModuleInit {
   private readonly logger = new Logger(AsistenciaIotService.name);
   private _vpsStorage: any = null;
 
   constructor(
     private readonly supabase: SupabaseService,
     private readonly dahuaService: DahuaService,
+    private readonly devicePoller: DevicePollerService,
   ) {}
+
+  /**
+   * Registra este servicio como procesador de lecturas biométricas del poller,
+   * para que cada rostro reconocido por el terminal Dahua genere la marcación.
+   */
+  onModuleInit() {
+    this.devicePoller.setAsistenciaIotFn((params) => this.procesarLecturaBiometrica(params));
+  }
+
+  /** Fecha (YYYY-MM-DD) y minutos del día en hora de Colombia */
+  private horaLocal(date: Date): { fecha: string; minutos: number } {
+    const local = new Date(date.getTime() + OFFSET_COLOMBIA_MS);
+    return {
+      fecha: local.toISOString().split('T')[0],
+      minutos: local.getUTCHours() * 60 + local.getUTCMinutes(),
+    };
+  }
 
   private get adminClient() {
     return this.supabase.getSupabaseAdminClient();
@@ -576,8 +599,7 @@ export class AsistenciaIotService {
     }
 
     const eventDate = timestamp ? new Date(timestamp) : new Date();
-    const hoyStr = eventDate.toISOString().split('T')[0];
-    const eventTimeMinutes = eventDate.getHours() * 60 + eventDate.getMinutes();
+    const { fecha: hoyStr, minutos: eventTimeMinutes } = this.horaLocal(eventDate);
 
     // Obtener horarios disponibles del puesto
     let horario = persona.horario;
@@ -690,13 +712,9 @@ export class AsistenciaIotService {
     // Bloquear hasta 30 minutos antes de la hora de salida programada,
     // o al menos 2 horas después de la entrada
     let bloqueoTimestamp = new Date(eventDate.getTime() + 2 * 60 * 60 * 1000);
-    if (progSalidaMin > eventTimeMinutes) {
-      const salidaDate = new Date(eventDate);
-      const [hS, mS] = horaSalidaProg.split(':').map(Number);
-      salidaDate.setHours(hS, mS - toleranciaMin, 0, 0);
-      if (salidaDate.getTime() > eventDate.getTime()) {
-        bloqueoTimestamp = salidaDate;
-      }
+    const minutosHastaVentanaSalida = progSalidaMin - toleranciaMin - eventTimeMinutes;
+    if (minutosHastaVentanaSalida > 0) {
+      bloqueoTimestamp = new Date(eventDate.getTime() + minutosHastaVentanaSalida * 60 * 1000);
     }
 
     const { data: nuevoRegistro, error: regErr } = await this.adminClient
@@ -742,14 +760,13 @@ export class AsistenciaIotService {
     if (!persona) throw new NotFoundException('Personal no encontrado');
 
     const eventDate = dto.hora ? new Date(dto.hora) : new Date();
-    const hoyStr = eventDate.toISOString().split('T')[0];
+    const { fecha: hoyStr, minutos: actualMin } = this.horaLocal(eventDate);
 
     if (dto.tipo === 'entrada') {
       const horaEntradaProg = persona.horario?.hora_entrada || '08:00:00';
       const horaSalidaProg = persona.horario?.hora_salida || '17:00:00';
 
       const progMin = this.timeStringToMinutes(horaEntradaProg);
-      const actualMin = eventDate.getHours() * 60 + eventDate.getMinutes();
       const diff = actualMin - progMin;
       const estado = diff > 10 ? 'tarde' : 'a_tiempo';
 
@@ -973,7 +990,69 @@ export class AsistenciaIotService {
     }
   }
 
-  private async sincronizarHardwarePuesto(puestoId: number, personal: any) {
+  /**
+   * Re-sincroniza todo el personal activo del puesto con el terminal Dahua asignado.
+   * Útil cuando el dispositivo estuvo fuera de línea al momento del enrolamiento.
+   */
+  async sincronizarPersonalPuesto(puestoId: number) {
+    const realPuestoId = await this.resolveRealPuestoId(puestoId);
+    const { data: personal, error } = await this.adminClient
+      .from('asistencia_iot_personal')
+      .select('*')
+      .eq('puesto_id', realPuestoId)
+      .eq('activo', true);
+
+    if (error) throw error;
+
+    const resultados: any[] = [];
+    for (const p of personal || []) {
+      const r = await this.sincronizarHardwarePuesto(realPuestoId, p);
+      resultados.push({ id: p.id, nombre: p.nombre_completo, cedula: p.cedula, ...r });
+      // Si el terminal no responde, no tiene sentido intentar con el resto
+      if (r.dispositivoOffline) {
+        for (const resto of (personal || []).slice(resultados.length)) {
+          resultados.push({ id: resto.id, nombre: resto.nombre_completo, cedula: resto.cedula, ok: false, mensaje: r.mensaje, dispositivoOffline: true });
+        }
+        break;
+      }
+    }
+
+    const sincronizados = resultados.filter((r) => r.ok).length;
+    return {
+      total: resultados.length,
+      sincronizados,
+      fallidos: resultados.length - sincronizados,
+      resultados,
+    };
+  }
+
+  private async descargarFotoBase64(url: string | null): Promise<string | null> {
+    if (!url) return null;
+    if (url.startsWith('data:')) return url;
+    try {
+      const resp = await axios.get(url, { responseType: 'arraybuffer', timeout: 10000 });
+      return Buffer.from(resp.data).toString('base64');
+    } catch (e: any) {
+      this.logger.warn(`No se pudo descargar la foto ${url}: ${e.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Enrola a la persona en el terminal Dahua del puesto (usuario + tarjeta + rostro).
+   * Solo marca 'sincronizado_dispositivo' si el terminal respondió y el rostro quedó cargado.
+   */
+  private async sincronizarHardwarePuesto(
+    puestoId: number,
+    personal: any,
+  ): Promise<{ ok: boolean; mensaje: string; dispositivoOffline?: boolean }> {
+    const marcarEstado = async (ok: boolean) => {
+      await this.adminClient
+        .from('asistencia_iot_personal')
+        .update({ sincronizado_dispositivo: ok, dispositivo_user_id: ok ? personal.cedula : null })
+        .eq('id', personal.id);
+    };
+
     const { data: cfg } = await this.adminClient
       .from('puestos_asistencia_iot_config')
       .select('*, dispositivo:dispositivos_iot(*)')
@@ -981,35 +1060,63 @@ export class AsistenciaIotService {
       .eq('iot_activo', true)
       .maybeSingle();
 
-    if (!cfg || !cfg.dispositivo) return;
+    if (!cfg || !cfg.dispositivo) {
+      return { ok: false, mensaje: 'El puesto no tiene un dispositivo IoT activo asignado' };
+    }
 
     const dev = cfg.dispositivo;
-    // Si es Dahua y tenemos foto
-    if (personal.foto_rostro_url && (dev.tipo_dispositivo === 'dahua' || dev.ip_direccion)) {
-      this.logger.log(`🔄 Sincronizando personal ${personal.nombre_completo} (${personal.cedula}) a terminal Dahua ${dev.nombre_identificador}...`);
-      // Llamada segura a DahuaService
-      try {
-        const ip = dev.ip_direccion;
-        const port = dev.puerto_servicio || dev.configuracion_tecnica?.puerto || 80;
-        const user = dev.credencial_usuario || 'admin';
-        const pass = dev.credencial_password || '';
+    const tec = dev.configuracion_tecnica || {};
+    const marca = String(tec.marca || '').toLowerCase();
+    if (marca && marca !== 'dahua') {
+      await marcarEstado(false);
+      return { ok: false, mensaje: `El dispositivo ${dev.nombre_identificador} es ${tec.marca}; la asistencia IoT solo soporta Dahua` };
+    }
 
-        await this.dahuaService.agregarPersona(ip, port, user, pass, {
-          userId: personal.cedula,
-          nombre: personal.nombre_completo,
-          codigoTarjeta: personal.cedula,
-          habilitado: true,
-        });
+    const ip = dev.ip_direccion;
+    const port = Number(tec.puerto) || 80;
+    const user = dev.credencial_usuario || 'admin';
+    const pass = dev.credencial_password || '';
+    const destino = `${dev.nombre_identificador} (${ip}:${port})`;
 
-        await this.adminClient
-          .from('asistencia_iot_personal')
-          .update({ sincronizado_dispositivo: true, dispositivo_user_id: personal.cedula })
-          .eq('id', personal.id);
+    // 1. Verificar que el terminal responda antes de intentar enrolar
+    try {
+      await this.dahuaService.getSystemInfo(ip, port, user, pass);
+    } catch (e: any) {
+      await marcarEstado(false);
+      const mensaje = `El terminal ${destino} no responde: ${e.message}`;
+      this.logger.warn(`⚠️ [Asistencia IoT Sync] ${mensaje}`);
+      return { ok: false, mensaje, dispositivoOffline: true };
+    }
 
-        this.logger.log(`✅ Personal ${personal.nombre_completo} sincronizado a hardware`);
-      } catch (err: any) {
-        this.logger.warn(`⚠️ Error sincronizando a terminal Dahua: ${err.message}`);
+    // 2. La foto es obligatoria para el reconocimiento facial
+    const fotoBase64 = await this.descargarFotoBase64(personal.foto_rostro_url);
+    if (!fotoBase64) {
+      await marcarEstado(false);
+      return { ok: false, mensaje: `${personal.nombre_completo} no tiene una foto de rostro válida` };
+    }
+
+    // 3. Enrolar usuario + tarjeta (cédula) + rostro
+    try {
+      this.logger.log(`🔄 [Asistencia IoT Sync] Enrolando ${personal.nombre_completo} (${personal.cedula}) en ${destino}...`);
+      const res = await this.dahuaService.agregarPersona(ip, port, user, pass, {
+        userId: personal.cedula,
+        nombre: personal.nombre_completo,
+        codigoTarjeta: personal.cedula,
+        habilitado: true,
+        fotoBase64,
+      });
+
+      await marcarEstado(res.fotoSubida);
+      if (!res.fotoSubida) {
+        return { ok: false, mensaje: `El terminal ${destino} rechazó el rostro de ${personal.nombre_completo} (revise calidad/encuadre de la foto)` };
       }
+
+      this.logger.log(`✅ [Asistencia IoT Sync] ${personal.nombre_completo} enrolado con rostro en ${destino}`);
+      return { ok: true, mensaje: 'Sincronizado con rostro' };
+    } catch (err: any) {
+      await marcarEstado(false);
+      this.logger.warn(`⚠️ [Asistencia IoT Sync] Error enrolando en ${destino}: ${err.message}`);
+      return { ok: false, mensaje: err.message };
     }
   }
 
