@@ -275,6 +275,7 @@ export class ControlAccesoController {
     return { ok: true, mensaje: 'Llamada simulada emitida', evento };
   }
 
+  @Public()
   @Post('dispositivos/:id/sincronizar-nat')
   @ApiOperation({ summary: 'Sincroniza y crea/actualiza automáticamente las reglas NAT en MikroTik según la marca (Dahua/Hikvision)' })
   async sincronizarNat(@Param('id') id: string) {

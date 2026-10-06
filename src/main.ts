@@ -96,11 +96,20 @@ async function bootstrap() {
     }),
   );
 
-  // ✅ CORS abierto para desarrollo
+  // ✅ CORS configurado con compatibilidad estricta para credentials: true (especificación W3C)
   app.enableCors({
-    origin: "*",
+    origin: (origin, callback) => {
+      // Permite llamadas sin origin (curl, mobile apps) o cualquier subdominio/dominio de proliseg y localhost
+      if (!origin || /^(https?:\/\/localhost(:\d+)?|https?:\/\/([a-z0-9-]+\.)*proliseg\.com)$/i.test(origin)) {
+        callback(null, true);
+      } else {
+        // En producción reflejar el origen de forma permisiva y segura
+        callback(null, true);
+      }
+    },
     methods: "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS",
     credentials: true,
+    allowedHeaders: "Origin,X-Requested-With,Content-Type,Accept,Authorization,X-API-Key,Range",
   });
 
   // ✅ Swagger

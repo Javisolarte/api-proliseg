@@ -4526,14 +4526,15 @@ export class ControlAccesoService implements OnModuleInit {
       }
     }
 
-    // Reordenar payloads si ya tenemos un formato exitoso en caché para esta IP
-    const cachedLabel = this.faceUploadFormatCache.get(ip);
+    // Reordenar payloads si ya tenemos un formato exitoso en caché para este dispositivo/IP
+    const cacheKey = deviceId ? `${deviceId}` : ip;
+    const cachedLabel = this.faceUploadFormatCache.get(cacheKey);
     if (cachedLabel) {
       const cachedIdx = payloads.findIndex(p => p.label === cachedLabel);
       if (cachedIdx !== -1) {
         const [cachedPayload] = payloads.splice(cachedIdx, 1);
         payloads.unshift(cachedPayload);
-        this.logger.log(`⚡ [HARDWARE ROSTRO] Usando formato en caché para ${ip}: ${cachedLabel}`);
+        this.logger.log(`⚡ [HARDWARE ROSTRO] Usando formato en caché para ${cacheKey}: ${cachedLabel}`);
       }
     }
 
@@ -4553,7 +4554,7 @@ export class ControlAccesoService implements OnModuleInit {
           { deviceId, headers: payload.headers, customTimeout: 5000 }
         );
         this.logger.log(`✅ [HARDWARE ROSTRO OK] Sincronizado correctamente con ${payload.label}`);
-        this.faceUploadFormatCache.set(ip, payload.label);
+        this.faceUploadFormatCache.set(cacheKey, payload.label);
         return response;
       } catch (err) {
         lastError = err;
@@ -4569,8 +4570,8 @@ export class ControlAccesoService implements OnModuleInit {
             rData.errorCode === 1610641412 ||
             errMsg.includes('deviceUserAlreadyExistFace')
           ) {
-            this.logger.log(`✅ [HARDWARE ROSTRO OK] El rostro del usuario ${userId} ya existe en el dispositivo (${ip}). Sincronizado.`);
-            this.faceUploadFormatCache.set(ip, payload.label);
+            this.logger.log(`✅ [HARDWARE ROSTRO OK] El rostro del usuario ${userId} ya existe en el dispositivo (${cacheKey}). Sincronizado.`);
+            this.faceUploadFormatCache.set(cacheKey, payload.label);
             return { ok: true, ya_existia: true, message: 'Rostro ya enrolado' };
           }
 
@@ -4653,23 +4654,24 @@ export class ControlAccesoService implements OnModuleInit {
     };
 
     // 1. Probar formato en caché si ya existe para este dispositivo/IP
-    const cached = this.userCreateFormatCache.get(ip);
+    const cacheKey = deviceId ? `${deviceId}` : ip;
+    const cached = this.userCreateFormatCache.get(cacheKey);
     if (cached) {
       try {
-        this.logger.log(`⚡ [HARDWARE SYNC CACHE] Intentando formato en caché para ${ip}: ${cached.label}`);
+        this.logger.log(`⚡ [HARDWARE SYNC CACHE] Intentando formato en caché para ${cacheKey}: ${cached.label}`);
         const res = await this.proxyRequestDynamic(ip, cached.method, cached.path, cached.buildBody(userId, sanitizedNombre), {
           deviceId,
           customTimeout: 3500,
         });
-        this.logger.log(`✅ [HARDWARE SYNC CACHE OK] Usuario ${userId} creado en ${ip} usando formato en caché`);
+        this.logger.log(`✅ [HARDWARE SYNC CACHE OK] Usuario ${userId} creado en ${cacheKey} usando formato en caché`);
         return res;
       } catch (cachedErr) {
         if (isAlreadyExistsError(cachedErr)) {
-          this.logger.log(`ℹ️ [HARDWARE SYNC] Usuario ${userId} ya existe en ${ip} (vía caché). Sincronizado.`);
+          this.logger.log(`ℹ️ [HARDWARE SYNC] Usuario ${userId} ya existe en ${cacheKey} (vía caché). Sincronizado.`);
           return { ok: true, ya_existia: true };
         }
-        this.logger.warn(`⚠️ [HARDWARE SYNC CACHE MISS] Formato en caché falló para ${ip}: ${cachedErr.message}. Probando candidatos...`);
-        this.userCreateFormatCache.delete(ip);
+        this.logger.warn(`⚠️ [HARDWARE SYNC CACHE MISS] Formato en caché falló para ${cacheKey}: ${cachedErr.message}. Probando candidatos...`);
+        this.userCreateFormatCache.delete(cacheKey);
       }
     }
 
@@ -4785,15 +4787,15 @@ export class ControlAccesoService implements OnModuleInit {
           cand.buildBody(userId, sanitizedNombre),
           { deviceId, customTimeout: 3500 }
         );
-        this.logger.log(`✅ [HARDWARE SYNC OK] Usuario ${userId} creado exitosamente en ${ip} con ${cand.label}`);
-        this.userCreateFormatCache.set(ip, cand);
+        this.logger.log(`✅ [HARDWARE SYNC OK] Usuario ${userId} creado exitosamente en ${cacheKey} con ${cand.label}`);
+        this.userCreateFormatCache.set(cacheKey, cand);
         return res;
       } catch (err) {
         lastError = err;
 
         if (isAlreadyExistsError(err)) {
-          this.logger.log(`ℹ️ [HARDWARE SYNC] Usuario ${userId} ya existe en ${ip} (${cand.label}). Éxito idempotente.`);
-          this.userCreateFormatCache.set(ip, cand);
+          this.logger.log(`ℹ️ [HARDWARE SYNC] Usuario ${userId} ya existe en ${cacheKey} (${cand.label}). Éxito idempotente.`);
+          this.userCreateFormatCache.set(cacheKey, cand);
           return { ok: true, ya_existia: true, message: 'Usuario ya existía en biométrico' };
         }
 
@@ -5353,13 +5355,16 @@ export class ControlAccesoService implements OnModuleInit {
     }
 
     // 3. Empujar a hardware con manejo de errores no bloqueante
+    const hardwareResults: Array<{ devId: string; ok: boolean; error?: string }> = [];
     if (dispositivoIds && dispositivoIds.length > 0) {
       await Promise.all(
         dispositivoIds.map(async (devId) => {
           try {
             await this.pushPersonaToDevice(persona.id, devId);
+            hardwareResults.push({ devId, ok: true });
           } catch (syncErr) {
             this.logger.error(`❌ [HARDWARE SYNC ERROR] No se pudo empujar persona ${persona.id} al dispositivo ${devId}: ${syncErr.message}`);
+            hardwareResults.push({ devId, ok: false, error: syncErr.message });
           }
         })
       );
@@ -5378,6 +5383,7 @@ export class ControlAccesoService implements OnModuleInit {
       ok: true,
       persona_id: persona.id,
       residente: residentResult,
+      hardware_results: hardwareResults,
     };
   }
 
