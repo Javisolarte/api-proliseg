@@ -587,12 +587,19 @@ export class ComunicacionesGateway implements OnGatewayInit, OnGatewayConnection
             deviceId: data.deviceId,
         });
 
-        // Correr el relayer en background.
+        // Correr el relayer en background con callback onReady para avisar al cliente web
         this.controlAccesoService.relayAudioToDevice(
             passThroughStream,
             data.targetIp,
             data.deviceId,
             user,
+            () => {
+                this.logger.log(`🎙️ [AUDIO-IN-WS] Canal hacia hardware listo para ${data.targetIp}, notificando a cliente...`);
+                client.emit('control_acceso_audio_listo', {
+                    targetIp: data.targetIp,
+                    deviceId: data.deviceId,
+                });
+            },
         ).then((res) => {
             this.logger.log(`🎙️ [AUDIO-IN-WS] Transmisión terminada para ${data.targetIp}: ${JSON.stringify(res)}`);
         }).catch((err) => {

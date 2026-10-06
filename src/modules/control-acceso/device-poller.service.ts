@@ -59,6 +59,13 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     this.eliminarVisitaHwFn = fn;
   }
 
+  /** Función para registrar marcaciones biométricas en Asistencia IoT */
+  private asistenciaIotFn: ((params: any) => Promise<any> | any) | null = null;
+
+  setAsistenciaIotFn(fn: (params: any) => Promise<any> | any) {
+    this.asistenciaIotFn = fn;
+  }
+
   /** IDs ya procesados para deduplicar — en memoria, bajo consumo */
   private readonly seenEventIds = new Set<string>();
   private readonly latestDbTimestamp = new Map<string, string>();

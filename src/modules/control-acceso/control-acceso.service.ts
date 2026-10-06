@@ -676,7 +676,7 @@ export class ControlAccesoService implements OnModuleInit {
       } else {
         const base = `http://${resolved.ip}:${resolved.port}`;
         this.logger.log(`📞 [INTERCOM] Enviando señal de colgar a Hikvision ${dev.nombre_identificador} (${base})...`);
-        const signals = ['hangUp', 'reject', 'cancle', 'cancel'];
+        const signals = ['cancel', 'hangUp', 'bellTimeout', 'reject'];
         for (const sig of signals) {
           const payloadJson = JSON.stringify({ CallSignal: { cmdType: sig } });
           try {
@@ -694,7 +694,7 @@ export class ControlAccesoService implements OnModuleInit {
             break;
           } catch {
             try {
-              const xml = `<?xml version="1.0" encoding="UTF-8"?><CallSignal><cmdType>${sig}</cmdType></CallSignal>`;
+              const xml = `<?xml version="1.0" encoding="UTF-8"?><CallSignal version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema"><cmdType>${sig}</cmdType></CallSignal>`;
               await this.devicePoller.executeDigestRequest(
                 'PUT',
                 `${base}/ISAPI/VideoIntercom/callSignal`,
@@ -802,72 +802,43 @@ export class ControlAccesoService implements OnModuleInit {
         return dahuaSent;
       }
 
-      // Hikvision Door Station
+      // Hikvision Door Station:
+      // Cuando la estación exterior timbra (llamante), enviar 'cancel' silencia de inmediato
+      // el timbrado físico en el altavoz del hardware y devuelve el dispositivo a idle.
       const base = `http://${resolved.ip}:${resolved.port}`;
       let hikSent = false;
 
-      // 1. Intentar responder (answer)
-      try {
-        await this.devicePoller.executeDigestRequest(
-          'PUT',
-          `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
-          user,
-          pass,
-          JSON.stringify({ CallSignal: { cmdType: 'answer' } }),
-          'application/json',
-          2500
-        );
-        hikSent = true;
-        this.logger.log(`📞 [INTERCOM] Señal "answer" aceptada en ${dev.nombre_identificador}`);
-      } catch {
+      const signalsToSilence = ['cancel', 'hangUp', 'bellTimeout', 'reject', 'answer'];
+      for (const sig of signalsToSilence) {
         try {
           await this.devicePoller.executeDigestRequest(
             'PUT',
-            `${base}/ISAPI/VideoIntercom/callSignal`,
+            `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
             user,
             pass,
-            `<?xml version="1.0" encoding="UTF-8"?><CallSignal><cmdType>answer</cmdType></CallSignal>`,
-            'application/xml',
-            2500
+            JSON.stringify({ CallSignal: { cmdType: sig } }),
+            'application/json',
+            2000
           );
           hikSent = true;
-          this.logger.log(`📞 [INTERCOM] Señal XML "answer" aceptada en ${dev.nombre_identificador}`);
-        } catch {}
-      }
-
-      // 2. Si es una estación exterior de puerta (Door Station) que rechaza 'answer'
-      // por ser la llamante, enviar 'cancle' / 'hangUp' para cancelar el timbrado físico del altavoz
-      if (!hikSent) {
-        for (const sig of ['cancle', 'hangUp', 'reject', 'cancel']) {
+          this.logger.log(`📞 [INTERCOM] Timbre físico silenciado con "${sig}" en ${dev.nombre_identificador}`);
+          break;
+        } catch {
           try {
+            const xml = `<?xml version="1.0" encoding="UTF-8"?><CallSignal version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema"><cmdType>${sig}</cmdType></CallSignal>`;
             await this.devicePoller.executeDigestRequest(
               'PUT',
-              `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
+              `${base}/ISAPI/VideoIntercom/callSignal`,
               user,
               pass,
-              JSON.stringify({ CallSignal: { cmdType: sig } }),
-              'application/json',
+              xml,
+              'application/xml',
               2000
             );
             hikSent = true;
-            this.logger.log(`📞 [INTERCOM] Timbre físico silenciado con "${sig}" en ${dev.nombre_identificador}`);
+            this.logger.log(`📞 [INTERCOM] Timbre físico XML silenciado con "${sig}" en ${dev.nombre_identificador}`);
             break;
-          } catch {
-            try {
-              await this.devicePoller.executeDigestRequest(
-                'PUT',
-                `${base}/ISAPI/VideoIntercom/callSignal`,
-                user,
-                pass,
-                `<?xml version="1.0" encoding="UTF-8"?><CallSignal><cmdType>${sig}</cmdType></CallSignal>`,
-                'application/xml',
-                2000
-              );
-              hikSent = true;
-              this.logger.log(`📞 [INTERCOM] Timbre físico XML silenciado con "${sig}" en ${dev.nombre_identificador}`);
-              break;
-            } catch {}
-          }
+          } catch {}
         }
       }
 
@@ -906,7 +877,6 @@ export class ControlAccesoService implements OnModuleInit {
 
       this.logger.log(`📞 [INTERCOM] Contestando y silenciando timbre físico de ${dev.nombre_identificador}...`);
       const sent = await this.silenciarTimbreHardware(deviceId);
-      await this.colgarLlamadaDispositivo(deviceId, operator).catch(() => {});
 
       return { ok: true, sent, mensaje: 'Llamada contestada y timbre silenciado en hardware' };
     } catch (err: any) {
@@ -1187,6 +1157,7 @@ export class ControlAccesoService implements OnModuleInit {
     targetIp: string,
     deviceId?: string,
     operator?: any,
+    onReady?: () => void,
   ): Promise<any> {
     const target = await this.resolveAudioNetworkTarget(targetIp, deviceId);
     const baseIsapi = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}`;
@@ -1201,6 +1172,9 @@ export class ControlAccesoService implements OnModuleInit {
     }
 
     if (target.isDahua) {
+      if (onReady) {
+        try { onReady(); } catch {}
+      }
       return this.relayAudioToDeviceDahua(audioStream, target, deviceId, operator);
     }
 
@@ -1256,16 +1230,24 @@ export class ControlAccesoService implements OnModuleInit {
   <audioCompressionType>${audioFormat === 'alaw' ? 'G.711alaw' : 'G.711ulaw'}</audioCompressionType>
 </TwoWayAudioChannel>`;
 
+    let sessionId: string | null = null;
     try {
       this.logger.log(`🎙️ [AUDIO-IN] Abriendo canal de audio en ${target.host}:${target.port}`);
       const openResult = await this.executeDigestAuth('PUT', `${baseIsapi}/open`, target.user, target.pass, openPayload, 'text', 15000, isapiHeaders);
       this.logger.log(`✅ [AUDIO-IN] Canal de audio abierto correctamente`);
+      const match = String(openResult).match(/<sessionId>([^<]+)<\/sessionId>/i);
+      if (match && match[1]) {
+        sessionId = match[1].trim();
+        this.logger.log(`🔑 [AUDIO-IN] Hikvision TwoWayAudio sessionId obtenido: ${sessionId}`);
+      }
     } catch (openErr) {
       this.logger.error(`❌ [AUDIO-IN] FALLO al abrir canal de audio: ${openErr.message}`);
       throw new Error(`No se pudo abrir el canal de audio en el dispositivo: ${openErr.message}`);
     }
 
-    const deviceUrl = `${baseIsapi}/audioData`;
+    const deviceUrl = sessionId
+      ? `${baseIsapi}/audioData?sessionId=${sessionId}`
+      : `${baseIsapi}/audioData`;
 
     this.logger.log(`[AUDIO-IN] Enviando audio a ${target.host}:${target.port} (${target.via})${deviceId ? ` device=${deviceId}` : ''}`);
 
@@ -1288,7 +1270,9 @@ export class ControlAccesoService implements OnModuleInit {
     return new Promise((resolve, reject) => {
       let req: any = null;
 
-      // ffmpeg: convierte WebM/Opus del navegador → PCM G.711 a/μ-law crudo (sin contenedor WAV)
+      // ffmpeg: convierte WebM/Opus del navegador → PCM G.711 a/μ-law crudo con ecualización de telefonía
+      // highpass=200Hz y lowpass=3400Hz eliminan retumbos graves y siseos agudos.
+      // alimiter previene la distorsión y saturación digital en el DAC del altavoz físico.
       const ffmpeg = spawn(this.getFfmpegBinary(), [
         '-hide_banner',
         '-loglevel', 'info',
@@ -1300,7 +1284,7 @@ export class ControlAccesoService implements OnModuleInit {
         '-ac', '1',             // Mono
         '-ar', '8000',          // 8kHz (requerido por G.711)
         '-c:a', audioFormat === 'alaw' ? 'pcm_alaw' : 'pcm_mulaw',   // Codec de salida
-        '-af', 'volume=2.0',    // Volumen calibrado sin saturación
+        '-af', 'highpass=f=200,lowpass=f=3400,volume=1.4,alimiter=limit=0.92',    // Calibrado claro y nítido
         '-f', audioFormat,      // Formato de salida: raw alaw/mulaw
         '-flush_packets', '1',
         'pipe:1',
@@ -1395,6 +1379,15 @@ export class ControlAccesoService implements OnModuleInit {
 
       // Pipear el stream de audio transcrito por ffmpeg directamente al socket de la petición HTTP
       ffmpeg.stdout.pipe(req);
+
+      // Notificar que el canal HTTP/ISAPI hacia el hardware está listo para recibir chunks
+      if (onReady) {
+        try {
+          onReady();
+        } catch (readyErr: any) {
+          this.logger.debug(`[AUDIO-IN] Error en callback onReady: ${readyErr?.message}`);
+        }
+      }
 
       const ffmpegErrors: Buffer[] = [];
       ffmpeg.stderr.on('data', (chunk) => {
