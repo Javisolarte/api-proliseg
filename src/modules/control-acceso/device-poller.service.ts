@@ -75,6 +75,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
   /** Cooldown de llamadas para evitar rebotes de eventos de timbre tras contestar o colgar */
   private readonly callCooldowns = new Map<string, number>();
+  /** Estado de llamada previo por dispositivo para detectar fin de llamada o respuesta remota */
+  private readonly lastCallStatus = new Map<string, string>();
 
   public setCallCooldown(deviceId: string, durationMs: number = 25000) {
     this.callCooldowns.set(deviceId, Date.now() + durationMs);
@@ -517,7 +519,10 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       if (typeof cs === 'string') {
         try { cs = JSON.parse(cs); } catch {}
       }
-      const callState = cs?.CallStatus?.status || cs?.status;
+      const callState = cs?.CallStatus?.status || cs?.status || 'idle';
+      const prevCallState = this.lastCallStatus.get(device.id) || 'idle';
+      this.lastCallStatus.set(device.id, callState);
+
       if (callState === 'ring') {
         if (!this.isCallInCooldown(device.id)) {
           const ringKey = `call_ring_${device.id}_${Math.floor(Date.now() / 20000)}`;
@@ -537,6 +542,30 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
             this.saveAndEmit(callEvent);
           }
         }
+      } else if (callState === 'onCall' && prevCallState === 'ring') {
+        this.logger.log(`📞 [EventSystem] Llamada atendida → ${device.nombre_identificador}`);
+        this.saveAndEmit({
+          dispositivo_id: device.id,
+          tipo_evento: 'llamada_contestada',
+          nombre_dispositivo: device.nombre_identificador,
+          nombre_persona: 'Llamada Atendida',
+          documento_persona: 'LLAMADA_CONTESTADA',
+          metodo_acceso: 'intercom',
+          timestamp: new Date().toISOString(),
+          detalles_raw: { source: 'VideoIntercom/callStatus', status: callState, ip, port }
+        });
+      } else if (callState === 'idle' && (prevCallState === 'ring' || prevCallState === 'onCall')) {
+        this.logger.log(`📞 [EventSystem] Llamada finalizada/colgada en hardware → ${device.nombre_identificador}`);
+        this.saveAndEmit({
+          dispositivo_id: device.id,
+          tipo_evento: 'llamada_finalizada',
+          nombre_dispositivo: device.nombre_identificador,
+          nombre_persona: 'Llamada Finalizada',
+          documento_persona: 'LLAMADA_FINALIZADA',
+          metodo_acceso: 'intercom',
+          timestamp: new Date().toISOString(),
+          detalles_raw: { source: 'VideoIntercom/callStatus', status: callState, ip, port }
+        });
       }
     } catch {}
 
