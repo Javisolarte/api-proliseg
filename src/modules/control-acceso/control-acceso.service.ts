@@ -1175,6 +1175,7 @@ export class ControlAccesoService implements OnModuleInit {
     deviceId?: string,
     operator?: any,
     onReady?: () => void,
+    audioFormatInput?: string,
   ): Promise<any> {
     const target = await this.resolveAudioNetworkTarget(targetIp, deviceId);
     const baseIsapi = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}`;
@@ -1284,37 +1285,46 @@ export class ControlAccesoService implements OnModuleInit {
 
     const finalAuthHeader = this.buildDigestAuthHeader('PUT', deviceUrl, target.user, target.pass)!;
 
+    const isRawMulaw = audioFormatInput === 'raw_pcm_mulaw';
+
     return new Promise((resolve, reject) => {
       let req: any = null;
+      let ffmpeg: any = null;
 
-      // ffmpeg: convierte WebM/Opus del navegador → PCM G.711 a/μ-law crudo con ecualización de telefonía
-      // highpass=200Hz y lowpass=3400Hz eliminan retumbos graves y siseos agudos.
-      // alimiter previene la distorsión y saturación digital en el DAC del altavoz físico.
-      const ffmpeg = spawn(this.getFfmpegBinary(), [
-        '-hide_banner',
-        '-loglevel', 'info',
-        '-fflags', 'nobuffer',
-        '-flags', 'low_delay',
-        '-probesize', '4096',
-        '-f', 'webm',           // Formato de entrada explícito: WebM/Opus del navegador
-        '-i', 'pipe:0',
-        '-ac', '1',             // Mono
-        '-ar', '8000',          // 8kHz (requerido por G.711)
-        '-c:a', audioFormat === 'alaw' ? 'pcm_alaw' : 'pcm_mulaw',   // Codec de salida
-        '-af', 'highpass=f=200,lowpass=f=3400,volume=1.4,alimiter=limit=0.92',    // Calibrado claro y nítido
-        '-f', audioFormat,      // Formato de salida: raw alaw/mulaw
-        '-flush_packets', '1',
-        'pipe:1',
-      ]);
+      if (!isRawMulaw) {
+        // ffmpeg: convierte WebM/Opus del navegador → PCM G.711 a/μ-law crudo con ecualización de telefonía
+        // highpass=200Hz y lowpass=3400Hz eliminan retumbos graves y siseos agudos.
+        // alimiter previene la distorsión y saturación digital en el DAC del altavoz físico.
+        ffmpeg = spawn(this.getFfmpegBinary(), [
+          '-hide_banner',
+          '-loglevel', 'info',
+          '-fflags', 'nobuffer',
+          '-flags', 'low_delay',
+          '-probesize', '4096',
+          '-f', 'webm',           // Formato de entrada explícito: WebM/Opus del navegador
+          '-i', 'pipe:0',
+          '-ac', '1',             // Mono
+          '-ar', '8000',          // 8kHz (requerido por G.711)
+          '-c:a', audioFormat === 'alaw' ? 'pcm_alaw' : 'pcm_mulaw',   // Codec de salida
+          '-af', 'highpass=f=200,lowpass=f=3400,volume=1.4,alimiter=limit=0.92',    // Calibrado claro y nítido
+          '-f', audioFormat,      // Formato de salida: raw alaw/mulaw
+          '-flush_packets', '1',
+          'pipe:1',
+        ]);
+      } else {
+        this.logger.log(`⚡ [AUDIO-IN] Modo NATIVO Directo G.711u activado (Bypass FFmpeg, Latencia Cero estilo Zoom/Meet)`);
+      }
 
       let settled = false;
       const finalize = async (fn: (value?: any) => void, value?: any) => {
         if (settled) return;
         settled = true;
         try { (audioStream as any).destroy?.(); } catch {}
-        try { ffmpeg.stdin.destroy(); } catch {}
-        try { ffmpeg.stdout.destroy(); } catch {}
-        try { ffmpeg.kill('SIGKILL'); } catch {}
+        if (ffmpeg) {
+          try { ffmpeg.stdin?.destroy(); } catch {}
+          try { ffmpeg.stdout?.destroy(); } catch {}
+          try { ffmpeg.kill('SIGKILL'); } catch {}
+        }
         try { req?.destroy(); } catch {}
 
         // 3. Cerrar el canal de audio en el dispositivo
@@ -1394,8 +1404,12 @@ export class ControlAccesoService implements OnModuleInit {
         finalize(reject, err);
       });
 
-      // Pipear el stream de audio transcrito por ffmpeg directamente al socket de la petición HTTP
-      ffmpeg.stdout.pipe(req);
+      // Si es audio nativo G.711u ya procesado en el cliente, pipear directamente al hardware sin pasar por ffmpeg
+      if (isRawMulaw) {
+        audioStream.pipe(req);
+      } else if (ffmpeg) {
+        ffmpeg.stdout.pipe(req);
+      }
 
       // Notificar que el canal HTTP/ISAPI hacia el hardware está listo para recibir chunks
       if (onReady) {
@@ -1406,39 +1420,42 @@ export class ControlAccesoService implements OnModuleInit {
         }
       }
 
-      const ffmpegErrors: Buffer[] = [];
-      ffmpeg.stderr.on('data', (chunk) => {
-        ffmpegErrors.push(Buffer.from(chunk));
-        this.logger.debug(`[AUDIO-IN] ffmpeg stderr: ${chunk.toString()}`);
-      });
-      ffmpeg.on('error', (error) => {
-        if (clientDisconnected || (audioStream as any).aborted) {
-          finalize(resolve, { ok: true, mensaje: 'Transmisión finalizada' });
-          return;
-        }
-        this.logger.error(`❌ [AUDIO-IN] ffmpeg error: ${error.message}`);
-        finalize(reject, error);
-      });
-      ffmpeg.on('close', (code) => {
-        if (code !== 0 && !settled) {
+      if (ffmpeg) {
+        const ffmpegErrors: Buffer[] = [];
+        ffmpeg.stderr.on('data', (chunk: Buffer) => {
+          ffmpegErrors.push(Buffer.from(chunk));
+          this.logger.debug(`[AUDIO-IN] ffmpeg stderr: ${chunk.toString()}`);
+        });
+        ffmpeg.on('error', (error: any) => {
           if (clientDisconnected || (audioStream as any).aborted) {
-            finalize(resolve, {
-              ok: true,
-              mensaje: 'Transmisión finalizada',
-              detalle: {
-                target: `${target.host}:${target.port}`,
-                via: target.via,
-                status: 'closed',
-              },
-              operador: operator || null,
-            });
+            finalize(resolve, { ok: true, mensaje: 'Transmisión finalizada' });
             return;
           }
-          const message = Buffer.concat(ffmpegErrors).toString('utf8') || `ffmpeg terminó con código ${code}`;
-          this.logger.error(`❌ [AUDIO-IN] ffmpeg cerró con código ${code}: ${message}`);
-          finalize(reject, new Error(message));
-        }
-      });
+          this.logger.error(`❌ [AUDIO-IN] ffmpeg error: ${error.message}`);
+          finalize(reject, error);
+        });
+        ffmpeg.on('close', (code: number) => {
+          if (code !== 0 && !settled) {
+            if (clientDisconnected || (audioStream as any).aborted) {
+              finalize(resolve, {
+                ok: true,
+                mensaje: 'Transmisión finalizada',
+                detalle: {
+                  target: `${target.host}:${target.port}`,
+                  via: target.via,
+                  status: 'closed',
+                },
+                operador: operator || null,
+              });
+              return;
+            }
+            const message = Buffer.concat(ffmpegErrors).toString('utf8') || `ffmpeg terminó con código ${code}`;
+            this.logger.error(`❌ [AUDIO-IN] ffmpeg cerró con código ${code}: ${message}`);
+            finalize(reject, new Error(message));
+          }
+        });
+        audioStream.pipe(ffmpeg.stdin);
+      }
 
       audioStream.on('error', (error) => {
         if (clientDisconnected || (audioStream as any).aborted) {
@@ -1448,7 +1465,6 @@ export class ControlAccesoService implements OnModuleInit {
         this.logger.error(`❌ [AUDIO-IN] Error en el stream de entrada: ${error.message}`);
         finalize(reject, error);
       });
-      audioStream.pipe(ffmpeg.stdin);
     });
   }
 

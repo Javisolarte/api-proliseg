@@ -69,7 +69,7 @@ export class ComunicacionesGateway implements OnGatewayInit, OnGatewayConnection
     private sesionesActivas: Map<string, SesionActiva> = new Map();
     private socketToSesion: Map<string, string> = new Map();
     private empleadoToSocket: Map<number, string> = new Map();
-    private activeAudioStreams: Map<string, { stream: PassThrough; targetIp: string; deviceId?: string }> = new Map();
+    private activeAudioStreams: Map<string, { stream: PassThrough; targetIp: string; deviceId?: string; format?: string }> = new Map();
 
     private cleanupInterval: NodeJS.Timeout;
     private readonly SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutos (aumentado para WebRTC)
@@ -567,11 +567,11 @@ export class ComunicacionesGateway implements OnGatewayInit, OnGatewayConnection
 
     @SubscribeMessage('control_acceso_audio_iniciar')
     async handleControlAccesoAudioIniciar(
-        @MessageBody() data: { targetIp: string; deviceId?: string },
+        @MessageBody() data: { targetIp: string; deviceId?: string; format?: string },
         @ConnectedSocket() client: Socket,
     ) {
         const user = client.data.user;
-        this.logger.log(`🎙️ [AUDIO-IN-WS] Solicitud de inicio de audio de ${user?.email || 'desconocido'} para IP=${data.targetIp}, DeviceId=${data.deviceId}`);
+        this.logger.log(`🎙️ [AUDIO-IN-WS] Solicitud de inicio de audio (${data.format || 'webm'}) de ${user?.email || 'desconocido'} para IP=${data.targetIp}, DeviceId=${data.deviceId}`);
 
         // Limpiar stream previo si existiera
         const prev = this.activeAudioStreams.get(client.id);
@@ -585,6 +585,7 @@ export class ComunicacionesGateway implements OnGatewayInit, OnGatewayConnection
             stream: passThroughStream,
             targetIp: data.targetIp,
             deviceId: data.deviceId,
+            format: data.format || 'webm',
         });
 
         // Correr el relayer en background con callback onReady para avisar al cliente web
@@ -598,8 +599,10 @@ export class ComunicacionesGateway implements OnGatewayInit, OnGatewayConnection
                 client.emit('control_acceso_audio_listo', {
                     targetIp: data.targetIp,
                     deviceId: data.deviceId,
+                    format: data.format || 'webm',
                 });
             },
+            data.format,
         ).then((res) => {
             this.logger.log(`🎙️ [AUDIO-IN-WS] Transmisión terminada para ${data.targetIp}: ${JSON.stringify(res)}`);
         }).catch((err) => {
