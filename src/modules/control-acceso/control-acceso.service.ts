@@ -709,6 +709,7 @@ export class ControlAccesoService implements OnModuleInit {
             );
             sent = true;
             this.logger.log(`📞 [INTERCOM] Señal "${sig}" aceptada por ${dev.nombre_identificador}`);
+            break;
           } catch {
             try {
               const xml = `<?xml version="1.0" encoding="UTF-8"?><CallSignal version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema"><cmdType>${sig}</cmdType></CallSignal>`;
@@ -723,6 +724,7 @@ export class ControlAccesoService implements OnModuleInit {
               );
               sent = true;
               this.logger.log(`📞 [INTERCOM] Señal XML "${sig}" aceptada por ${dev.nombre_identificador}`);
+              break;
             } catch {}
           }
         }
@@ -866,6 +868,133 @@ export class ControlAccesoService implements OnModuleInit {
     }
   }
 
+  /**
+   * Contesta formalmente la llamada en el hardware físico (Hikvision y Dahua).
+   * Envía la señal nativa 'answer' que detiene el tono de timbrado ('tuuu...'),
+   * activa el aviso de voz ('Por favor hable') y conmuta el chip a estado de conversación.
+   */
+  async contestarTimbreHardware(deviceId: string): Promise<boolean> {
+    try {
+      const { data: dev } = await this.supabase
+        .getSupabaseAdminClient()
+        .from('dispositivos_iot')
+        .select('*')
+        .eq('id', deviceId)
+        .single();
+
+      if (!dev) return false;
+
+      // Cooldown de 25s en poller para que no se sigan emitiendo eventos de timbrado
+      this.devicePoller.setCallCooldown(deviceId, 25000);
+
+      const user = dev.credencial_usuario || 'admin';
+      const pass = dev.credencial_password || '';
+      const resolved = await this.resolveDoorNetworkTarget(
+        dev.ip_direccion,
+        dev.configuracion_tecnica?.puerto || 80,
+        dev.configuracion_tecnica
+      );
+
+      const origIp = String(dev.configuracion_tecnica?.puertos_mapeados?.original_ip || dev.ip_direccion || resolved.ip || '');
+      const marcaStr = String(
+        dev.configuracion_tecnica?.marca || dev.configuracion_tecnica?.modelo || dev.nombre_identificador || ''
+      ).toLowerCase();
+
+      const isHikvision =
+        marcaStr.includes('hikvision') ||
+        marcaStr.includes('hik') ||
+        marcaStr.includes('ds-k') ||
+        marcaStr.includes('ds-2cd') ||
+        origIp.includes('.78') ||
+        origIp.includes('.79') ||
+        String(resolved.ip).includes('.78') ||
+        String(resolved.ip).includes('.79') ||
+        Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_rtsp) === 30078 ||
+        Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_rtsp) === 30079 ||
+        Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) === 20078 ||
+        Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) === 20079;
+
+      const isDahua = !isHikvision && (
+        marcaStr.includes('dahua') ||
+        marcaStr.includes('dh') ||
+        marcaStr.includes('asi32') ||
+        marcaStr.includes('asi') ||
+        marcaStr.includes('vto') ||
+        ((origIp.startsWith('192.168.35.') || String(dev.ip_direccion).startsWith('192.168.35.')) &&
+         !origIp.includes('.78') && !origIp.includes('.79')) ||
+        (Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) >= 20080 && Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) <= 20099)
+      );
+
+      if (isDahua) {
+        let dahuaSent = false;
+        const answerEndpoints = [
+          '/cgi-bin/intercom.cgi?action=answer',
+          '/cgi-bin/console.cgi?action=answer',
+          '/cgi-bin/vto.cgi?action=answer'
+        ];
+        for (const ep of answerEndpoints) {
+          try {
+            await this.dahuaService.cgi(resolved.ip, resolved.port, user, pass, 'GET', ep, undefined, 'text', undefined, 2000);
+            dahuaSent = true;
+            this.logger.log(`📞 [INTERCOM] Dahua llamada contestada vía ${ep} en ${dev.nombre_identificador}`);
+            break;
+          } catch {}
+        }
+        try {
+          await this.dahuaService.rpcCall(resolved.ip, resolved.port, user, pass, 'VoipTalk.answer', {});
+          dahuaSent = true;
+          this.logger.log(`📞 [INTERCOM] Dahua VoipTalk.answer RPC enviado en ${dev.nombre_identificador}`);
+        } catch {}
+        return dahuaSent;
+      }
+
+      // Hikvision Door Station:
+      // Enviar 'answer' para que la estación exterior corte el timbrado ('tuuu...'),
+      // reproduzca 'Por favor hable' y pase su chip de audio a estado de llamada conectada.
+      const base = `http://${resolved.ip}:${resolved.port}`;
+      let hikSent = false;
+
+      // 1. Intentar responder con la señal nativa 'answer'
+      try {
+        await this.devicePoller.executeDigestRequest(
+          'PUT',
+          `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
+          user,
+          pass,
+          JSON.stringify({ CallSignal: { cmdType: 'answer' } }),
+          'application/json',
+          2000
+        );
+        hikSent = true;
+        this.logger.log(`📞 [INTERCOM] Llamada CONTESTADA exitosamente con "answer" en ${dev.nombre_identificador}`);
+      } catch (jsonErr: any) {
+        try {
+          const xml = `<?xml version="1.0" encoding="UTF-8"?><CallSignal version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema"><cmdType>answer</cmdType></CallSignal>`;
+          await this.devicePoller.executeDigestRequest(
+            'PUT',
+            `${base}/ISAPI/VideoIntercom/callSignal`,
+            user,
+            pass,
+            xml,
+            'application/xml',
+            2000
+          );
+          hikSent = true;
+          this.logger.log(`📞 [INTERCOM] Llamada CONTESTADA exitosamente con XML "answer" en ${dev.nombre_identificador}`);
+        } catch (xmlErr: any) {
+          this.logger.warn(`⚠️ [INTERCOM] No se pudo enviar "answer" directo, aplicando fallback silenciador: ${xmlErr.message}`);
+          // Fallback seguro: si el dispositivo ya estaba contestado o no aceptó 'answer', silenciar timbre
+          hikSent = await this.silenciarTimbreHardware(deviceId);
+        }
+      }
+
+      return hikSent;
+    } catch (err: any) {
+      this.logger.warn(`No se pudo contestar llamada en hardware: ${err.message}`);
+      return false;
+    }
+  }
+
   async contestarLlamadaDispositivo(deviceId: string, operator?: any) {
     try {
       const { data: dev } = await this.supabase
@@ -893,7 +1022,7 @@ export class ControlAccesoService implements OnModuleInit {
       });
 
       this.logger.log(`📞 [INTERCOM] Contestando y silenciando timbre físico de ${dev.nombre_identificador}...`);
-      const sent = await this.silenciarTimbreHardware(deviceId);
+      const sent = await this.contestarTimbreHardware(deviceId);
 
       return { ok: true, sent, mensaje: 'Llamada contestada y timbre silenciado en hardware' };
     } catch (err: any) {
@@ -1182,10 +1311,10 @@ export class ControlAccesoService implements OnModuleInit {
 
     this.logger.log(`🎙️ [AUDIO-IN] Target resolved: host=${target.host}:${target.port}, user=${target.user}, passLength=${target.pass?.length || 0}, isDahua=${target.isDahua}`);
 
-    // Silenciar automáticamente el timbre en hardware al iniciar a transmitir voz por el micrófono
+    // Silenciar o contestar automáticamente el timbre en hardware al iniciar a transmitir voz por el micrófono
     if (deviceId) {
-      this.silenciarTimbreHardware(deviceId).catch((err) => {
-        this.logger.debug(`[AUDIO-IN] Silenciar timbre en background: ${err?.message}`);
+      this.contestarTimbreHardware(deviceId).catch((err) => {
+        this.logger.debug(`[AUDIO-IN] Contestar/silenciar timbre en background: ${err?.message}`);
       });
     }
 
@@ -1249,18 +1378,30 @@ export class ControlAccesoService implements OnModuleInit {
 </TwoWayAudioChannel>`;
 
     let sessionId: string | null = null;
-    try {
-      this.logger.log(`🎙️ [AUDIO-IN] Abriendo canal de audio en ${target.host}:${target.port}`);
-      const openResult = await this.executeDigestAuth('PUT', `${baseIsapi}/open`, target.user, target.pass, openPayload, 'text', 15000, isapiHeaders);
-      this.logger.log(`✅ [AUDIO-IN] Canal de audio abierto correctamente`);
-      const match = String(openResult).match(/<sessionId>([^<]+)<\/sessionId>/i);
-      if (match && match[1]) {
-        sessionId = match[1].trim();
-        this.logger.log(`🔑 [AUDIO-IN] Hikvision TwoWayAudio sessionId obtenido: ${sessionId}`);
+    let openAttempts = 0;
+    const maxOpenAttempts = 3;
+    while (openAttempts < maxOpenAttempts) {
+      openAttempts++;
+      try {
+        this.logger.log(`🎙️ [AUDIO-IN] Abriendo canal de audio (intento ${openAttempts}/${maxOpenAttempts}) en ${target.host}:${target.port}`);
+        const openResult = await this.executeDigestAuth('PUT', `${baseIsapi}/open`, target.user, target.pass, openPayload, 'text', 15000, isapiHeaders);
+        this.logger.log(`✅ [AUDIO-IN] Canal de audio abierto correctamente`);
+        const match = String(openResult).match(/<sessionId>([^<]+)<\/sessionId>/i);
+        if (match && match[1]) {
+          sessionId = match[1].trim();
+          this.logger.log(`🔑 [AUDIO-IN] Hikvision TwoWayAudio sessionId obtenido: ${sessionId}`);
+        }
+        break;
+      } catch (openErr: any) {
+        const isBusy = /403|busy|occupied|400|deviceState/i.test(openErr?.message || '');
+        if (openAttempts < maxOpenAttempts && isBusy) {
+          this.logger.warn(`⚠️ [AUDIO-IN] Canal ocupado en dispositivo, esperando 600ms para reintentar (intento ${openAttempts}/${maxOpenAttempts})...`);
+          await new Promise(r => setTimeout(r, 600));
+        } else {
+          this.logger.error(`❌ [AUDIO-IN] FALLO al abrir canal de audio: ${openErr.message}`);
+          throw new Error(`No se pudo abrir el canal de audio en el dispositivo: ${openErr.message}`);
+        }
       }
-    } catch (openErr) {
-      this.logger.error(`❌ [AUDIO-IN] FALLO al abrir canal de audio: ${openErr.message}`);
-      throw new Error(`No se pudo abrir el canal de audio en el dispositivo: ${openErr.message}`);
     }
 
     const deviceUrl = sessionId
