@@ -2919,6 +2919,36 @@ export class ControlAccesoService implements OnModuleInit {
     return { ip, port: Number(configuredRtsp || 554), via: 'directo' };
   }
 
+  /**
+   * Auto-calibra los encoders de streaming de terminales Hikvision para máxima estabilidad:
+   * Forza CBR, I-Frame interval a 1000ms (1s), GOP de 25 fotogramas y audio G.711ulaw.
+   */
+  async asegurarFormatoStreamHikvision(ip: string, port: number, user: string, pass: string): Promise<void> {
+    try {
+      const channels = ['101', '102'];
+      const base = `http://${ip}:${port}`;
+      for (const ch of channels) {
+        try {
+          const getRes = await this.devicePoller.executeDigestRequest(
+            'GET', `${base}/ISAPI/Streaming/channels/${ch}`, user, pass, null, 'application/xml', 3000
+          );
+          let xml = typeof getRes === 'string' ? getRes : JSON.stringify(getRes);
+          if (xml && xml.includes('<StreamingChannel')) {
+            xml = xml.replace(/<videoQualityControlType>[^<]+<\/videoQualityControlType>/g, '<videoQualityControlType>CBR</videoQualityControlType>');
+            xml = xml.replace(/<keyFrameInterval>[^<]+<\/keyFrameInterval>/g, '<keyFrameInterval>1000</keyFrameInterval>');
+            xml = xml.replace(/<GovLength>[^<]+<\/GovLength>/g, '<GovLength>25</GovLength>');
+            await this.devicePoller.executeDigestRequest(
+              'PUT', `${base}/ISAPI/Streaming/channels/${ch}`, user, pass, xml, 'application/xml', 3000
+            );
+            this.logger.log(`📹 [HIKVISION ENCODE] Canal ${ch} auto-calibrado: CBR, GOP=25 (1s), 1000ms en ${ip}:${port}`);
+          }
+        } catch {}
+      }
+    } catch (err: any) {
+      this.logger.debug(`[HIKVISION ENCODE] Auto-calibración en background: ${err?.message}`);
+    }
+  }
+
   async startVideoStream(deviceId: string): Promise<any> {
     try {
       // 1. Obtener datos del dispositivo
@@ -2981,17 +3011,18 @@ export class ControlAccesoService implements OnModuleInit {
 
       let rtspPath = '/Streaming/Channels/102'; // Default: Hikvision Sub-Stream
 
+      const httpPort = Number(
+        dev.configuracion_tecnica?.puertos_mapeados?.mapped_http ||
+        dev.configuracion_tecnica?.puerto ||
+        dev.puerto ||
+        80
+      );
+
       if (isDahua) {
         rtspPath = '/cam/realmonitor?channel=1&subtype=0'; // Dahua Main-Stream (H.264 compatible con todos los navegadores)
-        const httpPort = Number(
-          dev.configuracion_tecnica?.puertos_mapeados?.mapped_http ||
-          dev.configuracion_tecnica?.puerto ||
-          dev.puerto ||
-          80
-        );
         this.dahuaService.asegurarFormatoH264(targetIp, httpPort, user, pass).catch(() => {});
-      } else if (marcaStr.includes('zk')) {
-        rtspPath = '/live/ch01_1'; // ZKTeco Sub-Stream
+      } else {
+        this.asegurarFormatoStreamHikvision(targetIp, httpPort, user, pass).catch(() => {});
       }
 
       // Armar la URL de la fuente RTSP (EncodeURIComponent para contraseñas con caracteres especiales como #)
