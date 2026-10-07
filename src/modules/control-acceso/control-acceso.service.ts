@@ -3071,11 +3071,12 @@ export class ControlAccesoService implements OnModuleInit {
         }
       }
 
-      // Retornar las rutas con el prefijo /webrtc/ que maneja el frontend y el iframe
+      // Retornar las rutas con el prefijo /webrtc/ que maneja el frontend, el WHEP player nativo y el iframe fallback
       return {
         streamName,
         webrtcUrl: `https://${domain}/webrtc/${streamName}`,
-        iframeUrl: `https://${domain}/webrtc/${streamName}/` // El slash final es vital
+        iframeUrl: `https://${domain}/webrtc/${streamName}/`, // El slash final es vital
+        whepUrl: `https://${domain}/webrtc/${streamName}/whep`
       };
     } catch (error) {
       this.logger.error(`❌ [WEBRTC STREAM] Error: ${error.message}`);
