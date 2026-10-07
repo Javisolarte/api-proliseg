@@ -623,7 +623,6 @@ export class ComunicacionesGateway implements OnGatewayInit, OnGatewayConnection
 
         try {
             const buffer = Buffer.isBuffer(data.chunk) ? data.chunk : Buffer.from(data.chunk);
-            this.logger.log(`🎙️ [AUDIO-IN-WS] Recibido chunk de micrófono (${buffer.length} bytes)`);
             session.stream.write(buffer);
         } catch (err) {
             this.logger.error(`🎙️ [AUDIO-IN-WS] Error escribiendo chunk en stream: ${err.message}`);
