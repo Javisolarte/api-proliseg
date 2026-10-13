@@ -1091,6 +1091,29 @@ export class AsistenciaIotService implements OnModuleInit {
     };
   }
 
+  /**
+   * Sincroniza un funcionario específico con el dispositivo biométrico del puesto.
+   */
+  async sincronizarPersonalIndividual(personalId: number) {
+    const { data: personal, error } = await this.adminClient
+      .from('asistencia_iot_personal')
+      .select('*')
+      .eq('id', personalId)
+      .maybeSingle();
+
+    if (error || !personal) {
+      throw new NotFoundException('Funcionario no encontrado');
+    }
+
+    const resultado = await this.sincronizarHardwarePuesto(personal.puesto_id, personal);
+    return {
+      id: personal.id,
+      nombre: personal.nombre_completo,
+      cedula: personal.cedula,
+      ...resultado,
+    };
+  }
+
   private async descargarFotoBase64(url: string | null): Promise<string | null> {
     if (!url) return null;
     if (url.startsWith('data:')) return url;

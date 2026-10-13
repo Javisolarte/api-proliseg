@@ -161,6 +161,18 @@ export class AsistenciaIotController {
     return this.service.deletePersonal(id);
   }
 
+  @Post('puestos/:puestoId/personal/sincronizar')
+  @ApiOperation({ summary: 'Sincronizar todo el personal del puesto con el dispositivo biométrico' })
+  sincronizarPersonalPuesto(@Param('puestoId', ParseIntPipe) puestoId: number) {
+    return this.service.sincronizarPersonalPuesto(puestoId);
+  }
+
+  @Post('personal/:id/sincronizar')
+  @ApiOperation({ summary: 'Sincronizar un funcionario individual con el biométrico' })
+  sincronizarPersonalIndividual(@Param('id', ParseIntPipe) id: number) {
+    return this.service.sincronizarPersonalIndividual(id);
+  }
+
   // ==========================================================================
   // REGISTROS DE ASISTENCIA
   // ==========================================================================
