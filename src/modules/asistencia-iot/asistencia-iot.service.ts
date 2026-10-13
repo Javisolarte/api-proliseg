@@ -1,9 +1,10 @@
-import { Injectable, Logger, NotFoundException, BadRequestException, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException, OnModuleInit, Inject, forwardRef } from '@nestjs/common';
 import { createClient } from '@supabase/supabase-js';
 import axios from 'axios';
 import { SupabaseService } from '../supabase/supabase.service';
 import { DahuaService } from '../control-acceso/dahua.service';
 import { DevicePollerService } from '../control-acceso/device-poller.service';
+import { ControlAccesoService } from '../control-acceso/control-acceso.service';
 
 /** Colombia (America/Bogota) no tiene horario de verano: UTC-5 fijo */
 const OFFSET_COLOMBIA_MS = -5 * 60 * 60 * 1000;
@@ -26,6 +27,8 @@ export class AsistenciaIotService implements OnModuleInit {
     private readonly supabase: SupabaseService,
     private readonly dahuaService: DahuaService,
     private readonly devicePoller: DevicePollerService,
+    @Inject(forwardRef(() => ControlAccesoService))
+    private readonly controlAccesoService: ControlAccesoService,
   ) {}
 
   /**
@@ -490,6 +493,24 @@ export class AsistenciaIotService implements OnModuleInit {
 
   async createPersonalManual(puestoId: number, dto: CreatePersonalManualDto) {
     const realPuestoId = await this.resolveRealPuestoId(puestoId);
+
+    // 1. Buscar si ya existe la persona en este puesto para conservar foto existente y sincronización
+    const { data: existing } = await this.adminClient
+      .from('asistencia_iot_personal')
+      .select('id, foto_rostro_url, sincronizado_dispositivo')
+      .eq('puesto_id', realPuestoId)
+      .eq('cedula', dto.cedula.trim())
+      .maybeSingle();
+
+    let finalFotoUrl = existing?.foto_rostro_url || null;
+
+    // Si viene nueva foto en base64, subirla al bucket de storage
+    if (dto.foto_base64 && dto.foto_base64.includes('base64,')) {
+      finalFotoUrl = await this.subirFotoStorage(dto.foto_base64, realPuestoId, dto.cedula);
+    } else if (dto.foto_rostro_url && dto.foto_rostro_url.trim() !== '') {
+      finalFotoUrl = dto.foto_rostro_url;
+    }
+
     const payload = {
       puesto_id: realPuestoId,
       horario_id: dto.horario_id || null,
@@ -498,8 +519,9 @@ export class AsistenciaIotService implements OnModuleInit {
       telefono: dto.telefono?.trim() || null,
       correo: dto.correo?.trim() || null,
       cargo: dto.cargo?.trim() || null,
-      foto_rostro_url: dto.foto_rostro_url || null,
+      foto_rostro_url: finalFotoUrl,
       activo: true,
+      updated_at: new Date().toISOString(),
     };
 
     const { data, error } = await this.adminClient
@@ -564,13 +586,34 @@ export class AsistenciaIotService implements OnModuleInit {
     const { dispositivo_id, cedula, foto_url, timestamp, detalles_raw } = params;
     if (!cedula && !params.nombre) return null;
 
-    // Buscar puesto asociado al dispositivo
-    const { data: config } = await this.adminClient
+    // Buscar puesto asociado al dispositivo (directo o por dispositivo_iot.puesto_id)
+    let config: any = null;
+    const { data: directConfig } = await this.adminClient
       .from('puestos_asistencia_iot_config')
       .select('puesto_id, iot_activo, tolerancia_minutos')
       .eq('dispositivo_iot_id', dispositivo_id)
       .eq('iot_activo', true)
       .maybeSingle();
+
+    if (directConfig) {
+      config = directConfig;
+    } else {
+      const { data: dev } = await this.adminClient
+        .from('dispositivos_iot')
+        .select('id, puesto_id')
+        .eq('id', dispositivo_id)
+        .maybeSingle();
+
+      if (dev?.puesto_id) {
+        const { data: fallbackConfig } = await this.adminClient
+          .from('puestos_asistencia_iot_config')
+          .select('puesto_id, iot_activo, tolerancia_minutos')
+          .eq('puesto_id', dev.puesto_id)
+          .eq('iot_activo', true)
+          .maybeSingle();
+        if (fallbackConfig) config = fallbackConfig;
+      }
+    }
 
     if (!config) {
       return null; // El dispositivo no tiene IoT activo para asistencia en ningún puesto
@@ -656,14 +699,34 @@ export class AsistenciaIotService implements OnModuleInit {
     // CASO 1: YA TIENE ENTRADA HOY -> EVALUAR SALIDA O ANTI-REBOTE
     // ========================================================================
     if (regHoy) {
-      // Si la lectura está dentro del período de BLOQUEO ANTI-REBOTE -> IGNORAR
-      if (regHoy.bloqueado_hasta && eventDate.getTime() < new Date(regHoy.bloqueado_hasta).getTime()) {
-        this.logger.debug(`[Anti-Rebote] Ignorando marcación repetida para ${persona.nombre_completo} hasta ${regHoy.bloqueado_hasta}`);
+      const ahoraMs = eventDate.getTime();
+      const entradaMs = new Date(regHoy.hora_entrada_real).getTime();
+      const diffEntradaMin = (ahoraMs - entradaMs) / (60 * 1000);
+
+      // Anti-rebote inmediato: evitar duplicar lecturas consecutivas en menos de 3 minutos
+      if (diffEntradaMin < 3) {
+        this.logger.debug(`[Anti-Rebote] Ignorando marcación repetida para ${persona.nombre_completo} (${Math.round(diffEntradaMin * 60)}s tras entrada)`);
         return { ignorado_antirebote: true, registro_id: regHoy.id };
       }
 
-      // Si aún no tiene salida y ya está en ventana de salida (o después de su inicio)
-      if (!regHoy.hora_salida_real && eventTimeMinutes > progEntradaMin + 30) {
+      // Si ya tiene salida registrada:
+      if (regHoy.hora_salida_real) {
+        const salidaMs = new Date(regHoy.hora_salida_real).getTime();
+        const diffSalidaMin = (ahoraMs - salidaMs) / (60 * 1000);
+        if (diffSalidaMin < 3) {
+          this.logger.debug(`[Anti-Rebote] Ignorando marcación repetida tras salida para ${persona.nombre_completo}`);
+          return { ignorado_antirebote: true, registro_id: regHoy.id };
+        }
+
+        // Si es jornada partida y la marcación previa fue del tramo 'mañana',
+        // pero ahora ya estamos en la tarde (tramo 'tarde'), dejamos continuar para crear entrada de la tarde
+        if (horario?.es_jornada_partida && regHoy.tramo_horario === 'mañana' && tramoActual === 'tarde') {
+          // Continuar hacia CASO 2 (nueva entrada tarde)
+        } else {
+          return { ya_registrado: true, registro_id: regHoy.id, mensaje: 'Jornada completada' };
+        }
+      } else {
+        // NO TIENE SALIDA AÚN Y PASARON MÁS DE 3 MINUTOS -> REGISTRAR SALIDA
         let estadoSalida = 'cumplido';
         if (eventTimeMinutes < progSalidaMin - toleranciaMin) {
           estadoSalida = 'anticipado';
@@ -671,23 +734,31 @@ export class AsistenciaIotService implements OnModuleInit {
           estadoSalida = 'extra';
         }
 
-        const { data: updated } = await this.adminClient
+        const detalles = regHoy.detalles_raw || {};
+        detalles.salida_marcada_por = dispositivo_id;
+
+        const { data: updated, error: updErr } = await this.adminClient
           .from('asistencia_iot_registros')
           .update({
             hora_salida_real: eventDate.toISOString(),
             estado_salida: estadoSalida,
             foto_salida_url: foto_url || persona.foto_rostro_url,
             estado_general: 'finalizado',
+            bloqueado_hasta: new Date(ahoraMs + 3 * 60 * 1000).toISOString(),
+            detalles_raw: detalles,
           })
           .eq('id', regHoy.id)
           .select()
           .single();
 
+        if (updErr) {
+          this.logger.error(`Error actualizando salida asistencia IoT: ${updErr.message}`);
+          throw updErr;
+        }
+
         this.logger.log(`✅ [Asistencia IoT] Salida registrada: ${persona.nombre_completo} [${tramoActual}] (${estadoSalida})`);
         return updated;
       }
-
-      return { ya_registrado: true, registro_id: regHoy.id };
     }
 
     // ========================================================================
@@ -708,14 +779,8 @@ export class AsistenciaIotService implements OnModuleInit {
       minutosTardanza = diffEntrada;
     }
 
-    // Calcular hora de bloqueo anti-rebote:
-    // Bloquear hasta 30 minutos antes de la hora de salida programada,
-    // o al menos 2 horas después de la entrada
-    let bloqueoTimestamp = new Date(eventDate.getTime() + 2 * 60 * 60 * 1000);
-    const minutosHastaVentanaSalida = progSalidaMin - toleranciaMin - eventTimeMinutes;
-    if (minutosHastaVentanaSalida > 0) {
-      bloqueoTimestamp = new Date(eventDate.getTime() + minutosHastaVentanaSalida * 60 * 1000);
-    }
+    // Bloqueo anti-rebote inmediato de 3 minutos
+    const bloqueoTimestamp = new Date(eventDate.getTime() + 3 * 60 * 1000);
 
     const { data: nuevoRegistro, error: regErr } = await this.adminClient
       .from('asistencia_iot_registros')
@@ -1067,17 +1132,55 @@ export class AsistenciaIotService implements OnModuleInit {
     const dev = cfg.dispositivo;
     const tec = dev.configuracion_tecnica || {};
     const marca = String(tec.marca || '').toLowerCase();
-    if (marca && marca !== 'dahua') {
-      await marcarEstado(false);
-      return { ok: false, mensaje: `El dispositivo ${dev.nombre_identificador} es ${tec.marca}; la asistencia IoT solo soporta Dahua` };
-    }
-
     const ip = dev.ip_direccion;
     const port = Number(tec.puerto) || 80;
     const user = dev.credencial_usuario || 'admin';
     const pass = dev.credencial_password || '';
     const destino = `${dev.nombre_identificador} (${ip}:${port})`;
 
+    // Descargar foto en base64 si existe
+    const fotoBase64 = await this.descargarFotoBase64(personal.foto_rostro_url);
+
+    // ── SOPORTE HIKVISION ─────────────────────────────────────────────────────
+    if (marca.includes('hikvision') || marca.includes('hik')) {
+      try {
+        this.logger.log(`🔄 [Asistencia IoT Sync] Enrolando funcionario ${personal.nombre_completo} (${personal.cedula}) en Hikvision ${destino}...`);
+
+        // 1. Crear usuario en hardware Hikvision
+        await this.controlAccesoService.crearUsuarioEnHardware(
+          ip,
+          personal.cedula,
+          personal.nombre_completo,
+          dev.id,
+        );
+
+        // 2. Subir foto facial si existe
+        let rostroCargado = false;
+        if (fotoBase64) {
+          try {
+            await this.controlAccesoService.uploadRostro(ip, personal.cedula, fotoBase64, dev.id);
+            rostroCargado = true;
+          } catch (rostroErr: any) {
+            this.logger.warn(`⚠️ [Asistencia IoT Sync] Error subiendo foto a Hikvision ${destino}: ${rostroErr.message}`);
+          }
+        }
+
+        await marcarEstado(true);
+        this.logger.log(`✅ [Asistencia IoT Sync] ${personal.nombre_completo} sincronizado en Hikvision ${destino} (rostro: ${rostroCargado})`);
+        return {
+          ok: true,
+          mensaje: rostroCargado ? 'Sincronizado con rostro en terminal Hikvision' : 'Usuario registrado en Hikvision (sin foto facial)',
+        };
+      } catch (err: any) {
+        await marcarEstado(false);
+        const mensaje = `Error enrolando en terminal Hikvision ${destino}: ${err.message}`;
+        this.logger.warn(`⚠️ [Asistencia IoT Sync] ${mensaje}`);
+        const isOffline = /timeout|refused|unreach|ECONN/i.test(err.message);
+        return { ok: false, mensaje, dispositivoOffline: isOffline };
+      }
+    }
+
+    // ── SOPORTE DAHUA (O GENÉRICO) ────────────────────────────────────────────
     // 1. Verificar que el terminal responda antes de intentar enrolar
     try {
       await this.dahuaService.getSystemInfo(ip, port, user, pass);
@@ -1088,8 +1191,7 @@ export class AsistenciaIotService implements OnModuleInit {
       return { ok: false, mensaje, dispositivoOffline: true };
     }
 
-    // 2. La foto es obligatoria para el reconocimiento facial
-    const fotoBase64 = await this.descargarFotoBase64(personal.foto_rostro_url);
+    // 2. La foto es obligatoria para el reconocimiento facial en Dahua
     if (!fotoBase64) {
       await marcarEstado(false);
       return { ok: false, mensaje: `${personal.nombre_completo} no tiene una foto de rostro válida` };
@@ -1112,7 +1214,7 @@ export class AsistenciaIotService implements OnModuleInit {
       }
 
       this.logger.log(`✅ [Asistencia IoT Sync] ${personal.nombre_completo} enrolado con rostro en ${destino}`);
-      return { ok: true, mensaje: 'Sincronizado con rostro' };
+      return { ok: true, mensaje: 'Sincronizado con rostro en Dahua' };
     } catch (err: any) {
       await marcarEstado(false);
       this.logger.warn(`⚠️ [Asistencia IoT Sync] Error enrolando en ${destino}: ${err.message}`);

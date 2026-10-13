@@ -132,6 +132,10 @@ export class CreatePersonalManualDto {
   foto_rostro_url?: string;
 
   @IsOptional()
+  @IsString()
+  foto_base64?: string;
+
+  @IsOptional()
   @IsNumber()
   horario_id?: number;
 }
