@@ -9,6 +9,7 @@ import { DevicePollerService } from './device-poller.service';
 import { spawn } from 'child_process';
 import { DahuaService } from './dahua.service';
 import { DahuaSipService } from './dahua-sip.service';
+import { normalizarFechaColombiaUTC, formatearHoraLocalHardwareColombia } from './timezone.helper';
 
 @Injectable()
 export class ControlAccesoService implements OnModuleInit {
@@ -5170,19 +5171,18 @@ export class ControlAccesoService implements OnModuleInit {
     const nombre = this.sanitizeHardwareName(visita.nombre_visitante || 'Visitante');
     const tokenQr = visita.token_qr;
 
-    // Calcular fecha de vencimiento
+    // Calcular fecha de vencimiento en hora local del terminal hardware (Colombia UTC-5)
     let endTime = '2036-12-31T23:59:59';
     if (visita.fecha_vencimiento) {
-      const venc = new Date(visita.fecha_vencimiento);
-      endTime = venc.toISOString().replace('Z', '').split('.')[0];
+      endTime = formatearHoraLocalHardwareColombia(new Date(visita.fecha_vencimiento));
     }
 
-    // Calcular fecha de inicio (30 min antes de la programada, o ahora)
-    let beginTime = new Date().toISOString().replace('Z', '').split('.')[0];
+    // Calcular fecha de inicio (30 min antes de la programada, en hora local del terminal)
+    let beginTime = formatearHoraLocalHardwareColombia(new Date());
     if (visita.fecha_programada) {
       const prog = new Date(visita.fecha_programada);
       prog.setMinutes(prog.getMinutes() - 30);
-      beginTime = prog.toISOString().replace('Z', '').split('.')[0];
+      beginTime = formatearHoraLocalHardwareColombia(prog);
     }
 
     this.logger.log(`🎫 [VISITA-HW] Registrando visitante '${nombre}' (${employeeNo}) en dispositivo ${ip} con cardNo=${tokenQr}`);
@@ -6464,7 +6464,7 @@ export class ControlAccesoService implements OnModuleInit {
     // Generar un token QR numérico de 12 dígitos para compatibilidad con controles de acceso Hikvision
     const randomNumericToken = Math.floor(100000000000 + Math.random() * 900000000000).toString();
 
-    const fechaProg = body.fecha_programada || new Date().toISOString();
+    const fechaProg = normalizarFechaColombiaUTC(body.fecha_programada);
     const durHoras = body.duracion_horas || 2;
     const fechaVencimiento = new Date(new Date(fechaProg).getTime() + durHoras * 60 * 60 * 1000).toISOString();
 
@@ -6511,7 +6511,11 @@ export class ControlAccesoService implements OnModuleInit {
         .eq('id', id)
         .maybeSingle();
       if (existing) {
-        const prog = body.fecha_programada !== undefined ? body.fecha_programada : existing.fecha_programada;
+        const rawProg = body.fecha_programada !== undefined ? body.fecha_programada : existing.fecha_programada;
+        const prog = normalizarFechaColombiaUTC(rawProg);
+        if (body.fecha_programada !== undefined) {
+          body.fecha_programada = prog;
+        }
         const dur = body.duracion_horas !== undefined ? body.duracion_horas : (existing.duracion_horas || 2);
         body.fecha_vencimiento = new Date(new Date(prog).getTime() + dur * 60 * 60 * 1000).toISOString();
       }

@@ -4,6 +4,7 @@ import { ControlAccesoService } from './control-acceso.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import axios from 'axios';
+import { normalizarFechaColombiaUTC } from './timezone.helper';
 
 @ApiTags('Residentes App')
 @ApiBearerAuth('JWT-auth')
@@ -149,7 +150,7 @@ export class ResidentesAppController {
     const documentoVisitante = body.documento_visitante || '';
     const telefonoVisitante = body.telefono_visitante || null;
     const motivo = body.motivo || body.observacion || 'Visita programada';
-    const fechaProgramada = body.fecha_programada || body.fecha_esperada || new Date().toISOString();
+    const fechaProgramada = normalizarFechaColombiaUTC(body.fecha_programada || body.fecha_esperada, true);
     const duracionHoras = body.duracion_horas || 2;
 
     let { data: persona } = await admin
