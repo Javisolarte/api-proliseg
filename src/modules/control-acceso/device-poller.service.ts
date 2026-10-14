@@ -598,16 +598,19 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     const intercomStatus = String(info?.IntercomEvent?.callStatus || '').toLowerCase();
     const isCallCenter = desc.includes('management center') || desc.includes('call center') || desc.includes('centro') || desc.includes('intercom');
 
-    // ── Si es control de acceso puro (major 5), procesar acceso y salir de inmediato (NUNCA es llamada) ──
-    if (major === 5) {
+    // ── Si es control de acceso puro (major 5), procesar acceso y salir de inmediato (a menos que sea timbre minor 51) ──
+    if (major === 5 && sub === 51) {
+      // Botón de llamada físico/táctil en terminales de acceso facial (ej: DS-K1T344): continúa hacia isRing
+    } else if (major === 5) {
       this.procesarWebhookHikvision(eventObj, device.id).catch(() => {});
       return;
     }
 
     // Eventos de llamada de citófono en Hikvision:
-    // Captura timbre VideoIntercom (major 3, minor 43/1/88), llamada al centro de gestión y estados calling/ring
+    // Captura timbre VideoIntercom (major 3, minor 43/1/88/112/113), botón llamada (major 5, minor 51) y estados calling/ring
     const isRing =
-      (major === 3 && (sub === 43 || sub === 1 || sub === 88)) ||
+      (major === 5 && sub === 51) ||
+      (major === 3 && (sub === 43 || sub === 1 || sub === 88 || sub === 112 || sub === 113 || sub === 114)) ||
       isCallCenter ||
       intercomStatus === 'calling' ||
       intercomStatus === 'ring' ||
@@ -1003,7 +1006,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
-  private async getDeviceById(idOrIp: string): Promise<DeviceInfo | null> {
+  public async getDeviceById(idOrIp: string): Promise<DeviceInfo | null> {
     if (!idOrIp) return null;
     const cached = this.devicesMap.get(idOrIp);
     if (cached) return cached;
@@ -1028,8 +1031,9 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   private mapHikvisionEventType(major: number, minor: number, eventType?: string): string {
     const et = String(eventType || '').toLowerCase();
 
-    // ── Control de Acceso (major 5) — NUNCA ES LLAMADA ─────────────────────
+    // ── Control de Acceso (major 5) ──────────────────────────────────────────
     if (major === 5) {
+      if (minor === 51) return 'llamada'; // 0x33 = MINOR_CALL_BUTTON_PRESSED (timbre/botón de llamada del citófono)
       if (minor === 75) return 'entrada';
       if (minor === 76) return 'salida';
       if (minor === 21) return 'apertura_boton'; // Botón físico de salida presionado
@@ -1040,12 +1044,15 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
     // ── Intercomunicador / Timbre / Llamada ──────────────────────────────────
     // En Hikvision las llamadas son VideoIntercom (major 3) con códigos específicos de timbre:
-    // minor 43 = MINOR_BELL_CALLING (timbre al centro o residente)
-    // minor 1  = MINOR_CALL_SLAVE
-    // minor 88 = MINOR_DEVICE_RINGING
-    // ATENCIÓN: minor 1024 es MINOR_LOCAL_DEVICE_ONLINE (keep-alive periódico de Hikvision, NUNCA llamada)
+    // minor 43  = MINOR_BELL_CALLING (timbre al centro o residente)
+    // minor 1   = MINOR_CALL_SLAVE
+    // minor 88  = MINOR_DEVICE_RINGING
+    // minor 112 = MINOR_CALL_CENTER (llamada al centro de gestión)
+    // minor 113 = MINOR_CALL_RESIDENCE
+    // minor 114 = MINOR_CALL_APP
+    // ATENCIÓN: minor 1024 y 1028 son keep-alive periódicos de Hikvision, NUNCA llamada
     if (
-      (major === 3 && (minor === 43 || minor === 1 || minor === 88)) ||
+      (major === 3 && (minor === 43 || minor === 1 || minor === 88 || minor === 112 || minor === 113 || minor === 114)) ||
       et === 'ring' ||
       et === 'calling' ||
       et === 'call' ||
@@ -1077,7 +1084,11 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     let nombrePersona = this.firstText(info?.name, info?.employeeName, info?.userName, info?.UserName);
     let documentoPersona = this.firstText(info?.employeeNoString, info?.employeeNo, info?.userID, info?.UserID, info?.personId);
 
-    if (tipoEvento === 'apertura_boton') {
+    if (tipoEvento === 'llamada') {
+      nombrePersona = 'Llamada de Citófono';
+      documentoPersona = 'LLAMADA';
+      metodoAcceso = 'intercom';
+    } else if (tipoEvento === 'apertura_boton') {
       nombrePersona = 'Apertura por Botón';
       documentoPersona = 'BOTON';
       metodoAcceso = 'boton';

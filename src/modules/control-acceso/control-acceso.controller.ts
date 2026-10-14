@@ -270,9 +270,14 @@ export class ControlAccesoController {
   @ApiOperation({ summary: 'Simula un evento de llamada de citófono para probar la interfaz' })
   async simularLlamada(@Body() body: { deviceId?: string }) {
     const devId = body?.deviceId || 'b1de3230-aa82-4217-a0a3-f09074b1e42f';
+    let devName = 'Dispositivo';
+    try {
+      const dev = await this.devicePoller.getDeviceById(devId);
+      if (dev?.nombre_identificador) devName = dev.nombre_identificador;
+    } catch {}
     const evento: any = {
       dispositivo_id: devId,
-      nombre_dispositivo: 'EDIFICIO VADO PRINCIPAL INTERNO',
+      nombre_dispositivo: devName,
       tipo_evento: 'llamada',
       timestamp: new Date().toISOString(),
       detalles_raw: { simulated: true }
