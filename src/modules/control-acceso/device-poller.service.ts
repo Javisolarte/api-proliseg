@@ -640,7 +640,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     // Eventos de llamada de citófono en Hikvision:
     // Solo cuando el subsistema es VideoIntercom (major 3) o cuando el estado/tipo es explícitamente timbre/llamada
     const isRing =
-      (major === 3 && (sub === 43 || sub === 1 || sub === 9 || sub === 88)) ||
+      (major === 3 && (sub === 43 || sub === 1 || sub === 88)) ||
       eventType === 'ring' ||
       eventState === 'ring' ||
       eventType === 'call' ||
@@ -1063,10 +1063,13 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     }
 
     // ── Intercomunicador / Timbre / Llamada ──────────────────────────────────
-    // En Hikvision las llamadas son VideoIntercom (major 3) o eventos explícitos
+    // En Hikvision las llamadas son VideoIntercom (major 3) con códigos específicos de timbre:
+    // minor 43 = MINOR_BELL_CALLING (timbre al centro o residente)
+    // minor 1  = MINOR_CALL_SLAVE
+    // minor 88 = MINOR_DEVICE_RINGING
+    // ATENCIÓN: minor 1024 es MINOR_LOCAL_DEVICE_ONLINE (keep-alive periódico de Hikvision, NUNCA llamada)
     if (
-      (major === 3 && (minor === 43 || minor === 1 || minor === 88 || minor === 9)) ||
-      (major === 3) ||
+      (major === 3 && (minor === 43 || minor === 1 || minor === 88)) ||
       et === 'ring' ||
       et === 'call' ||
       et.includes('videotalk')
