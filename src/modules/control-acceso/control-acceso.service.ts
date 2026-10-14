@@ -840,15 +840,15 @@ export class ControlAccesoService implements OnModuleInit {
       }
 
       // Hikvision Door Station / Terminal de Acceso Facial:
-      // Cuando la estación exterior timbra (llamante), enviar 'cancel' o 'hangUp' corta DE INMEDIATO
-      // el timbrado físico en el altavoz del hardware ('tuuu, tuuu...') para permitir la verificación limpia.
+      // Cuando la estación exterior timbra (llamante), enviar 'reject' seguido de 'hangUp' corta DE INMEDIATO
+      // el timbrado físico en el altavoz del hardware ('tuuu, tuuu...') y cancela el timbrado en apps móviles (Hik-Connect)
+      // evitando que el generador de tono físico colisione con el audio de voz o que expire a los 30s.
       const base = `http://${resolved.ip}:${resolved.port}`;
       let hikSent = false;
 
-      // Intentar primero con 'cancel' (señal oficial que corta el timbrado exterior inmediatamente sin emitir "no contesta")
-      // y como respaldo 'hangUp' o 'reject'
-      const signalsToSilence = ['cancel', 'hangUp', 'reject', 'answer'];
-      for (const sig of signalsToSilence) {
+      // 1. Enviar prioritariamente 'reject' (corta el timbrado de inmediato en la estación exterior y en los clientes conectados)
+      const primarySignals = ['reject', 'hangUp', 'cancel', 'answer'];
+      for (const sig of primarySignals) {
         try {
           await this.devicePoller.executeDigestRequest(
             'PUT',
@@ -880,6 +880,19 @@ export class ControlAccesoService implements OnModuleInit {
           } catch {}
         }
       }
+
+      // 2. Si se envió reject, enviar también un hangUp de confirmación para asegurar cierre formal de llamada
+      try {
+        await this.devicePoller.executeDigestRequest(
+          'PUT',
+          `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
+          user,
+          pass,
+          JSON.stringify({ CallSignal: { cmdType: 'hangUp' } }),
+          'application/json',
+          1500
+        );
+      } catch {}
 
       return hikSent;
     } catch (err: any) {
@@ -1205,12 +1218,16 @@ export class ControlAccesoService implements OnModuleInit {
 
     this.logger.log(`🎙️ [AUDIO-IN] Target resolved: host=${target.host}:${target.port}, user=${target.user}, passLength=${target.pass?.length || 0}, isDahua=${target.isDahua}`);
 
-    // Silenciar o contestar automáticamente el timbre en hardware al iniciar a transmitir voz por el micrófono
+    // Silenciar o contestar formalmente el timbre en hardware al iniciar a transmitir voz por el micrófono
     const effectiveDeviceId = (deviceId && deviceId !== 'undefined' ? deviceId : undefined) || (target as any).deviceId;
     if (effectiveDeviceId) {
-      this.contestarTimbreHardware(effectiveDeviceId).catch((err) => {
-        this.logger.debug(`[AUDIO-IN] Contestar/silenciar timbre en background: ${err?.message}`);
-      });
+      try {
+        await this.contestarTimbreHardware(effectiveDeviceId);
+        // Pausa breve para garantizar que el oscilador físico apagó el timbre antes de inyectar voz
+        await new Promise(r => setTimeout(r, 150));
+      } catch (err: any) {
+        this.logger.debug(`[AUDIO-IN] Contestar/silenciar timbre error: ${err?.message}`);
+      }
     }
 
     if (target.isDahua) {
