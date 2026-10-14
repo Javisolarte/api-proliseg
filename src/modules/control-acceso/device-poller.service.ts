@@ -377,50 +377,14 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     this.logger.log(`✅ [EventSystem] Webhook Hikvision registrado → ${device.nombre_identificador} via ${protocolVal} (${ipAddressVal}:${portNoVal})`);
   }
 
-  // ─── Auto-configuración de Intercomunicador Hikvision (Llamar a Centro) ────
+  // ─── Configuración de Intercomunicador Hikvision ──────────────────────────
 
   private async configureHikvisionIntercom(device: DeviceInfo, ip: string, port: number, user: string, pass: string) {
-    try {
-      const base = `http://${ip}:${port}`;
-      // 'app' (Hik-Connect) emite timbrado continuo sin requerir central fisica port 8000, evitando 'Fallo de conexion'
-      const preferred = device.configuracion_tecnica?.call_method;
-      const tryMethods = preferred ? [preferred, 'app', 'callCenter', 'manageCenter'] : ['app', 'callCenter', 'manageCenter'];
-      let configured = false;
-
-      for (const method of tryMethods) {
-        const payload = `<?xml version="1.0" encoding="UTF-8"?>
-<KeyCfg version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
-  <id>1</id>
-  <callMethod>${method}</callMethod>
-  <keyType>call</keyType>
-  <enableCallCenter>true</enableCallCenter>
-</KeyCfg>`;
-
-        try {
-          await this.executeDigestRequest(
-            'PUT',
-            `${base}/ISAPI/VideoIntercom/keyCfg/1`,
-            user,
-            pass,
-            payload,
-            'application/xml',
-            5000
-          );
-          this.logger.log(`📞 [EventSystem] Intercomunicador Hikvision configurado (callMethod=${method}) → ${device.nombre_identificador}`);
-          configured = true;
-          break;
-        } catch {
-          // Si el firmware rechaza el parámetro, probar con la otra variante
-          continue;
-        }
-      }
-
-      if (!configured) {
-        this.logger.debug(`[EventSystem] No se pudo configurar keyCfg en ${device.nombre_identificador}`);
-      }
-    } catch (err: any) {
-      this.logger.debug(`[EventSystem] Dispositivo ${device.nombre_identificador} no soporta keyCfg intercom: ${err.message}`);
-    }
+    // RESPETAR LA CONFIGURACIÓN MANUAL DEL USUARIO:
+    // Nunca sobreescribir automáticamente el botón físico a 'app'. El usuario configura
+    // libremente 'Call Management Center' en la interfaz web de Hikvision y el sistema
+    // respeta y preserva esa configuración de forma permanente.
+    return;
   }
 
   // ─── Registro de webhook en Dahua ASI — AlarmServer CGI (correcto para ASI7213X) ──
