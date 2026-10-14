@@ -631,13 +631,20 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     const eventType = String(info?.eventType || '').toLowerCase();
     const eventState = String(info?.status || '').toLowerCase();
 
+    // ── Si es control de acceso puro (major 5), procesar acceso y salir de inmediato (NUNCA es llamada) ──
+    if (major === 5) {
+      this.procesarWebhookHikvision(eventObj, device.id).catch(() => {});
+      return;
+    }
+
     // Eventos de llamada de citófono en Hikvision:
     // Solo cuando el subsistema es VideoIntercom (major 3) o cuando el estado/tipo es explícitamente timbre/llamada
     const isRing =
       (major === 3 && (sub === 43 || sub === 1 || sub === 9 || sub === 88)) ||
-      eventType.includes('ring') ||
+      eventType === 'ring' ||
       eventState === 'ring' ||
-      (eventType.includes('call') && !eventType.includes('end') && !eventType.includes('hangup'));
+      eventType === 'call' ||
+      eventType === 'videotalk';
     const isAnswer = (major === 3 && sub === 44) || eventState === 'oncall';
     const isHangup = (major === 3 && sub === 45) || eventState === 'idle' || eventType.includes('hangup') || eventType.includes('callend');
 
@@ -1045,9 +1052,18 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   private mapHikvisionEventType(major: number, minor: number, eventType?: string): string {
     const et = String(eventType || '').toLowerCase();
 
+    // ── Control de Acceso (major 5) — NUNCA ES LLAMADA ─────────────────────
+    if (major === 5) {
+      if (minor === 75) return 'entrada';
+      if (minor === 76) return 'salida';
+      if (minor === 21) return 'apertura_boton'; // Botón físico de salida presionado
+      if (minor === 22) return 'puerta_abierta'; // Evento de estado de puerta / botón liberado
+      if (minor === 23) return 'puerta_cerrada';
+      return 'acceso';
+    }
+
     // ── Intercomunicador / Timbre / Llamada ──────────────────────────────────
-    // En Hikvision las llamadas pueden reportarse como major 3 (VideoIntercom)
-    // o como major 5 (AccessControl) con sub-códigos específicos de timbre/llamada
+    // En Hikvision las llamadas son VideoIntercom (major 3) o eventos explícitos
     if (
       (major === 3 && (minor === 43 || minor === 1 || minor === 88 || minor === 9)) ||
       (major === 3) ||
@@ -1056,16 +1072,6 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       et.includes('videotalk')
     ) {
       return 'llamada';
-    }
-
-    // ── Control de Acceso (major 5) ─────────────────────────────────────────
-    if (major === 5) {
-      if (minor === 75) return 'entrada';
-      if (minor === 76) return 'salida';
-      if (minor === 21) return 'apertura_boton'; // Botón físico de salida presionado
-      if (minor === 22) return 'puerta_abierta'; // Evento de estado de puerta / botón liberado
-      if (minor === 23) return 'puerta_cerrada';
-      return 'acceso';
     }
 
     if (major === 6) return 'alarma';
