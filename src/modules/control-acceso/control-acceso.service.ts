@@ -22,6 +22,7 @@ export class ControlAccesoService implements OnModuleInit {
   private faceUploadFormatCache = new Map<string, string>();
   private userCreateFormatCache = new Map<string, any>();
   private lastChimeSilenceTime = new Map<string, number>();
+  private activeTwoWaySessions = new Map<string, { sessionId: string; openedAt: number }>();
   private readonly audioTalkChannelId = 1;
 
   constructor(
@@ -678,76 +679,59 @@ export class ControlAccesoService implements OnModuleInit {
         } catch {}
       } else {
         const base = `http://${resolved.ip}:${resolved.port}`;
+        const deviceHost = `${resolved.ip}:${resolved.port}`;
         this.logger.log(`📞 [INTERCOM] Enviando señal de colgar y cierre de audio a Hikvision ${dev.nombre_identificador} (${base})...`);
 
-        // 1. Cerrar canal de audio bidireccional TwoWayAudio (resetea el estado a idle)
-        try {
-          await this.devicePoller.executeDigestRequest(
+        this.activeTwoWaySessions.delete(deviceHost);
+
+        const hangUpPayload = JSON.stringify({ CallSignal: { cmdType: 'hangUp' } });
+
+        // Enviar en paralelo cierre de audio y señal de colgado para que el equipo anuncie "La llamada ha terminado"
+        await Promise.allSettled([
+          this.devicePoller.executeDigestRequest(
             'PUT',
-            `${base}/ISAPI/System/TwoWayAudio/channels/1/close`,
+            `${base}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}/close`,
             user,
             pass,
             null,
             'application/xml',
             1500
-          );
-          sent = true;
-          this.logger.log(`📞 [INTERCOM] Canal TwoWayAudio 1 cerrado en ${dev.nombre_identificador}`);
-        } catch {}
-
-        // 2. Enviar señales de colgado y terminación de llamada
-        const signals = ['hangUp', 'reject', 'cancel'];
-        for (const sig of signals) {
-          const payloadJson = JSON.stringify({ CallSignal: { cmdType: sig } });
-          try {
-            await this.devicePoller.executeDigestRequest(
-              'PUT',
-              `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
-              user,
-              pass,
-              payloadJson,
-              'application/json',
-              1500
-            );
-            sent = true;
-            this.logger.log(`📞 [INTERCOM] Señal "${sig}" aceptada por ${dev.nombre_identificador}`);
-            break;
-          } catch {
-            try {
-              const xml = `<?xml version="1.0" encoding="UTF-8"?><CallSignal version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema"><cmdType>${sig}</cmdType></CallSignal>`;
-              await this.devicePoller.executeDigestRequest(
-                'PUT',
-                `${base}/ISAPI/VideoIntercom/callSignal`,
-                user,
-                pass,
-                xml,
-                'application/xml',
-                1500
-              );
-              sent = true;
-              this.logger.log(`📞 [INTERCOM] Señal XML "${sig}" aceptada por ${dev.nombre_identificador}`);
-              break;
-            } catch {}
-          }
-        }
-        // Cerrar también en canal ezviz por si la llamada estaba vinculada a la nube/tablet
-        try {
-          await this.devicePoller.executeDigestRequest(
+          ),
+          this.devicePoller.executeDigestRequest(
+            'PUT',
+            `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
+            user,
+            pass,
+            hangUpPayload,
+            'application/json',
+            1500
+          ),
+          this.devicePoller.executeDigestRequest(
             'PUT',
             `${base}/ISAPI/VideoIntercom/callSignal?format=json&channelType=ezviz`,
             user,
             pass,
-            JSON.stringify({ CallSignal: { cmdType: 'hangUp' } }),
+            hangUpPayload,
             'application/json',
             1200
-          );
-        } catch {}
+          )
+        ]);
+        sent = true;
       }
       return { ok: true, sent, mensaje: 'Señal de colgar enviada al hardware' };
     } catch (err: any) {
       this.logger.warn(`Error al colgar llamada en hardware: ${err.message}`);
       return { ok: false, mensaje: err.message };
     }
+  }
+
+  /**
+   * Rechaza una llamada de citófono entrante (equivalente al botón rojo mientras timbra).
+   * Corta el timbre en el terminal exterior y en todas las pantallas/apps.
+   */
+  async rechazarTimbreHardware(deviceId: string): Promise<boolean> {
+    const res = await this.colgarLlamadaDispositivo(deviceId);
+    return res.ok;
   }
 
   /**
@@ -847,8 +831,8 @@ export class ControlAccesoService implements OnModuleInit {
 
       // Hikvision Door Station / Terminal de Acceso Facial:
       // Responder formalmente la llamada emitiendo la señal 'answer' idéntica a la Tablet y Hik-Connect.
-      // NUNCA enviar 'deviceOnCall' (este comando le indica al hardware "Línea ocupada" y aborta la llamada).
       const base = `http://${resolved.ip}:${resolved.port}`;
+      const deviceHost = `${resolved.ip}:${resolved.port}`;
       let hikSent = false;
 
       const answerPayload = JSON.stringify({
@@ -857,7 +841,8 @@ export class ControlAccesoService implements OnModuleInit {
         }
       });
 
-      // 1. Enviar 'answer' al canal ISAPI principal para que anuncie "Por favor hable" y detenga el timbre
+      // Paso 1: Enviar señal de "answer" para cambiar el estado físico del DS-K1T344 a "In Call"
+      // Esto dispara el prompt interno "Por favor, hable" en el equipo y cancela el timbre en Hik-Connect
       try {
         await this.devicePoller.executeDigestRequest(
           'PUT',
@@ -869,12 +854,44 @@ export class ControlAccesoService implements OnModuleInit {
           1800
         );
         hikSent = true;
-        this.logger.log(`📞 [INTERCOM] Llamada contestada con "answer" en ${dev.nombre_identificador} ("Por favor hable" activado)`);
+        this.logger.log(`📞 [INTERCOM] Llamada contestada con "answer" en ${dev.nombre_identificador} ("Por favor, hable" activado)`);
       } catch (err: any) {
         this.logger.warn(`Error enviando answer a ${dev.nombre_identificador}: ${err.message}`);
       }
 
-      // 2. Si el terminal timbraba hacia la nube (Hik-Connect / EZVIZ), confirmar 'answer' en canal ezviz para silenciar la tablet/móviles
+      // Paso 2: CRÍTICO (< 300ms después del answer) - Abrir TwoWayAudio
+      // Así el DS-K1T344 enlaza el altavoz y micrófono con la sesión contestada y no aborta la llamada
+      try {
+        const audioFormat = this.deviceCodecCache.get(deviceHost) || 'mulaw';
+        const openPayload = `<?xml version="1.0" encoding="UTF-8"?>
+<TwoWayAudioChannel version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
+  <id>${this.audioTalkChannelId}</id>
+  <audioCompressionType>${audioFormat === 'alaw' ? 'G.711alaw' : 'G.711ulaw'}</audioCompressionType>
+</TwoWayAudioChannel>`;
+
+        const openRes = await this.devicePoller.executeDigestRequest(
+          'PUT',
+          `${base}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}/open`,
+          user,
+          pass,
+          openPayload,
+          'application/xml',
+          1800
+        );
+        const match = String(openRes).match(/<sessionId>([^<]+)<\/sessionId>/i);
+        if (match && match[1]) {
+          const sessId = match[1].trim();
+          this.activeTwoWaySessions.set(deviceHost, { sessionId: sessId, openedAt: Date.now() });
+          this.logger.log(`📞 [INTERCOM] TwoWayAudio canal ${this.audioTalkChannelId} abierto (sessionId: ${sessId}) en ${dev.nombre_identificador}`);
+        } else {
+          this.activeTwoWaySessions.set(deviceHost, { sessionId: '', openedAt: Date.now() });
+          this.logger.log(`📞 [INTERCOM] TwoWayAudio canal ${this.audioTalkChannelId} abierto en ${dev.nombre_identificador}`);
+        }
+      } catch (audioErr: any) {
+        this.logger.warn(`📞 [INTERCOM] Aviso al abrir TwoWayAudio canal ${this.audioTalkChannelId} en ${dev.nombre_identificador}: ${audioErr.message}`);
+      }
+
+      // Paso 3: Confirmar 'answer' en canal ezviz para silenciar la app Hik-Connect / móviles
       try {
         await this.devicePoller.executeDigestRequest(
           'PUT',
@@ -886,7 +903,6 @@ export class ControlAccesoService implements OnModuleInit {
           1500
         );
         hikSent = true;
-        this.logger.log(`📞 [INTERCOM] Llamada contestada en canal ezviz en ${dev.nombre_identificador} (timbre silenciado en tablets/apps)`);
       } catch {}
 
       return hikSent;
@@ -1272,41 +1288,51 @@ export class ControlAccesoService implements OnModuleInit {
       }
     }
 
-    // 0. Cerrar canal previo que pueda haber quedado abierto (ignorar errores)
-    try {
-      await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text', 15000, isapiHeaders);
-    } catch {}
+    // Verificar si ya tenemos una sesión de TwoWayAudio activa abierta al contestar la llamada
+    const activeSession = this.activeTwoWaySessions.get(deviceHost);
+    let sessionId: string | null = null;
+    const isFresh = activeSession && (Date.now() - activeSession.openedAt < 30000);
 
-    // 2. Abrir el canal de audio bidireccional en el dispositivo (Hikvision ISAPI)
-    const openPayload = `<?xml version="1.0" encoding="UTF-8"?>
+    if (isFresh && activeSession.sessionId) {
+      sessionId = activeSession.sessionId;
+      this.logger.log(`🎙️ [AUDIO-IN] Reutilizando sesión TwoWayAudio activa (sessionId: ${sessionId}) en ${deviceHost}`);
+    } else {
+      // 0. Cerrar canal previo que pueda haber quedado abierto (ignorar errores)
+      try {
+        await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text', 15000, isapiHeaders);
+      } catch {}
+
+      // 2. Abrir el canal de audio bidireccional en el dispositivo (Hikvision ISAPI)
+      const openPayload = `<?xml version="1.0" encoding="UTF-8"?>
 <TwoWayAudioChannel version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
   <id>${this.audioTalkChannelId}</id>
   <audioCompressionType>${audioFormat === 'alaw' ? 'G.711alaw' : 'G.711ulaw'}</audioCompressionType>
 </TwoWayAudioChannel>`;
 
-    let sessionId: string | null = null;
-    let openAttempts = 0;
-    const maxOpenAttempts = 3;
-    while (openAttempts < maxOpenAttempts) {
-      openAttempts++;
-      try {
-        this.logger.log(`🎙️ [AUDIO-IN] Abriendo canal de audio (intento ${openAttempts}/${maxOpenAttempts}) en ${target.host}:${target.port}`);
-        const openResult = await this.executeDigestAuth('PUT', `${baseIsapi}/open`, target.user, target.pass, openPayload, 'text', 15000, isapiHeaders);
-        this.logger.log(`✅ [AUDIO-IN] Canal de audio abierto correctamente`);
-        const match = String(openResult).match(/<sessionId>([^<]+)<\/sessionId>/i);
-        if (match && match[1]) {
-          sessionId = match[1].trim();
-          this.logger.log(`🔑 [AUDIO-IN] Hikvision TwoWayAudio sessionId obtenido: ${sessionId}`);
-        }
-        break;
-      } catch (openErr: any) {
-        const isBusy = /403|busy|occupied|400|deviceState/i.test(openErr?.message || '');
-        if (openAttempts < maxOpenAttempts && isBusy) {
-          this.logger.warn(`⚠️ [AUDIO-IN] Canal ocupado en dispositivo, esperando 600ms para reintentar (intento ${openAttempts}/${maxOpenAttempts})...`);
-          await new Promise(r => setTimeout(r, 600));
-        } else {
-          this.logger.error(`❌ [AUDIO-IN] FALLO al abrir canal de audio: ${openErr.message}`);
-          throw new Error(`No se pudo abrir el canal de audio en el dispositivo: ${openErr.message}`);
+      let openAttempts = 0;
+      const maxOpenAttempts = 3;
+      while (openAttempts < maxOpenAttempts) {
+        openAttempts++;
+        try {
+          this.logger.log(`🎙️ [AUDIO-IN] Abriendo canal de audio (intento ${openAttempts}/${maxOpenAttempts}) en ${target.host}:${target.port}`);
+          const openResult = await this.executeDigestAuth('PUT', `${baseIsapi}/open`, target.user, target.pass, openPayload, 'text', 15000, isapiHeaders);
+          this.logger.log(`✅ [AUDIO-IN] Canal de audio abierto correctamente`);
+          const match = String(openResult).match(/<sessionId>([^<]+)<\/sessionId>/i);
+          if (match && match[1]) {
+            sessionId = match[1].trim();
+            this.activeTwoWaySessions.set(deviceHost, { sessionId: sessionId, openedAt: Date.now() });
+            this.logger.log(`🔑 [AUDIO-IN] Hikvision TwoWayAudio sessionId obtenido: ${sessionId}`);
+          }
+          break;
+        } catch (openErr: any) {
+          const isBusy = /403|busy|occupied|400|deviceState/i.test(openErr?.message || '');
+          if (openAttempts < maxOpenAttempts && isBusy) {
+            this.logger.warn(`⚠️ [AUDIO-IN] Canal ocupado en dispositivo, esperando 600ms para reintentar (intento ${openAttempts}/${maxOpenAttempts})...`);
+            await new Promise(r => setTimeout(r, 600));
+          } else {
+            this.logger.error(`❌ [AUDIO-IN] FALLO al abrir canal de audio: ${openErr.message}`);
+            throw new Error(`No se pudo abrir el canal de audio en el dispositivo: ${openErr.message}`);
+          }
         }
       }
     }

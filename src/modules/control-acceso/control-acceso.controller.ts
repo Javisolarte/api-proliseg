@@ -61,6 +61,12 @@ export class ControlAccesoController {
     return this.controlAccesoService.colgarLlamadaDispositivo(id, operator);
   }
 
+  @Post('dispositivos/:id/rechazar')
+  @ApiOperation({ summary: 'Rechaza una llamada de citófono entrante en el dispositivo de hardware' })
+  async rechazarLlamada(@Param('id') id: string, @CurrentUser() operator?: any) {
+    return this.controlAccesoService.rechazarTimbreHardware(id);
+  }
+
   @Post('dispositivos/:id/contestar')
   @ApiOperation({ summary: 'Contesta una llamada de citófono en el dispositivo de hardware y sincroniza todos los clientes' })
   async contestarLlamada(@Param('id') id: string, @CurrentUser() operator?: any) {
