@@ -160,6 +160,18 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
       const evento = this.buildEventoAcceso(device, info, this.sanitizeTimestamp(info?.dateTime));
 
+      if (evento.tipo_evento === 'llamada') {
+        if (this.isCallInCooldown(device.id)) {
+          this.logger.debug(`[Webhook HIK] Llamada ignorada por cooldown en ${device.nombre_identificador}`);
+          return { ok: true, cooldown: true };
+        }
+        this.logger.log(`📞 [Webhook HIK] ¡TIMBRE / LLAMADA ENTRANTE EN TIEMPO REAL! → ${device.nombre_identificador}`);
+      } else if (evento.tipo_evento === 'llamada_finalizada') {
+        this.logger.log(`📞 [Webhook HIK] Llamada finalizada en hardware → ${device.nombre_identificador}`);
+      } else if (evento.tipo_evento === 'llamada_contestada') {
+        this.logger.log(`📞 [Webhook HIK] Llamada atendida en hardware → ${device.nombre_identificador}`);
+      }
+
       // Guardar y emitir — siempre sin await para no bloquear la respuesta HTTP a la cámara
       this.saveAndEmit(evento);
       this.logger.log(`🚪 [Webhook HIK] ${evento.tipo_evento} — ${evento.nombre_persona || 'Desconocido'} @ ${device.nombre_identificador}`);
@@ -598,17 +610,21 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     const intercomStatus = String(info?.IntercomEvent?.callStatus || '').toLowerCase();
     const isCallCenter = desc.includes('management center') || desc.includes('call center') || desc.includes('centro') || desc.includes('intercom');
 
-    // ── Si es control de acceso puro (major 5), procesar acceso y salir de inmediato (a menos que sea timbre minor 51) ──
+    const voiceTalkCmd = String(info?.VoiceTalkEvent?.cmdType || eventObj?.VoiceTalkEvent?.cmdType || '').toLowerCase();
+    const isVoiceTalk = eventType.includes('voicetalk') || !!info?.VoiceTalkEvent || !!eventObj?.VoiceTalkEvent || desc.includes('voice talk');
+
+    // ── Si es control de acceso puro (major 5), procesar acceso y salir de inmediato (a menos que sea timbre minor 51 o voice talk) ──
     if (major === 5 && sub === 51) {
       // Botón de llamada físico/táctil en terminales de acceso facial (ej: DS-K1T344): continúa hacia isRing
-    } else if (major === 5) {
+    } else if (major === 5 && !isVoiceTalk) {
       this.procesarWebhookHikvision(eventObj, device.id).catch(() => {});
       return;
     }
 
     // Eventos de llamada de citófono en Hikvision:
-    // Captura timbre VideoIntercom (major 3, minor 43/1/88/112/113), botón llamada (major 5, minor 51) y estados calling/ring
+    // Captura timbre VideoIntercom (major 3, minor 43/1/88/112/113), botón llamada (major 5, minor 51), VoiceTalk (DS-K1T344) y estados calling/ring
     const isRing =
+      (isVoiceTalk && (voiceTalkCmd === 'request' || voiceTalkCmd === 'call' || voiceTalkCmd === 'ring' || !voiceTalkCmd)) ||
       (major === 5 && sub === 51) ||
       (major === 3 && (sub === 43 || sub === 1 || sub === 88 || sub === 112 || sub === 113 || sub === 114)) ||
       isCallCenter ||
@@ -620,8 +636,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       eventType === 'call' ||
       eventType === 'videotalk' ||
       (eventType === 'intercom' && (eventState === 'active' || intercomStatus === 'calling'));
-    const isAnswer = (major === 3 && sub === 44) || eventState === 'oncall' || intercomStatus === 'oncall';
-    const isHangup = (major === 3 && sub === 45) || eventState === 'idle' || intercomStatus === 'idle' || eventType.includes('hangup') || eventType.includes('callend');
+    const isAnswer = (major === 3 && sub === 44) || eventState === 'oncall' || intercomStatus === 'oncall' || (isVoiceTalk && (voiceTalkCmd === 'answer' || voiceTalkCmd === 'accept'));
+    const isHangup = (major === 3 && sub === 45) || eventState === 'idle' || intercomStatus === 'idle' || eventType.includes('hangup') || eventType.includes('callend') || (isVoiceTalk && (voiceTalkCmd === 'hangup' || voiceTalkCmd === 'cancel' || voiceTalkCmd === 'reject'));
 
     if (isRing) {
       if (this.isCallInCooldown(device.id)) return;
@@ -1028,8 +1044,22 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     return null;
   }
 
-  private mapHikvisionEventType(major: number, minor: number, eventType?: string): string {
+  private mapHikvisionEventType(major: number, minor: number, eventType?: string, rawInfo?: any): string {
     const et = String(eventType || '').toLowerCase();
+    const desc = String(rawInfo?.eventDescription || '').toLowerCase();
+    const voiceTalkCmd = String(rawInfo?.VoiceTalkEvent?.cmdType || '').toLowerCase();
+    const isVoiceTalk = et.includes('voicetalk') || !!rawInfo?.VoiceTalkEvent || desc.includes('voice talk');
+
+    // ── Citófonos Hikvision modernos (DS-K1T344, Video/Voice Intercom) ──────
+    if (isVoiceTalk) {
+      if (voiceTalkCmd === 'hangup' || voiceTalkCmd === 'cancel' || voiceTalkCmd === 'reject') {
+        return 'llamada_finalizada';
+      }
+      if (voiceTalkCmd === 'answer' || voiceTalkCmd === 'accept') {
+        return 'llamada_contestada';
+      }
+      return 'llamada'; // 'request' o timbre inicial
+    }
 
     // ── Control de Acceso (major 5) ──────────────────────────────────────────
     if (major === 5) {
@@ -1042,15 +1072,10 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       return 'acceso';
     }
 
-    // ── Intercomunicador / Timbre / Llamada ──────────────────────────────────
-    // En Hikvision las llamadas son VideoIntercom (major 3) con códigos específicos de timbre:
-    // minor 43  = MINOR_BELL_CALLING (timbre al centro o residente)
-    // minor 1   = MINOR_CALL_SLAVE
-    // minor 88  = MINOR_DEVICE_RINGING
-    // minor 112 = MINOR_CALL_CENTER (llamada al centro de gestión)
-    // minor 113 = MINOR_CALL_RESIDENCE
-    // minor 114 = MINOR_CALL_APP
-    // ATENCIÓN: minor 1024 y 1028 son keep-alive periódicos de Hikvision, NUNCA llamada
+    // ── Intercomunicador / Timbre / Llamada (major 3) ────────────────────────
+    if (major === 3 && minor === 44) return 'llamada_contestada';
+    if (major === 3 && minor === 45) return 'llamada_finalizada';
+
     if (
       (major === 3 && (minor === 43 || minor === 1 || minor === 88 || minor === 112 || minor === 113 || minor === 114)) ||
       et === 'ring' ||
@@ -1058,6 +1083,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       et === 'call' ||
       et === 'intercom' ||
       et.includes('videotalk') ||
+      et.includes('voicetalk') ||
       et.includes('management center') ||
       et.includes('call center')
     ) {
@@ -1079,7 +1105,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     const minor = Number(info?.subEventType ?? info?.minor ?? info?.sub ?? 0);
     const desc = String(info?.eventDescription || '').toLowerCase();
     const eventType = info?.eventType || (desc.includes('management center') || desc.includes('call center') ? 'call' : undefined);
-    const tipoEvento = this.mapHikvisionEventType(major, minor, eventType);
+    const tipoEvento = this.mapHikvisionEventType(major, minor, eventType, info);
     let metodoAcceso = this.mapHikvisionMethod(info?.cardReaderKind);
     let nombrePersona = this.firstText(info?.name, info?.employeeName, info?.userName, info?.UserName);
     let documentoPersona = this.firstText(info?.employeeNoString, info?.employeeNo, info?.userID, info?.UserID, info?.personId);
@@ -1087,6 +1113,14 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     if (tipoEvento === 'llamada') {
       nombrePersona = 'Llamada de Citófono';
       documentoPersona = 'LLAMADA';
+      metodoAcceso = 'intercom';
+    } else if (tipoEvento === 'llamada_finalizada') {
+      nombrePersona = 'Llamada Finalizada';
+      documentoPersona = 'LLAMADA_FINALIZADA';
+      metodoAcceso = 'intercom';
+    } else if (tipoEvento === 'llamada_contestada') {
+      nombrePersona = 'Llamada Atendida';
+      documentoPersona = 'LLAMADA_CONTESTADA';
       metodoAcceso = 'intercom';
     } else if (tipoEvento === 'apertura_boton') {
       nombrePersona = 'Apertura por Botón';
@@ -1145,8 +1179,14 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     const persistirEvento = async () => {
       let persona: any = null;
       if (evento.tipo_evento === 'llamada') {
-        evento.nombre_persona = 'Llamada a central/residente';
+        evento.nombre_persona = evento.nombre_persona || 'Llamada de Citófono';
         evento.documento_persona = 'LLAMADA';
+      } else if (evento.tipo_evento === 'llamada_finalizada') {
+        evento.nombre_persona = 'Llamada Finalizada';
+        evento.documento_persona = 'LLAMADA_FINALIZADA';
+      } else if (evento.tipo_evento === 'llamada_contestada') {
+        evento.nombre_persona = 'Llamada Atendida';
+        evento.documento_persona = 'LLAMADA_CONTESTADA';
       } else {
         await this.enrichQrEvent(evento);
         persona = await this.resolvePersonaForEvento(evento);
@@ -1468,7 +1508,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private getEventId(deviceId: string, info: any): string {
-    const uniqueVal = info?.serialNo || info?.time || info?.dateTime || info?.dateTimeString || 'rand_' + randomBytes(4).toString('hex');
+    const cmd = info?.VoiceTalkEvent?.cmdType ? `_${info.VoiceTalkEvent.cmdType}` : '';
+    const uniqueVal = (info?.serialNo || info?.time || info?.dateTime || info?.dateTimeString || 'rand_' + randomBytes(4).toString('hex')) + cmd;
     return `${deviceId}_${uniqueVal}`;
   }
 
