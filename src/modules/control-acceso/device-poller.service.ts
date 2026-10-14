@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import * as http from 'http';
 import axios from 'axios';
 import { createHash, randomBytes } from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
@@ -108,7 +109,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
    */
   private readonly fallbackTimers = new Map<string, NodeJS.Timeout>();
   private readonly dahuaStreamSubscriptions = new Map<string, { stop: () => void }>();
-  private readonly FALLBACK_POLL_MS = 3000; // 3s para detección en tiempo real de llamadas y eventos
+  private readonly hikAlertStreamSubscriptions = new Map<string, { stop: () => void }>();
+  private readonly FALLBACK_POLL_MS = 1500; // 1.5s para respaldo ultrarrápido de llamadas y eventos
 
   // ─── Ciclo de vida ────────────────────────────────────────────────────────
 
@@ -125,6 +127,10 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       try { s.stop(); } catch {}
     });
     this.dahuaStreamSubscriptions.clear();
+    this.hikAlertStreamSubscriptions.forEach(s => {
+      try { s.stop(); } catch {}
+    });
+    this.hikAlertStreamSubscriptions.clear();
   }
 
   // ─── API Pública ──────────────────────────────────────────────────────────
@@ -232,6 +238,10 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       try { s.stop(); } catch {}
     });
     this.dahuaStreamSubscriptions.clear();
+    this.hikAlertStreamSubscriptions.forEach(s => {
+      try { s.stop(); } catch {}
+    });
+    this.hikAlertStreamSubscriptions.clear();
     this.devicesMap.clear();
     
     // Ejecutar en segundo plano sin await para no bloquear la respuesta HTTP
@@ -456,6 +466,17 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         });
       }
     }
+
+    // Si es Hikvision, conectar stream de eventos en tiempo real (ISAPI AlertStream multipart/mixed <50ms)
+    if (marca.includes('hikvision') || marca.includes('hik')) {
+      if (!this.hikAlertStreamSubscriptions.has(device.id)) {
+        this.attachAlertStreamHikvision(device, ip, port, user, pass).then(sub => {
+          if (sub) this.hikAlertStreamSubscriptions.set(device.id, sub);
+        }).catch(err => {
+          this.logger.debug(`[EventSystem] attachAlertStreamHikvision no pudo iniciar en ${device.nombre_identificador}: ${err.message}`);
+        });
+      }
+    }
   }
 
   private handleDahuaStreamEvent(device: DeviceInfo, ip: string, port: number, eventObj: any) {
@@ -492,6 +513,179 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       }
     } else if (eventCode.includes('accesscontrol')) {
       this.procesarWebhookDahua(eventObj, device.id);
+    }
+  }
+
+  /**
+   * Conecta persistentemente al AlertStream de Hikvision (/ISAPI/Event/notification/alertStream).
+   * Recibe llamadas, pulsaciones de botón de timbre y eventos de acceso en < 50ms (idéntico a Hik-Connect).
+   */
+  private async attachAlertStreamHikvision(
+    device: DeviceInfo,
+    ip: string,
+    port: number,
+    user: string,
+    pass: string,
+  ): Promise<{ stop: () => void }> {
+    let active = true;
+    let req: any = null;
+    const path = '/ISAPI/Event/notification/alertStream';
+
+    const connectStream = () => {
+      if (!active) return;
+
+      const doReq = (authHVal?: string) => {
+        if (!active) return;
+        const headers: any = { 'Accept': 'multipart/mixed, application/xml, application/json' };
+        if (authHVal) headers['Authorization'] = authHVal;
+
+        req = http.request({ host: ip, port, path, method: 'GET', headers, timeout: 0 }, (res: any) => {
+          if (res.statusCode === 401 && !authHVal) {
+            const authH = res.headers['www-authenticate'] || '';
+            const realm = (authH.match(/realm="([^"]+)"/) || [])[1];
+            const nonce = (authH.match(/nonce="([^"]+)"/) || [])[1];
+            const qop = (authH.match(/qop="([^"]+)"/) || [])[1];
+            const ha1 = createHash('md5').update(`${user}:${realm}:${pass}`).digest('hex');
+            const ha2 = createHash('md5').update(`GET:${path}`).digest('hex');
+            let authHeader = '';
+            if (qop === 'auth') {
+              const nc = '00000001';
+              const cnonce = 'abcdef12';
+              const resp = createHash('md5').update(`${ha1}:${nonce}:${nc}:${cnonce}:auth:${ha2}`).digest('hex');
+              authHeader = `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${path}", qop=auth, nc=${nc}, cnonce="${cnonce}", response="${resp}"`;
+            } else {
+              const resp = createHash('md5').update(`${ha1}:${nonce}:${ha2}`).digest('hex');
+              authHeader = `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${path}", response="${resp}"`;
+            }
+            return doReq(authHeader);
+          }
+
+          if (res.statusCode !== 200) {
+            this.logger.debug(`[HIK ALERT STREAM] Status ${res.statusCode} en ${device.nombre_identificador}. Reconectando en 10s...`);
+            if (active) setTimeout(connectStream, 10000);
+            return;
+          }
+
+          this.logger.log(`📡 [HIK ALERT STREAM] Conectado exitosamente en tiempo real (<50ms) a ${device.nombre_identificador} (${ip}:${port})`);
+
+          let buffer = '';
+          res.on('data', (chunk: Buffer) => {
+            buffer += chunk.toString('utf8');
+            const jsonMatches = buffer.match(/\{[\s\S]*?\}(?=\r?\n--|\r?\nContent-|$)/g);
+            if (jsonMatches) {
+              for (const m of jsonMatches) {
+                try {
+                  const eventObj = JSON.parse(m.trim());
+                  this.handleHikStreamEvent(device, ip, port, eventObj);
+                  buffer = buffer.replace(m, '');
+                } catch {}
+              }
+            }
+            if (buffer.length > 50000) {
+              buffer = buffer.slice(-10000);
+            }
+          });
+
+          res.on('end', () => {
+            if (active) {
+              this.logger.warn(`⚠️ [HIK ALERT STREAM] Stream finalizado en ${device.nombre_identificador}. Reconectando en 5s...`);
+              setTimeout(connectStream, 5000);
+            }
+          });
+
+          res.on('error', (err: any) => {
+            if (active) {
+              this.logger.debug(`[HIK ALERT STREAM] Error en ${device.nombre_identificador}: ${err.message}. Reconectando en 5s...`);
+              setTimeout(connectStream, 5000);
+            }
+          });
+        });
+
+        req.on('error', (err: any) => {
+          if (active) {
+            this.logger.debug(`[HIK ALERT STREAM] Conexión rechazada en ${device.nombre_identificador}: ${err.message}. Reconectando en 10s...`);
+            setTimeout(connectStream, 10000);
+          }
+        });
+
+        req.end();
+      };
+
+      doReq();
+    };
+
+    connectStream();
+
+    return {
+      stop: () => {
+        active = false;
+        try { if (req) req.destroy(); } catch {}
+      }
+    };
+  }
+
+  private handleHikStreamEvent(device: DeviceInfo, ip: string, port: number, eventObj: any) {
+    const info = eventObj?.AccessControllerEvent || eventObj?.EventNotificationAlert || eventObj;
+    const major = Number(info?.majorEventType);
+    const sub = Number(info?.subEventType);
+    const eventType = String(info?.eventType || '').toLowerCase();
+    const eventState = String(info?.status || '').toLowerCase();
+
+    // Eventos de llamada de citófono en Hikvision:
+    // major 3 sub 43 = Ring / Timbre
+    // major 3 sub 44 = Call Start / Answer
+    // major 3 sub 45 = Call End / HangUp
+    const isRing = (major === 3 && sub === 43) || eventType.includes('call') || eventState === 'ring';
+    const isAnswer = (major === 3 && sub === 44) || eventState === 'oncall';
+    const isHangup = (major === 3 && sub === 45) || eventState === 'idle';
+
+    if (isRing) {
+      if (this.isCallInCooldown(device.id)) return;
+      const ringKey = `call_ring_hik_${device.id}_${Math.floor(Date.now() / 20000)}`;
+      if (!this.seenEventIds.has(ringKey)) {
+        this.seenEventIds.add(ringKey);
+        this.logger.log(`📞 [HIK STREAM] ¡TIMBRE ENTRANTE EN TIEMPO REAL (<50ms)! → ${device.nombre_identificador}`);
+        const callEvent: EventoAcceso = {
+          dispositivo_id: device.id,
+          tipo_evento: 'llamada',
+          nombre_dispositivo: device.nombre_identificador,
+          nombre_persona: 'Llamada de Citófono',
+          documento_persona: 'LLAMADA',
+          metodo_acceso: 'intercom',
+          timestamp: new Date().toISOString(),
+          detalles_raw: { source: 'ISAPI/alertStream', ...info, ip, port }
+        };
+        this.saveAndEmit(callEvent);
+      }
+    } else if (isAnswer) {
+      this.logger.log(`📞 [HIK STREAM] Llamada atendida en tiempo real → ${device.nombre_identificador}`);
+      this.saveAndEmit({
+        dispositivo_id: device.id,
+        tipo_evento: 'llamada_contestada',
+        nombre_dispositivo: device.nombre_identificador,
+        nombre_persona: 'Llamada Atendida',
+        documento_persona: 'LLAMADA_CONTESTADA',
+        metodo_acceso: 'intercom',
+        timestamp: new Date().toISOString(),
+        detalles_raw: { source: 'ISAPI/alertStream', ...info, ip, port }
+      });
+    } else if (isHangup) {
+      if (!this.isCallInCooldown(device.id)) {
+        this.logger.log(`📞 [HIK STREAM] Llamada finalizada en hardware → ${device.nombre_identificador}`);
+        this.saveAndEmit({
+          dispositivo_id: device.id,
+          tipo_evento: 'llamada_finalizada',
+          nombre_dispositivo: device.nombre_identificador,
+          nombre_persona: 'Llamada Finalizada',
+          documento_persona: 'LLAMADA_FINALIZADA',
+          metodo_acceso: 'intercom',
+          timestamp: new Date().toISOString(),
+          detalles_raw: { source: 'ISAPI/alertStream', ...info, ip, port }
+        });
+      }
+    } else {
+      // Procesa cualquier otro evento (reconocimiento facial, tarjeta, apertura) inmediatamente
+      this.procesarWebhookHikvision(eventObj, device.id).catch(() => {});
     }
   }
 

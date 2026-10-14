@@ -730,6 +730,18 @@ export class ControlAccesoService implements OnModuleInit {
             } catch {}
           }
         }
+        // Cerrar también en canal ezviz por si la llamada estaba vinculada a la nube/tablet
+        try {
+          await this.devicePoller.executeDigestRequest(
+            'PUT',
+            `${base}/ISAPI/VideoIntercom/callSignal?format=json&channelType=ezviz`,
+            user,
+            pass,
+            JSON.stringify({ CallSignal: { cmdType: 'hangUp' } }),
+            'application/json',
+            1200
+          );
+        } catch {}
       }
       return { ok: true, sent, mensaje: 'Señal de colgar enviada al hardware' };
     } catch (err: any) {
@@ -834,76 +846,47 @@ export class ControlAccesoService implements OnModuleInit {
       }
 
       // Hikvision Door Station / Terminal de Acceso Facial:
-      // Simular con total fidelidad la respuesta de llamada desde la tablet / Hik-Connect:
-      // Enviar 'answer' para que el hardware exterior anuncie por altavoz "Por favor hable",
-      // apague de inmediato el generador físico de timbre ("tuuu, tuuu...") y sincronice el canal de audio dúplex.
+      // Responder formalmente la llamada emitiendo la señal 'answer' idéntica a la Tablet y Hik-Connect.
+      // NUNCA enviar 'deviceOnCall' (este comando le indica al hardware "Línea ocupada" y aborta la llamada).
       const base = `http://${resolved.ip}:${resolved.port}`;
       let hikSent = false;
 
-      // 1. Enviar 'answer' por el endpoint estándar ISAPI y plataformas móviles (Hik-Connect / EZVIZ)
-      const answerUrls = [
-        `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
-        `${base}/ISAPI/VideoIntercom/callSignal?format=json&channelType=ezviz`,
-        `${base}/ISAPI/VideoIntercom/callSignal?format=json&channelType=tripartitePlatform`
-      ];
-
-      const simpleAnswerPayload = JSON.stringify({
+      const answerPayload = JSON.stringify({
         CallSignal: {
           cmdType: 'answer'
         }
       });
-      const answerPayloadWithInfo = JSON.stringify({
-        CallSignal: {
-          cmdType: 'answer',
-          periodNumber: 1,
-          buildingNo: 1,
-          unitNo: 1,
-          floorNo: 1,
-          devNo: 255
-        }
-      });
 
-      for (const url of answerUrls) {
-        try {
-          await this.devicePoller.executeDigestRequest(
-            'PUT',
-            url,
-            user,
-            pass,
-            simpleAnswerPayload,
-            'application/json',
-            1500
-          );
-          hikSent = true;
-          this.logger.log(`📞 [INTERCOM] Llamada contestada vía ${url} en ${dev.nombre_identificador} ("Por favor hable" activado)`);
-        } catch {
-          try {
-            await this.devicePoller.executeDigestRequest(
-              'PUT',
-              url,
-              user,
-              pass,
-              answerPayloadWithInfo,
-              'application/json',
-              1500
-            );
-            hikSent = true;
-            this.logger.log(`📞 [INTERCOM] Llamada contestada con callerInfo vía ${url} en ${dev.nombre_identificador}`);
-          } catch {}
-        }
-      }
-
-      // 2. Notificar 'deviceOnCall' para consolidar el estado de llamada activa en el terminal
+      // 1. Enviar 'answer' al canal ISAPI principal para que anuncie "Por favor hable" y detenga el timbre
       try {
         await this.devicePoller.executeDigestRequest(
           'PUT',
           `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
           user,
           pass,
-          JSON.stringify({ CallSignal: { cmdType: 'deviceOnCall' } }),
+          answerPayload,
           'application/json',
-          1200
+          1800
         );
+        hikSent = true;
+        this.logger.log(`📞 [INTERCOM] Llamada contestada con "answer" en ${dev.nombre_identificador} ("Por favor hable" activado)`);
+      } catch (err: any) {
+        this.logger.warn(`Error enviando answer a ${dev.nombre_identificador}: ${err.message}`);
+      }
+
+      // 2. Si el terminal timbraba hacia la nube (Hik-Connect / EZVIZ), confirmar 'answer' en canal ezviz para silenciar la tablet/móviles
+      try {
+        await this.devicePoller.executeDigestRequest(
+          'PUT',
+          `${base}/ISAPI/VideoIntercom/callSignal?format=json&channelType=ezviz`,
+          user,
+          pass,
+          answerPayload,
+          'application/json',
+          1500
+        );
+        hikSent = true;
+        this.logger.log(`📞 [INTERCOM] Llamada contestada en canal ezviz en ${dev.nombre_identificador} (timbre silenciado en tablets/apps)`);
       } catch {}
 
       return hikSent;
