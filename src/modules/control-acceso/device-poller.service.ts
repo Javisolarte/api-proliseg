@@ -626,16 +626,29 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
   private handleHikStreamEvent(device: DeviceInfo, ip: string, port: number, eventObj: any) {
     const info = eventObj?.AccessControllerEvent || eventObj?.EventNotificationAlert || eventObj;
-    const major = Number(info?.majorEventType);
-    const sub = Number(info?.subEventType);
+    const major = Number(info?.majorEventType ?? info?.major ?? 0);
+    const sub = Number(info?.subEventType ?? info?.minor ?? info?.sub ?? 0);
     const eventType = String(info?.eventType || '').toLowerCase();
     const eventState = String(info?.status || '').toLowerCase();
 
-    // Eventos de llamada de citófono en Hikvision:
-    // major 3 sub 43 = Ring / Timbre
-    // major 3 sub 44 = Call Start / Answer
-    // major 3 sub 45 = Call End / HangUp
-    const isRing = (major === 3 && sub === 43) || eventType.includes('call') || eventState === 'ring';
+    // Eventos de llamada de citófono en Hikvision (tanto major 3 VideoIntercom como major 5 AccessControl):
+    // sub 43 = MINOR_CALL_CENTER (Timbre / Llamada a Centro de Gestión)
+    // sub 44 = MINOR_CALL_CENTER_OPERATION
+    // sub 9  = MINOR_CALL_OUT
+    // sub 88 = MINOR_BELL_CALL
+    // sub 73 = MINOR_CALL_ROOM
+    const isRing =
+      sub === 43 ||
+      sub === 44 ||
+      sub === 9 ||
+      sub === 88 ||
+      sub === 73 ||
+      (major === 3 && (sub === 43 || sub === 1 || sub === 9)) ||
+      eventType.includes('call') ||
+      eventType.includes('ring') ||
+      eventType.includes('bell') ||
+      eventType.includes('intercom') ||
+      eventState === 'ring';
     const isAnswer = (major === 3 && sub === 44) || eventState === 'oncall';
     const isHangup = (major === 3 && sub === 45) || eventState === 'idle';
 
@@ -1082,7 +1095,9 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private buildEventoAcceso(device: DeviceInfo, info: any, timestampStr: string): EventoAcceso {
-    const tipoEvento = this.mapHikvisionEventType(info?.major, info?.minor, info?.eventType);
+    const major = Number(info?.majorEventType ?? info?.major ?? 0);
+    const minor = Number(info?.subEventType ?? info?.minor ?? info?.sub ?? 0);
+    const tipoEvento = this.mapHikvisionEventType(major, minor, info?.eventType);
     let metodoAcceso = this.mapHikvisionMethod(info?.cardReaderKind);
     let nombrePersona = this.firstText(info?.name, info?.employeeName, info?.userName, info?.UserName);
     let documentoPersona = this.firstText(info?.employeeNoString, info?.employeeNo, info?.userID, info?.UserID, info?.personId);
