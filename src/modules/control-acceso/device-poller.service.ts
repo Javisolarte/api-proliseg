@@ -631,26 +631,15 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     const eventType = String(info?.eventType || '').toLowerCase();
     const eventState = String(info?.status || '').toLowerCase();
 
-    // Eventos de llamada de citófono en Hikvision (tanto major 3 VideoIntercom como major 5 AccessControl):
-    // sub 43 = MINOR_CALL_CENTER (Timbre / Llamada a Centro de Gestión)
-    // sub 44 = MINOR_CALL_CENTER_OPERATION
-    // sub 9  = MINOR_CALL_OUT
-    // sub 88 = MINOR_BELL_CALL
-    // sub 73 = MINOR_CALL_ROOM
+    // Eventos de llamada de citófono en Hikvision:
+    // Solo cuando el subsistema es VideoIntercom (major 3) o cuando el estado/tipo es explícitamente timbre/llamada
     const isRing =
-      sub === 43 ||
-      sub === 44 ||
-      sub === 9 ||
-      sub === 88 ||
-      sub === 73 ||
-      (major === 3 && (sub === 43 || sub === 1 || sub === 9)) ||
-      eventType.includes('call') ||
+      (major === 3 && (sub === 43 || sub === 1 || sub === 9 || sub === 88)) ||
       eventType.includes('ring') ||
-      eventType.includes('bell') ||
-      eventType.includes('intercom') ||
-      eventState === 'ring';
+      eventState === 'ring' ||
+      (eventType.includes('call') && !eventType.includes('end') && !eventType.includes('hangup'));
     const isAnswer = (major === 3 && sub === 44) || eventState === 'oncall';
-    const isHangup = (major === 3 && sub === 45) || eventState === 'idle';
+    const isHangup = (major === 3 && sub === 45) || eventState === 'idle' || eventType.includes('hangup') || eventType.includes('callend');
 
     if (isRing) {
       if (this.isCallInCooldown(device.id)) return;
@@ -1060,16 +1049,11 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     // En Hikvision las llamadas pueden reportarse como major 3 (VideoIntercom)
     // o como major 5 (AccessControl) con sub-códigos específicos de timbre/llamada
     if (
-      major === 3 ||
-      minor === 43 || // MINOR_CALL_CENTER (Timbre / Llamada a Centro)
-      minor === 44 || // MINOR_CALL_CENTER_OPERATION (Operación de llamada a Centro)
-      minor === 9 ||  // MINOR_CALL_OUT
-      minor === 88 || // MINOR_BELL_CALL
-      et.includes('call') ||
-      et.includes('ring') ||
-      et.includes('intercom') ||
-      et.includes('videotalk') ||
-      et.includes('bell')
+      (major === 3 && (minor === 43 || minor === 1 || minor === 88 || minor === 9)) ||
+      (major === 3) ||
+      et === 'ring' ||
+      et === 'call' ||
+      et.includes('videotalk')
     ) {
       return 'llamada';
     }
