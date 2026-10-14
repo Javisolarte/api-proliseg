@@ -814,8 +814,6 @@ export class ControlAccesoService implements OnModuleInit {
       if (isDahua) {
         let dahuaSent = false;
         const answerEndpoints = [
-          '/cgi-bin/intercom.cgi?action=hangUp',
-          '/cgi-bin/intercom.cgi?action=cancel',
           '/cgi-bin/intercom.cgi?action=answer',
           '/cgi-bin/console.cgi?action=answer',
           '/cgi-bin/vto.cgi?action=answer'
@@ -824,14 +822,10 @@ export class ControlAccesoService implements OnModuleInit {
           try {
             await this.dahuaService.cgi(resolved.ip, resolved.port, user, pass, 'GET', ep, undefined, 'text', undefined, 2000);
             dahuaSent = true;
-            this.logger.log(`📞 [INTERCOM] Dahua timbre cortado vía ${ep} en ${dev.nombre_identificador}`);
+            this.logger.log(`📞 [INTERCOM] Dahua llamada contestada vía ${ep} en ${dev.nombre_identificador}`);
             break;
           } catch {}
         }
-        try {
-          await this.dahuaService.rpcCall(resolved.ip, resolved.port, user, pass, 'VoipTalk.hangUp', {});
-          dahuaSent = true;
-        } catch {}
         try {
           await this.dahuaService.rpcCall(resolved.ip, resolved.port, user, pass, 'VoipTalk.answer', {});
           dahuaSent = true;
@@ -840,57 +834,75 @@ export class ControlAccesoService implements OnModuleInit {
       }
 
       // Hikvision Door Station / Terminal de Acceso Facial:
-      // Cuando la estación exterior timbra (llamante), enviar 'reject' seguido de 'hangUp' corta DE INMEDIATO
-      // el timbrado físico en el altavoz del hardware ('tuuu, tuuu...') y cancela el timbrado en apps móviles (Hik-Connect)
-      // evitando que el generador de tono físico colisione con el audio de voz o que expire a los 30s.
+      // Simular con total fidelidad la respuesta de llamada desde la tablet / Hik-Connect:
+      // Enviar 'answer' para que el hardware exterior anuncie por altavoz "Por favor hable",
+      // apague de inmediato el generador físico de timbre ("tuuu, tuuu...") y sincronice el canal de audio dúplex.
       const base = `http://${resolved.ip}:${resolved.port}`;
       let hikSent = false;
 
-      // 1. Enviar prioritariamente 'reject' (corta el timbrado de inmediato en la estación exterior y en los clientes conectados)
-      const primarySignals = ['reject', 'hangUp', 'cancel', 'answer'];
-      for (const sig of primarySignals) {
+      // 1. Enviar 'answer' por el endpoint estándar ISAPI y plataformas móviles (Hik-Connect / EZVIZ)
+      const answerUrls = [
+        `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
+        `${base}/ISAPI/VideoIntercom/callSignal?format=json&channelType=ezviz`,
+        `${base}/ISAPI/VideoIntercom/callSignal?format=json&channelType=tripartitePlatform`
+      ];
+
+      const simpleAnswerPayload = JSON.stringify({
+        CallSignal: {
+          cmdType: 'answer'
+        }
+      });
+      const answerPayloadWithInfo = JSON.stringify({
+        CallSignal: {
+          cmdType: 'answer',
+          periodNumber: 1,
+          buildingNo: 1,
+          unitNo: 1,
+          floorNo: 1,
+          devNo: 255
+        }
+      });
+
+      for (const url of answerUrls) {
         try {
           await this.devicePoller.executeDigestRequest(
             'PUT',
-            `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
+            url,
             user,
             pass,
-            JSON.stringify({ CallSignal: { cmdType: sig } }),
+            simpleAnswerPayload,
             'application/json',
-            2000
+            1500
           );
           hikSent = true;
-          this.logger.log(`📞 [INTERCOM] Timbre físico cortado/silenciado con "${sig}" en ${dev.nombre_identificador}`);
-          break;
+          this.logger.log(`📞 [INTERCOM] Llamada contestada vía ${url} en ${dev.nombre_identificador} ("Por favor hable" activado)`);
         } catch {
           try {
-            const xml = `<?xml version="1.0" encoding="UTF-8"?><CallSignal version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema"><cmdType>${sig}</cmdType></CallSignal>`;
             await this.devicePoller.executeDigestRequest(
               'PUT',
-              `${base}/ISAPI/VideoIntercom/callSignal`,
+              url,
               user,
               pass,
-              xml,
-              'application/xml',
-              2000
+              answerPayloadWithInfo,
+              'application/json',
+              1500
             );
             hikSent = true;
-            this.logger.log(`📞 [INTERCOM] Timbre físico XML cortado/silenciado con "${sig}" en ${dev.nombre_identificador}`);
-            break;
+            this.logger.log(`📞 [INTERCOM] Llamada contestada con callerInfo vía ${url} en ${dev.nombre_identificador}`);
           } catch {}
         }
       }
 
-      // 2. Si se envió reject, enviar también un hangUp de confirmación para asegurar cierre formal de llamada
+      // 2. Notificar 'deviceOnCall' para consolidar el estado de llamada activa en el terminal
       try {
         await this.devicePoller.executeDigestRequest(
           'PUT',
           `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
           user,
           pass,
-          JSON.stringify({ CallSignal: { cmdType: 'hangUp' } }),
+          JSON.stringify({ CallSignal: { cmdType: 'deviceOnCall' } }),
           'application/json',
-          1500
+          1200
         );
       } catch {}
 
