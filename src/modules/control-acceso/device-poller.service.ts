@@ -594,6 +594,9 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     const sub = Number(info?.subEventType ?? info?.minor ?? info?.sub ?? 0);
     const eventType = String(info?.eventType || '').toLowerCase();
     const eventState = String(info?.status || '').toLowerCase();
+    const desc = String(info?.eventDescription || eventObj?.eventDescription || '').toLowerCase();
+    const intercomStatus = String(info?.IntercomEvent?.callStatus || '').toLowerCase();
+    const isCallCenter = desc.includes('management center') || desc.includes('call center') || desc.includes('centro') || desc.includes('intercom');
 
     // ── Si es control de acceso puro (major 5), procesar acceso y salir de inmediato (NUNCA es llamada) ──
     if (major === 5) {
@@ -602,15 +605,20 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Eventos de llamada de citófono en Hikvision:
-    // Solo cuando el subsistema es VideoIntercom (major 3) o cuando el estado/tipo es explícitamente timbre/llamada
+    // Captura timbre VideoIntercom (major 3, minor 43/1/88), llamada al centro de gestión y estados calling/ring
     const isRing =
       (major === 3 && (sub === 43 || sub === 1 || sub === 88)) ||
+      isCallCenter ||
+      intercomStatus === 'calling' ||
+      intercomStatus === 'ring' ||
       eventType === 'ring' ||
+      eventType === 'calling' ||
       eventState === 'ring' ||
       eventType === 'call' ||
-      eventType === 'videotalk';
-    const isAnswer = (major === 3 && sub === 44) || eventState === 'oncall';
-    const isHangup = (major === 3 && sub === 45) || eventState === 'idle' || eventType.includes('hangup') || eventType.includes('callend');
+      eventType === 'videotalk' ||
+      (eventType === 'intercom' && (eventState === 'active' || intercomStatus === 'calling'));
+    const isAnswer = (major === 3 && sub === 44) || eventState === 'oncall' || intercomStatus === 'oncall';
+    const isHangup = (major === 3 && sub === 45) || eventState === 'idle' || intercomStatus === 'idle' || eventType.includes('hangup') || eventType.includes('callend');
 
     if (isRing) {
       if (this.isCallInCooldown(device.id)) return;
@@ -686,11 +694,15 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       if (typeof cs === 'string') {
         try { cs = JSON.parse(cs); } catch {}
       }
-      const callState = cs?.CallStatus?.status || cs?.status || 'idle';
-      const prevCallState = this.lastCallStatus.get(device.id) || 'idle';
+      const rawStatus = String(cs?.CallStatus?.status || cs?.status || 'idle');
+      const callState = rawStatus.toLowerCase();
+      const prevCallState = (this.lastCallStatus.get(device.id) || 'idle').toLowerCase();
       this.lastCallStatus.set(device.id, callState);
 
-      if (callState === 'ring') {
+      const isRingState = callState === 'ring' || callState === 'calling' || callState === 'ringing' || callState === 'ringback';
+      const prevWasRing = prevCallState === 'ring' || prevCallState === 'calling' || prevCallState === 'ringing' || prevCallState === 'ringback';
+
+      if (isRingState) {
         if (!this.isCallInCooldown(device.id)) {
           const ringKey = `call_ring_${device.id}_${Math.floor(Date.now() / 20000)}`;
           if (!this.seenEventIds.has(ringKey)) {
@@ -709,7 +721,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
             this.saveAndEmit(callEvent);
           }
         }
-      } else if (callState === 'onCall' && prevCallState === 'ring') {
+      } else if (callState === 'oncall' && prevWasRing) {
         this.logger.log(`📞 [EventSystem] Llamada atendida → ${device.nombre_identificador}`);
         this.saveAndEmit({
           dispositivo_id: device.id,
@@ -721,7 +733,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           timestamp: new Date().toISOString(),
           detalles_raw: { source: 'VideoIntercom/callStatus', status: callState, ip, port }
         });
-      } else if (callState === 'idle' && (prevCallState === 'ring' || prevCallState === 'onCall')) {
+      } else if (callState === 'idle' && (prevWasRing || prevCallState === 'oncall')) {
         if (!this.isCallInCooldown(device.id)) {
           this.logger.log(`📞 [EventSystem] Llamada finalizada/colgada en hardware → ${device.nombre_identificador}`);
           this.saveAndEmit({
@@ -1035,8 +1047,12 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     if (
       (major === 3 && (minor === 43 || minor === 1 || minor === 88)) ||
       et === 'ring' ||
+      et === 'calling' ||
       et === 'call' ||
-      et.includes('videotalk')
+      et === 'intercom' ||
+      et.includes('videotalk') ||
+      et.includes('management center') ||
+      et.includes('call center')
     ) {
       return 'llamada';
     }
@@ -1054,7 +1070,9 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   private buildEventoAcceso(device: DeviceInfo, info: any, timestampStr: string): EventoAcceso {
     const major = Number(info?.majorEventType ?? info?.major ?? 0);
     const minor = Number(info?.subEventType ?? info?.minor ?? info?.sub ?? 0);
-    const tipoEvento = this.mapHikvisionEventType(major, minor, info?.eventType);
+    const desc = String(info?.eventDescription || '').toLowerCase();
+    const eventType = info?.eventType || (desc.includes('management center') || desc.includes('call center') ? 'call' : undefined);
+    const tipoEvento = this.mapHikvisionEventType(major, minor, eventType);
     let metodoAcceso = this.mapHikvisionMethod(info?.cardReaderKind);
     let nombrePersona = this.firstText(info?.name, info?.employeeName, info?.userName, info?.UserName);
     let documentoPersona = this.firstText(info?.employeeNoString, info?.employeeNo, info?.userID, info?.UserID, info?.personId);
