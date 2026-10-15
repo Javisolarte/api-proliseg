@@ -391,12 +391,112 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
   // ─── Configuración de Intercomunicador Hikvision ──────────────────────────
 
-  private async configureHikvisionIntercom(device: DeviceInfo, ip: string, port: number, user: string, pass: string) {
-    // RESPETAR LA CONFIGURACIÓN MANUAL DEL USUARIO:
-    // Nunca sobreescribir automáticamente el botón físico a 'app'. El usuario configura
-    // libremente 'Call Management Center' en la interfaz web de Hikvision y el sistema
-    // respeta y preserva esa configuración de forma permanente.
-    return;
+  public async configureHikvisionIntercom(device: DeviceInfo, ip: string, port: number, user: string, pass: string) {
+    try {
+      const base = `http://${ip}:${port}`;
+
+      // 1. Determinar la IP del Gateway VPS en el túnel correspondiente a este dispositivo
+      const parts = String(device.ip_direccion || ip).split('.');
+      const vpsGatewayIp = parts.length === 4 ? `${parts[0]}.${parts[1]}.${parts[2]}.1` : '10.8.0.1';
+
+      // 2. Verificar estado actual del botón para no sobreescribir si ya está en Centro de Gestión
+      let isAlreadyCallCenter = false;
+      try {
+        const keyCfgXml = await this.executeDigestRequest('GET', `${base}/ISAPI/VideoIntercom/keyCfg/1`, user, pass, null, 'application/xml', 3000);
+        if (keyCfgXml && (String(keyCfgXml).includes('manageCenter') || String(keyCfgXml).includes('callCenter'))) {
+          isAlreadyCallCenter = true;
+        }
+      } catch {}
+
+      // 3. Sincronizar DeviceCommunication (Main Station IP -> vpsGatewayIp)
+      const commPayload = JSON.stringify({
+        DeviceCommunication: {
+          regNumber: '10010100000',
+          regPassword: pass || 'admin12345',
+          ServerAddressList: [
+            { id: 1, unitType: 'manage', addressingFormatType: 'ipaddress', ipAddress: vpsGatewayIp },
+            { id: 2, unitType: 'sip', addressingFormatType: 'ipaddress', ipAddress: '0.0.0.0' }
+          ]
+        }
+      });
+
+      await this.executeDigestRequest(
+        'PUT',
+        `${base}/ISAPI/VideoIntercom/deviceCommunication?format=json`,
+        user,
+        pass,
+        commPayload,
+        'application/json',
+        3000
+      ).catch(() => {});
+
+      // 4. Si el botón no llama al centro de gestión, configurarlo automáticamente
+      if (!isAlreadyCallCenter) {
+        // Intentar formato estándar manageCenter (DS-K1T344 y DS-KV6113)
+        const keyPayloadStd = `<KeyCfg version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema"><id>1</id><module>main</module><callMethod>manageCenter</callMethod><callNumber>1</callNumber><enableCallCenter>true</enableCallCenter></KeyCfg>`;
+        const resKey = await this.executeDigestRequest(
+          'PUT',
+          `${base}/ISAPI/VideoIntercom/keyCfg/1`,
+          user,
+          pass,
+          keyPayloadStd,
+          'application/xml',
+          3000
+        ).catch(() => null);
+
+        if (!resKey || String(resKey).includes('error') || String(resKey).includes('Invalid Content')) {
+          // Fallback para variantes que usan callCenter (ej: DS-K1T344MBWX-E1)
+          const keyPayloadAlt = `<KeyCfg version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema"><id>1</id><callMethod>callCenter</callMethod><keyType>callCenter</keyType></KeyCfg>`;
+          await this.executeDigestRequest(
+            'PUT',
+            `${base}/ISAPI/VideoIntercom/keyCfg/1`,
+            user,
+            pass,
+            keyPayloadAlt,
+            'application/xml',
+            3000
+          ).catch(() => {});
+        }
+
+        this.logger.log(`📞 [IntercomSetup] Botón físico configurado a Centro de Gestión (Gateway: ${vpsGatewayIp}) → ${device.nombre_identificador}`);
+      } else {
+        this.logger.log(`📞 [IntercomSetup] Botón preservado en Centro de Gestión → ${device.nombre_identificador}`);
+      }
+    } catch (err: any) {
+      this.logger.debug(`[IntercomSetup] Intercomunicador no configurado en ${device.nombre_identificador}: ${err.message}`);
+    }
+  }
+
+  public async autoConfigurarTodosLosIntercomunicadoresHikvision() {
+    const { data: devices } = await this.supabase
+      .getSupabaseAdminClient()
+      .from('dispositivos_iot')
+      .select('*');
+
+    const hikDevs = (devices || []).filter((d: any) =>
+      (d.configuracion_tecnica?.marca || '').toLowerCase().includes('hik')
+    );
+
+    const resultados: any[] = [];
+
+    for (const dev of hikDevs) {
+      const ip = dev.ip_direccion;
+      const port = dev.configuracion_tecnica?.puertos_mapeados?.mapped_http || dev.configuracion_tecnica?.puerto || 80;
+      const user = dev.credencial_usuario || 'admin';
+      const pass = dev.credencial_password || '';
+
+      const parts = String(ip).split('.');
+      const vpsGatewayIp = parts.length === 4 ? `${parts[0]}.${parts[1]}.${parts[2]}.1` : '10.8.0.1';
+
+      try {
+        await this.configureHikvisionIntercom(dev as DeviceInfo, ip, port, user, pass);
+        resultados.push({ id: dev.id, nombre: dev.nombre_identificador, gateway: vpsGatewayIp, ok: true });
+      } catch (err: any) {
+        resultados.push({ id: dev.id, nombre: dev.nombre_identificador, gateway: vpsGatewayIp, ok: false, error: err.message });
+      }
+    }
+
+    return { ok: true, total: hikDevs.length, resultados };
   }
 
   // ─── Registro de webhook en Dahua ASI — AlarmServer CGI (correcto para ASI7213X) ──

@@ -287,6 +287,31 @@ export class ControlAccesoController {
   }
 
   @Public()
+  @Post('dispositivos/sincronizar-intercomunicadores')
+  @ApiOperation({ summary: 'Auto-configura de forma masiva e inteligente todos los citófonos Hikvision hacia su respectivo túnel VPS' })
+  async sincronizarIntercomunicadores() {
+    this.logger.log(`📞 [SYNC-INTERCOM] Iniciando sincronización masiva de citófonos Hikvision...`);
+    return this.devicePoller.autoConfigurarTodosLosIntercomunicadoresHikvision();
+  }
+
+  @Public()
+  @Post('dispositivos/:id/sincronizar-intercomunicador')
+  @ApiOperation({ summary: 'Auto-configura un citófono Hikvision individual (IP Central según túnel y botón físico)' })
+  async sincronizarIntercomunicadorIndividual(@Param('id') id: string) {
+    this.logger.log(`📞 [SYNC-INTERCOM] Sincronizando citófono Hikvision individual: ${id}`);
+    const dev = await this.devicePoller.getDeviceById(id);
+    if (!dev) return { ok: false, mensaje: 'Dispositivo no encontrado' };
+
+    const ip = dev.ip_direccion;
+    const port = dev.configuracion_tecnica?.puertos_mapeados?.mapped_http || dev.configuracion_tecnica?.puerto || 80;
+    const user = dev.credencial_usuario || 'admin';
+    const pass = dev.credencial_password || '';
+
+    await this.devicePoller.configureHikvisionIntercom(dev, ip, port, user, pass);
+    return { ok: true, mensaje: `Citófono ${dev.nombre_identificador} sincronizado correctamente` };
+  }
+
+  @Public()
   @Post('dispositivos/:id/sincronizar-nat')
   @ApiOperation({ summary: 'Sincroniza y crea/actualiza automáticamente las reglas NAT en MikroTik según la marca (Dahua/Hikvision)' })
   async sincronizarNat(@Param('id') id: string) {
