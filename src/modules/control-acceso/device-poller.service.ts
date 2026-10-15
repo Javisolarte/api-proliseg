@@ -402,7 +402,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       // 2. Verificar estado actual del botón para no sobreescribir si ya está en Centro de Gestión
       let isAlreadyCallCenter = false;
       try {
-        const keyCfgXml = await this.executeDigestRequest('GET', `${base}/ISAPI/VideoIntercom/keyCfg/1`, user, pass, null, 'application/xml', 3000);
+        const keyCfgXml = await this.executeDigestRequest('GET', `${base}/ISAPI/VideoIntercom/keyCfg/1`, user, pass, null, 'application/xml', 7000);
         if (keyCfgXml && (String(keyCfgXml).includes('manageCenter') || String(keyCfgXml).includes('callCenter'))) {
           isAlreadyCallCenter = true;
         }
@@ -427,7 +427,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         pass,
         commPayload,
         'application/json',
-        3000
+        7000
       ).catch(() => {});
 
       // 4. Si el botón no llama al centro de gestión, configurarlo automáticamente
@@ -441,7 +441,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           pass,
           keyPayloadStd,
           'application/xml',
-          3000
+          7000
         ).catch(() => null);
 
         if (!resKey || String(resKey).includes('error') || String(resKey).includes('Invalid Content')) {
@@ -454,7 +454,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
             pass,
             keyPayloadAlt,
             'application/xml',
-            3000
+            7000
           ).catch(() => {});
         }
 
