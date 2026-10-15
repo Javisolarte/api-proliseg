@@ -722,11 +722,14 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Eventos de llamada de citófono en Hikvision:
-    // Captura timbre VideoIntercom (major 3, minor 43/1/88/112/113), botón llamada (major 5, minor 51), VoiceTalk (DS-K1T344) y estados calling/ring
+    // Captura timbre VideoIntercom (major 3, minor 43/1/88), botón llamada (major 5, minor 51), VoiceTalk (DS-K1T344) y estados calling/ring
+    // NOTA: minor 112 (0x70), 113 (0x71) y 114 (0x72) son operaciones remotas de red (login/logout/armado ACS), NUNCA llamadas.
+    const isRemoteOperation = major === 3 && (sub === 112 || sub === 113 || sub === 114 || !!info?.remoteHostAddr);
     const isRing =
-      (isVoiceTalk && (voiceTalkCmd === 'request' || voiceTalkCmd === 'call' || voiceTalkCmd === 'ring' || !voiceTalkCmd)) ||
+      !isRemoteOperation &&
+      ((isVoiceTalk && (voiceTalkCmd === 'request' || voiceTalkCmd === 'call' || voiceTalkCmd === 'ring' || !voiceTalkCmd)) ||
       (major === 5 && sub === 51) ||
-      (major === 3 && (sub === 43 || sub === 1 || sub === 88 || sub === 112 || sub === 113 || sub === 114)) ||
+      (major === 3 && (sub === 43 || sub === 1 || sub === 88)) ||
       isCallCenter ||
       intercomStatus === 'calling' ||
       intercomStatus === 'ring' ||
@@ -735,7 +738,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       eventState === 'ring' ||
       eventType === 'call' ||
       eventType === 'videotalk' ||
-      (eventType === 'intercom' && (eventState === 'active' || intercomStatus === 'calling'));
+      (eventType === 'intercom' && (eventState === 'active' || intercomStatus === 'calling')));
     const isAnswer = (major === 3 && sub === 44) || eventState === 'oncall' || intercomStatus === 'oncall' || (isVoiceTalk && (voiceTalkCmd === 'answer' || voiceTalkCmd === 'accept'));
     const isHangup = (major === 3 && sub === 45) || eventState === 'idle' || intercomStatus === 'idle' || eventType.includes('hangup') || eventType.includes('callend') || (isVoiceTalk && (voiceTalkCmd === 'hangup' || voiceTalkCmd === 'cancel' || voiceTalkCmd === 'reject'));
 
@@ -1176,8 +1179,13 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     if (major === 3 && minor === 44) return 'llamada_contestada';
     if (major === 3 && minor === 45) return 'llamada_finalizada';
 
+    // Descartar explícitamente operaciones remotas de red (112 = MINOR_REMOTE_LOGIN)
+    if (major === 3 && (minor === 112 || minor === 113 || minor === 114 || !!rawInfo?.remoteHostAddr)) {
+      return 'evento';
+    }
+
     if (
-      (major === 3 && (minor === 43 || minor === 1 || minor === 88 || minor === 112 || minor === 113 || minor === 114)) ||
+      (major === 3 && (minor === 43 || minor === 1 || minor === 88)) ||
       et === 'ring' ||
       et === 'calling' ||
       et === 'call' ||
