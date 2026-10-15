@@ -313,7 +313,7 @@ export class VisitasTecnicasService {
             const { data: plantilla } = await supabase
                 .from('plantillas_documentos')
                 .select('id')
-                .eq('nombre', 'ACTA DE VISITA TÉCNICA')
+                .or('nombre.eq.SIG-GO-F-21,nombre.eq.ACTA DE VISITA TÉCNICA,tipo.eq.visita_tecnica')
                 .eq('activa', true)
                 .order('version', { ascending: false })
                 .limit(1)

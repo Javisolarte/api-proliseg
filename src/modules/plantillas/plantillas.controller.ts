@@ -31,7 +31,7 @@ export class PlantillasController {
     constructor(private readonly plantillasService: PlantillasService) { }
 
     @Get()
-    @RequirePermissions("plantillas")
+    @RequirePermissions("plantillas", "visitas", "documentos", "contratos", "cotizaciones", "empleados")
     @ApiOperation({ summary: "Listar todas las plantillas" })
     @ApiQuery({ name: "tipo", required: false, description: "Filtrar por tipo de plantilla" })
     @ApiQuery({ name: "activa", required: false, type: Boolean, description: "Filtrar por estado activo" })
@@ -82,7 +82,7 @@ export class PlantillasController {
     }
 
     @Post(":id/render-preview")
-    @RequirePermissions("plantillas")
+    @RequirePermissions("plantillas", "visitas", "documentos", "contratos", "cotizaciones", "empleados")
     @ApiOperation({
         summary: "Vista previa de plantilla con datos de muestra",
         description: "Renderiza la plantilla con datos de ejemplo para verificar el resultado"

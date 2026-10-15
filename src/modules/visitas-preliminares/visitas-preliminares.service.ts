@@ -186,7 +186,14 @@ export class VisitasPreliminareService {
             if (!visita) return;
             const supabase = this.supabaseService.getClient();
 
-            const { data: plantilla } = await supabase.from('plantillas_documentos').select('id').eq('nombre', 'REPORTE DE VISITA PRELIMINAR').eq('activa', true).order('version', { ascending: false }).limit(1).single();
+            const { data: plantilla } = await supabase
+                .from('plantillas_documentos')
+                .select('id')
+                .or('nombre.eq.SIG-GO-F-18,nombre.eq.REPORTE DE VISITA PRELIMINAR,tipo.eq.visita_preliminar')
+                .eq('activa', true)
+                .order('version', { ascending: false })
+                .limit(1)
+                .single();
             if (!plantilla) { this.logger.warn("No se encontró plantilla para Visita Preliminar"); return; }
 
             const options: Intl.DateTimeFormatOptions = { timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
