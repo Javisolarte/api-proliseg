@@ -273,6 +273,7 @@ export class DahuaService {
       } catch (err: any) {
         if (err?.response?.status === 401) {
           this.digestCache.delete(host);
+          delete headers['Authorization'];
         } else {
           throw err;
         }
@@ -1371,8 +1372,9 @@ export class DahuaService {
           ip, port, user, pass, 'GET',
           `/cgi-bin/recordFinder.cgi?action=find&name=${table}&count=${maxResults}`,
         );
-        const raw = String(resp.data || '');
-        if (raw && !raw.toLowerCase().includes('error')) {
+        const raw = String(resp?.data || '');
+        const isError = /^\s*error\b|result\s*=\s*false/i.test(raw);
+        if (raw && !isError && (raw.includes('records[') || raw.includes('table.') || raw.includes('found=') || raw.startsWith('{') || raw.startsWith('['))) {
           const eventos = this.parseDahuaEventos(raw);
           if (eventos.length > 0) return eventos;
         }
@@ -1387,8 +1389,9 @@ export class DahuaService {
         ip, port, user, pass, 'GET',
         `/cgi-bin/log.cgi?action=getLog&count=${maxResults}`,
       );
-      const raw = String(resp.data || '');
-      if (raw && !raw.toLowerCase().includes('error')) {
+      const raw = String(resp?.data || '');
+      const isError = /^\s*error\b|result\s*=\s*false/i.test(raw);
+      if (raw && !isError && (raw.includes('records[') || raw.includes('table.') || raw.includes('found=') || raw.startsWith('{') || raw.startsWith('['))) {
         return this.parseDahuaEventos(raw);
       }
     } catch {}
@@ -1474,8 +1477,8 @@ export class DahuaService {
       payload?.UserID || payload?.UserId || ''
     ) || undefined;
     const nombre = String(
-      data?.UserName || data?.Name || data?.name ||
-      payload?.UserName || payload?.Name || ''
+      data?.CardName || data?.UserName || data?.Name || data?.name ||
+      payload?.CardName || payload?.UserName || payload?.Name || ''
     ) || undefined;
     const codigoTarjeta = String(
       data?.CardNo || data?.cardNo || payload?.CardNo || ''
@@ -1703,7 +1706,13 @@ export class DahuaService {
         } else if (obj.CreateTime && !isNaN(Number(obj.CreateTime))) {
           timestamp = new Date(Number(obj.CreateTime) * 1000).toISOString();
         } else if (obj.Time) {
-          timestamp = obj.Time;
+          const tMatch = String(obj.Time).match(/^(\d{4})-(\d{2})-(\d{2})[\sT](\d{2}):(\d{2}):(\d{2})/);
+          if (tMatch) {
+            const [, Y, M, D, h, m, s] = tMatch;
+            timestamp = `${Y}-${M}-${D}T${h}:${m}:${s}-05:00`;
+          } else {
+            timestamp = obj.Time;
+          }
         }
 
         let tipo = 'entrada';

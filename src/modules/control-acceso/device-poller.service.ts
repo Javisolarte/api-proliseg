@@ -955,36 +955,39 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
   private async fallbackPollDahua(device: DeviceInfo, ip: string, port: number, user: string, pass: string) {
     try {
-      // 1. Chequeo de timbre/llamada en tiempo real para Dahua
-      try {
-        const statusResp = await this.dahuaService.cgi(
-          ip, port, user, pass, 'GET',
-          '/cgi-bin/eventManager.cgi?action=getEventStatus&code=VideoTalk',
-          null, 'text', 'application/x-www-form-urlencoded', 2000
-        );
-        const rawStatus = String(statusResp?.data || '');
-        if (rawStatus.toLowerCase().includes('true') || rawStatus.toLowerCase().includes('start')) {
-          if (this.isCallInCooldown(device.id)) {
-            return;
+      // 1. Chequeo de timbre/llamada solo si el dispositivo es un videoportero/intercom (no facial puro)
+      const modelo = String(device.configuracion_tecnica?.modelo || '').toLowerCase();
+      const esIntercom = modelo.includes('vto') || modelo.includes('intercom') || modelo.includes('citofono') || modelo.includes('timbre');
+      if (esIntercom) {
+        try {
+          const statusResp = await this.dahuaService.cgi(
+            ip, port, user, pass, 'GET',
+            '/cgi-bin/eventManager.cgi?action=getEventStatus&code=VideoTalk',
+            null, 'text', 'application/x-www-form-urlencoded', 2000
+          );
+          const rawStatus = String(statusResp?.data || '');
+          if (rawStatus.toLowerCase().includes('true') || rawStatus.toLowerCase().includes('start')) {
+            if (!this.isCallInCooldown(device.id)) {
+              const ringKey = `call_ring_dh_${device.id}_${Math.floor(Date.now() / 20000)}`;
+              if (!this.seenEventIds.has(ringKey)) {
+                this.seenEventIds.add(ringKey);
+                this.logger.log(`📞 [EventSystem] ¡TIMBRE ENTRANTE DAHUA (POLL)! → ${device.nombre_identificador}`);
+                const callEvent: EventoAcceso = {
+                  dispositivo_id: device.id,
+                  tipo_evento: 'llamada',
+                  nombre_dispositivo: device.nombre_identificador,
+                  nombre_persona: 'Llamada de Citófono Dahua',
+                  documento_persona: 'LLAMADA',
+                  metodo_acceso: 'intercom',
+                  timestamp: new Date().toISOString(),
+                  detalles_raw: { source: 'dahua_event_status', status: rawStatus, ip, port }
+                };
+                this.saveAndEmit(callEvent);
+              }
+            }
           }
-          const ringKey = `call_ring_dh_${device.id}_${Math.floor(Date.now() / 20000)}`;
-          if (!this.seenEventIds.has(ringKey)) {
-            this.seenEventIds.add(ringKey);
-            this.logger.log(`📞 [EventSystem] ¡TIMBRE ENTRANTE DAHUA (POLL)! → ${device.nombre_identificador}`);
-            const callEvent: EventoAcceso = {
-              dispositivo_id: device.id,
-              tipo_evento: 'llamada',
-              nombre_dispositivo: device.nombre_identificador,
-              nombre_persona: 'Llamada de Citófono Dahua',
-              documento_persona: 'LLAMADA',
-              metodo_acceso: 'intercom',
-              timestamp: new Date().toISOString(),
-              detalles_raw: { source: 'dahua_event_status', status: rawStatus, ip, port }
-            };
-            this.saveAndEmit(callEvent);
-          }
-        }
-      } catch {}
+        } catch {}
+      }
 
       if (!this.latestDbTimestamp.has(device.id)) {
         const { data } = await this.supabase
@@ -1045,9 +1048,11 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         };
 
         this.saveAndEmit(evento);
-        this.logger.debug(`[Dahua Poll] ${evento.tipo_evento} — ${evento.nombre_persona || 'Desconocido'} @ ${device.nombre_identificador}`);
+        this.logger.log(`🚪 [Dahua Poll] ${evento.tipo_evento} — ${evento.nombre_persona || 'Desconocido'} (${evento.documento_persona || 'sin-doc'}) @ ${device.nombre_identificador}`);
       }
-    } catch (err) { /* offline — silencioso */ }
+    } catch (err: any) {
+      this.logger.debug(`[fallbackPollDahua] ${device.nombre_identificador}: ${err.message}`);
+    }
   }
 
   private buildDigestHeader(method: string, url: string, user: string, pass: string, challenge: any) {
