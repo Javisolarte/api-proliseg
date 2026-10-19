@@ -18,6 +18,8 @@ import {
 } from './dto/asistencia-iot.dto';
 import * as crypto from 'crypto';
 
+import { ComunicacionesGateway } from '../comunicaciones/comunicaciones.gateway';
+
 @Injectable()
 export class AsistenciaIotService implements OnModuleInit {
   private readonly logger = new Logger(AsistenciaIotService.name);
@@ -29,7 +31,24 @@ export class AsistenciaIotService implements OnModuleInit {
     private readonly devicePoller: DevicePollerService,
     @Inject(forwardRef(() => ControlAccesoService))
     private readonly controlAccesoService: ControlAccesoService,
+    @Inject(forwardRef(() => ComunicacionesGateway))
+    private readonly comunicacionesGateway?: ComunicacionesGateway,
   ) {}
+
+  /**
+   * Emite marcaciones biométricas o manuales a través de WebSocket en tiempo real hacia Prolicontrol.
+   */
+  public emitirMarcacionRealtime(puestoId: number, data: any) {
+    try {
+      if (this.comunicacionesGateway?.server) {
+        this.comunicacionesGateway.server.emit('asistencia_iot_marcacion', data);
+        this.comunicacionesGateway.server.to('dispositivos_eventos').emit('asistencia_iot_marcacion', data);
+        this.logger.log(`📡 [WS Asistencia IoT] Emitida marcación: ${data.mensaje} - ${data.funcionario} (${data.tipo_marcacion})`);
+      }
+    } catch (err: any) {
+      this.logger.warn(`⚠️ [WS Asistencia IoT] Error emitiendo evento: ${err.message}`);
+    }
+  }
 
   /**
    * Registra este servicio como procesador de lecturas biométricas del poller,
@@ -695,48 +714,75 @@ export class AsistenciaIotService implements OnModuleInit {
       .limit(1)
       .maybeSingle();
 
-    // ========================================================================
-    // CASO 1: YA TIENE ENTRADA HOY -> EVALUAR SALIDA O ANTI-REBOTE
-    // ========================================================================
-    if (regHoy) {
-      const ahoraMs = eventDate.getTime();
-      const entradaMs = new Date(regHoy.hora_entrada_real).getTime();
-      const diffEntradaMin = (ahoraMs - entradaMs) / (60 * 1000);
+    const midPoint = Math.floor((progEntradaMin + progSalidaMin) / 2);
+    const ahoraMs = eventDate.getTime();
 
-      // Anti-rebote inmediato: evitar duplicar lecturas consecutivas en menos de 3 minutos
-      if (diffEntradaMin < 3) {
-        this.logger.debug(`[Anti-Rebote] Ignorando marcación repetida para ${persona.nombre_completo} (${Math.round(diffEntradaMin * 60)}s tras entrada)`);
-        return { ignorado_antirebote: true, registro_id: regHoy.id };
+    let esSalida = false;
+    let targetRegistroId: any = null;
+
+    if (regHoy) {
+      const entradaMs = new Date(regHoy.hora_entrada_real || regHoy.created_at).getTime();
+      const diffEntradaSeg = (ahoraMs - entradaMs) / 1000;
+
+      // Anti-rebote inmediato: 30 segundos tras registrar entrada
+      if (diffEntradaSeg < 30) {
+        this.logger.debug(`[Anti-Rebote] Ignorando marcación repetida para ${persona.nombre_completo} (${Math.round(diffEntradaSeg)}s tras entrada)`);
+        return { ignorado_antirebote: true, registro_id: regHoy.id, mensaje: 'Marcación ya registrada previamente' };
       }
 
-      // Si ya tiene salida registrada:
       if (regHoy.hora_salida_real) {
         const salidaMs = new Date(regHoy.hora_salida_real).getTime();
-        const diffSalidaMin = (ahoraMs - salidaMs) / (60 * 1000);
-        if (diffSalidaMin < 3) {
+        const diffSalidaSeg = (ahoraMs - salidaMs) / 1000;
+        if (diffSalidaSeg < 30) {
           this.logger.debug(`[Anti-Rebote] Ignorando marcación repetida tras salida para ${persona.nombre_completo}`);
-          return { ignorado_antirebote: true, registro_id: regHoy.id };
+          return { ignorado_antirebote: true, registro_id: regHoy.id, mensaje: 'Salida ya registrada' };
         }
 
-        // Si es jornada partida y la marcación previa fue del tramo 'mañana',
-        // pero ahora ya estamos en la tarde (tramo 'tarde'), dejamos continuar para crear entrada de la tarde
+        // Si es jornada partida y la marcación previa fue del tramo 'mañana', pero ahora es 'tarde'
         if (horario?.es_jornada_partida && regHoy.tramo_horario === 'mañana' && tramoActual === 'tarde') {
-          // Continuar hacia CASO 2 (nueva entrada tarde)
+          esSalida = false; // Nueva entrada de la tarde
         } else {
-          return { ya_registrado: true, registro_id: regHoy.id, mensaje: 'Jornada completada' };
+          return { ya_registrado: true, registro_id: regHoy.id, mensaje: 'Jornada completada para hoy' };
         }
       } else {
-        // NO TIENE SALIDA AÚN Y PASARON MÁS DE 3 MINUTOS -> REGISTRAR SALIDA
-        let estadoSalida = 'cumplido';
-        if (eventTimeMinutes < progSalidaMin - toleranciaMin) {
-          estadoSalida = 'anticipado';
-        } else if (eventTimeMinutes > progSalidaMin + 30) {
-          estadoSalida = 'extra';
-        }
+        // Tiene entrada pero NO salida: esta marcación es SALIDA
+        esSalida = true;
+        targetRegistroId = regHoy.id;
+      }
+    } else {
+      // NO TIENE REGISTRO PREVIO HOY
+      // Si la marcación ocurre después del punto medio del horario Y pasada la tolerancia de entrada,
+      // se interpreta como marcación de SALIDA directa
+      if (eventTimeMinutes > midPoint && eventTimeMinutes > (progEntradaMin + toleranciaMin)) {
+        esSalida = true;
+      } else {
+        esSalida = false;
+      }
+    }
 
-        const detalles = regHoy.detalles_raw || {};
-        detalles.salida_marcada_por = dispositivo_id;
+    let resultadoRegistro: any = null;
+    let tipoMarcacion: 'ingreso' | 'salida' = esSalida ? 'salida' : 'ingreso';
+    let mensajeConfirmacion = '';
+    let estadoTexto = '';
 
+    if (esSalida) {
+      // EVALUAR SALIDA
+      let estadoSalida = 'cumplido';
+      if (eventTimeMinutes < progSalidaMin - toleranciaMin) {
+        estadoSalida = 'anticipado';
+        estadoTexto = 'Salida Anticipada';
+      } else if (eventTimeMinutes > progSalidaMin + 30) {
+        estadoSalida = 'extra';
+        estadoTexto = 'Horas Extra';
+      } else {
+        estadoSalida = 'cumplido';
+        estadoTexto = 'A Tiempo';
+      }
+
+      mensajeConfirmacion = 'Registro correctamente salida';
+
+      if (targetRegistroId) {
+        // Actualizar registro existente
         const { data: updated, error: updErr } = await this.adminClient
           .from('asistencia_iot_registros')
           .update({
@@ -744,74 +790,128 @@ export class AsistenciaIotService implements OnModuleInit {
             estado_salida: estadoSalida,
             foto_salida_url: foto_url || persona.foto_rostro_url,
             estado_general: 'finalizado',
-            bloqueado_hasta: new Date(ahoraMs + 3 * 60 * 1000).toISOString(),
-            detalles_raw: detalles,
+            bloqueado_hasta: new Date(ahoraMs + 30 * 1000).toISOString(),
+            detalles_raw: { ...(regHoy.detalles_raw || {}), salida_marcada_por: dispositivo_id },
           })
-          .eq('id', regHoy.id)
-          .select()
+          .eq('id', targetRegistroId)
+          .select('*, personal:asistencia_iot_personal(*), horario:puestos_horarios_asistencia(*)')
           .single();
 
         if (updErr) {
-          this.logger.error(`Error actualizando salida asistencia IoT: ${updErr.message}`);
+          this.logger.error(`Error actualizando salida: ${updErr.message}`);
           throw updErr;
         }
+        resultadoRegistro = updated;
+      } else {
+        // Salida directa sin entrada previa
+        const { data: newSalida, error: newSalErr } = await this.adminClient
+          .from('asistencia_iot_registros')
+          .insert({
+            puesto_id: puestoId,
+            personal_id: persona.id,
+            dispositivo_id: dispositivo_id,
+            horario_id: horario?.id || null,
+            tramo_horario: tramoActual,
+            fecha: hoyStr,
+            hora_entrada_programada: horaEntradaProg,
+            hora_entrada_real: null,
+            estado_entrada: 'no_registrado',
+            minutos_tardanza: 0,
+            hora_salida_programada: horaSalidaProg,
+            hora_salida_real: eventDate.toISOString(),
+            estado_salida: estadoSalida,
+            foto_salida_url: foto_url || persona.foto_rostro_url,
+            bloqueado_hasta: new Date(ahoraMs + 30 * 1000).toISOString(),
+            estado_general: 'finalizado',
+            metodo_marcacion: 'facial',
+            detalles_raw: { nota: 'Salida directa sin marcación de entrada previa' },
+          })
+          .select('*, personal:asistencia_iot_personal(*), horario:puestos_horarios_asistencia(*)')
+          .single();
 
-        this.logger.log(`✅ [Asistencia IoT] Salida registrada: ${persona.nombre_completo} [${tramoActual}] (${estadoSalida})`);
-        return updated;
+        if (newSalErr) {
+          this.logger.error(`Error guardando salida directa: ${newSalErr.message}`);
+          throw newSalErr;
+        }
+        resultadoRegistro = newSalida;
       }
-    }
 
-    // ========================================================================
-    // CASO 2: NUEVA ENTRADA
-    // ========================================================================
-    let estadoEntrada = 'a_tiempo';
-    let minutosTardanza = 0;
-
-    // Comparar con hora de entrada programada
-    const diffEntrada = eventTimeMinutes - progEntradaMin;
-
-    if (diffEntrada < -toleranciaMin) {
-      estadoEntrada = 'temprano';
-    } else if (diffEntrada <= toleranciaMin) {
-      estadoEntrada = 'a_tiempo';
+      this.logger.log(`✅ [Asistencia IoT] Salida registrada: ${persona.nombre_completo} (${estadoSalida})`);
     } else {
-      estadoEntrada = 'tarde';
-      minutosTardanza = diffEntrada;
+      // EVALUAR INGRESO / ENTRADA
+      let estadoEntrada = 'a_tiempo';
+      let minutosTardanza = 0;
+      const diffEntrada = eventTimeMinutes - progEntradaMin;
+
+      if (diffEntrada < -toleranciaMin) {
+        estadoEntrada = 'temprano';
+        estadoTexto = 'Temprano';
+      } else if (diffEntrada <= toleranciaMin) {
+        estadoEntrada = 'a_tiempo';
+        estadoTexto = 'A Tiempo';
+      } else {
+        estadoEntrada = 'tarde';
+        minutosTardanza = diffEntrada;
+        estadoTexto = `Tarde (+${minutosTardanza}m)`;
+      }
+
+      mensajeConfirmacion = 'Registro correctamente ingreso';
+
+      const { data: nuevoRegistro, error: regErr } = await this.adminClient
+        .from('asistencia_iot_registros')
+        .insert({
+          puesto_id: puestoId,
+          personal_id: persona.id,
+          dispositivo_id: dispositivo_id,
+          horario_id: horario?.id || null,
+          tramo_horario: tramoActual,
+          fecha: hoyStr,
+          hora_entrada_programada: horaEntradaProg,
+          hora_entrada_real: eventDate.toISOString(),
+          estado_entrada: estadoEntrada,
+          minutos_tardanza: minutosTardanza,
+          foto_entrada_url: foto_url || persona.foto_rostro_url,
+          hora_salida_programada: horaSalidaProg,
+          bloqueado_hasta: new Date(ahoraMs + 30 * 1000).toISOString(),
+          estado_general: 'presente',
+          metodo_marcacion: 'facial',
+          detalles_raw: detalles_raw || null,
+        })
+        .select('*, personal:asistencia_iot_personal(*), horario:puestos_horarios_asistencia(*)')
+        .single();
+
+      if (regErr) {
+        this.logger.error(`Error guardando registro asistencia IoT: ${regErr.message}`);
+        throw regErr;
+      }
+      resultadoRegistro = nuevoRegistro;
+
+      this.logger.log(`✅ [Asistencia IoT] Ingreso registrado: ${persona.nombre_completo} (${estadoEntrada}, demora: ${minutosTardanza}m)`);
     }
 
-    // Bloqueo anti-rebote inmediato de 3 minutos
-    const bloqueoTimestamp = new Date(eventDate.getTime() + 3 * 60 * 1000);
+    // Construir evento unificado en tiempo real para Prolicontrol
+    const payloadWs = {
+      puesto_id: puestoId,
+      personal_id: persona.id,
+      funcionario: persona.nombre_completo,
+      cedula: persona.cedula,
+      cargo: persona.cargo || '',
+      foto_url: persona.foto_rostro_url || foto_url || null,
+      tipo_marcacion: tipoMarcacion,
+      mensaje: mensajeConfirmacion,
+      estado_texto: estadoTexto,
+      hora: eventDate.toISOString(),
+      timestamp: eventDate.toISOString(),
+      metodo: 'facial',
+      registro: resultadoRegistro,
+    };
 
-    const { data: nuevoRegistro, error: regErr } = await this.adminClient
-      .from('asistencia_iot_registros')
-      .insert({
-        puesto_id: puestoId,
-        personal_id: persona.id,
-        dispositivo_id: dispositivo_id,
-        horario_id: horario?.id || null,
-        tramo_horario: tramoActual,
-        fecha: hoyStr,
-        hora_entrada_programada: horaEntradaProg,
-        hora_entrada_real: eventDate.toISOString(),
-        estado_entrada: estadoEntrada,
-        minutos_tardanza: minutosTardanza,
-        foto_entrada_url: foto_url || persona.foto_rostro_url,
-        hora_salida_programada: horaSalidaProg,
-        bloqueado_hasta: bloqueoTimestamp.toISOString(),
-        estado_general: 'presente',
-        metodo_marcacion: 'facial',
-        detalles_raw: detalles_raw || null,
-      })
-      .select()
-      .single();
+    this.emitirMarcacionRealtime(puestoId, payloadWs);
 
-    if (regErr) {
-      this.logger.error(`Error guardando registro asistencia IoT: ${regErr.message}`);
-      throw regErr;
-    }
-
-    this.logger.log(`✅ [Asistencia IoT] Entrada registrada: ${persona.nombre_completo} (${estadoEntrada}, demora: ${minutosTardanza}m)`);
-    return nuevoRegistro;
+    return {
+      success: true,
+      ...payloadWs,
+    };
   }
 
   async registrarMarcacionManual(puestoId: number, dto: ProcesarMarcacionManualDto) {
@@ -827,6 +927,10 @@ export class AsistenciaIotService implements OnModuleInit {
     const eventDate = dto.hora ? new Date(dto.hora) : new Date();
     const { fecha: hoyStr, minutos: actualMin } = this.horaLocal(eventDate);
 
+    let resultadoRegistro: any = null;
+    let mensajeConfirmacion = dto.tipo === 'salida' ? 'Registro correctamente salida' : 'Registro correctamente ingreso';
+    let estadoTexto = '';
+
     if (dto.tipo === 'entrada') {
       const horaEntradaProg = persona.horario?.hora_entrada || '08:00:00';
       const horaSalidaProg = persona.horario?.hora_salida || '17:00:00';
@@ -834,6 +938,7 @@ export class AsistenciaIotService implements OnModuleInit {
       const progMin = this.timeStringToMinutes(horaEntradaProg);
       const diff = actualMin - progMin;
       const estado = diff > 10 ? 'tarde' : 'a_tiempo';
+      estadoTexto = estado === 'a_tiempo' ? 'A Tiempo' : `Tarde (+${diff}m)`;
 
       const { data, error } = await this.adminClient
         .from('asistencia_iot_registros')
@@ -846,17 +951,18 @@ export class AsistenciaIotService implements OnModuleInit {
           estado_entrada: estado,
           minutos_tardanza: diff > 10 ? diff : 0,
           hora_salida_programada: horaSalidaProg,
+          foto_entrada_url: persona.foto_rostro_url,
           estado_general: 'presente',
           metodo_marcacion: 'manual',
           detalles_raw: { observacion: dto.observacion || 'Registro manual por administrador' },
         })
-        .select()
+        .select('*, personal:asistencia_iot_personal(*), horario:puestos_horarios_asistencia(*)')
         .single();
 
       if (error) throw error;
-      return data;
+      resultadoRegistro = data;
     } else {
-      // Salida
+      // Salida manual
       const { data: reg } = await this.adminClient
         .from('asistencia_iot_registros')
         .select('*')
@@ -867,22 +973,75 @@ export class AsistenciaIotService implements OnModuleInit {
         .limit(1)
         .maybeSingle();
 
-      if (!reg) throw new BadRequestException('No existe registro de entrada para hoy');
+      estadoTexto = 'Cumplido';
 
-      const { data, error } = await this.adminClient
-        .from('asistencia_iot_registros')
-        .update({
-          hora_salida_real: eventDate.toISOString(),
-          estado_salida: 'cumplido',
-          estado_general: 'finalizado',
-        })
-        .eq('id', reg.id)
-        .select()
-        .single();
+      if (reg) {
+        const { data, error } = await this.adminClient
+          .from('asistencia_iot_registros')
+          .update({
+            hora_salida_real: eventDate.toISOString(),
+            estado_salida: 'cumplido',
+            estado_general: 'finalizado',
+            foto_salida_url: persona.foto_rostro_url,
+          })
+          .eq('id', reg.id)
+          .select('*, personal:asistencia_iot_personal(*), horario:puestos_horarios_asistencia(*)')
+          .single();
 
-      if (error) throw error;
-      return data;
+        if (error) throw error;
+        resultadoRegistro = data;
+      } else {
+        // Salida sin entrada previa registrada
+        const horaEntradaProg = persona.horario?.hora_entrada || '08:00:00';
+        const horaSalidaProg = persona.horario?.hora_salida || '17:00:00';
+
+        const { data, error } = await this.adminClient
+          .from('asistencia_iot_registros')
+          .insert({
+            puesto_id: realPuestoId,
+            personal_id: persona.id,
+            fecha: hoyStr,
+            hora_entrada_programada: horaEntradaProg,
+            hora_entrada_real: null,
+            estado_entrada: 'no_registrado',
+            hora_salida_programada: horaSalidaProg,
+            hora_salida_real: eventDate.toISOString(),
+            estado_salida: 'cumplido',
+            estado_general: 'finalizado',
+            foto_salida_url: persona.foto_rostro_url,
+            metodo_marcacion: 'manual',
+            detalles_raw: { observacion: dto.observacion || 'Salida manual directa' },
+          })
+          .select('*, personal:asistencia_iot_personal(*), horario:puestos_horarios_asistencia(*)')
+          .single();
+
+        if (error) throw error;
+        resultadoRegistro = data;
+      }
     }
+
+    const payloadWs = {
+      puesto_id: realPuestoId,
+      personal_id: persona.id,
+      funcionario: persona.nombre_completo,
+      cedula: persona.cedula,
+      cargo: persona.cargo || '',
+      foto_url: persona.foto_rostro_url || null,
+      tipo_marcacion: dto.tipo,
+      mensaje: mensajeConfirmacion,
+      estado_texto: estadoTexto,
+      hora: eventDate.toISOString(),
+      timestamp: eventDate.toISOString(),
+      metodo: 'manual',
+      registro: resultadoRegistro,
+    };
+
+    this.emitirMarcacionRealtime(realPuestoId, payloadWs);
+
+    return {
+      success: true,
+      ...payloadWs,
+    };
   }
 
   // ==========================================================================

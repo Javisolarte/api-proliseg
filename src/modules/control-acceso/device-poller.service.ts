@@ -1033,11 +1033,12 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           dispositivo_id: device.id,
           nombre_dispositivo: device.nombre_identificador,
           tipo_evento: ev.tipo,
-          metodo_acceso: 'tarjeta',
+          metodo_acceso: ev.metodoAcceso || 'facial',
           persona_id: personaId,
           nombre_persona: nombrePersona,
           documento_persona: ev.userId,
           codigo_tarjeta: ev.codigoTarjeta,
+          foto_evidencia_url: ev.fotoUrl,
           timestamp: ev.timestamp,
           detalles_raw: { ...ev.raw, _marca: 'dahua', _fuente: 'fallback_poll' },
         };

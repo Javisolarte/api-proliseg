@@ -32,6 +32,8 @@ export interface DahuaEvento {
   codigoTarjeta?: string;
   timestamp: string;        // ISO
   canal: number;
+  metodoAcceso?: string;
+  fotoUrl?: string;
   raw: any;
 }
 
@@ -1484,11 +1486,15 @@ export class DahuaService {
     ) || undefined;
 
     // Timestamp
-    const rawTime = payload?.LocaleTime || payload?.Time || payload?.time || payload?.UTC;
+    const rawTime = payload?.LocaleTime || payload?.Time || payload?.time || payload?.UTC || data?.CreateTime;
     let timestamp: string;
     try {
-      const dt = new Date(rawTime || '');
-      timestamp = (!rawTime || isNaN(dt.getTime())) ? new Date().toISOString() : dt.toISOString();
+      if (typeof rawTime === 'number' || (/^\d+$/.test(String(rawTime)) && Number(rawTime) < 10000000000)) {
+        timestamp = new Date(Number(rawTime) * 1000).toISOString();
+      } else {
+        const dt = new Date(rawTime || '');
+        timestamp = (!rawTime || isNaN(dt.getTime())) ? new Date().toISOString() : dt.toISOString();
+      }
     } catch {
       timestamp = new Date().toISOString();
     }
@@ -1677,7 +1683,8 @@ export class DahuaService {
     const map = new Map<string, any>();
     const lines = raw.split('\n');
     for (const line of lines) {
-      const match = line.trim().match(/^table\.([a-zA-Z0-9_]+)\[(\d+)\]\.([a-zA-Z0-9_]+)=(.*)$/);
+      // Soporta: table.records[0].key=val, records[0].key=val, record[0].key=val
+      const match = line.trim().match(/^(?:table\.)?([a-zA-Z0-9_]+)\[(\d+)\]\.([a-zA-Z0-9_]+)=(.*)$/);
       if (!match) continue;
       const [, tableName, index, key, val] = match;
       const itemKey = `${tableName}_${index}`;
@@ -1686,14 +1693,44 @@ export class DahuaService {
     }
 
     for (const [, obj] of map.entries()) {
-      if (obj.UserID || obj.CardNo || obj.Time || obj.CardName || obj.UserName) {
+      if (obj.UserID || obj.CardNo || obj.Time || obj.CreateTime || obj.CardName || obj.UserName) {
+        // Timestamp: Intentar extraer de la foto si tiene YYYYMMDDHHmmss, o de CreateTime (Unix epoch)
+        let timestamp = new Date().toISOString();
+        const urlMatch = obj.URL ? String(obj.URL).match(/_(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/) : null;
+        if (urlMatch) {
+          const [, Y, M, D, h, m, s] = urlMatch;
+          timestamp = `${Y}-${M}-${D}T${h}:${m}:${s}-05:00`;
+        } else if (obj.CreateTime && !isNaN(Number(obj.CreateTime))) {
+          timestamp = new Date(Number(obj.CreateTime) * 1000).toISOString();
+        } else if (obj.Time) {
+          timestamp = obj.Time;
+        }
+
+        let tipo = 'entrada';
+        const rawType = String(obj.Type || obj.EventType || obj.Status || '').toLowerCase();
+        if (rawType.includes('exit') || rawType.includes('salida') || rawType === '0') {
+          tipo = 'salida';
+        } else if (rawType.includes('entry') || rawType.includes('enter') || rawType === '1') {
+          tipo = 'entrada';
+        } else {
+          tipo = this.mapDahuaEventType(obj.EventType || obj.Status || obj.Method || '');
+        }
+
+        let metodo = 'desconocido';
+        const m = String(obj.Method || obj.CardType || '').toLowerCase();
+        if (m === '15' || m.includes('face') || m === '2') metodo = 'facial';
+        else if (m === '0' || m.includes('card')) metodo = 'tarjeta';
+        else if (m.includes('pwd') || m.includes('pass')) metodo = 'pin';
+
         eventos.push({
-          tipo: this.mapDahuaEventType(obj.EventType || obj.Status || obj.Method || ''),
+          tipo,
           userId: obj.UserID || undefined,
           nombre: obj.CardName || obj.UserName || undefined,
           codigoTarjeta: obj.CardNo || undefined,
-          timestamp: obj.Time || new Date().toISOString(),
+          timestamp,
           canal: Number(obj.Door || obj.Channel || 1),
+          metodoAcceso: metodo,
+          fotoUrl: obj.URL || undefined,
           raw: obj,
         });
       }
