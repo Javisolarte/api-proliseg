@@ -994,12 +994,13 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           .eq('dispositivo_id', device.id)
           .order('timestamp', { ascending: false })
           .limit(1);
-        const lastTimestamp = data?.[0]?.timestamp || new Date(Date.now() - 5 * 60000).toISOString();
+        const lastTimestamp = data?.[0]?.timestamp || new Date(Date.now() - 30 * 60000).toISOString();
         this.latestDbTimestamp.set(device.id, lastTimestamp);
       }
 
-      const desde = new Date(this.latestDbTimestamp.get(device.id) || new Date(Date.now() - 5 * 60000).toISOString());
-      const eventos = await this.dahuaService.obtenerEventos(ip, port, user, pass, desde, 20);
+      const desde = new Date(this.latestDbTimestamp.get(device.id) || new Date(Date.now() - 30 * 60000).toISOString());
+      // Consultar hasta 100 eventos para abarcar todas las marcaciones recientes del terminal
+      const eventos = await this.dahuaService.obtenerEventos(ip, port, user, pass, desde, 100);
 
       const lastDbTime = desde.getTime();
 

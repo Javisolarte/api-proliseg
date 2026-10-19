@@ -1360,7 +1360,7 @@ export class DahuaService {
    */
   async obtenerEventos(
     ip: string, port: number, user: string, pass: string,
-    desde?: Date, maxResults = 50,
+    desde?: Date, maxResults = 100,
   ): Promise<DahuaEvento[]> {
     this.logger.debug(`📋 [DAHUA EVENTOS] Obteniendo log de ${ip}:${port}`);
 

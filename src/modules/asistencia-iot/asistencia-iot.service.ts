@@ -641,20 +641,30 @@ export class AsistenciaIotService implements OnModuleInit {
     const puestoId = config.puesto_id;
     const toleranciaMin = config.tolerancia_minutos || 10;
 
-    // Buscar personal en el puesto
-    let queryPersonal = this.adminClient
-      .from('asistencia_iot_personal')
-      .select('*, horario:puestos_horarios_asistencia(*)')
-      .eq('puesto_id', puestoId)
-      .eq('activo', true);
-
+    // Buscar personal en el puesto (por cédula, dispositivo_user_id o coincidencia de nombre)
+    let persona: any = null;
     if (cedula) {
-      queryPersonal = queryPersonal.eq('cedula', cedula);
-    } else if (params.nombre) {
-      queryPersonal = queryPersonal.ilike('nombre_completo', `%${params.nombre}%`);
+      const { data: byDoc } = await this.adminClient
+        .from('asistencia_iot_personal')
+        .select('*, horario:puestos_horarios_asistencia(*)')
+        .eq('puesto_id', puestoId)
+        .eq('activo', true)
+        .or(`cedula.eq.${cedula},dispositivo_user_id.eq.${cedula}`)
+        .maybeSingle();
+      if (byDoc) persona = byDoc;
     }
 
-    const { data: persona } = await queryPersonal.maybeSingle();
+    if (!persona && params.nombre) {
+      const { data: byName } = await this.adminClient
+        .from('asistencia_iot_personal')
+        .select('*, horario:puestos_horarios_asistencia(*)')
+        .eq('puesto_id', puestoId)
+        .eq('activo', true)
+        .ilike('nombre_completo', `%${params.nombre.trim()}%`)
+        .maybeSingle();
+      if (byName) persona = byName;
+    }
+
     if (!persona) {
       this.logger.debug(`Persona ${cedula || params.nombre} no está registrada en puesto ${puestoId}`);
       return null;
@@ -714,7 +724,6 @@ export class AsistenciaIotService implements OnModuleInit {
       .limit(1)
       .maybeSingle();
 
-    const midPoint = Math.floor((progEntradaMin + progSalidaMin) / 2);
     const ahoraMs = eventDate.getTime();
 
     let esSalida = false;
@@ -742,7 +751,9 @@ export class AsistenciaIotService implements OnModuleInit {
         if (horario?.es_jornada_partida && regHoy.tramo_horario === 'mañana' && tramoActual === 'tarde') {
           esSalida = false; // Nueva entrada de la tarde
         } else {
-          return { ya_registrado: true, registro_id: regHoy.id, mensaje: 'Jornada completada para hoy' };
+          // Re-marcación de salida posterior en el turno: actualizar con la salida más reciente
+          esSalida = true;
+          targetRegistroId = regHoy.id;
         }
       } else {
         // Tiene entrada pero NO salida: esta marcación es SALIDA
@@ -750,14 +761,9 @@ export class AsistenciaIotService implements OnModuleInit {
         targetRegistroId = regHoy.id;
       }
     } else {
-      // NO TIENE REGISTRO PREVIO HOY
-      // Si la marcación ocurre después del punto medio del horario Y pasada la tolerancia de entrada,
-      // se interpreta como marcación de SALIDA directa
-      if (eventTimeMinutes > midPoint && eventTimeMinutes > (progEntradaMin + toleranciaMin)) {
-        esSalida = true;
-      } else {
-        esSalida = false;
-      }
+      // NO TIENE REGISTRO PREVIO HOY:
+      // La PRIMERA marcación del día para este funcionario es SIEMPRE su INGRESO
+      esSalida = false;
     }
 
     let resultadoRegistro: any = null;
@@ -791,7 +797,7 @@ export class AsistenciaIotService implements OnModuleInit {
             foto_salida_url: foto_url || persona.foto_rostro_url,
             estado_general: 'finalizado',
             bloqueado_hasta: new Date(ahoraMs + 30 * 1000).toISOString(),
-            detalles_raw: { ...(regHoy.detalles_raw || {}), salida_marcada_por: dispositivo_id },
+            detalles_raw: { ...(regHoy?.detalles_raw || {}), salida_marcada_por: dispositivo_id },
           })
           .eq('id', targetRegistroId)
           .select('*, personal:asistencia_iot_personal(*), horario:puestos_horarios_asistencia(*)')
@@ -803,7 +809,7 @@ export class AsistenciaIotService implements OnModuleInit {
         }
         resultadoRegistro = updated;
       } else {
-        // Salida directa sin entrada previa
+        // Salida directa sin entrada previa (hora_entrada_real debe tener timestamp válido por NOT NULL de DB)
         const { data: newSalida, error: newSalErr } = await this.adminClient
           .from('asistencia_iot_registros')
           .insert({
@@ -814,7 +820,7 @@ export class AsistenciaIotService implements OnModuleInit {
             tramo_horario: tramoActual,
             fecha: hoyStr,
             hora_entrada_programada: horaEntradaProg,
-            hora_entrada_real: null,
+            hora_entrada_real: eventDate.toISOString(),
             estado_entrada: 'no_registrado',
             minutos_tardanza: 0,
             hora_salida_programada: horaSalidaProg,
