@@ -644,17 +644,21 @@ export class AsistenciaIotService implements OnModuleInit {
     // Buscar personal en el puesto (por cédula, dispositivo_user_id o coincidencia de nombre)
     let persona: any = null;
     if (cedula) {
+      let orClause = `cedula.eq.${cedula},dispositivo_user_id.eq.${cedula}`;
+      if (/^\d+$/.test(cedula)) {
+        orClause += `,id.eq.${cedula}`;
+      }
       const { data: byDoc } = await this.adminClient
         .from('asistencia_iot_personal')
         .select('*, horario:puestos_horarios_asistencia(*)')
         .eq('puesto_id', puestoId)
         .eq('activo', true)
-        .or(`cedula.eq.${cedula},dispositivo_user_id.eq.${cedula}`)
+        .or(orClause)
         .maybeSingle();
       if (byDoc) persona = byDoc;
     }
 
-    if (!persona && params.nombre) {
+    if (!persona && params.nombre && !params.nombre.toLowerCase().startsWith('tag ')) {
       const { data: byName } = await this.adminClient
         .from('asistencia_iot_personal')
         .select('*, horario:puestos_horarios_asistencia(*)')
@@ -663,6 +667,20 @@ export class AsistenciaIotService implements OnModuleInit {
         .ilike('nombre_completo', `%${params.nombre.trim()}%`)
         .maybeSingle();
       if (byName) persona = byName;
+    }
+
+    if (!persona && detalles_raw?.CardName) {
+      const cName = String(detalles_raw.CardName).trim();
+      if (cName && !cName.toLowerCase().startsWith('tag ')) {
+        const { data: byCard } = await this.adminClient
+          .from('asistencia_iot_personal')
+          .select('*, horario:puestos_horarios_asistencia(*)')
+          .eq('puesto_id', puestoId)
+          .eq('activo', true)
+          .ilike('nombre_completo', `%${cName}%`)
+          .maybeSingle();
+        if (byCard) persona = byCard;
+      }
     }
 
     if (!persona) {
@@ -1302,7 +1320,10 @@ export class AsistenciaIotService implements OnModuleInit {
     const marcarEstado = async (ok: boolean) => {
       await this.adminClient
         .from('asistencia_iot_personal')
-        .update({ sincronizado_dispositivo: ok, dispositivo_user_id: ok ? personal.cedula : null })
+        .update({
+          sincronizado_dispositivo: ok,
+          dispositivo_user_id: ok ? (personal.dispositivo_user_id || personal.cedula) : null,
+        })
         .eq('id', personal.id);
     };
 

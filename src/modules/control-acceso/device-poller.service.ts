@@ -1374,6 +1374,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           foto_url: evento.foto_evidencia_url,
           timestamp: evento.timestamp,
           detalles_raw: {
+            ...(evento.detalles_raw || {}),
             evento_raw: evento.tipo_evento,
             dispositivo: evento.nombre_dispositivo,
             metodo: evento.metodo_acceso,
