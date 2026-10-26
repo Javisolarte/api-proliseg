@@ -7228,6 +7228,21 @@ export class ControlAccesoService implements OnModuleInit {
       `/cgi-bin/configManager.cgi?action=setConfig&AccessControlGeneral.AccessVoice.CurrentVoiceID=${voiceId}`
     );
 
+    // Consultar capacidades de idioma
+    const langCaps = await this.dahuaService.cgi(ip, port, user, pass, 'GET', '/cgi-bin/magicBox.cgi?action=getLanguageCaps').catch(() => null);
+    const currentLang = await this.dahuaService.cgi(ip, port, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=getConfig&name=Language').catch(() => null);
+
+    // Si soporta español, configurarlo
+    let setLangResult: any = null;
+    const capsStr = String(langCaps?.data || '');
+    if (capsStr.toLowerCase().includes('spanish') || capsStr.toLowerCase().includes('es')) {
+      const setLangResp = await this.dahuaService.cgi(ip, port, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&Language=Spanish').catch(() => null);
+      setLangResult = setLangResp?.data?.trim();
+    }
+
+    // Verificar cómo quedó configurado en el hardware
+    const verifyVoice = await this.dahuaService.cgi(ip, port, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=getConfig&name=AccessControlGeneral.AccessVoice').catch(() => null);
+
     const voiceNames: Record<number, string> = {
       0: 'Verified successfully (Validación exitosa)',
       1: 'The door is opened (Puerta abierta)',
@@ -7247,7 +7262,11 @@ export class ControlAccesoService implements OnModuleInit {
       dispositivo: dev.nombre_identificador,
       ip,
       port,
-      detalleHardware: resp?.data?.trim() || 'OK'
+      detalleHardware: resp?.data?.trim() || 'OK',
+      idiomasSoportados: langCaps?.data?.trim() || 'No reportado',
+      idiomaActual: currentLang?.data?.trim() || 'No reportado',
+      cambioIdiomaEspanol: setLangResult,
+      configuracionHardwareVoz: verifyVoice?.data?.trim() || 'No disponible'
     };
   }
 
