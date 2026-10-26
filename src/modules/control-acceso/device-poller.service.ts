@@ -473,21 +473,25 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       ).catch(() => {});
 
       // Sincronizar RelatedDeviceAddress (CRÍTICO para Videoporteros y Frentes de Calle con pantalla táctil como AMIRA PRINCIPAL)
-      // Garantiza que cuando un visitante pulsa "Llamar a la central", marque a vpsGatewayIp:8000 en lugar de fallar con "Error en la llamada" por apuntar a 0.0.0.0.
+      // Garantiza que cuando un visitante pulsa "Llamar a la central", marque al gateway local en lugar de fallar con "Error en la llamada" por apuntar a 0.0.0.0 o al web console de Coolify.
+      const isAmiraPrincipal = String(device.nombre_identificador || '').toUpperCase().includes('AMIRA PRINCIPAL');
+      const targetCenterIp = isAmiraPrincipal ? '192.168.60.1' : vpsGatewayIp;
+      const targetCenterPort = isAmiraPrincipal ? 8291 : 8000;
+
       const relatedDevXml = `<?xml version="1.0" encoding="UTF-8"?>
 <RelatedDeviceAddress version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
   <ManageAddress>
     <addressingFormatType>ipaddress</addressingFormatType>
-    <ipAddress>${vpsGatewayIp}</ipAddress>
+    <ipAddress>${targetCenterIp}</ipAddress>
   </ManageAddress>
   <SIPServerAddress>
     <addressingFormatType>ipaddress</addressingFormatType>
     <ipAddress>0.0.0.0</ipAddress>
   </SIPServerAddress>
-  <centerPort>8000</centerPort>
+  <centerPort>${targetCenterPort}</centerPort>
   <CenterAddress>
     <addressingFormatType>ipaddress</addressingFormatType>
-    <ipAddress>${vpsGatewayIp}</ipAddress>
+    <ipAddress>${targetCenterIp}</ipAddress>
   </CenterAddress>
 </RelatedDeviceAddress>`;
 
@@ -1034,9 +1038,10 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           AcsEventCond: { 
             searchID: `fb_${device.id}_${Date.now()}`, 
             searchResultPosition: 0, 
-            maxResults: 20, 
+            maxResults: 30, 
             major: 0, 
-            minor: 0 
+            minor: 0,
+            timeReverseOrder: true
           } 
         },
         'application/json',
@@ -1053,7 +1058,9 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      const infos = responseData?.AcsEvent?.InfoList || [];
+      const rawInfos = responseData?.AcsEvent?.InfoList || [];
+      // Revertir lista para procesar en orden cronológico ascendente (el más antiguo primero hacia el más reciente)
+      const infos = [...rawInfos].reverse();
       const lastDbTimeStr = this.latestDbTimestamp.get(device.id) || new Date(0).toISOString();
       const lastDbTime = new Date(lastDbTimeStr).getTime();
 
@@ -1082,7 +1089,21 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         }
 
         const evento = this.buildEventoAcceso(device, info, eventTimeStr);
-        this.saveAndEmit(evento);
+
+        if (evento.tipo_evento === 'llamada') {
+          if (this.isCallInCooldown(device.id)) continue;
+          this.setCallCooldown(device.id, 25000);
+          this.logger.log(`📞 [EventSystem Fallback] ¡TIMBRE / LLAMADA ENTRANTE CAPTURADA! → ${device.nombre_identificador} (${evento.nombre_persona})`);
+          this.saveAndEmit(evento);
+        } else if (evento.tipo_evento === 'llamada_finalizada') {
+          if (this.isCallInCooldown(device.id)) {
+            this.logger.log(`📞 [EventSystem Fallback] Fin de llamada ignorado por cooldown activo (llamada en curso) → ${device.nombre_identificador}`);
+            continue;
+          }
+          this.saveAndEmit(evento);
+        } else {
+          this.saveAndEmit(evento);
+        }
       }
     } catch (err) { /* AcsEvent silencioso */ }
   }
