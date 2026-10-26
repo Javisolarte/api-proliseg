@@ -309,6 +309,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         // Siempre iniciar polling como respaldo de seguridad
         this.startFallbackPolling(device, ip, port, user, pass, marca);
       } else if (marca.includes('dahua')) {
+        await this.dahuaService.cgi(ip, port, user, pass, 'GET', '/cgi-bin/configManager.cgi?action=setConfig&AccessControlGeneral.AccessVoice.CurrentVoiceID=3').catch(() => {});
         await this.registerDahuaWebhook(device, ip, port, user, pass, webhookBase).catch((err) => {
           this.logger.warn(`⚠️ [EventSystem] Error al registrar webhook en ${device.nombre_identificador}: ${err.message}`);
         });
