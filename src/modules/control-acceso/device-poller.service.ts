@@ -398,33 +398,11 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     try {
       const base = `http://${ip}:${port}`;
 
-      // 0. Si el dispositivo tiene pantallas conectadas / llama a apartamentos, no sobreescribir el botón físico
-      const tienePantallas = !!(
-        device.configuracion_tecnica?.tiene_pantallas ||
-        device.configuracion_tecnica?.pantallas_conectadas ||
-        device.configuracion_tecnica?.modo_citofonia === 'pantallas' ||
-        String(device.nombre_identificador || '').toUpperCase().includes('AMIRA PRINCIPAL')
-      );
-
-      if (tienePantallas) {
-        this.logger.log(`📞 [IntercomSetup] ${device.nombre_identificador} tiene pantallas conectadas: Preservando llamada física a pantallas/apartamentos.`);
-        return;
-      }
-
       // 1. Determinar la IP del Gateway VPS en el túnel correspondiente a este dispositivo
       const parts = String(device.ip_direccion || ip).split('.');
       const vpsGatewayIp = parts.length === 4 ? `${parts[0]}.${parts[1]}.${parts[2]}.1` : '10.8.0.1';
 
-      // 2. Verificar estado actual del botón para no sobreescribir si ya está en Centro de Gestión
-      let isAlreadyCallCenter = false;
-      try {
-        const keyCfgXml = await this.executeDigestRequest('GET', `${base}/ISAPI/VideoIntercom/keyCfg/1`, user, pass, null, 'application/xml', 7000);
-        if (keyCfgXml && (String(keyCfgXml).includes('manageCenter') || String(keyCfgXml).includes('callCenter'))) {
-          isAlreadyCallCenter = true;
-        }
-      } catch {}
-
-      // 3. Sincronizar DeviceCommunication (Main Station IP -> vpsGatewayIp)
+      // 2. Sincronizar SIEMPRE DeviceCommunication (para que "Llamar a la central" funcione en TODOS los equipos, incluido AMIRA PRINCIPAL)
       const commPayload = JSON.stringify({
         DeviceCommunication: {
           regNumber: '10010100000',
@@ -436,7 +414,25 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         }
       });
 
-      await this.executeDigestRequest(
+      const commXml = `<?xml version="1.0" encoding="UTF-8"?>
+<DeviceCommunication version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
+  <ServerAddressList>
+    <ServerAddress>
+      <id>1</id>
+      <unitType>manage</unitType>
+      <addressingFormatType>ipaddress</addressingFormatType>
+      <ipAddress>${vpsGatewayIp}</ipAddress>
+    </ServerAddress>
+    <ServerAddress>
+      <id>2</id>
+      <unitType>sip</unitType>
+      <addressingFormatType>ipaddress</addressingFormatType>
+      <ipAddress>0.0.0.0</ipAddress>
+    </ServerAddress>
+  </ServerAddressList>
+</DeviceCommunication>`;
+
+      const resComm = await this.executeDigestRequest(
         'PUT',
         `${base}/ISAPI/VideoIntercom/deviceCommunication?format=json`,
         user,
@@ -444,40 +440,94 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         commPayload,
         'application/json',
         7000
+      ).catch(() => null);
+
+      if (!resComm || String(resComm?.data || resComm).includes('error') || String(resComm?.data || resComm).includes('Invalid Content')) {
+        await this.executeDigestRequest(
+          'PUT',
+          `${base}/ISAPI/VideoIntercom/deviceCommunication`,
+          user,
+          pass,
+          commXml,
+          'application/xml',
+          7000
+        ).catch(() => {});
+      }
+
+      // También configurar CenterCfg (usado por ciertos modelos de videoporteros y terminales)
+      const centerCfgJson = JSON.stringify({
+        CenterCfg: {
+          ipAddress: vpsGatewayIp,
+          portNo: 80,
+          enable: true
+        }
+      });
+      await this.executeDigestRequest(
+        'PUT',
+        `${base}/ISAPI/System/Network/Extension/centerCfg?format=json`,
+        user,
+        pass,
+        centerCfgJson,
+        'application/json',
+        5000
       ).catch(() => {});
 
-      // 4. Si el botón no llama al centro de gestión, configurarlo automáticamente
-      if (!isAlreadyCallCenter) {
-        // Intentar formato estándar manageCenter (DS-K1T344 y DS-KV6113)
-        const keyPayloadStd = `<KeyCfg version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema"><id>1</id><module>main</module><callMethod>manageCenter</callMethod><callNumber>1</callNumber><enableCallCenter>true</enableCallCenter></KeyCfg>`;
-        const resKey = await this.executeDigestRequest(
+      // 3. Si el dispositivo tiene pantallas conectadas / llama a apartamentos (como AMIRA PRINCIPAL):
+      // ¡PRESERVAR INTACTO su teclado y llamadas a pantallas de apartamentos!
+      // Ya quedó configurada la Central de Gestión (vpsGatewayIp) para cuando presionen "Llamar a la central",
+      // y preservamos los botones para que el marcado hacia las pantallas de residentes no se altere.
+      const tienePantallas = !!(
+        device.configuracion_tecnica?.tiene_pantallas ||
+        device.configuracion_tecnica?.pantallas_conectadas ||
+        device.configuracion_tecnica?.modo_citofonia === 'pantallas' ||
+        String(device.nombre_identificador || '').toUpperCase().includes('AMIRA PRINCIPAL')
+      );
+
+      if (tienePantallas) {
+        this.logger.log(`📞 [IntercomSetup] ${device.nombre_identificador} tiene pantallas conectadas: Central configurada (${vpsGatewayIp}) y marcado a pantallas/apartamentos preservado.`);
+        return;
+      }
+
+      // 4. Para dispositivos de un solo botón o sin pantallas (como AMIRA PARQUEADERO y AMIRA PARQUEADERO 2):
+      // Configurar el botón físico para llamar al Centro de Gestión (manageCenter)
+      const keyPayloadStd = `<KeyCfg version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema"><id>1</id><module>main</module><callMethod>manageCenter</callMethod><callNumber>1</callNumber><enableCallCenter>true</enableCallCenter></KeyCfg>`;
+      const resKey = await this.executeDigestRequest(
+        'PUT',
+        `${base}/ISAPI/VideoIntercom/keyCfg/1`,
+        user,
+        pass,
+        keyPayloadStd,
+        'application/xml',
+        7000
+      ).catch(() => null);
+
+      if (!resKey || String(resKey?.data || resKey).includes('error') || String(resKey?.data || resKey).includes('Invalid Content')) {
+        const keyPayloadAlt = `<KeyCfg version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema"><id>1</id><callMethod>callCenter</callMethod><keyType>callCenter</keyType></KeyCfg>`;
+        const resKeyAlt = await this.executeDigestRequest(
           'PUT',
           `${base}/ISAPI/VideoIntercom/keyCfg/1`,
           user,
           pass,
-          keyPayloadStd,
+          keyPayloadAlt,
           'application/xml',
           7000
         ).catch(() => null);
 
-        if (!resKey || String(resKey).includes('error') || String(resKey).includes('Invalid Content')) {
-          // Fallback para variantes que usan callCenter (ej: DS-K1T344MBWX-E1)
-          const keyPayloadAlt = `<KeyCfg version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema"><id>1</id><callMethod>callCenter</callMethod><keyType>callCenter</keyType></KeyCfg>`;
+        if (!resKeyAlt || String(resKeyAlt?.data || resKeyAlt).includes('error') || String(resKeyAlt?.data || resKeyAlt).includes('Invalid Content')) {
+          const keyPayloadSimple = `<KeyCfg version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema"><id>1</id><callMethod>manageCenter</callMethod><enableCallCenter>true</enableCallCenter></KeyCfg>`;
           await this.executeDigestRequest(
             'PUT',
             `${base}/ISAPI/VideoIntercom/keyCfg/1`,
             user,
             pass,
-            keyPayloadAlt,
+            keyPayloadSimple,
             'application/xml',
             7000
           ).catch(() => {});
         }
-
-        this.logger.log(`📞 [IntercomSetup] Botón físico configurado a Centro de Gestión (Gateway: ${vpsGatewayIp}) → ${device.nombre_identificador}`);
-      } else {
-        this.logger.log(`📞 [IntercomSetup] Botón preservado en Centro de Gestión → ${device.nombre_identificador}`);
       }
+
+      this.logger.log(`📞 [IntercomSetup] Botón físico configurado a Centro de Gestión (Gateway: ${vpsGatewayIp}) → ${device.nombre_identificador}`);
     } catch (err: any) {
       this.logger.debug(`[IntercomSetup] Intercomunicador no configurado en ${device.nombre_identificador}: ${err.message}`);
     }
@@ -1233,14 +1283,13 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     const isExplicitCallCenter = desc.includes('management center') || desc.includes('call center') || desc.includes('centro de gestión') || info?.callTarget === 'center' || info?.callMethod === 'manageCenter';
 
     const apto = this.extractApartmentNumber(info);
+    // Si hay un número de apartamento específico identificado y no es centro explícito -> Es llamada a pantalla de residente
     if (apto && !isExplicitCallCenter) {
       return true;
     }
 
-    if (tienePantallas && !isExplicitCallCenter) {
-      return true;
-    }
-
+    // Si NO hay número de apartamento específico (o fue llamado a la central):
+    // Es una llamada a la central / portería de Prolicontrol
     return false;
   }
 

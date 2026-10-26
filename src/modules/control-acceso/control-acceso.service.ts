@@ -3810,6 +3810,10 @@ export class ControlAccesoService implements OnModuleInit {
     }
 
     const paths = [
+      { key: 'device_info', path: '/ISAPI/System/deviceInfo?format=json', method: 'get' },
+      { key: 'device_communication', path: '/ISAPI/VideoIntercom/deviceCommunication?format=json', method: 'get' },
+      { key: 'key_cfg_1', path: '/ISAPI/VideoIntercom/keyCfg/1', method: 'get' },
+      { key: 'key_cfg_all', path: '/ISAPI/VideoIntercom/keyCfg', method: 'get' },
       { key: 'sip_config_json', path: '/ISAPI/VideoIntercom/sip/config?format=json', method: 'get' },
       { key: 'sip_config_xml', path: '/ISAPI/VideoIntercom/sip/config', method: 'get' },
       { key: 'center_cfg_json', path: '/ISAPI/System/Network/Extension/centerCfg?format=json', method: 'get' },
