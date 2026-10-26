@@ -166,6 +166,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           return { ok: true, cooldown: true };
         }
         this.logger.log(`📞 [Webhook HIK] ¡TIMBRE / LLAMADA ENTRANTE EN TIEMPO REAL! → ${device.nombre_identificador}`);
+      } else if (evento.tipo_evento === 'llamada_apartamento') {
+        this.logger.log(`📱 [Webhook HIK] ${evento.nombre_persona} en ${device.nombre_identificador} (Pantalla interior)`);
       } else if (evento.tipo_evento === 'llamada_finalizada') {
         this.logger.log(`📞 [Webhook HIK] Llamada finalizada en hardware → ${device.nombre_identificador}`);
       } else if (evento.tipo_evento === 'llamada_contestada') {
@@ -394,6 +396,19 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   public async configureHikvisionIntercom(device: DeviceInfo, ip: string, port: number, user: string, pass: string) {
     try {
       const base = `http://${ip}:${port}`;
+
+      // 0. Si el dispositivo tiene pantallas conectadas / llama a apartamentos, no sobreescribir el botón físico
+      const tienePantallas = !!(
+        device.configuracion_tecnica?.tiene_pantallas ||
+        device.configuracion_tecnica?.pantallas_conectadas ||
+        device.configuracion_tecnica?.modo_citofonia === 'pantallas' ||
+        String(device.nombre_identificador || '').toUpperCase().includes('AMIRA PRINCIPAL')
+      );
+
+      if (tienePantallas) {
+        this.logger.log(`📞 [IntercomSetup] ${device.nombre_identificador} tiene pantallas conectadas: Preservando llamada física a pantallas/apartamentos.`);
+        return;
+      }
 
       // 1. Determinar la IP del Gateway VPS en el túnel correspondiente a este dispositivo
       const parts = String(device.ip_direccion || ip).split('.');
@@ -747,16 +762,28 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       const ringKey = `call_ring_hik_${device.id}_${Math.floor(Date.now() / 20000)}`;
       if (!this.seenEventIds.has(ringKey)) {
         this.seenEventIds.add(ringKey);
-        this.logger.log(`📞 [HIK STREAM] ¡TIMBRE ENTRANTE EN TIEMPO REAL (<50ms)! → ${device.nombre_identificador}`);
+
+        const esLlamadaApto = this.isCallToApartmentOrScreen(device, info);
+        const apto = this.extractApartmentNumber(info);
+        const tipoEv = esLlamadaApto ? 'llamada_apartamento' : 'llamada';
+        const aptoStr = apto ? `Apto ${apto}` : 'Apto / Pantalla';
+        const nombrePer = esLlamadaApto ? `Llamando a ${aptoStr}` : 'Llamada de Citófono';
+        const docPer = esLlamadaApto ? (apto ? `APTO_${apto}` : 'PANTALLA_APTO') : 'LLAMADA';
+
+        this.logger.log(esLlamadaApto
+          ? `📱 [HIK STREAM] Llamada hacia pantalla de residente (${aptoStr}) en ${device.nombre_identificador}`
+          : `📞 [HIK STREAM] ¡TIMBRE ENTRANTE EN TIEMPO REAL (<50ms)! → ${device.nombre_identificador}`
+        );
+
         const callEvent: EventoAcceso = {
           dispositivo_id: device.id,
-          tipo_evento: 'llamada',
+          tipo_evento: tipoEv,
           nombre_dispositivo: device.nombre_identificador,
-          nombre_persona: 'Llamada de Citófono',
-          documento_persona: 'LLAMADA',
+          nombre_persona: nombrePer,
+          documento_persona: docPer,
           metodo_acceso: 'intercom',
           timestamp: new Date().toISOString(),
-          detalles_raw: { source: 'ISAPI/alertStream', ...info, ip, port }
+          detalles_raw: { source: 'ISAPI/alertStream', es_llamada_apartamento: esLlamadaApto, apto, ...info, ip, port }
         };
         this.saveAndEmit(callEvent);
       }
@@ -829,16 +856,43 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           const ringKey = `call_ring_${device.id}_${Math.floor(Date.now() / 20000)}`;
           if (!this.seenEventIds.has(ringKey)) {
             this.seenEventIds.add(ringKey);
-            this.logger.log(`📞 [EventSystem] ¡TIMBRE ENTRANTE EN TIEMPO REAL! → ${device.nombre_identificador} (${callState})`);
+
+            let calleeData: any = null;
+            try {
+              const cResp = await this.executeDigestRequest(
+                'GET',
+                `${base}/ISAPI/VideoIntercom/calleeInfo?format=json`,
+                user,
+                pass,
+                null,
+                'application/json',
+                1500,
+                'json'
+              ).catch(() => null);
+              calleeData = cResp?.data?.CalleeInfo || cResp?.data;
+            } catch {}
+
+            const esLlamadaApto = this.isCallToApartmentOrScreen(device, calleeData || cs);
+            const apto = this.extractApartmentNumber(calleeData || cs);
+            const tipoEv = esLlamadaApto ? 'llamada_apartamento' : 'llamada';
+            const aptoStr = apto ? `Apto ${apto}` : 'Apto / Pantalla';
+            const nombrePer = esLlamadaApto ? `Llamando a ${aptoStr}` : 'Llamada de Citófono';
+            const docPer = esLlamadaApto ? (apto ? `APTO_${apto}` : 'PANTALLA_APTO') : 'LLAMADA';
+
+            this.logger.log(esLlamadaApto
+              ? `📱 [EventSystem] Llamada hacia pantalla de residente (${aptoStr}) en ${device.nombre_identificador}`
+              : `📞 [EventSystem] ¡TIMBRE ENTRANTE EN TIEMPO REAL! → ${device.nombre_identificador} (${callState})`
+            );
+
             const callEvent: EventoAcceso = {
               dispositivo_id: device.id,
-              tipo_evento: 'llamada',
+              tipo_evento: tipoEv,
               nombre_dispositivo: device.nombre_identificador,
-              nombre_persona: 'Llamada de Citófono',
-              documento_persona: 'LLAMADA',
+              nombre_persona: nombrePer,
+              documento_persona: docPer,
               metodo_acceso: 'intercom',
               timestamp: new Date().toISOString(),
-              detalles_raw: { source: 'VideoIntercom/callStatus', status: callState, ip, port }
+              detalles_raw: { source: 'VideoIntercom/callStatus', status: callState, es_llamada_apartamento: esLlamadaApto, apto, ip, port }
             };
             this.saveAndEmit(callEvent);
           }
@@ -1132,6 +1186,62 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
+  private extractApartmentNumber(info: any): string | null {
+    if (!info) return null;
+    const candidates = [
+      info.roomNumber,
+      info.roomNo,
+      info.destRoomNo,
+      info.dialNumber,
+      info.CallRoomNo,
+      info.unitNumber,
+      info.unitNo,
+      info.IntercomEvent?.roomNo,
+      info.IntercomEvent?.destRoomNo,
+      info.IntercomEvent?.dialNumber,
+      info.callerInfo?.roomNo,
+      info.calleeInfo?.roomNo,
+    ];
+    for (const c of candidates) {
+      if (c !== undefined && c !== null && String(c).trim() !== '' && String(c).trim() !== '0') {
+        return String(c).trim();
+      }
+    }
+    const floor = info.floorNo || info.calleeInfo?.floorNo;
+    const unit = info.unitNo || info.calleeInfo?.unitNo;
+    if (floor && unit && Number(floor) > 0 && Number(unit) > 0) {
+      return `${floor}${String(unit).padStart(2, '0')}`;
+    }
+    const desc = String(info.eventDescription || info.description || '');
+    const m = desc.match(/(?:room|apto|apartamento|habitación|unidad)\s*[:#]?\s*(\d+[a-zA-Z]?)/i);
+    if (m) return m[1];
+
+    return null;
+  }
+
+  private isCallToApartmentOrScreen(device: DeviceInfo, info: any): boolean {
+    const tienePantallas = !!(
+      device.configuracion_tecnica?.tiene_pantallas ||
+      device.configuracion_tecnica?.pantallas_conectadas ||
+      device.configuracion_tecnica?.modo_citofonia === 'pantallas' ||
+      String(device.nombre_identificador || '').toUpperCase().includes('AMIRA PRINCIPAL')
+    );
+
+    const desc = String(info?.eventDescription || '').toLowerCase();
+    const isExplicitCallCenter = desc.includes('management center') || desc.includes('call center') || desc.includes('centro de gestión') || info?.callTarget === 'center' || info?.callMethod === 'manageCenter';
+
+    const apto = this.extractApartmentNumber(info);
+    if (apto && !isExplicitCallCenter) {
+      return true;
+    }
+
+    if (tienePantallas && !isExplicitCallCenter) {
+      return true;
+    }
+
+    return false;
+  }
+
   public async getDeviceById(idOrIp: string): Promise<DeviceInfo | null> {
     if (!idOrIp) return null;
     const cached = this.devicesMap.get(idOrIp);
@@ -1225,7 +1335,26 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     let nombrePersona = this.firstText(info?.name, info?.employeeName, info?.userName, info?.UserName);
     let documentoPersona = this.firstText(info?.employeeNoString, info?.employeeNo, info?.userID, info?.UserID, info?.personId);
 
+    const esLlamadaApto = this.isCallToApartmentOrScreen(device, info);
+    const apto = this.extractApartmentNumber(info);
+
     if (tipoEvento === 'llamada') {
+      if (esLlamadaApto) {
+        const aptoStr = apto ? `Apto ${apto}` : 'Apto / Pantalla';
+        nombrePersona = `Llamando a ${aptoStr}`;
+        documentoPersona = apto ? `APTO_${apto}` : 'PANTALLA_APTO';
+        metodoAcceso = 'intercom';
+        return {
+          dispositivo_id: device.id,
+          tipo_evento: 'llamada_apartamento',
+          nombre_dispositivo: device.nombre_identificador,
+          nombre_persona: nombrePersona,
+          documento_persona: documentoPersona,
+          metodo_acceso: metodoAcceso,
+          timestamp: timestampStr,
+          detalles_raw: { ...info, es_llamada_apartamento: true, apto }
+        };
+      }
       nombrePersona = 'Llamada de Citófono';
       documentoPersona = 'LLAMADA';
       metodoAcceso = 'intercom';
