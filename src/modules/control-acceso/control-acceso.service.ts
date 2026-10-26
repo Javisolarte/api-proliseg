@@ -3822,7 +3822,8 @@ export class ControlAccesoService implements OnModuleInit {
       { key: 'dial_param_xml', path: '/ISAPI/VideoIntercom/dialParam', method: 'get' },
       { key: 'call_status_json', path: '/ISAPI/VideoIntercom/callStatus?format=json', method: 'get' },
       { key: 'center_server_json', path: '/ISAPI/VideoIntercom/centerServer?format=json', method: 'get' },
-      { key: 'caller_info_json', path: '/ISAPI/VideoIntercom/callerInfo?format=json', method: 'get' }
+      { key: 'caller_info_json', path: '/ISAPI/VideoIntercom/callerInfo?format=json', method: 'get' },
+      { key: 'related_device_address', path: '/ISAPI/VideoIntercom/relatedDeviceAddress', method: 'get' }
     ];
 
     for (const item of paths) {

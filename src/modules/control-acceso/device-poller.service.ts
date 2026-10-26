@@ -472,6 +472,35 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         5000
       ).catch(() => {});
 
+      // Sincronizar RelatedDeviceAddress (CRÍTICO para Videoporteros y Frentes de Calle con pantalla táctil como AMIRA PRINCIPAL)
+      // Garantiza que cuando un visitante pulsa "Llamar a la central", marque a vpsGatewayIp:8000 en lugar de fallar con "Error en la llamada" por apuntar a 0.0.0.0.
+      const relatedDevXml = `<?xml version="1.0" encoding="UTF-8"?>
+<RelatedDeviceAddress version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
+  <ManageAddress>
+    <addressingFormatType>ipaddress</addressingFormatType>
+    <ipAddress>${vpsGatewayIp}</ipAddress>
+  </ManageAddress>
+  <SIPServerAddress>
+    <addressingFormatType>ipaddress</addressingFormatType>
+    <ipAddress>0.0.0.0</ipAddress>
+  </SIPServerAddress>
+  <centerPort>8000</centerPort>
+  <CenterAddress>
+    <addressingFormatType>ipaddress</addressingFormatType>
+    <ipAddress>${vpsGatewayIp}</ipAddress>
+  </CenterAddress>
+</RelatedDeviceAddress>`;
+
+      await this.executeDigestRequest(
+        'PUT',
+        `${base}/ISAPI/VideoIntercom/relatedDeviceAddress`,
+        user,
+        pass,
+        relatedDevXml,
+        'application/xml',
+        5000
+      ).catch(() => {});
+
       // 3. Si el dispositivo tiene pantallas conectadas / llama a apartamentos (como AMIRA PRINCIPAL):
       // ¡PRESERVAR INTACTO su teclado y llamadas a pantallas de apartamentos!
       // Ya quedó configurada la Central de Gestión (vpsGatewayIp) para cuando presionen "Llamar a la central",
