@@ -639,7 +639,8 @@ export class AsistenciaIotService implements OnModuleInit {
     }
 
     const puestoId = config.puesto_id;
-    const toleranciaMin = config.tolerancia_minutos || 10;
+    let toleranciaMin = config.tolerancia_minutos || 10;
+    let toleranciaSalidaMin = config.tolerancia_minutos || 10;
 
     // Buscar personal en el puesto (por cédula, dispositivo_user_id o coincidencia de nombre)
     let persona: any = null;
@@ -683,6 +684,17 @@ export class AsistenciaIotService implements OnModuleInit {
       }
     }
 
+    if (!persona && cedula && /1004192496/.test(cedula)) {
+      const { data: oscarAlt } = await this.adminClient
+        .from('asistencia_iot_personal')
+        .select('*, horario:puestos_horarios_asistencia(*)')
+        .eq('puesto_id', puestoId)
+        .eq('activo', true)
+        .eq('cedula', '10041192496')
+        .maybeSingle();
+      if (oscarAlt) persona = oscarAlt;
+    }
+
     if (!persona) {
       this.logger.debug(`Persona ${cedula || params.nombre} no está registrada en puesto ${puestoId}`);
       return null;
@@ -705,6 +717,9 @@ export class AsistenciaIotService implements OnModuleInit {
         horario = this.encontrarHorarioMasCercano(horarios, eventTimeMinutes);
       }
     }
+
+    if (horario?.tolerancia_entrada_minutos) toleranciaMin = horario.tolerancia_entrada_minutos;
+    if (horario?.tolerancia_salida_minutos) toleranciaSalidaMin = horario.tolerancia_salida_minutos;
 
     let horaEntradaProg = horario?.hora_entrada || '08:00:00';
     let horaSalidaProg = horario?.hora_salida || '17:00:00';
@@ -792,7 +807,7 @@ export class AsistenciaIotService implements OnModuleInit {
     if (esSalida) {
       // EVALUAR SALIDA
       let estadoSalida = 'cumplido';
-      if (eventTimeMinutes < progSalidaMin - toleranciaMin) {
+      if (eventTimeMinutes < progSalidaMin - toleranciaSalidaMin) {
         estadoSalida = 'anticipado';
         estadoTexto = 'Salida Anticipada';
       } else if (eventTimeMinutes > progSalidaMin + 30) {

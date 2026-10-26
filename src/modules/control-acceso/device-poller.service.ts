@@ -1057,7 +1057,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
       const desde = new Date(this.latestDbTimestamp.get(device.id) || new Date(Date.now() - 30 * 60000).toISOString());
       // Consultar hasta 100 eventos para abarcar todas las marcaciones recientes del terminal
-      const eventos = await this.dahuaService.obtenerEventos(ip, port, user, pass, desde, 100);
+      const eventos = await this.dahuaService.obtenerEventos(ip, port, user, pass, desde, 200);
+      eventos.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
       const lastDbTime = desde.getTime();
 

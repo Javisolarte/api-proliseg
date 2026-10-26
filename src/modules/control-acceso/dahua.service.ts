@@ -1361,7 +1361,7 @@ export class DahuaService {
    */
   async obtenerEventos(
     ip: string, port: number, user: string, pass: string,
-    desde?: Date, maxResults = 100,
+    desde?: Date, maxResults = 200,
   ): Promise<DahuaEvento[]> {
     this.logger.debug(`📋 [DAHUA EVENTOS] Obteniendo log de ${ip}:${port}`);
 
@@ -1370,10 +1370,18 @@ export class DahuaService {
       try {
         const resp = await this.cgi(
           ip, port, user, pass, 'GET',
-          `/cgi-bin/recordFinder.cgi?action=find&name=${table}&count=${maxResults}`,
+          `/cgi-bin/recordFinder.cgi?action=find&name=${table}&bReverse=true&count=${maxResults}`,
         );
-        const raw = String(resp?.data || '');
-        const isError = /^\s*error\b|result\s*=\s*false/i.test(raw);
+        let raw = String(resp?.data || '');
+        let isError = /^\s*error\b|result\s*=\s*false/i.test(raw);
+        if (!raw || isError || (!raw.includes('records[') && !raw.includes('table.') && !raw.includes('found='))) {
+          const respFallback = await this.cgi(
+            ip, port, user, pass, 'GET',
+            `/cgi-bin/recordFinder.cgi?action=find&name=${table}&count=${maxResults}`,
+          );
+          raw = String(respFallback?.data || '');
+          isError = /^\s*error\b|result\s*=\s*false/i.test(raw);
+        }
         if (raw && !isError && (raw.includes('records[') || raw.includes('table.') || raw.includes('found=') || raw.startsWith('{') || raw.startsWith('['))) {
           const eventos = this.parseDahuaEventos(raw);
           if (eventos.length > 0) return eventos;
