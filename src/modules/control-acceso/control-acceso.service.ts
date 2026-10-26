@@ -3786,9 +3786,9 @@ export class ControlAccesoService implements OnModuleInit {
       try {
         await this.dahuaService.cgi(
           ip, port, user, pass, 'GET',
-          '/cgi-bin/configManager.cgi?action=setConfig&AccessControlGeneral.AccessVoice.CurrentVoiceID=4'
+          '/cgi-bin/configManager.cgi?action=setConfig&AccessControlGeneral.AccessVoice.CurrentVoiceID=3'
         );
-        results['voz_bienvenida'] = 'VoiceID=4 configurado';
+        results['voz_asistencia'] = 'VoiceID=3 (Attendance checked / Asistencia) configurado';
       } catch {}
 
       // Listar usuarios registrados físicamente en el chip Dahua
@@ -7204,6 +7204,50 @@ export class ControlAccesoService implements OnModuleInit {
       user,
       netSdkTest,
       results
+    };
+  }
+
+  async setDahuaVoice(dispositivoId: string, voiceId: number = 3): Promise<any> {
+    const { data: dev } = await this.supabase
+      .getClient()
+      .from('dispositivos_iot')
+      .select('*')
+      .eq('id', dispositivoId)
+      .maybeSingle();
+
+    if (!dev) return { error: 'Dispositivo no encontrado' };
+
+    const ip = dev.ip_direccion;
+    const config = dev.configuracion_tecnica || {};
+    const port = Number(config.puertos_mapeados?.mapped_http || config.puerto || dev.puerto || 80);
+    const user = String(dev.credencial_usuario || 'admin');
+    const pass = String(dev.credencial_password || '');
+
+    const resp = await this.dahuaService.cgi(
+      ip, port, user, pass, 'GET',
+      `/cgi-bin/configManager.cgi?action=setConfig&AccessControlGeneral.AccessVoice.CurrentVoiceID=${voiceId}`
+    );
+
+    const voiceNames: Record<number, string> = {
+      0: 'Verified successfully (Validación exitosa)',
+      1: 'The door is opened (Puerta abierta)',
+      2: 'Unlocked successfully (Desbloqueado con éxito)',
+      3: 'Attendance checked (Asistencia registrada / Punch clock)',
+      4: 'Welcome (Bienvenido)',
+      5: 'Thank you for your coming',
+      6: 'Thank you',
+      7: 'Custom Voice / Temperature verification passed',
+      8: 'None (Silenciado)'
+    };
+
+    return {
+      ok: true,
+      voiceId,
+      nombreVoz: voiceNames[voiceId] || `Voice ID ${voiceId}`,
+      dispositivo: dev.nombre_identificador,
+      ip,
+      port,
+      detalleHardware: resp?.data?.trim() || 'OK'
     };
   }
 

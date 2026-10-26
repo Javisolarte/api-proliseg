@@ -368,6 +368,30 @@ export class ControlAccesoController {
   }
 
   @Public()
+  @Post('dahua-voice/:id')
+  @ApiOperation({ summary: 'Configura la voz de confirmación en el parlante físico del terminal Dahua' })
+  async setDahuaVoice(
+    @Param('id') id: string,
+    @Body() body?: { voiceId?: number }
+  ) {
+    const voiceId = body?.voiceId !== undefined ? Number(body.voiceId) : 3;
+    this.logger.log(`🔊 [DAHUA VOICE] Configurando VoiceID=${voiceId} en terminal: ${id}`);
+    return this.controlAccesoService.setDahuaVoice(id, voiceId);
+  }
+
+  @Public()
+  @Get('dahua-voice/:id')
+  @ApiOperation({ summary: 'Activa por defecto VoiceID=3 (Attendance checked / Asistencia) en el terminal Dahua' })
+  async setDahuaVoiceGet(
+    @Param('id') id: string,
+    @Query('voiceId') voiceIdQuery?: string
+  ) {
+    const voiceId = voiceIdQuery !== undefined ? Number(voiceIdQuery) : 3;
+    this.logger.log(`🔊 [DAHUA VOICE] Configurando VoiceID=${voiceId} en terminal: ${id}`);
+    return this.controlAccesoService.setDahuaVoice(id, voiceId);
+  }
+
+  @Public()
   @Get('test-dahua-sip/:id')
   @ApiOperation({ summary: 'Diagnostico de conectividad SIP / RTP hacia terminal Dahua' })
   async testDahuaSip(@Param('id') id: string) {
