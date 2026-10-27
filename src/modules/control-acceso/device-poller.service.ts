@@ -474,9 +474,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
       // Sincronizar RelatedDeviceAddress (CRÍTICO para Videoporteros y Frentes de Calle con pantalla táctil como AMIRA PRINCIPAL)
       // Garantiza que cuando un visitante pulsa "Llamar a la central", marque al gateway local en lugar de fallar con "Error en la llamada" por apuntar a 0.0.0.0 o al web console de Coolify.
-      const isAmiraPrincipal = String(device.nombre_identificador || '').toUpperCase().includes('AMIRA PRINCIPAL');
-      const targetCenterIp = isAmiraPrincipal ? '192.168.60.1' : vpsGatewayIp;
-      const targetCenterPort = isAmiraPrincipal ? 8291 : 8000;
+      const targetCenterIp = '10.8.0.1';
+      const targetCenterPort = 8000;
 
       const relatedDevXml = `<?xml version="1.0" encoding="UTF-8"?>
 <RelatedDeviceAddress version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
@@ -848,13 +847,15 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       const ringKey = `call_ring_hik_${device.id}_${Math.floor(Date.now() / 20000)}`;
       if (!this.seenEventIds.has(ringKey)) {
         this.seenEventIds.add(ringKey);
+        this.setCallCooldown(device.id, 25000);
 
         const esLlamadaApto = this.isCallToApartmentOrScreen(device, info);
         const apto = this.extractApartmentNumber(info);
         const tipoEv = esLlamadaApto ? 'llamada_apartamento' : 'llamada';
         const aptoStr = apto ? `Apto ${apto}` : 'Apto';
-        const nombrePer = esLlamadaApto ? (apto ? `Llamando al Apto ${apto}` : 'Llamando al Apto') : 'Llamada de Citófono';
-        const docPer = esLlamadaApto ? (apto ? `APTO_${apto}` : 'PANTALLA_APTO') : 'LLAMADA';
+        const isCallToCentral = isCallCenterIntercom || isCallCenter || (!esLlamadaApto && (sub === 112 || major === 3));
+        const nombrePer = esLlamadaApto ? (apto ? `Llamando al Apto ${apto}` : 'Llamando al Apto') : (isCallToCentral ? 'Llamada al Centro de Gestión' : 'Llamada de Citófono');
+        const docPer = esLlamadaApto ? (apto ? `APTO_${apto}` : 'PANTALLA_APTO') : (isCallToCentral ? 'LLAMADA_CENTRAL' : 'LLAMADA');
 
         this.logger.log(esLlamadaApto
           ? `📱 [HIK STREAM] Llamada hacia pantalla de residente (${aptoStr}) en ${device.nombre_identificador}`
@@ -942,6 +943,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           const ringKey = `call_ring_${device.id}_${Math.floor(Date.now() / 20000)}`;
           if (!this.seenEventIds.has(ringKey)) {
             this.seenEventIds.add(ringKey);
+            this.setCallCooldown(device.id, 25000);
 
             let calleeData: any = null;
             try {
@@ -962,8 +964,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
             const apto = this.extractApartmentNumber(calleeData || cs);
             const tipoEv = esLlamadaApto ? 'llamada_apartamento' : 'llamada';
             const aptoStr = apto ? `Apto ${apto}` : 'Apto';
-            const nombrePer = esLlamadaApto ? (apto ? `Llamando al Apto ${apto}` : 'Llamando al Apto') : 'Llamada de Citófono';
-            const docPer = esLlamadaApto ? (apto ? `APTO_${apto}` : 'PANTALLA_APTO') : 'LLAMADA';
+            const nombrePer = esLlamadaApto ? (apto ? `Llamando al Apto ${apto}` : 'Llamando al Apto') : 'Llamada al Centro de Gestión';
+            const docPer = esLlamadaApto ? (apto ? `APTO_${apto}` : 'PANTALLA_APTO') : 'LLAMADA_CENTRAL';
 
             this.logger.log(esLlamadaApto
               ? `📱 [EventSystem] Llamada hacia pantalla de residente (${aptoStr}) en ${device.nombre_identificador}`
@@ -1349,8 +1351,14 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Si el dispositivo tiene pantallas de residentes asociadas (como AMIRA PRINCIPAL)
-    // y NO fue llamada a la central, cualquier llamada/timbre es hacia un apartamento
+    // PERO NO viene número de apartamento:
     if (tienePantallas) {
+      // Si el evento proviene de callStatus general ("ring") y no se detectó número de apartamento,
+      // es llamada al Centro de Gestión / timbre general para que timbre la plataforma
+      const isGenericCallStatus = info?.status === 'ring' || info?.CallStatus?.status === 'ring' || (!subEv && !desc);
+      if (isGenericCallStatus && !apto) {
+        return false;
+      }
       return true;
     }
 
@@ -1540,7 +1548,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       let persona: any = null;
       if (evento.tipo_evento === 'llamada') {
         evento.nombre_persona = evento.nombre_persona || 'Llamada de Citófono';
-        evento.documento_persona = 'LLAMADA';
+        evento.documento_persona = evento.documento_persona || 'LLAMADA';
       } else if (evento.tipo_evento === 'llamada_finalizada') {
         evento.nombre_persona = 'Llamada Finalizada';
         evento.documento_persona = 'LLAMADA_FINALIZADA';
