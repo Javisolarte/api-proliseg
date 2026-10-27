@@ -852,8 +852,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         const esLlamadaApto = this.isCallToApartmentOrScreen(device, info);
         const apto = this.extractApartmentNumber(info);
         const tipoEv = esLlamadaApto ? 'llamada_apartamento' : 'llamada';
-        const aptoStr = apto ? `Apto ${apto}` : 'Apto / Pantalla';
-        const nombrePer = esLlamadaApto ? `Llamando a ${aptoStr}` : 'Llamada de Citófono';
+        const aptoStr = apto ? `Apto ${apto}` : 'Apto';
+        const nombrePer = esLlamadaApto ? (apto ? `Llamando al Apto ${apto}` : 'Llamando al Apto') : 'Llamada de Citófono';
         const docPer = esLlamadaApto ? (apto ? `APTO_${apto}` : 'PANTALLA_APTO') : 'LLAMADA';
 
         this.logger.log(esLlamadaApto
@@ -961,8 +961,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
             const esLlamadaApto = this.isCallToApartmentOrScreen(device, calleeData || cs);
             const apto = this.extractApartmentNumber(calleeData || cs);
             const tipoEv = esLlamadaApto ? 'llamada_apartamento' : 'llamada';
-            const aptoStr = apto ? `Apto ${apto}` : 'Apto / Pantalla';
-            const nombrePer = esLlamadaApto ? `Llamando a ${aptoStr}` : 'Llamada de Citófono';
+            const aptoStr = apto ? `Apto ${apto}` : 'Apto';
+            const nombrePer = esLlamadaApto ? (apto ? `Llamando al Apto ${apto}` : 'Llamando al Apto') : 'Llamada de Citófono';
             const docPer = esLlamadaApto ? (apto ? `APTO_${apto}` : 'PANTALLA_APTO') : 'LLAMADA';
 
             this.logger.log(esLlamadaApto
@@ -1094,6 +1094,9 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           if (this.isCallInCooldown(device.id)) continue;
           this.setCallCooldown(device.id, 25000);
           this.logger.log(`📞 [EventSystem Fallback] ¡TIMBRE / LLAMADA ENTRANTE CAPTURADA! → ${device.nombre_identificador} (${evento.nombre_persona})`);
+          this.saveAndEmit(evento);
+        } else if (evento.tipo_evento === 'llamada_apartamento') {
+          this.logger.log(`📱 [EventSystem Fallback] ¡LLAMADA A APARTAMENTO CAPTURADA! → ${device.nombre_identificador} (${evento.nombre_persona})`);
           this.saveAndEmit(evento);
         } else if (evento.tipo_evento === 'llamada_finalizada') {
           if (this.isCallInCooldown(device.id)) {
@@ -1335,14 +1338,22 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     const desc = String(info?.eventDescription || '').toLowerCase();
     const isExplicitCallCenter = subEv === 112 || desc.includes('management center') || desc.includes('call center') || desc.includes('centro de gestión') || desc.includes('central') || info?.callTarget === 'center' || info?.callMethod === 'manageCenter';
 
+    // Si es explícitamente una llamada a la central / centro de gestión, NUNCA es llamada a apartamento
+    if (isExplicitCallCenter) {
+      return false;
+    }
+
     const apto = this.extractApartmentNumber(info);
-    // Si hay un número de apartamento específico identificado y no es centro explícito -> Es llamada a pantalla de residente
-    if (apto && !isExplicitCallCenter) {
+    if (apto) {
       return true;
     }
 
-    // Si NO hay número de apartamento específico (o fue llamado a la central):
-    // Es una llamada a la central / portería de Prolicontrol
+    // Si el dispositivo tiene pantallas de residentes asociadas (como AMIRA PRINCIPAL)
+    // y NO fue llamada a la central, cualquier llamada/timbre es hacia un apartamento
+    if (tienePantallas) {
+      return true;
+    }
+
     return false;
   }
 
@@ -1445,8 +1456,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
     if (tipoEvento === 'llamada') {
       if (esLlamadaApto) {
-        const aptoStr = apto ? `Apto ${apto}` : 'Apto / Pantalla';
-        nombrePersona = `Llamando a ${aptoStr}`;
+        const aptoStr = apto ? `Apto ${apto}` : 'Apto';
+        nombrePersona = apto ? `Llamando al Apto ${apto}` : 'Llamando al Apto';
         documentoPersona = apto ? `APTO_${apto}` : 'PANTALLA_APTO';
         metodoAcceso = 'intercom';
         return {
