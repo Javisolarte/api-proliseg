@@ -402,13 +402,22 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       const parts = String(device.ip_direccion || ip).split('.');
       const vpsGatewayIp = parts.length === 4 ? `${parts[0]}.${parts[1]}.${parts[2]}.1` : '10.8.0.1';
 
+      // REGLA ESTRICTA DE AISLAMIENTO: Solo para Edificio Amira (AMIRA PRINCIPAL), la central se enruta
+      // al gateway MikroTik local (192.168.60.1:8000) donde la regla de firewall descarta silenciosamente
+      // el SYN TCP para sostener el timbrado activo ("ring") sin que Nginx/Coolify envíe TCP RST ("Error en la llamada").
+      // Los demás puestos de control se preservan 100% intactos apuntando a vpsGatewayIp / 10.8.0.1.
+      const isAmira = String(device.nombre_identificador || '').toUpperCase().includes('AMIRA');
+      const effectiveManageIp = isAmira ? '192.168.60.1' : vpsGatewayIp;
+      const targetCenterIp = isAmira ? '192.168.60.1' : '10.8.0.1';
+      const targetCenterPort = 8000;
+
       // 2. Sincronizar SIEMPRE DeviceCommunication (para que "Llamar a la central" funcione en TODOS los equipos, incluido AMIRA PRINCIPAL)
       const commPayload = JSON.stringify({
         DeviceCommunication: {
           regNumber: '10010100000',
           regPassword: pass || 'admin12345',
           ServerAddressList: [
-            { id: 1, unitType: 'manage', addressingFormatType: 'ipaddress', ipAddress: vpsGatewayIp },
+            { id: 1, unitType: 'manage', addressingFormatType: 'ipaddress', ipAddress: effectiveManageIp },
             { id: 2, unitType: 'sip', addressingFormatType: 'ipaddress', ipAddress: '0.0.0.0' }
           ]
         }
@@ -421,7 +430,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       <id>1</id>
       <unitType>manage</unitType>
       <addressingFormatType>ipaddress</addressingFormatType>
-      <ipAddress>${vpsGatewayIp}</ipAddress>
+      <ipAddress>${effectiveManageIp}</ipAddress>
     </ServerAddress>
     <ServerAddress>
       <id>2</id>
@@ -457,7 +466,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       // También configurar CenterCfg (usado por ciertos modelos de videoporteros y terminales)
       const centerCfgJson = JSON.stringify({
         CenterCfg: {
-          ipAddress: vpsGatewayIp,
+          ipAddress: effectiveManageIp,
           portNo: 80,
           enable: true
         }
@@ -474,8 +483,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
       // Sincronizar RelatedDeviceAddress (CRÍTICO para Videoporteros y Frentes de Calle con pantalla táctil como AMIRA PRINCIPAL)
       // Garantiza que cuando un visitante pulsa "Llamar a la central", marque al gateway local en lugar de fallar con "Error en la llamada" por apuntar a 0.0.0.0 o al web console de Coolify.
-      const targetCenterIp = '10.8.0.1';
-      const targetCenterPort = 8000;
+      // Para Amira se usa targetCenterIp (192.168.60.1), para los demás se mantiene 10.8.0.1.
 
       const relatedDevXml = `<?xml version="1.0" encoding="UTF-8"?>
 <RelatedDeviceAddress version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
