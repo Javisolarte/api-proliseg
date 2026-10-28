@@ -398,6 +398,21 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     try {
       const base = `http://${ip}:${port}`;
 
+      // 0. Si el dispositivo tiene pantallas conectadas / llama a apartamentos (como AMIRA PRINCIPAL):
+      // ¡PRESERVAR 100% INTACTO! No alterar DeviceCommunication (para no desconfigurar regPassword ni enlaces
+      // a las 21 pantallas de apartamentos) ni sobrescribir RelatedDeviceAddress.
+      const tienePantallas = !!(
+        device.configuracion_tecnica?.tiene_pantallas ||
+        device.configuracion_tecnica?.pantallas_conectadas ||
+        device.configuracion_tecnica?.modo_citofonia === 'pantallas' ||
+        String(device.nombre_identificador || '').toUpperCase().includes('AMIRA PRINCIPAL')
+      );
+
+      if (tienePantallas) {
+        this.logger.log(`📞 [IntercomSetup] ${device.nombre_identificador} tiene pantallas conectadas: Preservando comunicaciones y enlace con pantallas de residentes intactos.`);
+        return;
+      }
+
       // 1. Determinar la IP del Gateway VPS en el túnel correspondiente a este dispositivo
       const parts = String(device.ip_direccion || ip).split('.');
       const vpsGatewayIp = parts.length === 4 ? `${parts[0]}.${parts[1]}.${parts[2]}.1` : '10.8.0.1';
@@ -512,21 +527,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         5000
       ).catch(() => {});
 
-      // 3. Si el dispositivo tiene pantallas conectadas / llama a apartamentos (como AMIRA PRINCIPAL):
-      // ¡PRESERVAR INTACTO su teclado y llamadas a pantallas de apartamentos!
-      // Ya quedó configurada la Central de Gestión (vpsGatewayIp) para cuando presionen "Llamar a la central",
-      // y preservamos los botones para que el marcado hacia las pantallas de residentes no se altere.
-      const tienePantallas = !!(
-        device.configuracion_tecnica?.tiene_pantallas ||
-        device.configuracion_tecnica?.pantallas_conectadas ||
-        device.configuracion_tecnica?.modo_citofonia === 'pantallas' ||
-        String(device.nombre_identificador || '').toUpperCase().includes('AMIRA PRINCIPAL')
-      );
-
-      if (tienePantallas) {
-        this.logger.log(`📞 [IntercomSetup] ${device.nombre_identificador} tiene pantallas conectadas: Central configurada (${vpsGatewayIp}) y marcado a pantallas/apartamentos preservado.`);
-        return;
-      }
+      // 3. Dispositivos con pantallas ya fueron preservados en el paso 0
 
       // 4. Para dispositivos de un solo botón o sin pantallas (como AMIRA PARQUEADERO y AMIRA PARQUEADERO 2):
       // Configurar el botón físico para llamar al Centro de Gestión (manageCenter)
@@ -1359,14 +1360,8 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Si el dispositivo tiene pantallas de residentes asociadas (como AMIRA PRINCIPAL)
-    // PERO NO viene número de apartamento:
+    // y no es llamada a la central (minor 112), cualquier timbre es hacia pantallas de apartamentos
     if (tienePantallas) {
-      // Si el evento proviene de callStatus general ("ring") y no se detectó número de apartamento,
-      // es llamada al Centro de Gestión / timbre general para que timbre la plataforma
-      const isGenericCallStatus = info?.status === 'ring' || info?.CallStatus?.status === 'ring' || (!subEv && !desc);
-      if (isGenericCallStatus && !apto) {
-        return false;
-      }
       return true;
     }
 
