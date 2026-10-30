@@ -1355,16 +1355,19 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     }
 
     const apto = this.extractApartmentNumber(info);
+    // Solo es llamada a apartamento si se detectó un número de apartamento específico (ej: 601, 302, etc.)
     if (apto) {
       return true;
     }
 
-    // Si el dispositivo tiene pantallas de residentes asociadas (como AMIRA PRINCIPAL)
-    // y no es llamada a la central (minor 112), cualquier timbre es hacia pantallas de apartamentos
-    if (tienePantallas) {
-      return true;
+    // Si no hay un número de apartamento específico identificado (o el timbrado proviene de callStatus "ring" por "Llamar a la Central"):
+    // Siempre es llamada al Centro de Gestión / Central para que timbre en Prolicontrol y el operador de portería pueda contestar
+    const isGenericCallStatus = info?.status === 'ring' || info?.CallStatus?.status === 'ring' || (!subEv && !desc);
+    if (isGenericCallStatus && !apto) {
+      return false;
     }
 
+    // Por defecto, sin apartamento específico no se clasifica como apartamento
     return false;
   }
 
