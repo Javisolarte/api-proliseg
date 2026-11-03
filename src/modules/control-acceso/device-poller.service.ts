@@ -110,7 +110,11 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   private readonly fallbackTimers = new Map<string, NodeJS.Timeout>();
   private readonly dahuaStreamSubscriptions = new Map<string, { stop: () => void }>();
   private readonly hikAlertStreamSubscriptions = new Map<string, { stop: () => void }>();
-  private readonly FALLBACK_POLL_MS = 1500; // 1.5s para respaldo ultrarrápido de llamadas y eventos
+  private readonly FALLBACK_POLL_MS = 4000; // 4s para respaldo sin saturar equipos con stream activo
+  private readonly hostPollInFlight = new Set<string>();
+  private readonly hostBackoffUntil = new Map<string, number>();
+  private readonly hostStreamActive = new Set<string>();
+  private readonly hostLastPollAt = new Map<string, number>();
 
   // ─── Ciclo de vida ────────────────────────────────────────────────────────
 
@@ -148,17 +152,25 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   async procesarWebhookHikvision(payload: any, dispositivoId?: string) {
     try {
       const info = payload?.AccessControllerEvent || payload?.EventNotificationAlert || payload;
+      const rawEventType = String(info?.eventType || payload?.eventType || '').toLowerCase();
+      if (['videoloss', 'vmd', 'heartbeat', 'shelteralarm', 'fielddetection', 'linedetection', 'scenechangedetection'].includes(rawEventType)) {
+        return { ok: true, ignored: true };
+      }
+
       const device = await this.getDeviceById(dispositivoId || info?.ipAddress);
       if (!device) {
         this.logger.warn(`⚠️ [Webhook] Evento de dispositivo desconocido: ${dispositivoId}`);
         return { ok: false };
       }
 
+      const evento = this.buildEventoAcceso(device, info, this.sanitizeTimestamp(info?.dateTime));
+      if (evento.tipo_evento === 'evento') {
+        return { ok: true, ignored: true };
+      }
+
       const eventId = this.getEventId(device.id, info);
       if (this.seenEventIds.has(eventId)) return { ok: true, duplicado: true };
       this.markAsSeen(eventId);
-
-      const evento = this.buildEventoAcceso(device, info, this.sanitizeTimestamp(info?.dateTime));
 
       if (evento.tipo_evento === 'llamada') {
         if (this.isCallInCooldown(device.id)) {
@@ -373,7 +385,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     <portNo>${portNoVal}</portNo>
     <httpAuthenticationMethod>none</httpAuthenticationMethod>
     <SubscribeEvent>
-      <heartbeat>15</heartbeat>
+      <heartbeat>120</heartbeat>
       <eventMode>all</eventMode>
     </SubscribeEvent>
   </HttpHostNotification>
@@ -637,25 +649,32 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
     this.fallbackTimers.set(device.id, timer);
 
-    // Si es Dahua, conectar stream de eventos en tiempo real (HTTP multipart/x-mixed-replace)
+    const hostKey = `${ip}:${port}`;
+
+    // Si es Dahua, conectar stream de eventos en tiempo real (deduplicado por ip:port)
     if (marca.includes('dahua') || marca.includes('dh')) {
-      if (!this.dahuaStreamSubscriptions.has(device.id)) {
+      if (!this.dahuaStreamSubscriptions.has(hostKey)) {
+        this.dahuaStreamSubscriptions.set(hostKey, { stop: () => {} });
         this.dahuaService.attachEventManagerStream(ip, port, user, pass, (eventObj) => {
+          this.hostStreamActive.add(hostKey);
           this.handleDahuaStreamEvent(device, ip, port, eventObj);
         }).then(sub => {
-          if (sub) this.dahuaStreamSubscriptions.set(device.id, sub);
+          if (sub) this.dahuaStreamSubscriptions.set(hostKey, sub);
         }).catch(err => {
+          this.dahuaStreamSubscriptions.delete(hostKey);
           this.logger.debug(`[EventSystem] attachEventManagerStream no pudo iniciar en ${device.nombre_identificador}: ${err.message}`);
         });
       }
     }
 
-    // Si es Hikvision, conectar stream de eventos en tiempo real (ISAPI AlertStream multipart/mixed <50ms)
+    // Si es Hikvision, conectar stream de eventos en tiempo real (ISAPI AlertStream multipart/mixed <50ms, deduplicado por ip:port)
     if (marca.includes('hikvision') || marca.includes('hik')) {
-      if (!this.hikAlertStreamSubscriptions.has(device.id)) {
+      if (!this.hikAlertStreamSubscriptions.has(hostKey)) {
+        this.hikAlertStreamSubscriptions.set(hostKey, { stop: () => {} });
         this.attachAlertStreamHikvision(device, ip, port, user, pass).then(sub => {
-          if (sub) this.hikAlertStreamSubscriptions.set(device.id, sub);
+          if (sub) this.hikAlertStreamSubscriptions.set(hostKey, sub);
         }).catch(err => {
+          this.hikAlertStreamSubscriptions.delete(hostKey);
           this.logger.debug(`[EventSystem] attachAlertStreamHikvision no pudo iniciar en ${device.nombre_identificador}: ${err.message}`);
         });
       }
@@ -743,12 +762,16 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
             return doReq(authHeader);
           }
 
+          const hostKey = `${ip}:${port}`;
           if (res.statusCode !== 200) {
-            this.logger.debug(`[HIK ALERT STREAM] Status ${res.statusCode} en ${device.nombre_identificador}. Reconectando en 10s...`);
-            if (active) setTimeout(connectStream, 10000);
+            this.hostStreamActive.delete(hostKey);
+            this.logger.debug(`[HIK ALERT STREAM] Status ${res.statusCode} en ${device.nombre_identificador}. Reconectando en 20s...`);
+            if (active) setTimeout(connectStream, 20000);
             return;
           }
 
+          this.hostStreamActive.add(hostKey);
+          this.hostBackoffUntil.delete(hostKey);
           this.logger.log(`📡 [HIK ALERT STREAM] Conectado exitosamente en tiempo real (<50ms) a ${device.nombre_identificador} (${ip}:${port})`);
 
           let buffer = '';
@@ -770,24 +793,29 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           });
 
           res.on('end', () => {
+            this.hostStreamActive.delete(hostKey);
             if (active) {
-              this.logger.warn(`⚠️ [HIK ALERT STREAM] Stream finalizado en ${device.nombre_identificador}. Reconectando en 5s...`);
-              setTimeout(connectStream, 5000);
+              this.logger.warn(`⚠️ [HIK ALERT STREAM] Stream finalizado en ${device.nombre_identificador}. Reconectando en 8s...`);
+              setTimeout(connectStream, 8000);
             }
           });
 
           res.on('error', (err: any) => {
+            this.hostStreamActive.delete(hostKey);
             if (active) {
-              this.logger.debug(`[HIK ALERT STREAM] Error en ${device.nombre_identificador}: ${err.message}. Reconectando en 5s...`);
-              setTimeout(connectStream, 5000);
+              this.logger.debug(`[HIK ALERT STREAM] Error en ${device.nombre_identificador}: ${err.message}. Reconectando en 10s...`);
+              setTimeout(connectStream, 10000);
             }
           });
         });
 
         req.on('error', (err: any) => {
+          const hostKey = `${ip}:${port}`;
+          this.hostStreamActive.delete(hostKey);
+          this.hostBackoffUntil.set(hostKey, Date.now() + 30000);
           if (active) {
-            this.logger.debug(`[HIK ALERT STREAM] Conexión rechazada en ${device.nombre_identificador}: ${err.message}. Reconectando en 10s...`);
-            setTimeout(connectStream, 10000);
+            this.logger.debug(`[HIK ALERT STREAM] Conexión rechazada en ${device.nombre_identificador}: ${err.message}. Reconectando en 45s...`);
+            setTimeout(connectStream, 45000);
           }
         });
 
@@ -812,6 +840,9 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     const major = Number(info?.majorEventType ?? info?.major ?? 0);
     const sub = Number(info?.subEventType ?? info?.minor ?? info?.sub ?? 0);
     const eventType = String(info?.eventType || '').toLowerCase();
+    if (['videoloss', 'vmd', 'heartbeat', 'shelteralarm', 'fielddetection', 'linedetection', 'scenechangedetection'].includes(eventType)) {
+      return;
+    }
     const eventState = String(info?.status || '').toLowerCase();
     const desc = String(info?.eventDescription || eventObj?.eventDescription || '').toLowerCase();
     const intercomStatus = String(info?.IntercomEvent?.callStatus || '').toLowerCase();
@@ -909,13 +940,33 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           detalles_raw: { source: 'ISAPI/alertStream', ...info, ip, port }
         });
       }
-    } else {
-      // Procesa cualquier otro evento (reconocimiento facial, tarjeta, apertura) inmediatamente
+    } else if (!isRemoteOperation && major === 5) {
+      // Procesa eventos reales de control de acceso (major 5) inmediatamente
       this.procesarWebhookHikvision(eventObj, device.id).catch(() => {});
     }
   }
 
   private async fallbackPoll(device: DeviceInfo, ip: string, port: number, user: string, pass: string, marca: string) {
+    const hostKey = `${ip}:${port}`;
+    const now = Date.now();
+    if (this.hostPollInFlight.has(hostKey)) return;
+    const backoffUntil = this.hostBackoffUntil.get(hostKey) || 0;
+    if (now < backoffUntil) return;
+
+    const minInterval = this.hostStreamActive.has(hostKey) ? 15000 : 3500;
+    const lastPoll = this.hostLastPollAt.get(hostKey) || 0;
+    if (now - lastPoll < minInterval) return;
+
+    this.hostPollInFlight.add(hostKey);
+    this.hostLastPollAt.set(hostKey, now);
+    try {
+      await this.executeFallbackPollInternal(device, ip, port, user, pass, marca);
+    } finally {
+      this.hostPollInFlight.delete(hostKey);
+    }
+  }
+
+  private async executeFallbackPollInternal(device: DeviceInfo, ip: string, port: number, user: string, pass: string, marca: string) {
     // ── Separar path según marca — NO mezclar Hikvision ISAPI con Dahua CGI ──
     if (marca.includes('dahua') || marca.includes('dh')) {
       return this.fallbackPollDahua(device, ip, port, user, pass);
@@ -1100,6 +1151,7 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         }
 
         const evento = this.buildEventoAcceso(device, info, eventTimeStr);
+        if (evento.tipo_evento === 'evento') continue;
 
         if (evento.tipo_evento === 'llamada') {
           if (this.isCallInCooldown(device.id)) continue;
@@ -1119,7 +1171,11 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           this.saveAndEmit(evento);
         }
       }
-    } catch (err) { /* AcsEvent silencioso */ }
+    } catch (err: any) {
+      if (/ECONNREFUSED|EHOSTUNREACH|ETIMEDOUT|ENETUNREACH|timeout/i.test(err?.message || '')) {
+        this.hostBackoffUntil.set(`${ip}:${port}`, Date.now() + 30000);
+      }
+    }
   }
 
   // ─── Fallback Polling exclusivo para Dahua — usa CGI, NO ISAPI ─────────────
@@ -1223,6 +1279,9 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(`🚪 [Dahua Poll] ${evento.tipo_evento} — ${evento.nombre_persona || 'Desconocido'} (${evento.documento_persona || 'sin-doc'}) @ ${device.nombre_identificador}`);
       }
     } catch (err: any) {
+      if (/ECONNREFUSED|EHOSTUNREACH|ETIMEDOUT|ENETUNREACH|timeout/i.test(err?.message || '')) {
+        this.hostBackoffUntil.set(`${ip}:${port}`, Date.now() + 30000);
+      }
       this.logger.debug(`[fallbackPollDahua] ${device.nombre_identificador}: ${err.message}`);
     }
   }
@@ -1395,6 +1454,9 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
   private mapHikvisionEventType(major: number, minor: number, eventType?: string, rawInfo?: any): string {
     const et = String(eventType || '').toLowerCase();
+    if (['videoloss', 'vmd', 'heartbeat', 'shelteralarm', 'fielddetection', 'linedetection', 'scenechangedetection'].includes(et)) {
+      return 'evento';
+    }
     const desc = String(rawInfo?.eventDescription || '').toLowerCase();
     const voiceTalkCmd = String(rawInfo?.VoiceTalkEvent?.cmdType || '').toLowerCase();
     const isVoiceTalk = et.includes('voicetalk') || !!rawInfo?.VoiceTalkEvent || desc.includes('voice talk');
@@ -1418,6 +1480,22 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
       if (minor === 21) return 'apertura_boton'; // Botón físico de salida presionado
       if (minor === 22) return 'puerta_abierta'; // Evento de estado de puerta / botón liberado
       if (minor === 23) return 'puerta_cerrada';
+      const hasPersonData = !!(
+        rawInfo?.name ||
+        rawInfo?.employeeName ||
+        rawInfo?.userName ||
+        rawInfo?.UserName ||
+        rawInfo?.employeeNoString ||
+        rawInfo?.employeeNo ||
+        rawInfo?.userID ||
+        rawInfo?.UserID ||
+        rawInfo?.cardNo ||
+        rawInfo?.CardNo ||
+        rawInfo?.cardNumber ||
+        rawInfo?.FPID ||
+        rawInfo?.faceID
+      );
+      if (!hasPersonData) return 'evento';
       return 'acceso';
     }
 
@@ -1534,6 +1612,9 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   }
 
   saveAndEmit(evento: EventoAcceso) {
+    if (!evento || evento.tipo_evento === 'evento') {
+      return;
+    }
     if (evento.timestamp) {
       const currentLatest = this.latestDbTimestamp.get(evento.dispositivo_id);
       if (!currentLatest || new Date(evento.timestamp).getTime() > new Date(currentLatest).getTime()) {

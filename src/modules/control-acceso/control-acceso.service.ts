@@ -24,6 +24,9 @@ export class ControlAccesoService implements OnModuleInit {
   private lastChimeSilenceTime = new Map<string, number>();
   private activeTwoWaySessions = new Map<string, { sessionId: string; openedAt: number }>();
   private readonly audioTalkChannelId = 1;
+  private readonly webrtcStreamCache = new Map<string, { result: any; expiresAt: number }>();
+  private readonly calibratedDevices = new Set<string>();
+  private permisosCountCache: { counts: Record<string, number>; expiresAt: number } | null = null;
 
   constructor(
     private readonly supabase: SupabaseService,
@@ -147,24 +150,28 @@ export class ControlAccesoService implements OnModuleInit {
     const ids = (data || []).map((device: any) => device.id);
     if (!ids.length) return data || [];
 
-    // Contar de manera exacta los permisos activos por cada dispositivo sin verse truncado
-    // por el límite estricto de 1000 filas de PostgREST
-    const counts: Record<string, number> = {};
-    await Promise.all(
-      ids.map(async (devId: string) => {
-        try {
-          const { count, error: countErr } = await this.supabase
-            .getClient()
-            .from('acceso_permisos_dispositivos')
-            .select('id', { count: 'exact', head: true })
-            .eq('dispositivo_id', devId)
-            .eq('activo', true);
-          counts[devId] = (!countErr && count !== null) ? count : 0;
-        } catch {
-          counts[devId] = 0;
+    // Usar caché de conteos por 30s o una sola consulta agrupada para evitar 32 queries N+1
+    let counts: Record<string, number> = {};
+    if (this.permisosCountCache && this.permisosCountCache.expiresAt > Date.now()) {
+      counts = this.permisosCountCache.counts;
+    } else {
+      try {
+        const { data: permRows } = await this.supabase
+          .getClient()
+          .from('acceso_permisos_dispositivos')
+          .select('dispositivo_id')
+          .eq('activo', true)
+          .limit(10000);
+        for (const r of permRows || []) {
+          if (r.dispositivo_id) {
+            counts[r.dispositivo_id] = (counts[r.dispositivo_id] || 0) + 1;
+          }
         }
-      })
-    );
+        this.permisosCountCache = { counts, expiresAt: Date.now() + 30_000 };
+      } catch {
+        counts = {};
+      }
+    }
 
     return (data || []).map((device: any) => ({
       ...device,
@@ -402,6 +409,7 @@ export class ControlAccesoService implements OnModuleInit {
         dispositivo:dispositivos_iot(nombre_identificador, ip_direccion),
         persona:personas_gestion_acceso(id, nombre_completo, documento_identidad, codigo_tarjeta, face_id_ref)
       `)
+      .neq('tipo_evento', 'evento')
       .order('timestamp', { ascending: false })
       .limit(opts.limit || 50);
 
@@ -418,6 +426,7 @@ export class ControlAccesoService implements OnModuleInit {
           *,
           dispositivo:dispositivos_iot(nombre_identificador, ip_direccion)
         `)
+        .neq('tipo_evento', 'evento')
         .order('timestamp', { ascending: false })
         .limit(opts.limit || 50);
       if (opts.dispositivoId) fbQuery = fbQuery.eq('dispositivo_id', opts.dispositivoId);
@@ -2865,15 +2874,18 @@ export class ControlAccesoService implements OnModuleInit {
           const getRes = await this.devicePoller.executeDigestRequest(
             'GET', `${base}/ISAPI/Streaming/channels/${ch}`, user, pass, null, 'application/xml', 3000
           );
-          let xml = typeof getRes === 'string' ? getRes : JSON.stringify(getRes);
-          if (xml && xml.includes('<StreamingChannel')) {
-            xml = xml.replace(/<videoQualityControlType>[^<]+<\/videoQualityControlType>/g, '<videoQualityControlType>CBR</videoQualityControlType>');
-            xml = xml.replace(/<keyFrameInterval>[^<]+<\/keyFrameInterval>/g, '<keyFrameInterval>1000</keyFrameInterval>');
-            xml = xml.replace(/<GovLength>[^<]+<\/GovLength>/g, '<GovLength>25</GovLength>');
-            await this.devicePoller.executeDigestRequest(
-              'PUT', `${base}/ISAPI/Streaming/channels/${ch}`, user, pass, xml, 'application/xml', 3000
-            );
-            this.logger.log(`📹 [HIKVISION ENCODE] Canal ${ch} auto-calibrado: CBR, GOP=25 (1s), 1000ms en ${ip}:${port}`);
+          const origXml = typeof getRes === 'string' ? getRes : JSON.stringify(getRes);
+          if (origXml && origXml.includes('<StreamingChannel')) {
+            let xml = origXml
+              .replace(/<videoQualityControlType>[^<]+<\/videoQualityControlType>/g, '<videoQualityControlType>CBR</videoQualityControlType>')
+              .replace(/<keyFrameInterval>[^<]+<\/keyFrameInterval>/g, '<keyFrameInterval>1000</keyFrameInterval>')
+              .replace(/<GovLength>[^<]+<\/GovLength>/g, '<GovLength>25</GovLength>');
+            if (xml !== origXml) {
+              await this.devicePoller.executeDigestRequest(
+                'PUT', `${base}/ISAPI/Streaming/channels/${ch}`, user, pass, xml, 'application/xml', 3000
+              );
+              this.logger.log(`📹 [HIKVISION ENCODE] Canal ${ch} auto-calibrado: CBR, GOP=25 (1s), 1000ms en ${ip}:${port}`);
+            }
           }
         } catch {}
       }
@@ -2884,6 +2896,11 @@ export class ControlAccesoService implements OnModuleInit {
 
   async startVideoStream(deviceId: string): Promise<any> {
     try {
+      const cached = this.webrtcStreamCache.get(deviceId);
+      if (cached && cached.expiresAt > Date.now()) {
+        return cached.result;
+      }
+
       // 1. Obtener datos del dispositivo
       const { data: devices, error: dbErr } = await this.supabase
         .getClient()
@@ -2953,9 +2970,15 @@ export class ControlAccesoService implements OnModuleInit {
 
       if (isDahua) {
         rtspPath = '/cam/realmonitor?channel=1&subtype=0'; // Dahua Main-Stream (H.264 compatible con todos los navegadores)
-        this.dahuaService.asegurarFormatoH264(targetIp, httpPort, user, pass).catch(() => {});
+        if (!this.calibratedDevices.has(deviceId)) {
+          this.calibratedDevices.add(deviceId);
+          this.dahuaService.asegurarFormatoH264(targetIp, httpPort, user, pass).catch(() => {});
+        }
       } else {
-        this.asegurarFormatoStreamHikvision(targetIp, httpPort, user, pass).catch(() => {});
+        if (!this.calibratedDevices.has(deviceId)) {
+          this.calibratedDevices.add(deviceId);
+          this.asegurarFormatoStreamHikvision(targetIp, httpPort, user, pass).catch(() => {});
+        }
       }
 
       // Armar la URL de la fuente RTSP (EncodeURIComponent para contraseñas con caracteres especiales como #)
@@ -2970,14 +2993,15 @@ export class ControlAccesoService implements OnModuleInit {
       const domain = 'servidor.proliseg.com';
       const apiAuth = { username: 'admin', password: 'proliseg1025' };
 
-      // Leer valores personalizados desde configuracion_tecnica (con fallbacks estables)
-      const isVpn = this.isVpnIp(targetIp);
-      const sourceOnDemand = isDahua ? false : (dev.configuracion_tecnica?.source_on_demand ?? (isVpn ? false : true));
+      // Activar sourceOnDemand por defecto para no saturar los túneles WireGuard ni MediaMTX con 28 streams 24/7 sin espectadores
+      const sourceOnDemand = dev.configuracion_tecnica?.source_on_demand ?? true;
       const rtspTransport = dev.configuracion_tecnica?.rtsp_transport || 'tcp';
 
       const pathPayload = {
         source: sourceUrl,
         sourceOnDemand: sourceOnDemand,
+        sourceOnDemandStartTimeout: '10s',
+        sourceOnDemandCloseAfter: '15s',
         rtspTransport: rtspTransport,
       };
 
@@ -3005,12 +3029,14 @@ export class ControlAccesoService implements OnModuleInit {
       }
 
       // Retornar las rutas con el prefijo /webrtc/ que maneja el frontend, el WHEP player nativo y el iframe fallback
-      return {
+      const result = {
         streamName,
         webrtcUrl: `https://${domain}/webrtc/${streamName}`,
         iframeUrl: `https://${domain}/webrtc/${streamName}/`, // El slash final es vital
         whepUrl: `https://${domain}/webrtc/${streamName}/whep`
       };
+      this.webrtcStreamCache.set(deviceId, { result, expiresAt: Date.now() + 10 * 60_000 });
+      return result;
     } catch (error) {
       this.logger.error(`❌ [WEBRTC STREAM] Error: ${error.message}`);
       throw error;

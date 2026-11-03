@@ -2571,8 +2571,8 @@ export class DahuaService {
         });
       } catch (err: any) {
         if (active) {
-          this.logger.debug(`[DAHUA EVENT STREAM] Conexión stream rechazada en ${ip}:${port}: ${err.message}. Reconectando en 10s...`);
-          setTimeout(connectStream, 10000);
+          this.logger.debug(`[DAHUA EVENT STREAM] Conexión stream rechazada en ${ip}:${port}: ${err.message}. Reconectando en 45s...`);
+          setTimeout(connectStream, 45000);
         }
       }
     };
