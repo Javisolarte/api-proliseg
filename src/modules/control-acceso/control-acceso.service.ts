@@ -2896,11 +2896,6 @@ export class ControlAccesoService implements OnModuleInit {
 
   async startVideoStream(deviceId: string): Promise<any> {
     try {
-      const cached = this.webrtcStreamCache.get(deviceId);
-      if (cached && cached.expiresAt > Date.now()) {
-        return cached.result;
-      }
-
       // 1. Obtener datos del dispositivo
       const { data: devices, error: dbErr } = await this.supabase
         .getClient()
@@ -2993,15 +2988,14 @@ export class ControlAccesoService implements OnModuleInit {
       const domain = 'servidor.proliseg.com';
       const apiAuth = { username: 'admin', password: 'proliseg1025' };
 
-      // Activar sourceOnDemand por defecto para no saturar los túneles WireGuard ni MediaMTX con 28 streams 24/7 sin espectadores
-      const sourceOnDemand = dev.configuracion_tecnica?.source_on_demand ?? true;
+      // Leer valores personalizados desde configuracion_tecnica (con fallbacks estables)
+      const isVpn = this.isVpnIp(targetIp);
+      const sourceOnDemand = isDahua ? false : (dev.configuracion_tecnica?.source_on_demand ?? (isVpn ? false : true));
       const rtspTransport = dev.configuracion_tecnica?.rtsp_transport || 'tcp';
 
       const pathPayload = {
         source: sourceUrl,
         sourceOnDemand: sourceOnDemand,
-        sourceOnDemandStartTimeout: '10s',
-        sourceOnDemandCloseAfter: '15s',
         rtspTransport: rtspTransport,
       };
 
