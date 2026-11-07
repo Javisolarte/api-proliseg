@@ -17,12 +17,14 @@ export class ControlAccesoService implements OnModuleInit {
 
   private readonly proxyUrl = 'https://servidor.proliseg.com/dispositivos';
   private readonly apiKey = 'proliseg-acceso-2026';
-  private digestChallengeCache = new Map<string, { realm: string; nonce: string; qop?: string; opaque?: string }>();
+  private digestChallengeCache = new Map<string, { realm: string; nonce: string; qop?: string; opaque?: string; ncCounter?: number }>();
   private deviceCodecCache = new Map<string, string>();
   private faceUploadFormatCache = new Map<string, string>();
   private userCreateFormatCache = new Map<string, any>();
   private lastChimeSilenceTime = new Map<string, number>();
-  private activeTwoWaySessions = new Map<string, { sessionId: string; openedAt: number }>();
+  private pendingAnswerPromises = new Map<string, Promise<boolean>>();
+  private activeTwoWaySessions = new Map<string, { sessionId: string; isOpen: boolean; openedAt: number }>();
+  private vpsMtxUnavailableUntil = 0;
   private readonly audioTalkChannelId = 1;
   private readonly webrtcStreamCache = new Map<string, { result: any; expiresAt: number }>();
   private readonly calibratedDevices = new Set<string>();
@@ -53,52 +55,58 @@ export class ControlAccesoService implements OnModuleInit {
   }
 
   async cleanWebrtcIceServers() {
-    try {
-      const domain = 'servidor.proliseg.com';
-      const apiAuth = { username: 'admin', password: 'proliseg1025' };
+    const domain = 'servidor.proliseg.com';
+    const apiAuth = { username: 'admin', password: 'proliseg1025' };
 
-      const response = await axios.get(`https://${domain}/webrtc-api/v3/config/global/get`, { auth: apiAuth });
-      
-      const iceServers1 = response.data?.webrtcICEServers;
-      const iceServers2 = response.data?.webrtcICEServers2;
+    const cleanTargetMtx = async (apiPrefix: string, label: string, isVps = false) => {
+      if (isVps && Date.now() < this.vpsMtxUnavailableUntil) return;
+      try {
+        const response = await axios.get(`https://${domain}/${apiPrefix}/v3/config/global/get`, {
+          auth: apiAuth,
+          timeout: 2500,
+        });
 
-      let needsCleaning = false;
+        const iceServers1 = response.data?.webrtcICEServers;
+        const iceServers2 = response.data?.webrtcICEServers2;
+        const needsCleaning =
+          (Array.isArray(iceServers1) && iceServers1.length > 1) ||
+          (Array.isArray(iceServers2) && iceServers2.length > 2);
 
-      // 1. Validar si webrtcICEServers tiene más de 1 entrada
-      if (Array.isArray(iceServers1) && iceServers1.length > 1) {
-        needsCleaning = true;
+        if (needsCleaning) {
+          this.logger.warn(`🧹 [MediaMTX-${label} Watchdog] Detectada saturación en servidores ICE. Auto-purgando...`);
+          await axios.patch(
+            `https://${domain}/${apiPrefix}/v3/config/global/patch`,
+            {
+              webrtcICEServers: ['stun:stun.l.google.com:19302'],
+              webrtcICEServers2: [
+                {
+                  url: 'stun:stun.l.google.com:19302',
+                  username: '',
+                  password: '',
+                  clientOnly: false,
+                },
+              ],
+            },
+            { auth: apiAuth, timeout: 2500 },
+          );
+          this.logger.log(`✅ [MediaMTX-${label} Watchdog] Servidores ICE purgados y estabilizados.`);
+        } else {
+          this.logger.debug(`🛡️ [MediaMTX-${label} Watchdog] Servidores ICE verificados: limpios y óptimos.`);
+        }
+      } catch (error: any) {
+        if (isVps) {
+          this.vpsMtxUnavailableUntil = Date.now() + 10 * 60_000;
+          this.logger.debug(`[MediaMTX-VPS Watchdog] Instancia VPS apagada/no activa (${error.message}), omitiendo por 10m.`);
+        } else {
+          this.logger.warn(`⚠️ [MediaMTX-${label} Watchdog] Error en verificación de ICE: ${error.message}`);
+        }
       }
+    };
 
-      // 2. Validar si webrtcICEServers2 tiene más de 2 entradas o duplicados
-      if (Array.isArray(iceServers2) && iceServers2.length > 2) {
-        needsCleaning = true;
-      }
-
-      if (needsCleaning) {
-        this.logger.warn(`🧹 [MediaMTX Watchdog] Detectada saturación en servidores ICE (ICEServers: ${iceServers1?.length || 0}, ICEServers2: ${iceServers2?.length || 0}). Auto-purgando...`);
-        
-        await axios.patch(
-          `https://${domain}/webrtc-api/v3/config/global/patch`,
-          {
-            webrtcICEServers: ['stun:stun.l.google.com:19302'],
-            webrtcICEServers2: [
-              {
-                url: 'stun:stun.l.google.com:19302',
-                username: '',
-                password: '',
-                clientOnly: false
-              }
-            ]
-          },
-          { auth: apiAuth }
-        );
-        this.logger.log('✅ [MediaMTX Watchdog] Servidores ICE purgados y estabilizados en 1 STUN limpio.');
-      } else {
-        this.logger.debug('🛡️ [MediaMTX Watchdog] Servidores ICE verificados: limpios y óptimos.');
-      }
-    } catch (error) {
-      this.logger.warn(`⚠️ [MediaMTX Watchdog] Error en verificación de ICE: ${error.message}`);
-    }
+    await Promise.allSettled([
+      cleanTargetMtx('webrtc-edge-api', 'EDGE', false),
+      cleanTargetMtx('webrtc-api', 'VPS', true),
+    ]);
   }
 
   // Guardián automático cada 10 minutos para evitar saturación para siempre
@@ -756,169 +764,193 @@ export class ControlAccesoService implements OnModuleInit {
    * Corta de inmediato el tono de timbrado ('tuuu... tuuu...') en el altavoz exterior
    * enviando 'cancel' o 'hangUp' para que la conversación y verificación de voz sean limpias y sin interrupciones.
    */
+  private extractTwoWaySessionId(raw: any): string {
+    if (!raw) return '';
+    if (typeof raw === 'object') {
+      const candidate =
+        raw?.sessionId ??
+        raw?.TwoWayAudioSession?.sessionId ??
+        raw?.data?.sessionId ??
+        raw?.data?.TwoWayAudioSession?.sessionId;
+      if (candidate !== undefined && candidate !== null) {
+        return String(candidate).trim();
+      }
+    }
+    const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
+    const xmlMatch = text.match(/<sessionId>([^<]+)<\/sessionId>/i);
+    if (xmlMatch?.[1]) return xmlMatch[1].trim();
+    const jsonMatch = text.match(/"sessionId"\s*:\s*"?([^",}\s]+)"?/i);
+    if (jsonMatch?.[1]) return jsonMatch[1].trim();
+    return '';
+  }
+
   async contestarTimbreHardware(deviceId: string): Promise<boolean> {
-    try {
-      const now = Date.now();
-      const last = this.lastChimeSilenceTime.get(deviceId) || 0;
-      if (now - last < 2500) {
-        this.logger.debug(`[INTERCOM] Silenciamiento de hardware para ${deviceId} ya enviado hace ${now - last}ms, omitiendo duplicado.`);
-        return true;
-      }
-      this.lastChimeSilenceTime.set(deviceId, now);
+    const inFlight = this.pendingAnswerPromises.get(deviceId);
+    if (inFlight) {
+      this.logger.debug(`[INTERCOM] Reutilizando contestación en curso (single-flight) para ${deviceId}`);
+      return inFlight;
+    }
 
-      const { data: dev } = await this.supabase
-        .getSupabaseAdminClient()
-        .from('dispositivos_iot')
-        .select('*')
-        .eq('id', deviceId)
-        .single();
+    const now = Date.now();
+    const last = this.lastChimeSilenceTime.get(deviceId) || 0;
+    if (now - last < 3500) {
+      this.logger.debug(`[INTERCOM] Silenciamiento de hardware para ${deviceId} ya confirmado hace ${now - last}ms, omitiendo duplicado.`);
+      return true;
+    }
 
-      if (!dev) return false;
-
-      // Cooldown de 30s en poller para que no se sigan emitiendo eventos de timbrado
-      this.devicePoller.setCallCooldown(deviceId, 30000);
-
-      const user = dev.credencial_usuario || 'admin';
-      const pass = dev.credencial_password || '';
-      const resolved = await this.resolveDoorNetworkTarget(
-        dev.ip_direccion,
-        dev.configuracion_tecnica?.puerto || 80,
-        dev.configuracion_tecnica
-      );
-
-      const origIp = String(dev.configuracion_tecnica?.puertos_mapeados?.original_ip || dev.ip_direccion || resolved.ip || '');
-      const marcaStr = String(
-        dev.configuracion_tecnica?.marca || dev.configuracion_tecnica?.modelo || dev.nombre_identificador || ''
-      ).toLowerCase();
-
-      const isHikvision =
-        marcaStr.includes('hikvision') ||
-        marcaStr.includes('hik') ||
-        marcaStr.includes('ds-k') ||
-        marcaStr.includes('ds-2cd') ||
-        origIp.includes('.78') ||
-        origIp.includes('.79') ||
-        String(resolved.ip).includes('.78') ||
-        String(resolved.ip).includes('.79') ||
-        Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_rtsp) === 30078 ||
-        Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_rtsp) === 30079 ||
-        Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) === 20078 ||
-        Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) === 20079;
-
-      const isDahua = !isHikvision && (
-        marcaStr.includes('dahua') ||
-        marcaStr.includes('dh') ||
-        marcaStr.includes('asi32') ||
-        marcaStr.includes('asi') ||
-        marcaStr.includes('vto') ||
-        ((origIp.startsWith('192.168.35.') || String(dev.ip_direccion).startsWith('192.168.35.')) &&
-         !origIp.includes('.78') && !origIp.includes('.79')) ||
-        (Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) >= 20080 && Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) <= 20099)
-      );
-
-      if (isDahua) {
-        let dahuaSent = false;
-        const answerEndpoints = [
-          '/cgi-bin/intercom.cgi?action=answer',
-          '/cgi-bin/console.cgi?action=answer',
-          '/cgi-bin/vto.cgi?action=answer'
-        ];
-        for (const ep of answerEndpoints) {
-          try {
-            await this.dahuaService.cgi(resolved.ip, resolved.port, user, pass, 'GET', ep, undefined, 'text', undefined, 2000);
-            dahuaSent = true;
-            this.logger.log(`📞 [INTERCOM] Dahua llamada contestada vía ${ep} en ${dev.nombre_identificador}`);
-            break;
-          } catch {}
-        }
-        try {
-          await this.dahuaService.rpcCall(resolved.ip, resolved.port, user, pass, 'VoipTalk.answer', {});
-          dahuaSent = true;
-        } catch {}
-        return dahuaSent;
-      }
-
-      // Hikvision Door Station / Terminal de Acceso Facial:
-      // Responder formalmente la llamada emitiendo la señal 'answer' idéntica a la Tablet y Hik-Connect.
-      const base = `http://${resolved.ip}:${resolved.port}`;
-      const deviceHost = `${resolved.ip}:${resolved.port}`;
-      let hikSent = false;
-
-      const answerPayload = JSON.stringify({
-        CallSignal: {
-          cmdType: 'answer'
-        }
-      });
-
-      // Paso 1: Enviar señal de "answer" para cambiar el estado físico del DS-K1T344 a "In Call"
-      // Esto dispara el prompt interno "Por favor, hable" en el equipo y cancela el timbre en Hik-Connect
+    const promise = (async (): Promise<boolean> => {
       try {
-        await this.devicePoller.executeDigestRequest(
-          'PUT',
-          `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
-          user,
-          pass,
-          answerPayload,
-          'application/json',
-          1800
+        this.lastChimeSilenceTime.set(deviceId, Date.now());
+
+        const { data: dev } = await this.supabase
+          .getSupabaseAdminClient()
+          .from('dispositivos_iot')
+          .select('*')
+          .eq('id', deviceId)
+          .single();
+
+        if (!dev) return false;
+
+        // Cooldown de 30s en poller para que no se sigan emitiendo eventos de timbrado
+        this.devicePoller.setCallCooldown(deviceId, 30000);
+
+        const user = dev.credencial_usuario || 'admin';
+        const pass = dev.credencial_password || '';
+        const resolved = await this.resolveDoorNetworkTarget(
+          dev.ip_direccion,
+          dev.configuracion_tecnica?.puerto || 80,
+          dev.configuracion_tecnica
         );
-        hikSent = true;
-        this.logger.log(`📞 [INTERCOM] Llamada contestada con "answer" en ${dev.nombre_identificador} ("Por favor, hable" activado)`);
-      } catch (err: any) {
-        this.logger.warn(`Error enviando answer a ${dev.nombre_identificador}: ${err.message}`);
-      }
 
-      // Paso 2: CRÍTICO (< 300ms después del answer) - Abrir TwoWayAudio
-      // Así el DS-K1T344 enlaza el altavoz y micrófono con la sesión contestada y no aborta la llamada
-      try {
-        const audioFormat = this.deviceCodecCache.get(deviceHost) || 'mulaw';
-        const openPayload = `<?xml version="1.0" encoding="UTF-8"?>
+        const origIp = String(dev.configuracion_tecnica?.puertos_mapeados?.original_ip || dev.ip_direccion || resolved.ip || '');
+        const marcaStr = String(
+          dev.configuracion_tecnica?.marca || dev.configuracion_tecnica?.modelo || dev.nombre_identificador || ''
+        ).toLowerCase();
+
+        const isHikvision =
+          marcaStr.includes('hikvision') ||
+          marcaStr.includes('hik') ||
+          marcaStr.includes('ds-k') ||
+          marcaStr.includes('ds-2cd') ||
+          origIp.includes('.78') ||
+          origIp.includes('.79') ||
+          String(resolved.ip).includes('.78') ||
+          String(resolved.ip).includes('.79') ||
+          Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_rtsp) === 30078 ||
+          Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_rtsp) === 30079 ||
+          Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) === 20078 ||
+          Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) === 20079;
+
+        const isDahua = !isHikvision && (
+          marcaStr.includes('dahua') ||
+          marcaStr.includes('dh') ||
+          marcaStr.includes('asi32') ||
+          marcaStr.includes('asi') ||
+          marcaStr.includes('vto') ||
+          ((origIp.startsWith('192.168.35.') || String(dev.ip_direccion).startsWith('192.168.35.')) &&
+           !origIp.includes('.78') && !origIp.includes('.79')) ||
+          (Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) >= 20080 && Number(dev.configuracion_tecnica?.puertos_mapeados?.mapped_sdk) <= 20099)
+        );
+
+        if (isDahua) {
+          let dahuaSent = false;
+          const answerEndpoints = [
+            '/cgi-bin/intercom.cgi?action=answer',
+            '/cgi-bin/console.cgi?action=answer',
+            '/cgi-bin/vto.cgi?action=answer'
+          ];
+          for (const ep of answerEndpoints) {
+            try {
+              await this.dahuaService.cgi(resolved.ip, resolved.port, user, pass, 'GET', ep, undefined, 'text', undefined, 1800);
+              dahuaSent = true;
+              this.logger.log(`📞 [INTERCOM] Dahua llamada contestada vía ${ep} en ${dev.nombre_identificador}`);
+              break;
+            } catch {}
+          }
+          this.dahuaService.rpcCall(resolved.ip, resolved.port, user, pass, 'VoipTalk.answer', {}).catch(() => {});
+          return dahuaSent;
+        }
+
+        // Hikvision Door Station / Terminal de Acceso Facial:
+        const base = `http://${resolved.ip}:${resolved.port}`;
+        const deviceHost = `${resolved.ip}:${resolved.port}`;
+        let hikSent = false;
+
+        const answerPayload = JSON.stringify({
+          CallSignal: {
+            cmdType: 'answer'
+          }
+        });
+
+        // Paso 1: Enviar señal de "answer" (calienta también digestChallengeCache del servicio de audio)
+        try {
+          await this.executeDigestAuth(
+            'PUT',
+            `${base}/ISAPI/VideoIntercom/callSignal?format=json`,
+            user,
+            pass,
+            answerPayload,
+            'text',
+            2000,
+            { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          );
+          hikSent = true;
+          this.logger.log(`📞 [INTERCOM] Llamada contestada con "answer" en ${dev.nombre_identificador}`);
+        } catch (err: any) {
+          this.logger.warn(`Error enviando answer a ${dev.nombre_identificador}: ${err.message}`);
+        }
+
+        // Paso 2: Abrir TwoWayAudio de inmediato y cachear estado abierto + sessionId
+        try {
+          const audioFormat = this.deviceCodecCache.get(deviceHost) || 'mulaw';
+          const openPayload = `<?xml version="1.0" encoding="UTF-8"?>
 <TwoWayAudioChannel version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
   <id>${this.audioTalkChannelId}</id>
   <audioCompressionType>${audioFormat === 'alaw' ? 'G.711alaw' : 'G.711ulaw'}</audioCompressionType>
 </TwoWayAudioChannel>`;
 
-        const openRes = await this.devicePoller.executeDigestRequest(
-          'PUT',
-          `${base}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}/open`,
-          user,
-          pass,
-          openPayload,
-          'application/xml',
-          1800
-        );
-        const match = String(openRes).match(/<sessionId>([^<]+)<\/sessionId>/i);
-        if (match && match[1]) {
-          const sessId = match[1].trim();
-          this.activeTwoWaySessions.set(deviceHost, { sessionId: sessId, openedAt: Date.now() });
-          this.logger.log(`📞 [INTERCOM] TwoWayAudio canal ${this.audioTalkChannelId} abierto (sessionId: ${sessId}) en ${dev.nombre_identificador}`);
-        } else {
-          this.activeTwoWaySessions.set(deviceHost, { sessionId: '', openedAt: Date.now() });
-          this.logger.log(`📞 [INTERCOM] TwoWayAudio canal ${this.audioTalkChannelId} abierto en ${dev.nombre_identificador}`);
+          const openRes = await this.executeDigestAuth(
+            'PUT',
+            `${base}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}/open`,
+            user,
+            pass,
+            openPayload,
+            'text',
+            2200,
+            { 'Content-Type': 'application/xml', 'Accept': 'application/xml' },
+          );
+          const sessId = this.extractTwoWaySessionId(openRes);
+          this.activeTwoWaySessions.set(deviceHost, { sessionId: sessId, isOpen: true, openedAt: Date.now() });
+          this.logger.log(
+            `📞 [INTERCOM] TwoWayAudio canal ${this.audioTalkChannelId} listo${sessId ? ` (sessionId: ${sessId})` : ''} en ${dev.nombre_identificador}`,
+          );
+        } catch (audioErr: any) {
+          this.logger.warn(`📞 [INTERCOM] Aviso al abrir TwoWayAudio canal ${this.audioTalkChannelId} en ${dev.nombre_identificador}: ${audioErr.message}`);
         }
-      } catch (audioErr: any) {
-        this.logger.warn(`📞 [INTERCOM] Aviso al abrir TwoWayAudio canal ${this.audioTalkChannelId} en ${dev.nombre_identificador}: ${audioErr.message}`);
-      }
 
-      // Paso 3: Confirmar 'answer' en canal ezviz para silenciar la app Hik-Connect / móviles
-      try {
-        await this.devicePoller.executeDigestRequest(
+        // Paso 3 (No bloqueante): Confirmar 'answer' en canal ezviz en segundo plano para silenciar Hik-Connect móvil
+        this.executeDigestAuth(
           'PUT',
           `${base}/ISAPI/VideoIntercom/callSignal?format=json&channelType=ezviz`,
           user,
           pass,
           answerPayload,
-          'application/json',
-          1500
-        );
-        hikSent = true;
-      } catch {}
+          'text',
+          1500,
+          { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        ).catch(() => {});
 
-      return hikSent;
-    } catch (err: any) {
-      this.logger.warn(`No se pudo cortar/silenciar timbre en hardware: ${err.message}`);
-      return false;
-    }
+        return hikSent;
+      } catch (err: any) {
+        this.logger.warn(`No se pudo cortar/silenciar timbre en hardware: ${err.message}`);
+        return false;
+      } finally {
+        this.pendingAnswerPromises.delete(deviceId);
+      }
+    })();
+
+    this.pendingAnswerPromises.set(deviceId, promise);
+    return promise;
   }
 
   async contestarLlamadaDispositivo(deviceId: string, operator?: any) {
@@ -1195,13 +1227,64 @@ export class ControlAccesoService implements OnModuleInit {
     }
   }
 
+  private cacheDigestFromHeader(host: string, wwwAuthHeader?: string): boolean {
+    if (!wwwAuthHeader || !wwwAuthHeader.includes('Digest')) return false;
+    const realmMatch = wwwAuthHeader.match(/realm="([^"]+)"/);
+    const nonceMatch = wwwAuthHeader.match(/nonce="([^"]+)"/);
+    if (!realmMatch || !nonceMatch) return false;
+
+    const qopMatch = wwwAuthHeader.match(/qop="([^"]+)"/);
+    const opaqueMatch = wwwAuthHeader.match(/opaque="([^"]+)"/);
+    const qopRaw = qopMatch ? qopMatch[1] : '';
+    const qopOptions = qopRaw.split(',').map((s: string) => s.trim()).filter(Boolean);
+    const qop = qopOptions.includes('auth') ? 'auth' : (qopOptions[0] || undefined);
+
+    this.digestChallengeCache.set(host, {
+      realm: realmMatch[1],
+      nonce: nonceMatch[1],
+      qop,
+      opaque: opaqueMatch ? opaqueMatch[1] : undefined,
+      ncCounter: 0,
+    });
+    return true;
+  }
+
+  private mulawToAlawFast(mulawBuf: Buffer): Buffer {
+    const out = Buffer.allocUnsafe(mulawBuf.length);
+    const segEnd = [0x1f, 0x3f, 0x7f, 0xff, 0x1ff, 0x3ff, 0x7ff, 0xfff];
+    for (let i = 0; i < mulawBuf.length; i++) {
+      const u = (~mulawBuf[i]) & 0xff;
+      let t = ((u & 0x0f) << 3) + 0x84;
+      t <<= (u & 0x70) >> 4;
+      let pcm = (u & 0x80) ? (0x84 - t) : (t - 0x84);
+      let mask = 0xd5;
+      if (pcm < 0) {
+        pcm = -pcm - 1;
+        mask = 0x55;
+      }
+      let seg = 7;
+      const scaled = pcm >> 3;
+      for (let s = 0; s < 8; s++) {
+        if (scaled <= segEnd[s]) {
+          seg = s;
+          break;
+        }
+      }
+      const aval = (seg << 4) | ((seg < 2 ? (pcm >> 4) : (pcm >> (seg + 3))) & 0x0f);
+      out[i] = aval ^ mask;
+    }
+    return out;
+  }
+
   private buildDigestAuthHeader(method: string, url: string, user: string, pass: string): string | null {
     const host = new URL(url).host;
     const cached = this.digestChallengeCache.get(host);
     if (!cached) return null;
 
     const { realm, nonce, qop, opaque } = cached;
-    const nc = '00000001';
+    const nextNc = (cached.ncCounter || 0) + 1;
+    cached.ncCounter = nextNc;
+    const nc = nextNc.toString(16).padStart(8, '0');
     const cnonce = randomBytes(4).toString('hex');
     const uri = new URL(url).pathname + (new URL(url).search || '');
 
@@ -1236,25 +1319,25 @@ export class ControlAccesoService implements OnModuleInit {
     const target = await this.resolveAudioNetworkTarget(targetIp, deviceId);
     const baseIsapi = `http://${target.host}:${target.port}/ISAPI/System/TwoWayAudio/channels/${this.audioTalkChannelId}`;
 
-    this.logger.log(`🎙️ [AUDIO-IN] Target resolved: host=${target.host}:${target.port}, user=${target.user}, passLength=${target.pass?.length || 0}, isDahua=${target.isDahua}`);
+    this.logger.log(`🎙️ [AUDIO-IN] Target resolved: host=${target.host}:${target.port}, user=${target.user}, passLength=${target.pass?.length || 0}, isDahua=${target.isDahua}, fmt=${audioFormatInput || 'webm'}`);
 
-    // Silenciar o contestar formalmente el timbre en hardware al iniciar a transmitir voz por el micrófono
+    // Contestar/silenciar timbre físico con deduplicación single-flight (sin pausas artificiales si ya fue contestado)
     const effectiveDeviceId = (deviceId && deviceId !== 'undefined' ? deviceId : undefined) || (target as any).deviceId;
     if (effectiveDeviceId) {
+      const lastSilence = this.lastChimeSilenceTime.get(effectiveDeviceId) || 0;
+      const wasRecentlySilenced = !this.pendingAnswerPromises.has(effectiveDeviceId) && (Date.now() - lastSilence < 3500);
       try {
         await this.contestarTimbreHardware(effectiveDeviceId);
-        // Pausa breve para garantizar que el oscilador físico apagó el timbre antes de inyectar voz
-        await new Promise(r => setTimeout(r, 150));
+        if (!wasRecentlySilenced) {
+          await new Promise(r => setTimeout(r, 60));
+        }
       } catch (err: any) {
         this.logger.debug(`[AUDIO-IN] Contestar/silenciar timbre error: ${err?.message}`);
       }
     }
 
     if (target.isDahua) {
-      if (onReady) {
-        try { onReady(); } catch {}
-      }
-      return this.relayAudioToDeviceDahua(audioStream, target, deviceId, operator);
+      return this.relayAudioToDeviceDahua(audioStream, target, deviceId, operator, audioFormatInput, onReady);
     }
 
     let clientDisconnected = false;
@@ -1266,10 +1349,6 @@ export class ControlAccesoService implements OnModuleInit {
     });
 
     const deviceHost = `${target.host}:${target.port}`;
-    // Limpiar caché de Digest para evitar nonces obsoletos que causen bloqueos 401 en el dispositivo
-    this.digestChallengeCache.delete(deviceHost);
-    this.digestChallengeCache.delete(target.host);
-
     const isapiHeaders = {
       'Content-Type': 'application/xml',
       'Accept': 'application/xml',
@@ -1280,38 +1359,28 @@ export class ControlAccesoService implements OnModuleInit {
     const cachedCodec = this.deviceCodecCache.get(deviceHost);
     if (cachedCodec) {
       audioFormat = cachedCodec;
-      this.logger.log(`[AUDIO-IN] Dispositivo usa codec cacheado: G.711 ${audioFormat}`);
     } else {
       try {
         const capResult = await this.executeDigestAuth(
-          'GET', baseIsapi, target.user, target.pass, null, 'text', 15000, isapiHeaders
+          'GET', baseIsapi, target.user, target.pass, null, 'text', 3500, isapiHeaders
         );
         const capText = typeof capResult === 'string' ? capResult : JSON.stringify(capResult);
-        if (/G\.711alaw|alaw/i.test(capText)) {
+        if (/G\.711alaw|alaw/i.test(capText) && !/G\.711ulaw|ulaw/i.test(capText)) {
           audioFormat = 'alaw';
         }
         this.deviceCodecCache.set(deviceHost, audioFormat);
         this.logger.log(`[AUDIO-IN] Codec de dispositivo detectado y cacheado: G.711 ${audioFormat}`);
-      } catch (capErr) {
-        this.logger.debug(`[AUDIO-IN] No se pudo detectar codec, usando μ-law por defecto: ${capErr.message}`);
+      } catch {
+        this.deviceCodecCache.set(deviceHost, audioFormat);
       }
     }
 
-    // Verificar si ya tenemos una sesión de TwoWayAudio activa abierta al contestar la llamada
-    const activeSession = this.activeTwoWaySessions.get(deviceHost);
-    let sessionId: string | null = null;
-    const isFresh = activeSession && (Date.now() - activeSession.openedAt < 30000);
-
-    if (isFresh && activeSession.sessionId) {
-      sessionId = activeSession.sessionId;
-      this.logger.log(`🎙️ [AUDIO-IN] Reutilizando sesión TwoWayAudio activa (sessionId: ${sessionId}) en ${deviceHost}`);
-    } else {
-      // 0. Cerrar canal previo que pueda haber quedado abierto (ignorar errores)
-      try {
-        await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text', 15000, isapiHeaders);
-      } catch {}
-
-      // 2. Abrir el canal de audio bidireccional en el dispositivo (Hikvision ISAPI)
+    const openTwoWayChannel = async (forceCloseFirst: boolean): Promise<string | null> => {
+      if (forceCloseFirst) {
+        try {
+          await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text', 3000, isapiHeaders);
+        } catch {}
+      }
       const openPayload = `<?xml version="1.0" encoding="UTF-8"?>
 <TwoWayAudioChannel version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
   <id>${this.audioTalkChannelId}</id>
@@ -1323,85 +1392,94 @@ export class ControlAccesoService implements OnModuleInit {
       while (openAttempts < maxOpenAttempts) {
         openAttempts++;
         try {
-          this.logger.log(`🎙️ [AUDIO-IN] Abriendo canal de audio (intento ${openAttempts}/${maxOpenAttempts}) en ${target.host}:${target.port}`);
-          const openResult = await this.executeDigestAuth('PUT', `${baseIsapi}/open`, target.user, target.pass, openPayload, 'text', 15000, isapiHeaders);
-          this.logger.log(`✅ [AUDIO-IN] Canal de audio abierto correctamente`);
-          const match = String(openResult).match(/<sessionId>([^<]+)<\/sessionId>/i);
-          if (match && match[1]) {
-            sessionId = match[1].trim();
-            this.activeTwoWaySessions.set(deviceHost, { sessionId: sessionId, openedAt: Date.now() });
-            this.logger.log(`🔑 [AUDIO-IN] Hikvision TwoWayAudio sessionId obtenido: ${sessionId}`);
-          }
-          break;
+          this.logger.log(`🎙️ [AUDIO-IN] Abriendo canal de audio (intento ${openAttempts}/${maxOpenAttempts}) en ${deviceHost}`);
+          const openResult = await this.executeDigestAuth('PUT', `${baseIsapi}/open`, target.user, target.pass, openPayload, 'text', 4000, isapiHeaders);
+          const extracted = this.extractTwoWaySessionId(openResult);
+          this.activeTwoWaySessions.set(deviceHost, { sessionId: extracted, isOpen: true, openedAt: Date.now() });
+          this.logger.log(`✅ [AUDIO-IN] Canal de audio abierto${extracted ? ` (sessionId: ${extracted})` : ''}`);
+          return extracted || null;
         } catch (openErr: any) {
           const isBusy = /403|busy|occupied|400|deviceState/i.test(openErr?.message || '');
           if (openAttempts < maxOpenAttempts && isBusy) {
-            this.logger.warn(`⚠️ [AUDIO-IN] Canal ocupado en dispositivo, esperando 600ms para reintentar (intento ${openAttempts}/${maxOpenAttempts})...`);
-            await new Promise(r => setTimeout(r, 600));
+            this.logger.warn(`⚠️ [AUDIO-IN] Canal ocupado en ${deviceHost}, cerrando y reintentando en 250ms...`);
+            try {
+              await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text', 2000, isapiHeaders);
+            } catch {}
+            await new Promise(r => setTimeout(r, 250));
           } else {
             this.logger.error(`❌ [AUDIO-IN] FALLO al abrir canal de audio: ${openErr.message}`);
             throw new Error(`No se pudo abrir el canal de audio en el dispositivo: ${openErr.message}`);
           }
         }
       }
+      return null;
+    };
+
+    // 2. Reutilizar sesión TwoWayAudio recién abierta por contestarTimbreHardware (sin cerrar ni reabrir en vano)
+    const activeSession = this.activeTwoWaySessions.get(deviceHost);
+    let sessionId: string | null = null;
+    let reusedPreOpenedSession = false;
+    const isFresh = activeSession && activeSession.isOpen && (Date.now() - activeSession.openedAt < 25000);
+
+    if (isFresh) {
+      sessionId = activeSession.sessionId || null;
+      reusedPreOpenedSession = true;
+      this.logger.log(`⚡ [AUDIO-IN] Reutilizando canal TwoWayAudio activo${sessionId ? ` (sessionId: ${sessionId})` : ''} en ${deviceHost}`);
+    } else {
+      sessionId = await openTwoWayChannel(true);
     }
 
-    const deviceUrl = sessionId
+    let deviceUrl = sessionId
       ? `${baseIsapi}/audioData?sessionId=${sessionId}`
       : `${baseIsapi}/audioData`;
 
-    this.logger.log(`[AUDIO-IN] Enviando audio a ${target.host}:${target.port} (${target.via})${deviceId ? ` device=${deviceId}` : ''}`);
-
-    // 3. Calentar el Digest Auth contra la misma URL para obtener un nonce fresco
+    // 3. Asegurar Digest Challenge (0ms si ya está en caché gracias a contestar/open)
     await this.ensureDigestChallenge(deviceUrl, target.user, target.pass);
-    const authHeader = this.buildDigestAuthHeader('PUT', deviceUrl, target.user, target.pass);
-    if (!authHeader) {
-      // Si no hay nonce cacheado, intentar un warmup extra
-      this.logger.warn(`⚠️ [AUDIO-IN] No hay nonce cached, calentando Digest Auth...`);
-      await this.ensureDigestChallenge(`http://${target.host}:${target.port}/ISAPI/System/deviceInfo`, target.user, target.pass);
-      await this.ensureDigestChallenge(deviceUrl, target.user, target.pass);
-      const retryHeader = this.buildDigestAuthHeader('PUT', deviceUrl, target.user, target.pass);
-      if (!retryHeader) {
+    let currentAuthHeader = this.buildDigestAuthHeader('PUT', deviceUrl, target.user, target.pass);
+    if (!currentAuthHeader) {
+      await this.ensureDigestChallenge(`http://${deviceHost}/ISAPI/System/deviceInfo`, target.user, target.pass);
+      currentAuthHeader = this.buildDigestAuthHeader('PUT', deviceUrl, target.user, target.pass);
+      if (!currentAuthHeader) {
         throw new Error('No se pudo construir la autenticación Digest para audio bidireccional');
       }
     }
 
-    const finalAuthHeader = this.buildDigestAuthHeader('PUT', deviceUrl, target.user, target.pass)!;
-
     const isRawMulaw = audioFormatInput === 'raw_pcm_mulaw';
+    this.logger.log(`[AUDIO-IN] Streaming voz -> ${deviceHost} (${target.via}, mode=${isRawMulaw ? 'DIRECT_G711' : 'FFMPEG_WEBM'})`);
 
     return new Promise((resolve, reject) => {
       let req: any = null;
       let ffmpeg: any = null;
-
-      if (!isRawMulaw) {
-        // ffmpeg: convierte WebM/Opus del navegador → PCM G.711 a/μ-law crudo con ecualización de telefonía
-        // highpass=200Hz y lowpass=3400Hz eliminan retumbos graves y siseos agudos.
-        // alimiter previene la distorsión y saturación digital en el DAC del altavoz físico.
-        ffmpeg = spawn(this.getFfmpegBinary(), [
-          '-hide_banner',
-          '-loglevel', 'info',
-          '-fflags', 'nobuffer',
-          '-flags', 'low_delay',
-          '-probesize', '4096',
-          '-f', 'webm',           // Formato de entrada explícito: WebM/Opus del navegador
-          '-i', 'pipe:0',
-          '-ac', '1',             // Mono
-          '-ar', '8000',          // 8kHz (requerido por G.711)
-          '-c:a', audioFormat === 'alaw' ? 'pcm_alaw' : 'pcm_mulaw',   // Codec de salida
-          '-af', 'highpass=f=200,lowpass=f=3400,volume=1.4,alimiter=limit=0.92',    // Calibrado claro y nítido
-          '-f', audioFormat,      // Formato de salida: raw alaw/mulaw
-          '-flush_packets', '1',
-          'pipe:1',
-        ]);
-      } else {
-        this.logger.log(`⚡ [AUDIO-IN] Modo NATIVO Directo G.711u activado (Bypass FFmpeg, Latencia Cero estilo Zoom/Meet)`);
-      }
-
       let settled = false;
+      let authRetries = 0;
+      let sessionReopenRetries = 0;
+      const recentG711Chunks: Buffer[] = [];
+      let recentG711Bytes = 0;
+
+      const rememberChunk = (chunk: Buffer) => {
+        recentG711Chunks.push(chunk);
+        recentG711Bytes += chunk.length;
+        while (recentG711Bytes > 6400 && recentG711Chunks.length > 1) {
+          const removed = recentG711Chunks.shift()!;
+          recentG711Bytes -= removed.length;
+        }
+      };
+
+      const writeOutboundAudio = (rawChunk: Buffer) => {
+        if (settled || !rawChunk?.length) return;
+        const payload = (isRawMulaw && audioFormat === 'alaw')
+          ? this.mulawToAlawFast(rawChunk)
+          : rawChunk;
+        rememberChunk(payload);
+        if (req && !req.destroyed && req.writable) {
+          try { req.write(payload); } catch {}
+        }
+      };
+
       const finalize = async (fn: (value?: any) => void, value?: any) => {
         if (settled) return;
         settled = true;
+        this.activeTwoWaySessions.delete(deviceHost);
         try { (audioStream as any).destroy?.(); } catch {}
         if (ffmpeg) {
           try { ffmpeg.stdin?.destroy(); } catch {}
@@ -1410,100 +1488,184 @@ export class ControlAccesoService implements OnModuleInit {
         }
         try { req?.destroy(); } catch {}
 
-        // 3. Cerrar el canal de audio en el dispositivo
         try {
-          this.logger.debug(`[AUDIO-IN] Cerrando canal de audio en ${target.host}:${target.port}`);
-          await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text', 15000, isapiHeaders);
-          this.logger.log(`✅ [AUDIO-IN] Canal de audio cerrado`);
-        } catch (closeErr) {
-          this.logger.warn(`⚠️ [AUDIO-IN] Error al cerrar canal de audio: ${closeErr.message}`);
+          await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text', 3500, isapiHeaders);
+          this.logger.log(`✅ [AUDIO-IN] Canal de audio cerrado en ${deviceHost}`);
+        } catch (closeErr: any) {
+          this.logger.debug(`[AUDIO-IN] Aviso al cerrar canal de audio: ${closeErr?.message}`);
         }
 
         fn(value);
       };
 
-      // Realizar la petición PUT de subida en tiempo real usando el módulo nativo http/https
-      // Esto evita que Axios bufferice el stream de audio completo en memoria.
-      const parsedUrl = new URL(deviceUrl);
-      const transport = parsedUrl.protocol === 'https:' ? require('https') : require('http');
+      const openPutAudioStream = (authHdr: string, replayRecent = false) => {
+        if (settled) return;
+        const parsedUrl = new URL(deviceUrl);
+        const transport = parsedUrl.protocol === 'https:' ? require('https') : require('http');
 
-      req = transport.request({
-        method: 'PUT',
-        hostname: parsedUrl.hostname,
-        port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
-        path: parsedUrl.pathname + parsedUrl.search,
-        headers: {
-          'Authorization': finalAuthHeader,
-          'Content-Type': 'application/octet-stream',
-          'User-Agent': 'PROLISEG-ControlAcceso/1.0',
-          'Content-Length': '99999999',
-          'Connection': 'keep-alive',
-        }
-      }, (response) => {
-        this.logger.log(`[AUDIO-IN] Dispositivo respondió con status ${response.statusCode}`);
-        let responseData = '';
-        response.on('data', (chunk) => {
-          responseData += chunk.toString();
-        });
-        response.on('end', () => {
-          if (response.statusCode >= 200 && response.statusCode < 300) {
-            finalize(resolve, {
-              ok: true,
-              mensaje: 'Audio transmitido al dispositivo',
-              detalle: {
-                target: `${target.host}:${target.port}`,
-                via: target.via,
-                status: response.statusCode,
-              },
-              operador: operator || null,
-            });
-          } else {
-            if (response.statusCode === 401) {
-              this.logger.error(`❌ [AUDIO-IN] Autenticación rechazada (401) — nonce posiblemente expirado`);
-              const host = new URL(deviceUrl).host;
+        const activeReq: any = transport.request({
+          method: 'PUT',
+          hostname: parsedUrl.hostname,
+          port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
+          path: parsedUrl.pathname + parsedUrl.search,
+          headers: {
+            'Authorization': authHdr,
+            'Content-Type': 'application/octet-stream',
+            'User-Agent': 'PROLISEG-ControlAcceso/1.0',
+            'Content-Length': '99999999',
+            'Connection': 'keep-alive',
+          },
+        }, (response: any) => {
+          if (activeReq.__superseded || settled) {
+            try { response.resume(); } catch {}
+            return;
+          }
+
+          this.logger.log(`[AUDIO-IN] Dispositivo ${deviceHost} respondió PUT audioData con status ${response.statusCode}`);
+
+          // Auto-recuperación instantánea en 401 sin cortar la llamada del operador
+          if (response.statusCode === 401 && authRetries < 2 && !clientDisconnected) {
+            authRetries++;
+            activeReq.__superseded = true;
+            const wwwAuth = response.headers?.['www-authenticate'];
+            try { response.resume(); activeReq.destroy(); } catch {}
+            const host = new URL(deviceUrl).host;
+            if (!this.cacheDigestFromHeader(host, wwwAuth)) {
               this.digestChallengeCache.delete(host);
             }
-            finalize(reject, new Error(`El dispositivo respondió con estado ${response.statusCode}: ${responseData.substring(0, 200)}`));
+            (async () => {
+              try {
+                if (!this.digestChallengeCache.has(host)) {
+                  await this.ensureDigestChallenge(deviceUrl, target.user, target.pass);
+                }
+                const refreshedAuth = this.buildDigestAuthHeader('PUT', deviceUrl, target.user, target.pass);
+                if (refreshedAuth && !settled) {
+                  this.logger.log(`🔄 [AUDIO-IN] Nonce Digest renovado en caliente para ${deviceHost} (reintento #${authRetries})`);
+                  openPutAudioStream(refreshedAuth, true);
+                  return;
+                }
+              } catch {}
+              finalize(reject, new Error('Autenticación Digest rechazada tras reintento en audioData'));
+            })();
+            return;
+          }
+
+          // Si la sesión pre-abierta caducó en hardware (400/403/404), reabrir canal una vez en caliente
+          if (
+            reusedPreOpenedSession &&
+            sessionReopenRetries < 1 &&
+            !clientDisconnected &&
+            (response.statusCode === 400 || response.statusCode === 403 || response.statusCode === 404 || response.statusCode === 503)
+          ) {
+            sessionReopenRetries++;
+            reusedPreOpenedSession = false;
+            activeReq.__superseded = true;
+            try { response.resume(); activeReq.destroy(); } catch {}
+            (async () => {
+              try {
+                const newSess = await openTwoWayChannel(true);
+                deviceUrl = newSess ? `${baseIsapi}/audioData?sessionId=${newSess}` : `${baseIsapi}/audioData`;
+                const refreshedAuth = this.buildDigestAuthHeader('PUT', deviceUrl, target.user, target.pass);
+                if (refreshedAuth && !settled) {
+                  openPutAudioStream(refreshedAuth, true);
+                  return;
+                }
+              } catch (reopenErr: any) {
+                finalize(reject, reopenErr);
+                return;
+              }
+            })();
+            return;
+          }
+
+          let responseData = '';
+          response.on('data', (chunk: Buffer) => {
+            responseData += chunk.toString();
+          });
+          response.on('end', () => {
+            if (activeReq.__superseded || settled) return;
+            if (response.statusCode >= 200 && response.statusCode < 300) {
+              finalize(resolve, {
+                ok: true,
+                mensaje: 'Audio transmitido al dispositivo',
+                detalle: { target: deviceHost, via: target.via, status: response.statusCode },
+                operador: operator || null,
+              });
+            } else {
+              if (response.statusCode === 401) {
+                this.digestChallengeCache.delete(new URL(deviceUrl).host);
+              }
+              finalize(reject, new Error(`El dispositivo respondió con estado ${response.statusCode}: ${responseData.substring(0, 200)}`));
+            }
+          });
+        });
+
+        activeReq.on('socket', (sock: any) => {
+          try { sock.setNoDelay(true); } catch {}
+        });
+
+        activeReq.on('error', (err: any) => {
+          if (activeReq.__superseded || settled) return;
+          if (clientDisconnected || (audioStream as any).clientDisconnected || (audioStream as any).aborted) {
+            finalize(resolve, {
+              ok: true,
+              mensaje: 'Transmisión finalizada',
+              detalle: { target: deviceHost, via: target.via, status: 'closed' },
+              operador: operator || null,
+            });
+            return;
+          }
+          this.logger.error(`❌ [AUDIO-IN] Error en conexión PUT audioData: ${err.message}`);
+          finalize(reject, err);
+        });
+
+        req = activeReq;
+
+        if (replayRecent && recentG711Chunks.length > 0) {
+          for (const c of recentG711Chunks) {
+            try { activeReq.write(c); } catch {}
+          }
+        }
+      };
+
+      if (!isRawMulaw) {
+        ffmpeg = spawn(this.getFfmpegBinary(), [
+          '-hide_banner',
+          '-loglevel', 'warning',
+          '-fflags', '+nobuffer+flush_packets',
+          '-flags', 'low_delay',
+          '-probesize', '256',
+          '-analyzeduration', '0',
+          '-f', 'webm',
+          '-i', 'pipe:0',
+          '-ac', '1',
+          '-ar', '8000',
+          '-c:a', audioFormat === 'alaw' ? 'pcm_alaw' : 'pcm_mulaw',
+          '-af', 'highpass=f=180,lowpass=f=3500,acompressor=threshold=-18dB:ratio=3:attack=5:release=120,volume=1.5,alimiter=limit=0.93',
+          '-f', audioFormat,
+          '-flush_packets', '1',
+          'pipe:1',
+        ]);
+      } else {
+        this.logger.log(`⚡ [AUDIO-IN] Modo NATIVO Directo G.711 (${audioFormat}) activado (0ms FFmpeg Bypass)`);
+      }
+
+      openPutAudioStream(currentAuthHeader, false);
+
+      if (isRawMulaw) {
+        audioStream.on('data', (chunk: Buffer) => writeOutboundAudio(chunk));
+        audioStream.on('end', () => {
+          if (!settled) {
+            finalize(resolve, {
+              ok: true,
+              mensaje: 'Transmisión finalizada',
+              detalle: { target: deviceHost, via: target.via, status: 'completed' },
+              operador: operator || null,
+            });
           }
         });
-      });
-
-      req.on('error', (err) => {
-        if (clientDisconnected || (audioStream as any).clientDisconnected || (audioStream as any).aborted) {
-          this.logger.log(`[AUDIO-IN] Conexión PUT terminada normalmente al colgar/detener.`);
-          finalize(resolve, {
-            ok: true,
-            mensaje: 'Transmisión finalizada',
-            detalle: {
-              target: `${target.host}:${target.port}`,
-              via: target.via,
-              status: 'closed',
-            },
-            operador: operator || null,
-          });
-          return;
-        }
-        this.logger.error(`❌ [AUDIO-IN] Error en la conexión PUT audioData: ${err.message}`);
-        finalize(reject, err);
-      });
-
-      // Si es audio nativo G.711u ya procesado en el cliente, pipear directamente al hardware sin pasar por ffmpeg
-      if (isRawMulaw) {
-        audioStream.pipe(req);
       } else if (ffmpeg) {
-        ffmpeg.stdout.pipe(req);
-      }
-
-      // Notificar que el canal HTTP/ISAPI hacia el hardware está listo para recibir chunks
-      if (onReady) {
-        try {
-          onReady();
-        } catch (readyErr: any) {
-          this.logger.debug(`[AUDIO-IN] Error en callback onReady: ${readyErr?.message}`);
-        }
-      }
-
-      if (ffmpeg) {
+        ffmpeg.stdout.on('data', (chunk: Buffer) => writeOutboundAudio(chunk));
         const ffmpegErrors: Buffer[] = [];
         ffmpeg.stderr.on('data', (chunk: Buffer) => {
           ffmpegErrors.push(Buffer.from(chunk));
@@ -1514,38 +1676,36 @@ export class ControlAccesoService implements OnModuleInit {
             finalize(resolve, { ok: true, mensaje: 'Transmisión finalizada' });
             return;
           }
-          this.logger.error(`❌ [AUDIO-IN] ffmpeg error: ${error.message}`);
           finalize(reject, error);
         });
         ffmpeg.on('close', (code: number) => {
-          if (code !== 0 && !settled) {
-            if (clientDisconnected || (audioStream as any).aborted) {
+          if (!settled) {
+            if (code === 0 || clientDisconnected || (audioStream as any).aborted) {
               finalize(resolve, {
                 ok: true,
                 mensaje: 'Transmisión finalizada',
-                detalle: {
-                  target: `${target.host}:${target.port}`,
-                  via: target.via,
-                  status: 'closed',
-                },
+                detalle: { target: deviceHost, via: target.via, status: 'closed' },
                 operador: operator || null,
               });
               return;
             }
             const message = Buffer.concat(ffmpegErrors).toString('utf8') || `ffmpeg terminó con código ${code}`;
-            this.logger.error(`❌ [AUDIO-IN] ffmpeg cerró con código ${code}: ${message}`);
             finalize(reject, new Error(message));
           }
         });
         audioStream.pipe(ffmpeg.stdin);
       }
 
-      audioStream.on('error', (error) => {
+      // Notificar al cliente web que el socket ISAPI está listo para recibir voz en tiempo real
+      if (onReady) {
+        try { onReady(); } catch {}
+      }
+
+      audioStream.on('error', (error: any) => {
         if (clientDisconnected || (audioStream as any).aborted) {
           finalize(resolve, { ok: true, mensaje: 'Transmisión finalizada' });
           return;
         }
-        this.logger.error(`❌ [AUDIO-IN] Error en el stream de entrada: ${error.message}`);
         finalize(reject, error);
       });
     });
@@ -1556,13 +1716,22 @@ export class ControlAccesoService implements OnModuleInit {
     target: { host: string; port: number; user: string; pass: string; via: string; rtspPort?: number; sdkPort?: number; sipPort?: number; rtpPort?: number },
     deviceId?: string,
     operator?: any,
+    audioFormatInput?: string,
+    onReady?: () => void,
   ): Promise<any> {
-    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Transmitiendo voz hacia Dahua en ${target.host} (Port: ${target.port}, SdkPort: ${target.sdkPort || 'auto'})...`);
+    this.logger.log(`🎙️ [AUDIO-IN-DAHUA] Transmitiendo voz hacia Dahua en ${target.host} (Port: ${target.port}, SdkPort: ${target.sdkPort || 'auto'}, fmt=${audioFormatInput || 'webm'})...`);
 
     const rtspPort = target.rtspPort || (target.port >= 10000 ? 30000 + (target.port % 10000) : 554);
+    let readyNotified = false;
+    const notifyReadyOnce = () => {
+      if (readyNotified) return;
+      readyNotified = true;
+      if (onReady) {
+        try { onReady(); } catch {}
+      }
+    };
 
     // 1. PRIORIDAD 1: ONVIF Profile T RTSP Audio Backchannel (trackID=5)
-    // Transmisión directa sobre TCP RTSP al altavoz del hardware Dahua (SmartPSS/DMSS compatible)
     if (this.dahuaService) {
       try {
         const rtspOk = await this.dahuaService.relayAudioRtspBackchannel(
@@ -1571,6 +1740,8 @@ export class ControlAccesoService implements OnModuleInit {
           rtspPort,
           target.user,
           target.pass,
+          audioFormatInput,
+          notifyReadyOnce,
         );
         if (rtspOk) {
           return {
@@ -1584,6 +1755,8 @@ export class ControlAccesoService implements OnModuleInit {
         this.logger.warn(`⚠️ [AUDIO-IN-DAHUA] RTSP Backchannel error: ${rtspErr.message}, probando fallback NetSDK...`);
       }
     }
+
+    notifyReadyOnce();
 
     // 2. FALLBACK 2: NetSDK TCP
     if (this.dahuaService) {
@@ -1609,7 +1782,7 @@ export class ControlAccesoService implements OnModuleInit {
       }
     }
 
-    // 2. FALLBACK SECUNDARIO: SIP / RTP nativo si NetSDK no estuvo disponible
+    // 3. FALLBACK SECUNDARIO: SIP / RTP nativo si NetSDK no estuvo disponible
     const sipPort = target.sipPort || (target.port >= 10000 ? 50000 + (target.port % 10000) : 5060);
     const rtpPort = target.rtpPort || (target.port >= 10000 ? 40000 + (target.port % 10000) : 15000);
 
@@ -1735,16 +1908,23 @@ export class ControlAccesoService implements OnModuleInit {
       }
     }
 
-    // 4. ffmpeg: convierte G.711 crudo del dispositivo → MP3 para el navegador
-    const ffmpeg = spawn('ffmpeg', [
+    // 4. ffmpeg: convierte G.711 crudo del dispositivo → MP3 ultra-baja latencia con filtro de voz clara para el navegador
+    const ffmpeg = spawn(this.getFfmpegBinary(), [
       '-hide_banner',
       '-loglevel', 'warning',
+      '-fflags', '+nobuffer+flush_packets',
+      '-flags', 'low_delay',
+      '-probesize', '32',
+      '-analyzeduration', '0',
       '-f', audioFormat,       // mulaw o alaw según detección
       '-ar', '8000',
       '-ac', '1',
       '-i', 'pipe:0',
+      '-af', 'highpass=f=170,lowpass=f=3600,acompressor=threshold=-22dB:ratio=3:attack=5:release=120,volume=1.6,alimiter=limit=0.95',
       '-c:a', 'libmp3lame',
       '-b:a', '64k',
+      '-ar', '24000',
+      '-flush_packets', '1',
       '-f', 'mp3',
       'pipe:1',
     ]);
@@ -1760,7 +1940,7 @@ export class ControlAccesoService implements OnModuleInit {
       // Cerrar el canal de audio en el dispositivo
       try {
         this.logger.debug(`[AUDIO-OUT] Cerrando canal de audio en ${target.host}:${target.port}`);
-        await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text', 15000, isapiHeaders);
+        await this.executeDigestAuth('PUT', `${baseIsapi}/close`, target.user, target.pass, '', 'text', 4000, isapiHeaders);
         this.logger.log(`✅ [AUDIO-OUT] Canal de audio cerrado`);
       } catch (closeErr) {
         this.logger.warn(`⚠️ [AUDIO-OUT] Error al cerrar canal de audio: ${closeErr.message}`);
@@ -1792,7 +1972,7 @@ export class ControlAccesoService implements OnModuleInit {
 
     ffmpeg.stdout.pipe(res);
 
-    // 5. Conectar al stream de audio del dispositivo
+    // 5. Conectar al stream de audio del dispositivo y enlazarlo a ffmpeg.stdin
     axios
       .request({
         method: 'GET',
@@ -1806,6 +1986,7 @@ export class ControlAccesoService implements OnModuleInit {
       })
       .then((response) => {
         this.logger.log(`✅ [AUDIO-OUT] Stream de audio conectado (status ${response.status})`);
+        response.data.pipe(ffmpeg.stdin);
         response.data.on('error', (err) => {
           this.logger.error(`[AUDIO-OUT] Error en el stream de la cámara: ${err.message}`);
           finalize();
@@ -2976,58 +3157,86 @@ export class ControlAccesoService implements OnModuleInit {
         }
       }
 
-      // Armar la URL de la fuente RTSP (EncodeURIComponent para contraseñas con caracteres especiales como #)
+      // Armar las URLs RTSP para Servidor Local Edge (LAN directa :554) y VPS (VPN/NAT)
       const encodedPass = encodeURIComponent(pass);
       const sourceUrl = `rtsp://${user}:${encodedPass}@${targetIp}:${rtspPort}${rtspPath}`;
-      this.logger.log(`[WEBRTC] Fuente RTSP ${deviceId}: ${targetIp}:${rtspPort}${rtspPath} via ${rtspTarget.via}`);
+      const edgeIp = origIp || targetIp;
+      const origRtspPort = Number(dev.configuracion_tecnica?.puerto_rtsp || dev.puerto_rtsp || 554);
+      const edgeSourceUrl = `rtsp://${user}:${encodedPass}@${edgeIp}:${origRtspPort}${rtspPath}`;
+      this.logger.log(`[WEBRTC] Fuente RTSP ${deviceId}: Edge=${edgeIp}:${origRtspPort} | VPS=${targetIp}:${rtspPort}${rtspPath} (${rtspTarget.via})`);
 
       // Nombre simple de la cámara sin slashes para evitar errores 404 en la API
       const streamName = `cam_${deviceId.substring(0, 8)}`;
 
-      // 2. Registrar la ruta en la API de MediaMTX mediante el proxy seguro de Traefik
+      // 2. Registrar la ruta en la API de MediaMTX Local (Edge) y secundariamente en VPS si estuviera activa
       const domain = 'servidor.proliseg.com';
       const apiAuth = { username: 'admin', password: 'proliseg1025' };
 
-      // Leer valores personalizados desde configuracion_tecnica (con fallbacks estables)
       const isVpn = this.isVpnIp(targetIp);
       const sourceOnDemand = isDahua ? false : (dev.configuracion_tecnica?.source_on_demand ?? (isVpn ? false : true));
+      const edgeSourceOnDemand = isDahua ? false : (dev.configuracion_tecnica?.source_on_demand ?? true);
       const rtspTransport = dev.configuracion_tecnica?.rtsp_transport || 'tcp';
+
+      const edgePayload = {
+        source: edgeSourceUrl,
+        sourceOnDemand: edgeSourceOnDemand,
+        rtspTransport,
+      };
 
       const pathPayload = {
         source: sourceUrl,
-        sourceOnDemand: sourceOnDemand,
-        rtspTransport: rtspTransport,
+        sourceOnDemand,
+        rtspTransport,
       };
 
-      try {
-        // Intentar crear la ruta nueva
-        await axios.post(`https://${domain}/webrtc-api/v3/config/paths/add/${streamName}`, pathPayload, { auth: apiAuth });
-        this.logger.log(`✅ [WEBRTC] Ruta ${streamName} creada en MediaMTX.`);
-      } catch (err) {
-        if (err.response?.status === 400) {
-          // La ruta YA EXISTE → verificar si ya tiene la misma fuente antes de hacer PATCH (para no reiniciar el stream en vivo)
-          try {
-            const currentConf = await axios.get(`https://${domain}/webrtc-api/v3/config/paths/get/${streamName}`, { auth: apiAuth });
-            if (currentConf.data?.source !== sourceUrl || currentConf.data?.sourceOnDemand !== sourceOnDemand) {
-              await axios.patch(`https://${domain}/webrtc-api/v3/config/paths/patch/${streamName}`, pathPayload, { auth: apiAuth });
-              this.logger.log(`🔄 [WEBRTC] Ruta ${streamName} actualizada (PATCH) en MediaMTX.`);
-            } else {
-              this.logger.debug(`⚡ [WEBRTC] Ruta ${streamName} ya activa y al día en MediaMTX.`);
+      const registerInMtx = async (apiPrefix: string, payload: any, label: string, isVps = false) => {
+        if (isVps && Date.now() < this.vpsMtxUnavailableUntil) return;
+        try {
+          await axios.post(`https://${domain}/${apiPrefix}/v3/config/paths/add/${streamName}`, payload, {
+            auth: apiAuth,
+            timeout: 2500,
+          });
+          this.logger.log(`✅ [WEBRTC-${label}] Ruta ${streamName} creada en MediaMTX.`);
+        } catch (err: any) {
+          if (err.response?.status === 400) {
+            try {
+              const currentConf = await axios.get(`https://${domain}/${apiPrefix}/v3/config/paths/get/${streamName}`, {
+                auth: apiAuth,
+                timeout: 2500,
+              });
+              if (currentConf.data?.source !== payload.source || currentConf.data?.sourceOnDemand !== payload.sourceOnDemand) {
+                await axios.patch(`https://${domain}/${apiPrefix}/v3/config/paths/patch/${streamName}`, payload, {
+                  auth: apiAuth,
+                  timeout: 2500,
+                });
+                this.logger.log(`🔄 [WEBRTC-${label}] Ruta ${streamName} actualizada (PATCH) en MediaMTX.`);
+              }
+            } catch (patchErr: any) {
+              this.logger.warn(`⚠️ [WEBRTC-${label}] Error verificando/actualizando ruta: ${patchErr.message}`);
             }
-          } catch (patchErr) {
-            this.logger.warn(`⚠️ [WEBRTC] Error verificando/actualizando ruta en MediaMTX: ${patchErr.message}`);
+          } else if (isVps) {
+            this.vpsMtxUnavailableUntil = Date.now() + 10 * 60_000;
+            this.logger.debug(`[WEBRTC-VPS] MediaMTX VPS inactivo (${err.message}), omitiendo registro VPS por 10m.`);
+          } else {
+            this.logger.warn(`⚠️ [WEBRTC-${label}] No disponible temporalmente: ${err.message}`);
           }
-        } else {
-          this.logger.warn(`⚠️ [WEBRTC] Error registrando ruta en MediaMTX: ${err.message}`);
         }
-      }
+      };
 
-      // Retornar las rutas con el prefijo /webrtc/ que maneja el frontend, el WHEP player nativo y el iframe fallback
+      await Promise.allSettled([
+        registerInMtx('webrtc-edge-api', edgePayload, 'EDGE', false),
+        registerInMtx('webrtc-api', pathPayload, 'VPS', true),
+      ]);
+
+      // Retornar las rutas con el prefijo /webrtc/ (apuntando al MediaMTX Local Edge) y metadatos LAN para Audio Edge
       const result = {
         streamName,
         webrtcUrl: `https://${domain}/webrtc/${streamName}`,
-        iframeUrl: `https://${domain}/webrtc/${streamName}/`, // El slash final es vital
-        whepUrl: `https://${domain}/webrtc/${streamName}/whep`
+        iframeUrl: `https://${domain}/webrtc/${streamName}/`,
+        whepUrl: `https://${domain}/webrtc/${streamName}/whep`,
+        fallbackWhepUrl: `https://${domain}/webrtc-vps/${streamName}/whep`,
+        edgeIp,
+        isDahua,
       };
       this.webrtcStreamCache.set(deviceId, { result, expiresAt: Date.now() + 10 * 60_000 });
       return result;
@@ -5946,44 +6155,41 @@ export class ControlAccesoService implements OnModuleInit {
     const cached = this.digestChallengeCache.get(host);
 
     if (cached) {
-      const { realm, nonce, qop } = cached;
-      const nc = '00000001';
-      const cnonce = randomBytes(4).toString('hex');
-      const uri = new URL(url).pathname + (new URL(url).search || '');
+      const authStr = this.buildDigestAuthHeader(method, url, user, pass);
+      if (authStr) {
+        const config: any = {
+          method,
+          url,
+          headers: { ...headers, 'Authorization': authStr },
+          timeout,
+          responseType,
+        };
+        if (data !== undefined && data !== null) config.data = data;
 
-      const ha1 = createHash('md5').update(`${user}:${realm}:${pass}`).digest('hex');
-      const ha2 = createHash('md5').update(`${method}:${uri}`).digest('hex');
-      let responseHash = '';
-
-      if (qop === 'auth') {
-        responseHash = createHash('md5').update(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`).digest('hex');
-      } else {
-        responseHash = createHash('md5').update(`${ha1}:${nonce}:${ha2}`).digest('hex');
-      }
-
-      let authStr = `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${responseHash}"`;
-      if (qop === 'auth') {
-        authStr += `, qop="${qop}", nc=${nc}, cnonce="${cnonce}"`;
-      }
-
-      const config: any = {
-        method,
-        url,
-        headers: { ...headers, 'Authorization': authStr },
-        timeout,
-        responseType
-      };
-      if (data !== undefined && data !== null) config.data = data;
-
-      try {
-        this.logger.debug(`⚡ [DIGEST CACHE HIT] Sending pre-authenticated request to ${host}`);
-        return await axios(config);
-      } catch (error) {
-        if (error.response && error.response.status === 401) {
-          this.logger.debug(`⚠️ [DIGEST CACHE EXPIRED] Pre-authenticated request failed with 401. Clearing cache for ${host}`);
-          this.digestChallengeCache.delete(host);
-        } else {
-          throw error;
+        try {
+          this.logger.debug(`⚡ [DIGEST CACHE HIT] Sending pre-authenticated request to ${host}`);
+          return await axios(config);
+        } catch (error: any) {
+          if (error.response && error.response.status === 401) {
+            const freshWwwAuth = error.response.headers?.['www-authenticate'];
+            if (this.cacheDigestFromHeader(host, freshWwwAuth)) {
+              const retryAuthStr = this.buildDigestAuthHeader(method, url, user, pass);
+              if (retryAuthStr) {
+                const retryConfig: any = {
+                  method,
+                  url,
+                  headers: { ...headers, 'Authorization': retryAuthStr },
+                  timeout,
+                  responseType,
+                };
+                if (data !== undefined && data !== null) retryConfig.data = data;
+                return await axios(retryConfig);
+              }
+            }
+            this.digestChallengeCache.delete(host);
+          } else {
+            throw error;
+          }
         }
       }
     }
@@ -5992,53 +6198,20 @@ export class ControlAccesoService implements OnModuleInit {
       const config: any = { method, url, timeout, responseType, headers };
       if (data !== undefined && data !== null) config.data = data;
       return await axios(config);
-    } catch (error) {
-      if (error.response && error.response.status === 401 && error.response.headers['www-authenticate']) {
-        const authHeader = error.response.headers['www-authenticate'];
-        if (authHeader.includes('Digest')) {
-          const matchRealm = authHeader.match(/realm="([^"]+)"/);
-          const matchNonce = authHeader.match(/nonce="([^"]+)"/);
-          const matchQop = authHeader.match(/qop="([^"]+)"/);
-
-          if (matchRealm && matchNonce) {
-            const realm = matchRealm[1];
-            const nonce = matchNonce[1];
-            const qopRaw = matchQop ? matchQop[1] : '';
-            const qopOptions = qopRaw.split(',').map((item: string) => item.trim()).filter(Boolean);
-            const qop = qopOptions.includes('auth') ? 'auth' : (qopOptions[0] || '');
-
-            // Guardar en la caché para evitar la doble petición en el siguiente comando
-            this.digestChallengeCache.set(host, { realm, nonce, qop });
-            this.logger.debug(`💾 [DIGEST CACHE SAVE] Cached challenge for ${host}`);
-
-            const nc = '00000001';
-            const cnonce = randomBytes(4).toString('hex');
-            const uri = new URL(url).pathname + (new URL(url).search || '');
-
-            const ha1 = createHash('md5').update(`${user}:${realm}:${pass}`).digest('hex');
-            const ha2 = createHash('md5').update(`${method}:${uri}`).digest('hex');
-            let responseHash = '';
-
-            if (qop === 'auth') {
-              responseHash = createHash('md5').update(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`).digest('hex');
-            } else {
-              responseHash = createHash('md5').update(`${ha1}:${nonce}:${ha2}`).digest('hex');
-            }
-
-            let authStr = `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${responseHash}"`;
-            if (qop === 'auth') {
-              authStr += `, qop="${qop}", nc=${nc}, cnonce="${cnonce}"`;
-            }
-
+    } catch (error: any) {
+      if (error.response && error.response.status === 401 && error.response.headers?.['www-authenticate']) {
+        const wwwAuth = error.response.headers['www-authenticate'];
+        if (this.cacheDigestFromHeader(host, wwwAuth)) {
+          const authStr = this.buildDigestAuthHeader(method, url, user, pass);
+          if (authStr) {
             const config2: any = {
               method,
               url,
               headers: { ...headers, 'Authorization': authStr },
               timeout,
-              responseType
+              responseType,
             };
             if (data !== undefined && data !== null) config2.data = data;
-
             return await axios(config2);
           }
         }

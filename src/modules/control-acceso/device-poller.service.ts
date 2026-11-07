@@ -731,26 +731,74 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   ): Promise<{ stop: () => void }> {
     let active = true;
     let req: any = null;
+    let reconnectTimer: NodeJS.Timeout | null = null;
+    let consecutiveFailures = 0;
     const path = '/ISAPI/Event/notification/alertStream';
+    const hostKey = `${ip}:${port}`;
+
+    const clearReconnectTimer = () => {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
+
+    const scheduleReconnect = (baseDelayMs: number, reason?: string) => {
+      if (!active || reconnectTimer) return;
+      consecutiveFailures++;
+      const multiplier = Math.pow(1.7, Math.min(consecutiveFailures - 1, 5));
+      const jitterMs = Math.floor(Math.random() * 2500);
+      const delayMs = Math.min(300000, Math.round(baseDelayMs * multiplier) + jitterMs);
+
+      if (consecutiveFailures <= 2 || consecutiveFailures % 20 === 0) {
+        this.logger.debug(
+          `[HIK ALERT STREAM] ${reason || 'Reintento'} en ${device.nombre_identificador} (${hostKey}). Reconectando en ${Math.round(delayMs / 1000)}s (intento #${consecutiveFailures})...`,
+        );
+      }
+
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connectStream();
+      }, delayMs);
+    };
 
     const connectStream = () => {
       if (!active) return;
+      clearReconnectTimer();
+
+      if (req) {
+        try { req.__superseded = true; req.destroy(); } catch {}
+        req = null;
+      }
 
       const doReq = (authHVal?: string) => {
         if (!active) return;
         const headers: any = { 'Accept': 'multipart/mixed, application/xml, application/json' };
         if (authHVal) headers['Authorization'] = authHVal;
 
-        req = http.request({ host: ip, port, path, method: 'GET', headers, timeout: 0 }, (res: any) => {
+        const currentReq: any = http.request({ host: ip, port, path, method: 'GET', headers, timeout: 25000 }, (res: any) => {
+          if (!active || currentReq.__superseded) {
+            try { res.resume(); currentReq.destroy(); } catch {}
+            return;
+          }
+
           if (res.statusCode === 401 && !authHVal) {
+            currentReq.__superseded = true;
+            try { res.resume(); } catch {}
             const authH = res.headers['www-authenticate'] || '';
             const realm = (authH.match(/realm="([^"]+)"/) || [])[1];
             const nonce = (authH.match(/nonce="([^"]+)"/) || [])[1];
             const qop = (authH.match(/qop="([^"]+)"/) || [])[1];
+            if (!realm || !nonce) {
+              this.hostStreamActive.delete(hostKey);
+              try { currentReq.destroy(); } catch {}
+              scheduleReconnect(30000, 'Challenge Digest inválido (401)');
+              return;
+            }
             const ha1 = createHash('md5').update(`${user}:${realm}:${pass}`).digest('hex');
             const ha2 = createHash('md5').update(`GET:${path}`).digest('hex');
             let authHeader = '';
-            if (qop === 'auth') {
+            if (qop && qop.includes('auth')) {
               const nc = '00000001';
               const cnonce = 'abcdef12';
               const resp = createHash('md5').update(`${ha1}:${nonce}:${nc}:${cnonce}:auth:${ha2}`).digest('hex');
@@ -759,23 +807,28 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
               const resp = createHash('md5').update(`${ha1}:${nonce}:${ha2}`).digest('hex');
               authHeader = `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${path}", response="${resp}"`;
             }
+            try { currentReq.destroy(); } catch {}
             return doReq(authHeader);
           }
 
-          const hostKey = `${ip}:${port}`;
           if (res.statusCode !== 200) {
+            currentReq.__superseded = true;
             this.hostStreamActive.delete(hostKey);
-            this.logger.debug(`[HIK ALERT STREAM] Status ${res.statusCode} en ${device.nombre_identificador}. Reconectando en 20s...`);
-            if (active) setTimeout(connectStream, 20000);
+            try { res.resume(); currentReq.destroy(); } catch {}
+            const baseWait = res.statusCode === 500 || res.statusCode === 404 || res.statusCode === 403 ? 45000 : 25000;
+            scheduleReconnect(baseWait, `Status ${res.statusCode}`);
             return;
           }
 
+          currentReq.setTimeout(0);
+          consecutiveFailures = 0;
           this.hostStreamActive.add(hostKey);
           this.hostBackoffUntil.delete(hostKey);
-          this.logger.log(`📡 [HIK ALERT STREAM] Conectado exitosamente en tiempo real (<50ms) a ${device.nombre_identificador} (${ip}:${port})`);
+          this.logger.log(`📡 [HIK ALERT STREAM] Conectado exitosamente en tiempo real (<50ms) a ${device.nombre_identificador} (${hostKey})`);
 
           let buffer = '';
           res.on('data', (chunk: Buffer) => {
+            if (!active || currentReq.__superseded) return;
             buffer += chunk.toString('utf8');
             const jsonMatches = buffer.match(/\{[\s\S]*?\}(?=\r?\n--|\r?\nContent-|$)/g);
             if (jsonMatches) {
@@ -793,33 +846,38 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
           });
 
           res.on('end', () => {
+            if (currentReq.__superseded) return;
             this.hostStreamActive.delete(hostKey);
-            if (active) {
-              this.logger.warn(`⚠️ [HIK ALERT STREAM] Stream finalizado en ${device.nombre_identificador}. Reconectando en 8s...`);
-              setTimeout(connectStream, 8000);
-            }
+            scheduleReconnect(8000, 'Stream finalizado');
           });
 
           res.on('error', (err: any) => {
+            if (currentReq.__superseded) return;
             this.hostStreamActive.delete(hostKey);
-            if (active) {
-              this.logger.debug(`[HIK ALERT STREAM] Error en ${device.nombre_identificador}: ${err.message}. Reconectando en 10s...`);
-              setTimeout(connectStream, 10000);
-            }
+            scheduleReconnect(12000, `Error de lectura: ${err.message}`);
           });
         });
 
-        req.on('error', (err: any) => {
-          const hostKey = `${ip}:${port}`;
+        req = currentReq;
+
+        currentReq.on('timeout', () => {
+          if (currentReq.__superseded) return;
+          currentReq.__superseded = true;
           this.hostStreamActive.delete(hostKey);
           this.hostBackoffUntil.set(hostKey, Date.now() + 30000);
-          if (active) {
-            this.logger.debug(`[HIK ALERT STREAM] Conexión rechazada en ${device.nombre_identificador}: ${err.message}. Reconectando en 45s...`);
-            setTimeout(connectStream, 45000);
-          }
+          try { currentReq.destroy(); } catch {}
+          scheduleReconnect(30000, 'Timeout de conexión inicial');
         });
 
-        req.end();
+        currentReq.on('error', (err: any) => {
+          if (currentReq.__superseded) return;
+          currentReq.__superseded = true;
+          this.hostStreamActive.delete(hostKey);
+          this.hostBackoffUntil.set(hostKey, Date.now() + 30000);
+          scheduleReconnect(30000, `Conexión rechazada: ${err.message}`);
+        });
+
+        currentReq.end();
       };
 
       doReq();
@@ -830,7 +888,11 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     return {
       stop: () => {
         active = false;
-        try { if (req) req.destroy(); } catch {}
+        clearReconnectTimer();
+        if (req) {
+          try { req.__superseded = true; req.destroy(); } catch {}
+          req = null;
+        }
       }
     };
   }

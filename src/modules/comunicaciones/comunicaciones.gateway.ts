@@ -580,7 +580,7 @@ export class ComunicacionesGateway implements OnGatewayInit, OnGatewayConnection
             this.activeAudioStreams.delete(client.id);
         }
 
-        const passThroughStream = new PassThrough();
+        const passThroughStream = new PassThrough({ highWaterMark: 16384 });
         this.activeAudioStreams.set(client.id, {
             stream: passThroughStream,
             targetIp: data.targetIp,
@@ -623,6 +623,14 @@ export class ComunicacionesGateway implements OnGatewayInit, OnGatewayConnection
 
         try {
             const buffer = Buffer.isBuffer(data.chunk) ? data.chunk : Buffer.from(data.chunk);
+            // Anti-lag auto-adaptativo para G.711 crudo: nunca acumular más de ~350ms de cola en memoria
+            if (session.format === 'raw_pcm_mulaw' && session.stream.readableLength > 2880) {
+                const excess = session.stream.readableLength - 1280;
+                const dropBytes = Math.floor(excess / 160) * 160;
+                if (dropBytes > 0) {
+                    try { session.stream.read(dropBytes); } catch {}
+                }
+            }
             session.stream.write(buffer);
         } catch (err) {
             this.logger.error(`🎙️ [AUDIO-IN-WS] Error escribiendo chunk en stream: ${err.message}`);

@@ -2039,12 +2039,50 @@ export class DahuaService {
    * utilizando el estándar ONVIF Profile T Audio Backchannel sobre RTSP TCP (trackID=5).
    * Compatible nativamente con todos los terminales de control de acceso y videoporteros Dahua (ASI / VTO).
    */
+  private mulawByteToLinear(uVal: number): number {
+    const u = (~uVal) & 0xff;
+    let t = ((u & 0x0f) << 3) + 0x84;
+    t <<= (u & 0x70) >> 4;
+    return (u & 0x80) ? (0x84 - t) : (t - 0x84);
+  }
+
+  private linearToAlawByte(pcmVal: number): number {
+    let pcm = Math.max(-32768, Math.min(32767, Math.round(pcmVal)));
+    let mask = 0xd5;
+    if (pcm < 0) {
+      pcm = -pcm - 1;
+      mask = 0x55;
+    }
+    let seg = 7;
+    const segEnd = [0x1f, 0x3f, 0x7f, 0xff, 0x1ff, 0x3ff, 0x7ff, 0xfff];
+    const scaled = pcm >> 3;
+    for (let i = 0; i < 8; i++) {
+      if (scaled <= segEnd[i]) {
+        seg = i;
+        break;
+      }
+    }
+    const aval = (seg << 4) | ((seg < 2 ? (pcm >> 4) : (pcm >> (seg + 3))) & 0x0f);
+    return aval ^ mask;
+  }
+
+  private convertMulawBufferToAlaw(mulawBuf: Buffer, gain = 1.8): Buffer {
+    const out = Buffer.allocUnsafe(mulawBuf.length);
+    for (let i = 0; i < mulawBuf.length; i++) {
+      const pcm = this.mulawByteToLinear(mulawBuf[i]) * gain;
+      out[i] = this.linearToAlawByte(pcm);
+    }
+    return out;
+  }
+
   async relayAudioRtspBackchannel(
     audioStream: NodeJS.ReadableStream,
     ip: string,
     rtspPort: number,
     user: string,
     pass: string,
+    audioFormatInput?: string,
+    onReady?: () => void,
   ): Promise<boolean> {
     const sessionKey = `${ip}:${rtspPort}`;
     this.logger.log(`🎙️ [DAHUA-ONVIF-BACKCHANNEL] Iniciando transmisión hacia altavoz Dahua en ${sessionKey}...`);
@@ -2054,7 +2092,7 @@ export class DahuaService {
     if (prevSession) {
       try { prevSession(); } catch {}
       this.activeRtspSessions.delete(sessionKey);
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, 180));
     }
 
     return new Promise((resolve) => {
@@ -2066,6 +2104,7 @@ export class DahuaService {
       let client: any = null;
       let ffmpeg: any = null;
       let isCleanedUp = false;
+      let hasStreamed = false;
 
       const buildDigestAuth = (method: string, targetUri: string, authH: string): string => {
         const realmMatch = authH.match(/realm="([^"]+)"/i);
@@ -2116,9 +2155,9 @@ export class DahuaService {
           }
           setTimeout(() => {
             try { client.end(); client.destroy(); } catch {}
-          }, 300);
+          }, 200);
         }
-        resolve(true);
+        resolve(hasStreamed);
       };
 
       this.activeRtspSessions.set(sessionKey, () => cleanUp('reemplazo de sesion'));
@@ -2126,6 +2165,7 @@ export class DahuaService {
       try {
         const net = require('net');
         client = net.createConnection({ host: ip, port: rtspPort }, () => {
+          client.setNoDelay(true);
           this.logger.log(`🔌 [DAHUA-ONVIF-BACKCHANNEL] Conexión TCP RTSP establecida con ${sessionKey}`);
           const req = `DESCRIBE ${uri} RTSP/1.0\r\nCSeq: ${cseq++}\r\nUser-Agent: Prolicontrol\r\nAccept: application/sdp\r\nRequire: www.onvif.org/ver20/backchannel\r\n\r\n`;
           client.write(req);
@@ -2179,32 +2219,12 @@ export class DahuaService {
 
           if (buffer.includes('200 OK') && step === 'PLAY') {
             step = 'STREAMING';
+            hasStreamed = true;
             this.logger.log(`🎉 [DAHUA-ONVIF-BACKCHANNEL] Canal de audio abierto exitosamente hacia el altavoz Dahua!`);
 
-            const { spawn } = require('child_process');
-            let ffmpegBinary = 'ffmpeg';
-            if (process.platform === 'win32') {
-              try {
-                const ffmpegStatic = require('ffmpeg-static');
-                const fs = require('fs');
-                if (ffmpegStatic && fs.existsSync(ffmpegStatic)) ffmpegBinary = ffmpegStatic;
-                else ffmpegBinary = 'ffmpeg.exe';
-              } catch { ffmpegBinary = 'ffmpeg.exe'; }
+            if (onReady) {
+              try { onReady(); } catch {}
             }
-
-            ffmpeg = spawn(ffmpegBinary, [
-              '-hide_banner',
-              '-loglevel', 'error',
-              '-i', 'pipe:0',
-              '-ac', '1',
-              '-ar', '8000',
-              '-c:a', 'pcm_alaw',
-              '-f', 'alaw',
-              '-af', 'volume=4.5,alimiter=limit=0.95',
-              'pipe:1'
-            ]);
-
-            audioStream.pipe(ffmpeg.stdin, { end: false });
 
             let seq = 1;
             let ts = 0;
@@ -2212,7 +2232,7 @@ export class DahuaService {
             let rtpBuffer = Buffer.alloc(0);
             const CHUNK_SIZE = 160;
 
-            ffmpeg.stdout.on('data', (audioChunk: Buffer) => {
+            const pushAlawToRtp = (audioChunk: Buffer) => {
               rtpBuffer = Buffer.concat([rtpBuffer, audioChunk]);
               while (rtpBuffer.length >= CHUNK_SIZE) {
                 const frame = rtpBuffer.slice(0, CHUNK_SIZE);
@@ -2224,11 +2244,57 @@ export class DahuaService {
                   client.write(createRtpTcpFrame(interleavedRtpChannel, rtp));
                 }
               }
-            });
+            };
+
+            if (audioFormatInput === 'raw_pcm_mulaw') {
+              this.logger.log(`⚡ [DAHUA-ONVIF-BACKCHANNEL] Modo NATIVO Directo G.711u->G.711A (Bypass FFmpeg, Latencia Cero)`);
+              audioStream.on('data', (mulawChunk: Buffer) => {
+                if (isCleanedUp) return;
+                pushAlawToRtp(this.convertMulawBufferToAlaw(mulawChunk, 2.2));
+              });
+            } else {
+              const { spawn } = require('child_process');
+              let ffmpegBinary = 'ffmpeg';
+              if (process.platform === 'win32') {
+                try {
+                  const ffmpegStatic = require('ffmpeg-static');
+                  const fs = require('fs');
+                  if (ffmpegStatic && fs.existsSync(ffmpegStatic)) ffmpegBinary = ffmpegStatic;
+                  else ffmpegBinary = 'ffmpeg.exe';
+                } catch { ffmpegBinary = 'ffmpeg.exe'; }
+              }
+
+              ffmpeg = spawn(ffmpegBinary, [
+                '-hide_banner',
+                '-loglevel', 'error',
+                '-fflags', '+nobuffer+flush_packets',
+                '-flags', 'low_delay',
+                '-probesize', '256',
+                '-analyzeduration', '0',
+                '-f', 'webm',
+                '-i', 'pipe:0',
+                '-ac', '1',
+                '-ar', '8000',
+                '-c:a', 'pcm_alaw',
+                '-f', 'alaw',
+                '-af', 'highpass=f=180,lowpass=f=3500,volume=3.5,alimiter=limit=0.95',
+                '-flush_packets', '1',
+                'pipe:1'
+              ]);
+
+              audioStream.pipe(ffmpeg.stdin, { end: false });
+              ffmpeg.stdout.on('data', pushAlawToRtp);
+            }
 
             audioStream.on('close', () => cleanUp('audioStream close'));
             (audioStream as any).on('end', () => cleanUp('audioStream end'));
             audioStream.on('error', (err: any) => cleanUp(`audioStream error: ${err?.message || err}`));
+            return;
+          }
+
+          if (/\b(400|403|404|454|459|461|500|501|503)\b/.test(buffer.split('\r\n')[0] || '')) {
+            this.logger.warn(`⚠️ [DAHUA-ONVIF-BACKCHANNEL] Respuesta RTSP no soportada en ${step}: ${(buffer.split('\r\n')[0] || '').trim()}`);
+            cleanUp(`rtsp status error in ${step}`);
           }
         });
 
@@ -2506,9 +2572,33 @@ export class DahuaService {
   ): Promise<{ stop: () => void }> {
     let active = true;
     let cancelTokenSource: any = null;
+    let reconnectTimer: NodeJS.Timeout | null = null;
+    let consecutiveFailures = 0;
+
+    const clearReconnectTimer = () => {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
+
+    const scheduleReconnect = (baseDelayMs: number, reason?: string) => {
+      if (!active || reconnectTimer) return;
+      consecutiveFailures++;
+      const multiplier = Math.pow(1.6, Math.min(consecutiveFailures - 1, 5));
+      const delayMs = Math.min(300000, Math.round(baseDelayMs * multiplier) + Math.floor(Math.random() * 2000));
+      if (consecutiveFailures <= 2 || consecutiveFailures % 20 === 0) {
+        this.logger.debug(`[DAHUA EVENT STREAM] ${reason || 'Reintento'} en ${ip}:${port}. Reconectando en ${Math.round(delayMs / 1000)}s...`);
+      }
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connectStream();
+      }, delayMs);
+    };
 
     const connectStream = async () => {
       if (!active) return;
+      clearReconnectTimer();
       try {
         const axios = require('axios');
         const authHeader = await this.buildDigestAuthHeader('GET', `/cgi-bin/eventManager.cgi?action=attach&codes=[CallNoAnswered,Invite,VideoTalk,AccessControl]`, user, pass, ip, port);
@@ -2522,13 +2612,18 @@ export class DahuaService {
           headers,
           responseType: 'stream',
           cancelToken: cancelTokenSource.token,
-          timeout: 0,
+          timeout: 25000,
         });
 
+        consecutiveFailures = 0;
+        if (response.data?.socket) {
+          try { response.data.socket.setTimeout(0); } catch {}
+        }
         this.logger.log(`📡 [DAHUA EVENT STREAM] Conectado exitosamente a ${ip}:${port}`);
 
         let buffer = '';
         response.data.on('data', (chunk: Buffer) => {
+          if (!active) return;
           buffer += chunk.toString('latin1');
           const lines = buffer.split('\r\n');
           buffer = lines.pop() || '';
@@ -2557,23 +2652,14 @@ export class DahuaService {
         });
 
         response.data.on('end', () => {
-          if (active) {
-            this.logger.warn(`⚠️ [DAHUA EVENT STREAM] Stream finalizado en ${ip}:${port}. Reconectando en 5s...`);
-            setTimeout(connectStream, 5000);
-          }
+          scheduleReconnect(8000, 'Stream finalizado');
         });
 
         response.data.on('error', (err: any) => {
-          if (active) {
-            this.logger.debug(`[DAHUA EVENT STREAM] Error en stream ${ip}:${port}: ${err.message}. Reconectando en 5s...`);
-            setTimeout(connectStream, 5000);
-          }
+          scheduleReconnect(10000, `Error en stream: ${err.message}`);
         });
       } catch (err: any) {
-        if (active) {
-          this.logger.debug(`[DAHUA EVENT STREAM] Conexión stream rechazada en ${ip}:${port}: ${err.message}. Reconectando en 45s...`);
-          setTimeout(connectStream, 45000);
-        }
+        scheduleReconnect(45000, `Conexión rechazada: ${err.message}`);
       }
     };
 
@@ -2582,8 +2668,10 @@ export class DahuaService {
     return {
       stop: () => {
         active = false;
+        clearReconnectTimer();
         if (cancelTokenSource) {
           try { cancelTokenSource.cancel('Stream stopped'); } catch {}
+          cancelTokenSource = null;
         }
       }
     };
