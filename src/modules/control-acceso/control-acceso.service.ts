@@ -605,7 +605,7 @@ export class ControlAccesoService implements OnModuleInit {
     }
   }
 
-  async colgarLlamadaDispositivo(deviceId: string, operator?: any) {
+  async colgarLlamadaDispositivo(deviceId: string, operator?: any, skipHardware = false) {
     try {
       const { data: dev } = await this.supabase
         .getSupabaseAdminClient()
@@ -628,8 +628,12 @@ export class ControlAccesoService implements OnModuleInit {
         documento_persona: 'LLAMADA_FINALIZADA',
         metodo_acceso: 'intercom',
         timestamp: new Date().toISOString(),
-        detalles_raw: { operador: operator?.email || 'Operador', accion: 'colgar' }
+        detalles_raw: { operador: operator?.email || 'Operador', accion: 'colgar', edgeHandled: skipHardware }
       });
+
+      if (skipHardware) {
+        return { ok: true, sent: true, edgeHandled: true, mensaje: 'Estado de colgado sincronizado (hardware gestionado en Edge LAN)' };
+      }
 
       const user = dev.credencial_usuario || 'admin';
       const pass = dev.credencial_password || '';
@@ -953,7 +957,7 @@ export class ControlAccesoService implements OnModuleInit {
     return promise;
   }
 
-  async contestarLlamadaDispositivo(deviceId: string, operator?: any) {
+  async contestarLlamadaDispositivo(deviceId: string, operator?: any, skipHardware = false) {
     try {
       const { data: dev } = await this.supabase
         .getSupabaseAdminClient()
@@ -979,6 +983,9 @@ export class ControlAccesoService implements OnModuleInit {
         detalles_raw: { operador: operator?.email || 'Operador', accion: 'contestar' }
       });
 
+      if (skipHardware) {
+        return { ok: true, sent: true, edgeHandled: true, mensaje: 'Llamada sincronizada (hardware gestionado en Edge LAN)' };
+      }
       this.logger.log(`📞 [INTERCOM] Contestando y silenciando timbre físico de ${dev.nombre_identificador}...`);
       const sent = await this.contestarTimbreHardware(deviceId);
 
