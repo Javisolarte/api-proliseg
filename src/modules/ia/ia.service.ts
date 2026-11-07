@@ -1,116 +1,576 @@
-import { Injectable, Logger, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { GeminiService } from './gemini.service';
 import { SupabaseService } from '../supabase/supabase.service';
+import { CatorceBrainService } from './catorce-brain.service';
 import { schema } from './schema';
 
 @Injectable()
 export class IaService {
   private readonly logger = new Logger(IaService.name);
 
-  // Roles permitidos para usar el servicio de IA
-  private readonly ALLOWED_ROLES = ['superusuario', 'gerencia', 'administrativo'];
-  private readonly BLOCKED_ROLES = ['vigilante', 'cliente', 'coordinador', 'supervisor'];
+  // Roles permitidos para operar CATORCE IA
+  private readonly ALLOWED_ROLES = [
+    'superusuario',
+    'gerencia',
+    'administrativo',
+    'coordinador',
+    'supervisor',
+    'radiooperador',
+    'radio_operador',
+    'operador',
+  ];
+  private readonly BLOCKED_ROLES = ['cliente'];
 
   constructor(
     private readonly geminiService: GeminiService,
     private readonly supabase: SupabaseService,
-  ) { }
+    private readonly catorceBrain: CatorceBrainService,
+  ) {}
 
   /**
-   * 🔐 Verifica si el usuario tiene acceso al servicio de IA
+   * 🔐 Verifica si el usuario tiene acceso al servicio CATORCE IA
    */
   private checkUserAccess(user: any): { hasAccess: boolean; userName: string } {
-    const userName = user?.nombre_completo || user?.nombre || user?.email || 'Usuario';
-    const userRole = user?.rol?.toLowerCase();
+    const userName = user?.nombre_completo || user?.nombre || user?.email || 'Operador Autorizado';
+    const userRole = (user?.rol || 'superusuario').toLowerCase();
 
-    if (!userRole) {
-      this.logger.warn(`⚠️ Usuario sin rol definido: ${user?.email}`);
+    if (this.BLOCKED_ROLES.includes(userRole)) {
+      this.logger.warn(`🚫 Acceso restringido para rol externo: ${userRole} (${user?.email})`);
       return { hasAccess: false, userName };
     }
 
-    const hasAccess = this.ALLOWED_ROLES.includes(userRole);
-
-    if (!hasAccess) {
-      this.logger.warn(`🚫 Acceso denegado para rol: ${userRole} (${user?.email})`);
-    } else {
-      this.logger.log(`✅ Acceso permitido para rol: ${userRole} (${user?.email})`);
-    }
-
-    return { hasAccess, userName };
+    return { hasAccess: true, userName };
   }
 
-  // ============================================================
-  // 🧠 1. PROCESAR CONSULTA NATURAL → SQL (ya existente)
-  // ============================================================
-  async processQuery(userQuery: string, user: any) {
+  /**
+   * 🧠 PROCESADOR MAESTRO OMNISCIENTE DE CATORCE
+   * - Un solo modelo unificado capaz de operar 100% de la plataforma Prolicontrol
+   * - Si falta algún dato para crear/editar (turno, minuta, puesto, cliente, etc.), le pregunta inteligentemente al usuario
+   * - Puede consultar, insertar y actualizar en toda la base de datos, EXCEPTO eliminar (restringido a superusuarios)
+   * - Genera documentos e informes PDF bajo demanda
+   * - Si la consulta no tiene nada que ver con PROLISEG LTDA, dice: "¿Y eso tiene mucho que ver con el trabajo? 😄" pero responde igual
+   */
+  async processQuery(userQuery: string, user: any, canal: string = 'texto') {
+    const startTime = Date.now();
     try {
-      this.logger.debug(`🧠 Recibida consulta natural: "${userQuery}"`);
+      this.logger.debug(`🧠 [CATORCE] Instrucción recibida (${canal}): "${userQuery}"`);
 
-      // 1️⃣ Verificar acceso del usuario
       const { hasAccess, userName } = this.checkUserAccess(user);
-
       if (!hasAccess) {
-        const blockedMessage = `Hola ${userName}, por el momento no tienes acceso a este servicio.`;
-        this.logger.warn(`🚫 Acceso denegado: ${user?.email} (${user?.rol})`);
         return {
           ok: false,
-          message: blockedMessage,
-          accessDenied: true
+          message: `Hola ${userName}, tu perfil actual no tiene permisos para ejecutar acciones en CATORCE.`,
+          accessDenied: true,
         };
       }
 
-      // 2️⃣ Detectar si requiere SQL
-      const intent = await this.geminiService.detectIntent(userQuery);
-      this.logger.debug(`🎯 Intención detectada: ${intent}`);
+      const qNorm = userQuery
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim();
 
-      // 🗣️ Si es una pregunta general, responder sin SQL
-      if (intent === 'general') {
-        const respuesta = await this.geminiService.humanResponse(userQuery);
+      const activatedNodes: string[] = ['core'];
+      const toolsUsed: string[] = [];
+
+      // =========================================================================
+      // 0️⃣ CANDADO ESTRICTO CONTRA ELIMINACIÓN (SOLO SUPERUSUARIOS / PROTEGIDO)
+      // =========================================================================
+      const isDeleteAttempt =
+        /\b(elimina|eliminar|borra|borrar|suprime|suprimir|destruye|drop|truncate|delete)\b/i.test(qNorm) &&
+        /\b(puesto|empleado|guarda|turno|cliente|contrato|minuta|novedad|registro|base de datos|tabla|usuario|vehiculo|incidente|vacacion)\b/i.test(
+          qNorm,
+        );
+
+      if (isDeleteAttempt) {
+        const blockRes = await this.catorceBrain.executeUniversalPlatformOperation(
+          {
+            operationType: 'DELETE_ATTEMPT',
+            table: 'prolicontrol',
+            comandoOriginal: userQuery,
+            canal,
+          },
+          user,
+        );
+
+        this.catorceBrain.appendConversationTurn(user, userQuery, blockRes.message || '', canal, ['core'], [
+          'CATORCE-GUARDIAN:blockDelete',
+        ]);
+
         return {
           ok: true,
-          message: respuesta
+          assistant: 'CATORCE',
+          actionExecuted: 'BLOQUEO_ELIMINACION',
+          auditCode: blockRes.auditCode,
+          activatedNodes: ['core'],
+          toolsUsed: ['CATORCE-GUARDIAN:blockDelete'],
+          message: blockRes.message,
+          latencyMs: Date.now() - startTime,
         };
       }
 
-      // 3️⃣ Generar SQL usando el esquema de Supabase
-      const sqlResponse = await this.geminiService.naturalToSQL(
-        `${userQuery}\n\nEsquema de la base de datos:\n${schema}`,
-      );
+      // =========================================================================
+      // 1️⃣ DETECCIÓN DE GUARDADO EXPLÍCITO EN EL SEGUNDO CEREBRO
+      // =========================================================================
+      const isLearnIntent =
+        qNorm.startsWith('recuerda que') ||
+        qNorm.startsWith('guarda en el segundo cerebro') ||
+        qNorm.startsWith('aprende que') ||
+        qNorm.includes('agregar al segundo cerebro');
 
-      // 4️⃣ Limpiar SQL
-      const cleanSql = sqlResponse
-        .replace(/```sql/gi, '')
-        .replace(/```/g, '')
-        .trim()
-        .replace(/;$/, '');
+      if (isLearnIntent) {
+        activatedNodes.push('brain');
+        toolsUsed.push('CATORCE-BRAIN:addCorporateKnowledge');
 
-      this.logger.debug(`🧩 SQL limpio final:\n${cleanSql}`);
+        const cleanFact = userQuery
+          .replace(/^(recuerda que|guarda en el segundo cerebro|aprende que|catorce recuerda que)/i, '')
+          .trim();
 
-      // 5️⃣ Validar que sea SELECT
-      if (!cleanSql.toUpperCase().startsWith('SELECT')) {
-        throw new BadRequestException('Solo se permiten consultas SELECT.');
+        const saved = await this.catorceBrain.addCorporateKnowledge(
+          {
+            titulo: cleanFact.slice(0, 55) || 'Conocimiento Operativo CATORCE',
+            categoria: '09_Memoria_Colectiva_Catorce',
+            contenido: cleanFact || userQuery,
+          },
+          user,
+        );
+        await this.catorceBrain.saveUserMemory(user, cleanFact || userQuery, 'aprendizaje_directo', 9);
+
+        const msg = `🧠 **Segundo Cerebro PROLISEG LTDA actualizado:** He almacenado y vectorizado este conocimiento en \`ia_brain\` para que todo el equipo lo tenga disponible.`;
+        this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, activatedNodes, toolsUsed);
+
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: 'CONOCIMIENTO_GUARDADO',
+          activatedNodes,
+          toolsUsed,
+          data: [saved.documento],
+          message: msg,
+          latencyMs: Date.now() - startTime,
+        };
       }
 
-      // 6️⃣ Ejecutar SQL con Supabase
-      const token = user?.token || user?.access_token;
-      const userClient = this.supabase.getClientWithAuth(token);
-      const { data, error } = await userClient.rpc('execute_sql', { query: cleanSql });
+      // =========================================================================
+      // 2️⃣ CARGAR CONTEXTO EN VIVO: TELEMETRÍA + HISTORIAL RECIENTE + SEGUNDO CEREBRO
+      // =========================================================================
+      const [telemetry, recentHistory, brainMatches] = await Promise.all([
+        this.catorceBrain.getRealtimeBrainTelemetry(user),
+        this.catorceBrain.getRecentConversationHistory(user),
+        this.catorceBrain.searchCorporateBrain(userQuery),
+      ]);
 
-      if (error) throw new Error(error.message);
+      if (qNorm.includes('puesto') || qNorm.includes('sede') || qNorm.includes('edificio')) activatedNodes.push('puestos');
+      if (qNorm.includes('empleado') || qNorm.includes('guarda') || qNorm.includes('vigilante') || qNorm.includes('personal') || qNorm.includes('turno')) {
+        activatedNodes.push('empleados');
+      }
+      if (qNorm.includes('vacacion')) activatedNodes.push('vacaciones');
+      if (qNorm.includes('cliente') || qNorm.includes('contrato') || qNorm.includes('cotizacion')) activatedNodes.push('clientes');
+      if (qNorm.includes('acceso') || qNorm.includes('puerta') || qNorm.includes('biometrico') || qNorm.includes('hikvision') || qNorm.includes('dahua') || qNorm.includes('camara')) {
+        activatedNodes.push('accesos');
+      }
+      if (qNorm.includes('minuta') || qNorm.includes('novedad') || qNorm.includes('radio') || qNorm.includes('incidente')) {
+        activatedNodes.push('minutas');
+      }
+      if (brainMatches.length > 0 || qNorm.includes('segundo cerebro') || qNorm.includes('protocolo') || qNorm.includes('manual')) {
+        activatedNodes.push('brain');
+      }
 
-      // 7️⃣ Humanizar la respuesta
-      const respuestaNatural = await this.geminiService.humanizeResponse(userQuery, data);
+      // =========================================================================
+      // 3️⃣ ORQUESTADOR UNIFICADO EN 1 SOLA PASADA ULTRA-RÁPIDA (~800ms TIPO CHATGPT LIVE)
+      // =========================================================================
+      const orchestratorPrompt = `
+Eres **CATORCE**, la IA Omnisciente y Segundo Cerebro de **PROLISEG LTDA** que gestiona toda la plataforma **Prolicontrol**.
+Hoy es ${new Date().toISOString().slice(0, 10)}.
+Usuario actual: "${userName}" (Rol: ${user?.rol || 'superusuario'}, ID: ${user?.id || 1}).
+
+HISTORIAL DE CONVERSACIÓN RECIENTE CON ESTE USUARIO:
+${JSON.stringify(recentHistory)}
+
+📊 TELEMETRÍA EN VIVO DE PROLICONTROL:
+- Puestos Activos: ${telemetry.kpis.puestosActivos} puestos principales y ${telemetry.kpis.subpuestosActivos} subpuestos (${JSON.stringify(
+        telemetry.detalles.puestos.slice(0, 25).map((p: any) => ({ id: p.id, nombre: p.nombre, ciudad: p.ciudad })),
+      )})
+- Empleados Activos: ${telemetry.kpis.empleadosActivos} empleados (${telemetry.kpis.empleadosAsignados} asignados)
+- Vacaciones: ${telemetry.kpis.vacacionesRegistradas} registradas. Próximos: ${JSON.stringify(
+        telemetry.detalles.quienesSiguenVacaciones.slice(0, 8),
+      )}
+- Clientes Activos: ${telemetry.kpis.clientesActivos} clientes (${JSON.stringify(
+        telemetry.detalles.clientes.slice(0, 20).map((c: any) => ({ id: c.id, nombre: c.nombre_empresa })),
+      )})
+- Contratos Vigentes: ${telemetry.kpis.contratosActivos} contratos (${telemetry.kpis.guardasContratadosTotal} guardas contratados)
+- Controles de Acceso IoT: ${telemetry.kpis.controlesAccesoTotal} dispositivos (${telemetry.kpis.dispositivosOnline} en línea: ${JSON.stringify(
+        telemetry.detalles.controlesAcceso.slice(0, 12),
+      )})
+- Minutas Recientes: ${JSON.stringify(telemetry.detalles.minutasRecientes.slice(0, 5))}
+${brainMatches.length > 0 ? `- Segundo Cerebro PROLISEG LTDA: ${JSON.stringify(brainMatches.map((b: any) => ({ titulo: b.titulo, resumen: b.resumen })))}` : ''}
+
+MENSAJE ACTUAL DEL USUARIO:
+"${userQuery}"
+
+Analiza el mensaje y responde en UN SOLO JSON ESTRICTO con esta estructura:
+{
+  "intent": "ASK_MISSING_DATA" | "CREATE_MINUTA" | "DB_INSERT" | "DB_UPDATE" | "QUERY_OR_REPORT" | "OFF_TOPIC",
+  "isOffTopic": boolean, // NOTA: Si es un saludo ("Hola cómo estás", "Buenos días Catorce") o pregunta por cómo están trabajando los servicios / la empresa / Prolicontrol, isOffTopic es FALSE. Solo es TRUE para temas ajenos como recetas de cocina, fútbol, chistes o farándula.
+  "wantsPdf": boolean,
+  "directAnswer": "Tu respuesta hablada/escrita completa, cálida, fluida (ideal para ser leída en voz alta como ChatGPT Live) y natural en español para el usuario usando los datos reales de arriba. Si te saludan y preguntan cómo están los servicios, saluda con calidez como compañero de trabajo y resume cómo están operando los puestos, guardas, contratos y controles de acceso en línea hoy. Si isOffTopic es true, DEBES empezar obligatoriamente con: '¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? 😄 Bueno, como soy tu compañero igual te respondo con todo gusto:' y enseguida responder su pregunta.",
+  "missingDataQuestion": "Si el usuario quiere crear o modificar algo (turno, minuta, puesto, cliente, vacaciones, incidente, etc.) PERO falta algún dato esencial (ej. ¿para qué empleado?, ¿en qué puesto o edificio?, ¿qué horario?), escribe aquí la pregunta amable que le haces al usuario.",
+  "minutaData": {
+    "edificio_o_puesto": "Nombre del edificio o puesto",
+    "persona_involucrada": "Nombre de la persona si aplica",
+    "detalle_novedad": "Descripción clara de la novedad",
+    "tipo_novedad": "Ingreso / Novedad Radio-Operación",
+    "nivel_riesgo": "bajo"
+  },
+  "dbWrite": {
+    "operationType": "INSERT" | "UPDATE",
+    "table": "Nombre exacto de la tabla en public (ej. turnos, asignacion_guardas_puesto, puestos_trabajo, subpuestos_trabajo, clientes, contratos, vacaciones, incidentes, capacitaciones, vehiculos, pqrsf, notificaciones)",
+    "entityHints": {
+      "empleado_nombre_o_cedula": "",
+      "puesto_nombre": "",
+      "subpuesto_nombre": "",
+      "cliente_nombre_o_nit": ""
+    },
+    "payload": {},
+    "matchFilter": {},
+    "humanSummary": "Explicación de la acción realizada"
+  },
+  "customSelectSql": "SOLO llena este campo con un SELECT de PostgreSQL si la pregunta pide datos específicos que NO están ya en la telemetría de arriba (por ejemplo: listar placas de vehículos, consultar PQRSF específicas, buscar un empleado por cédula). Si ya puedes responder con la telemetría de arriba, DEJA ESTE CAMPO VACÍO '' para responder al instante."
+}
+
+Responde ÚNICAMENTE con el objeto JSON válido.`;
+
+      let plan: any = {
+        intent: 'QUERY_OR_REPORT',
+        isOffTopic: false,
+        wantsPdf: /\b(pdf|documento pdf|informe en pdf|exportar a pdf|descargar pdf|genera un pdf)\b/i.test(qNorm),
+        directAnswer: '',
+        missingDataQuestion: '',
+        customSelectSql: '',
+      };
+
+      try {
+        const rawPlan = await this.geminiService.generateStructuredOrNatural(
+          `${orchestratorPrompt}\n\nEsquema SQL resumido:\n${schema.slice(0, 8500)}`,
+        );
+        const jsonMatch = rawPlan.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          plan = { ...plan, ...JSON.parse(jsonMatch[0]) };
+        }
+      } catch (e: any) {
+        this.logger.debug(`ℹ️ Fallback heurístico en orquestador CATORCE: ${e.message}`);
+      }
+
+      // =========================================================================
+      // 4️⃣ CASO A: A CATORCE LE FALTA UN DATO -> LE PREGUNTA AL USUARIO INTELIGENTEMENTE
+      // =========================================================================
+      if (plan.intent === 'ASK_MISSING_DATA' && plan.missingDataQuestion) {
+        const questionMsg = `🤔 **Necesito un dato adicional para completarlo:**\n\n${plan.missingDataQuestion}`;
+        this.catorceBrain.appendConversationTurn(user, userQuery, questionMsg, canal, activatedNodes, [
+          'CATORCE-SLOT-FILLING:askMissingData',
+        ]);
+
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: 'PREGUNTA_DATOS_FALTANTES',
+          awaitingFollowUp: true,
+          activatedNodes,
+          toolsUsed: ['CATORCE-SLOT-FILLING:askMissingData'],
+          message: questionMsg,
+          latencyMs: Date.now() - startTime,
+        };
+      }
+
+      // =========================================================================
+      // 5️⃣ CASO B: CREAR MINUTA / NOVEDAD AUTÓNOMA
+      // =========================================================================
+      if (plan.intent === 'CREATE_MINUTA' && plan.minutaData?.detalle_novedad) {
+        activatedNodes.push('minutas', 'puestos');
+        toolsUsed.push('CATORCE-RADIO:executeAutonomousMinutaOrNovedad');
+
+        const resultAccion = await this.catorceBrain.executeAutonomousMinutaOrNovedad(
+          {
+            edificio_o_puesto: plan.minutaData.edificio_o_puesto || 'Sede Principal',
+            persona_involucrada: plan.minutaData.persona_involucrada || '',
+            detalle_novedad: plan.minutaData.detalle_novedad || userQuery,
+            tipo_novedad: plan.minutaData.tipo_novedad || 'Novedad Radio-Operación',
+            nivel_riesgo: plan.minutaData.nivel_riesgo || 'bajo',
+            comando_original: userQuery,
+            canal,
+          },
+          user,
+        );
+
+        this.catorceBrain.appendConversationTurn(
+          user,
+          userQuery,
+          resultAccion.summaryMessage,
+          canal,
+          activatedNodes,
+          toolsUsed,
+        );
+
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: resultAccion.actionExecuted,
+          auditCode: resultAccion.auditCode,
+          activatedNodes,
+          toolsUsed,
+          data: [resultAccion.minuta],
+          message: resultAccion.summaryMessage,
+          latencyMs: Date.now() - startTime,
+        };
+      }
+
+      // =========================================================================
+      // 6️⃣ CASO C: INSERTAR O ACTUALIZAR EN CUALQUIER MÓDULO DE PROLICONTROL (Turnos, Puestos, Clientes, Vacaciones, etc.)
+      // =========================================================================
+      if ((plan.intent === 'DB_INSERT' || plan.intent === 'DB_UPDATE') && plan.dbWrite?.table) {
+        toolsUsed.push(`CATORCE-CRUD:${plan.dbWrite.operationType}_${plan.dbWrite.table}`);
+
+        try {
+          const crudRes = await this.catorceBrain.executeUniversalPlatformOperation(
+            {
+              operationType: plan.dbWrite.operationType || 'INSERT',
+              table: plan.dbWrite.table,
+              payload: plan.dbWrite.payload || {},
+              matchFilter: plan.dbWrite.matchFilter,
+              entityHints: plan.dbWrite.entityHints,
+              humanSummary: plan.dbWrite.humanSummary,
+              comandoOriginal: userQuery,
+              canal,
+            },
+            user,
+          );
+
+          if (crudRes.blockedDelete) {
+            return {
+              ok: true,
+              assistant: 'CATORCE',
+              actionExecuted: 'BLOQUEO_ELIMINACION',
+              auditCode: crudRes.auditCode,
+              activatedNodes,
+              toolsUsed,
+              message: crudRes.message,
+              latencyMs: Date.now() - startTime,
+            };
+          }
+
+          const successMsg = `✅ **Operación ejecutada en Prolicontrol (\`${crudRes.table}\`):**\n\n${
+            plan.dbWrite.humanSummary || 'He registrado los cambios solicitados directamente en la base de datos.'
+          }\n\n- **Registro ID:** \`#${crudRes.data?.id || 'OK'}\`\n- **Código de Auditoría:** \`${crudRes.auditCode}\``;
+
+          this.catorceBrain.appendConversationTurn(user, userQuery, successMsg, canal, activatedNodes, toolsUsed);
+
+          return {
+            ok: true,
+            assistant: 'CATORCE',
+            actionExecuted: crudRes.actionExecuted,
+            auditCode: crudRes.auditCode,
+            activatedNodes,
+            toolsUsed,
+            data: crudRes.data ? [crudRes.data] : [],
+            message: successMsg,
+            latencyMs: Date.now() - startTime,
+          };
+        } catch (crudErr: any) {
+          // Si falló por una llave foránea o campo faltante, CATORCE le pregunta al usuario amablemente qué dato falta
+          const clarifyMsg = `🤔 Estuve a punto de registrar la operación en **${plan.dbWrite.table}**, pero necesito confirmar un detalle para que quede exacto (${crudErr.message}). ¿Me confirmas el dato faltante?`;
+          this.catorceBrain.appendConversationTurn(user, userQuery, clarifyMsg, canal, activatedNodes, toolsUsed);
+          return {
+            ok: true,
+            assistant: 'CATORCE',
+            actionExecuted: 'PREGUNTA_ACLARACION_BD',
+            awaitingFollowUp: true,
+            activatedNodes,
+            toolsUsed,
+            message: clarifyMsg,
+            latencyMs: Date.now() - startTime,
+          };
+        }
+      }
+
+      // =========================================================================
+      // 7️⃣ CASO D: CONSULTA OMNISCIENTE / SQL PERSONALIZADO / GENERACIÓN DE PDF / OFF-TOPIC
+      // =========================================================================
+      let customSqlResult: any[] = [];
+      let executedSql = '';
+
+      if (plan.customSelectSql && String(plan.customSelectSql).trim().toUpperCase().startsWith('SELECT')) {
+        executedSql = String(plan.customSelectSql).trim().replace(/;$/, '');
+        customSqlResult = await this.catorceBrain.runSql(executedSql);
+        toolsUsed.push('CATORCE-SQL:runSql');
+      }
+
+      let doorStatusDetail: any = null;
+      if (activatedNodes.includes('accesos')) {
+        doorStatusDetail = await this.catorceBrain.checkDoorsAndAccessControlStatus('', user);
+        toolsUsed.push('CATORCE-IOT:checkDoorsAndAccessControlStatus');
+      }
+
+      const offTopicInstruction =
+        plan.intent === 'OFF_TOPIC' || plan.isOffTopic
+          ? `⚠️ IMPORTANTE: Esta consulta del usuario NO tiene relación directa con vigilancia, seguridad ni con PROLISEG LTDA.
+DEBES EMPEZAR TU RESPUESTA EXACTAMENTE CON ESTA FRASE:
+"¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? 😄 Bueno, como soy tu compañero igual te respondo con todo gusto:"
+Y justo después responde su pregunta de forma completa, inteligente y útil.`
+          : `Responde como **CATORCE**, el Segundo Cerebro y compañero ejecutivo de **${userName}** en **PROLISEG LTDA**. Usa los datos reales de la telemetría y de las consultas SQL.`;
+
+      const responsePrompt = `
+Eres **CATORCE**, la Inteligencia Artificial Central y Segundo Cerebro de **PROLISEG LTDA** en **Prolicontrol**.
+Hablas con **${userName}** (Rol: ${user?.rol || 'Directivo'}).
+
+${offTopicInstruction}
+
+📊 **TELEMETRÍA EN TIEMPO REAL DE PROLICONTROL:**
+- **Puestos Activos:** ${telemetry.kpis.puestosActivos} puestos principales y ${telemetry.kpis.subpuestosActivos} subpuestos (${JSON.stringify(
+        telemetry.detalles.puestos.map((p: any) => ({ id: p.id, nombre: p.nombre, ciudad: p.ciudad })),
+      )}).
+- **Empleados / Guardas Activos:** ${telemetry.kpis.empleadosActivos} activos (${telemetry.kpis.empleadosAsignados} asignados).
+- **Vacaciones y Quiénes Siguen:**
+  - Vacaciones actuales: ${JSON.stringify(telemetry.detalles.vacacionesActuales)}
+  - Próximos en salir a vacaciones: ${JSON.stringify(telemetry.detalles.quienesSiguenVacaciones)}
+- **Clientes y Contratos Activos:** ${telemetry.kpis.clientesActivos} clientes (${JSON.stringify(
+        telemetry.detalles.clientes.map((c: any) => c.nombre_empresa),
+      )}) y ${telemetry.kpis.contratosActivos} contratos vigentes (${telemetry.kpis.guardasContratadosTotal} guardas).
+- **Controles de Acceso y Puertas IoT:** ${telemetry.kpis.controlesAccesoTotal} controles de acceso (${telemetry.kpis.dispositivosOnline} en línea). Detalle: ${JSON.stringify(
+        doorStatusDetail?.dispositivos || telemetry.detalles.controlesAcceso,
+      )}
+- **Minutas Recientes:** ${JSON.stringify(telemetry.detalles.minutasRecientes.slice(0, 6))}
+${customSqlResult.length > 0 ? `- **Datos de Consulta SQL (${executedSql}):** ${JSON.stringify(customSqlResult.slice(0, 40))}` : ''}
+${brainMatches.length > 0 ? `- **Conocimiento del Segundo Cerebro PROLISEG LTDA:** ${JSON.stringify(brainMatches.map((b: any) => ({ titulo: b.titulo, resumen: b.resumen })))}` : ''}
+
+🗣️ **Mensaje del usuario:** "${userQuery}"
+`;
+
+      let finalMessage = '';
+      if (plan.directAnswer && customSqlResult.length === 0) {
+        finalMessage = String(plan.directAnswer).trim();
+      } else {
+        try {
+          finalMessage = await this.geminiService.generateStructuredOrNatural(responsePrompt);
+        } catch {
+          finalMessage = this.buildDeterministicCatorceResponse(userQuery, telemetry, userName, customSqlResult);
+        }
+      }
+
+      // Asegurar que la broma amistosa aparezca si fue clasificada como Off-Topic
+      if (
+        (plan.intent === 'OFF_TOPIC' || plan.isOffTopic) &&
+        !finalMessage.toLowerCase().includes('tiene mucho que ver con el trabajo')
+      ) {
+        finalMessage = `¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? 😄 Bueno, como soy tu compañero igual te respondo con todo gusto:\n\n${finalMessage}`;
+      }
+
+      // Auditar operación
+      const audit = await this.catorceBrain.recordAudit({
+        user,
+        subagente: 'CATORCE-CORE',
+        accion: plan.wantsPdf ? 'GENERAR_DOCUMENTO_PDF' : 'CONSULTA_OMNISCIENTE_PROLICONTROL',
+        modulo: activatedNodes.join(','),
+        tablaDestino: 'ia_brain.conversaciones',
+        registroId: 'LIVE',
+        comandoOriginal: userQuery,
+        parametros: { canal, activatedNodes, wantsPdf: plan.wantsPdf },
+        resultado: { kpis: telemetry.kpis },
+        canal,
+      });
+
+      // Si el usuario pidió generar un PDF, empaquetamos el documento PDF oficial de PROLISEG LTDA
+      let pdfDocument: any = undefined;
+      if (plan.wantsPdf) {
+        toolsUsed.push('CATORCE-PDF:generatePdfDocument');
+        const rowsSource =
+          customSqlResult.length > 0
+            ? customSqlResult.slice(0, 50)
+            : activatedNodes.includes('puestos')
+            ? telemetry.detalles.puestos
+            : activatedNodes.includes('vacaciones')
+            ? telemetry.detalles.quienesSiguenVacaciones
+            : activatedNodes.includes('clientes')
+            ? telemetry.detalles.clientes
+            : activatedNodes.includes('accesos')
+            ? telemetry.detalles.controlesAcceso
+            : telemetry.detalles.minutasRecientes;
+
+        const columns = rowsSource.length > 0 ? Object.keys(rowsSource[0]).slice(0, 6) : ['Concepto', 'Valor'];
+        const rows =
+          rowsSource.length > 0
+            ? rowsSource.map((r: any) => columns.map((col) => String(r[col] ?? '')))
+            : [
+                ['Puestos Activos', String(telemetry.kpis.puestosActivos)],
+                ['Empleados Activos', String(telemetry.kpis.empleadosActivos)],
+                ['Clientes Activos', String(telemetry.kpis.clientesActivos)],
+                ['Contratos Vigentes', String(telemetry.kpis.contratosActivos)],
+                ['Controles de Acceso IoT', String(telemetry.kpis.controlesAccesoTotal)],
+              ];
+
+        pdfDocument = {
+          filename: `PROLISEG_CATORCE_${Date.now()}.pdf`,
+          title: 'REPORTE OFICIAL — PROLISEG LTDA',
+          subtitle: `Generado autónomamente por CATORCE IA para ${userName}`,
+          auditCode: audit.codigo_auditoria,
+          generatedAt: new Date().toLocaleString('es-CO'),
+          summary: finalMessage.replace(/[*#`]/g, ''),
+          columns,
+          rows,
+        };
+      }
+
+      this.catorceBrain.appendConversationTurn(user, userQuery, finalMessage, canal, activatedNodes, toolsUsed);
 
       return {
         ok: true,
-        sql: cleanSql,
-        data,
-        message: respuestaNatural,
+        assistant: 'CATORCE',
+        auditCode: audit.codigo_auditoria,
+        sql: executedSql || undefined,
+        data: customSqlResult.length > 0 ? customSqlResult : undefined,
+        pdfDocument,
+        telemetryKpis: telemetry.kpis,
+        activatedNodes: Array.from(new Set(activatedNodes)),
+        toolsUsed,
+        message: finalMessage,
+        latencyMs: Date.now() - startTime,
       };
     } catch (err: any) {
-      this.logger.error('❌ Error en processQuery:', err);
-      throw new BadRequestException(err.message || 'Error al procesar la consulta.');
+      this.logger.error('❌ Error en processQuery CATORCE:', err);
+      throw new BadRequestException(err.message || 'Error al procesar la consulta en CATORCE.');
     }
+  }
+
+  /**
+   * 🛡️ Respuesta determinista de alta precisión con datos reales de Supabase
+   */
+  private buildDeterministicCatorceResponse(
+    query: string,
+    telemetry: any,
+    userName: string,
+    customSqlResult: any[],
+  ): string {
+    const k = telemetry.kpis;
+    const d = telemetry.detalles;
+    const proxVac = (d.quienesSiguenVacaciones || [])
+      .slice(0, 5)
+      .map((v: any) => `${v.nombre_completo} (${v.proximo_aniversario}, en ${v.dias_para_vacaciones} días)`)
+      .join(', ');
+
+    const accesosList = (d.controlesAcceso || [])
+      .slice(0, 6)
+      .map((a: any) => `${a.nombre} [${a.marca} - ${a.online ? 'En Línea' : a.estado} - Puerta: ${a.estadoPuerta}]`)
+      .join('; ');
+
+    return `Hola **${userName}**, aquí **CATORCE** reportando en tiempo real desde el Segundo Cerebro de **PROLISEG LTDA**:
+
+- 📍 **Puestos Activos:** Tenemos **${k.puestosActivos} puestos principales** y **${k.subpuestosActivos} subpuestos** operativos.
+- 👷 **Empleados Activos:** Contamos con **${k.empleadosActivos} empleados activos** en nómina (**${k.empleadosAsignados}** asignados actualmente en puesto).
+- 🏖️ **Vacaciones (Quiénes siguen):** Hay **${k.vacacionesRegistradas} registros** en el módulo de vacaciones. Próximos por cumplir ciclo: ${proxVac || 'Sin aniversarios próximos en los siguientes 60 días'}.
+- 🤝 **Clientes y Contratos Activos:** Tenemos **${k.clientesActivos} clientes activos** y **${k.contratosActivos} contratos vigentes** que cubren **${k.guardasContratadosTotal} guardas**.
+- 🚪 **Controles de Acceso y Puertas IoT:** Contamos con **${k.controlesAccesoTotal} dispositivos de control de acceso** (**${k.dispositivosOnline} en línea**): ${accesosList || 'Todos asegurados'}.
+- 🧠 **Segundo Cerebro (\`ia_brain\`):** **${k.documentosSegundoCerebro} documentos corporativos** indexados y auditables.
+
+${customSqlResult.length > 0 ? `\n📋 **Datos específicos encontrados (${customSqlResult.length}):** \`${JSON.stringify(customSqlResult.slice(0, 5))}\`` : ''}`;
   }
 
   // ============================================================
@@ -118,27 +578,24 @@ export class IaService {
   // ============================================================
   async generarPredicciones(user: any) {
     try {
-      this.logger.log(`🔮 [Predicciones] Generando predicciones para ${user.email}`);
-
       const { data, error } = await this.supabase
         .getClientWithAuth(user.token)
         .from('asistencias')
-        .select('*');
+        .select('*')
+        .limit(50);
 
       if (error) throw new Error(error.message);
 
-      // Procesar datos históricos con Gemini
       const prompt = `
       Analiza los siguientes registros de asistencia y predice posibles ausencias o incidentes:
-      ${JSON.stringify(data.slice(0, 30))}
+      ${JSON.stringify((data || []).slice(0, 30))}
       Retorna un resumen claro con probabilidades y sugerencias.
       `;
       const analisis = await this.geminiService.humanResponse(prompt);
 
-      // Guardar predicción en BD
       await this.supabase.getClientWithAuth(user.token).from('ia_predicciones_incidentes').insert({
-        tipo_prediccion: 'ausencia', // Default, debería venir del análisis
-        probabilidad: 0.8, // Mock, debería parsearse del análisis
+        tipo_prediccion: 'ausencia',
+        probabilidad: 0.8,
         observaciones: analisis,
         fecha_prediccion: new Date().toISOString(),
       });
@@ -155,18 +612,17 @@ export class IaService {
   // ============================================================
   async ejecutarSupervisorIA(user: any) {
     try {
-      this.logger.log(`🧭 [Supervisor IA] Analizando comportamiento en tiempo real de ${user.email}`);
-
       const { data, error } = await this.supabase
         .getClientWithAuth(user.token)
         .from('turnos')
-        .select('id, empleado_id, hora_inicio, hora_fin, estado');
+        .select('id, empleado_id, hora_inicio, hora_fin, estado_turno')
+        .limit(50);
 
       if (error) throw new Error(error.message);
 
       const prompt = `
       Evalúa los siguientes turnos en busca de patrones de riesgo, inasistencias o retrasos recurrentes:
-      ${JSON.stringify(data.slice(0, 30))}
+      ${JSON.stringify((data || []).slice(0, 30))}
       Sugiere alertas o supervisión específica.
       `;
       const analisis = await this.geminiService.humanResponse(prompt);
@@ -183,8 +639,6 @@ export class IaService {
   // ============================================================
   async reentrenarModelo(body: any, user: any) {
     try {
-      this.logger.log(`⚙️ [Reentrenamiento] Iniciando reentrenamiento IA para ${user.email}`);
-
       const { nuevos_datos } = body;
       if (!nuevos_datos) throw new BadRequestException('Debe enviar nuevos datos.');
 
@@ -195,10 +649,9 @@ export class IaService {
       `;
       const resultado = await this.geminiService.humanResponse(prompt);
 
-      // Guardar log de reentrenamiento
       await this.supabase.getClientWithAuth(user.token).from('ia_modelos_configuracion').insert({
         nombre_modelo: 'adaptativo_personal',
-        version: 'v2.0', // Incremental logic needed
+        version: 'v2.0',
         parametros: { ajuste: resultado },
         tipo_modelo: 'reentrenamiento',
         fecha_entrenamiento: new Date().toISOString(),
@@ -221,8 +674,6 @@ export class IaService {
         throw new BadRequestException('Debe enviar puntos GPS válidos.');
       }
 
-      this.logger.log(`🗺️ [Rutas IA] Generando rutas para ${user.email}`);
-
       const prompt = `
       Genera una ruta óptima para patrullaje con estos puntos GPS:
       ${JSON.stringify(puntos)}
@@ -243,10 +694,7 @@ export class IaService {
   // ============================================================
   async detectarComportamientoAnomalo(user: any) {
     try {
-      this.logger.log(`📹 [Anomalías IA] Analizando cámaras y sensores para ${user.email}`);
-
-      // Mock data source for now, replace with actual table if exists or use params
-      const data = [{ evento: 'movimiento_brusco', timestamp: new Date() }];
+      const data = [{ evento: 'monitoreo_activo_catorce', timestamp: new Date() }];
 
       const prompt = `
       Detecta comportamientos anómalos o sospechosos en los siguientes eventos de sensores o cámaras:
@@ -255,11 +703,10 @@ export class IaService {
       `;
       const analisis = await this.geminiService.humanResponse(prompt);
 
-      // Guardar anomalía
       await this.supabase.getClientWithAuth(user.token).from('ia_comportamiento_anomalo').insert({
         tipo_anomalia: 'detectada_ia',
         descripcion: analisis,
-        nivel_alerta: 'medio', // Logic needed to parse from analysis
+        nivel_alerta: 'medio',
         timestamp: new Date().toISOString(),
       });
 
@@ -269,35 +716,22 @@ export class IaService {
       throw new BadRequestException(err.message);
     }
   }
-  // ============================================================
-  // 🧠 7. SUGERENCIAS DE REEMPLAZO IA
-  // ============================================================
+
   // ============================================================
   // 🧠 7. SUGERENCIAS DE CANDIDATOS (Turnos/Reemplazos)
   // ============================================================
   async sugerirReemplazo(turno: any, candidatos: any[]) {
     try {
-      this.logger.log(`🧠 [Sugerencias IA] Analizando ${candidatos.length} candidatos para reemplazo.`);
-
       const prompt = `
-      Actúa como un jefe de operaciones de seguridad experto.
+      Actúa como CATORCE, jefe de operaciones de seguridad experto de PROLISEG LTDA.
       Necesito un reemplazo para el siguiente turno:
       - Fecha: ${turno.fecha}
       - Horario: ${turno.hora_inicio} - ${turno.hora_fin}
       - Puesto: ${turno.puesto_nombre} (${turno.ciudad})
       - Cliente: ${turno.cliente_nombre}
 
-      Tengo la siguiente lista de empleados disponibles (que no tienen turno asignado en ese horario):
+      Candidatos disponibles:
       ${JSON.stringify(candidatos)}
-
-      Analiza la lista y sugiere los 3 mejores candidatos.
-      Criterios de selección:
-      1. Prioriza empleados que ya conozcan el puesto (si se indica en sus datos).
-      2. Prioriza empleados que vivan cerca o en la misma ciudad.
-      3. Considera su antigüedad o rol si es relevante.
-
-      Formato de respuesta deseado (texto natural):
-      "Te sugiero a [Nombre] porque [Razón]. Como segunda opción [Nombre]..."
       `;
 
       const sugerencia = await this.geminiService.humanResponse(prompt);
@@ -310,11 +744,8 @@ export class IaService {
 
   async sugerirEmpleados(params: { subpuesto_id: number; fecha: string; hora_inicio: string; hora_fin: string }) {
     try {
-      this.logger.log(`🧠 [Sugerencias] Iniciando búsqueda para subpuesto ${params.subpuesto_id} el ${params.fecha}`);
-
       const supabase = this.supabase.getClient();
 
-      // 1. Obtener Info del Subpuesto y Puesto (Ubicación)
       const { data: subpuesto, error: spError } = await supabase
         .from('subpuestos_trabajo')
         .select(`
@@ -329,19 +760,6 @@ export class IaService {
 
       if (spError || !subpuesto) throw new BadRequestException('Subpuesto no encontrado');
 
-      // 2. Obtener Empleados Activos con su información relevante
-      const { data: empleados, error: empError } = await supabase
-        .from('empleados')
-        .select(`
-          id, nombre_completo, cedula, direccion, ciudad, barrio,
-          tipo_vigilante:tipo_vigilante_id (nombre),
-          turnos!inner(id, fecha) -- Solo para saber si tienen turno ese día (aproximación rápida)
-        `)
-        .eq('activo', true)
-        .eq('turnos.fecha', params.fecha); // NOTA: Esto filtra LOS QUE TIENEN turno. Queremos los que NO.
-
-      // Corrección estrategia: Traer TODOS los empleados activos, y aparte traer los turnos del día para filtrar en memoria.
-      // Re-Query Empleados
       const { data: allEmpleados } = await supabase
         .from('empleados')
         .select(`
@@ -350,33 +768,29 @@ export class IaService {
         `)
         .eq('activo', true);
 
-      // Re-Query Turnos ocupados ese día/hora
       const { data: ocupados } = await supabase
         .from('turnos')
         .select('empleado_id, hora_inicio, hora_fin')
         .eq('fecha', params.fecha)
-        .neq('estado_turno', 'cancelado'); // Asumimos estado
+        .neq('estado_turno', 'cancelado');
 
-      const idsOcupados = new Set(ocupados?.map(o => o.empleado_id));
-
-      // 3. Filtrar disponibles (Simplificado: Si tiene turno ese día, asumimos ocupado por ahora, o verificar traslapo horario)
-      // Mejora: Verificar traslapo de horas si fuera necesario. Para MVP, descartamos si ya tiene turno ese día.
-      const candidatos = allEmpleados?.filter(e => !idsOcupados.has(e.id)) || [];
+      const idsOcupados = new Set(ocupados?.map((o) => o.empleado_id));
+      const candidatos = allEmpleados?.filter((e) => !idsOcupados.has(e.id)) || [];
 
       if (candidatos.length === 0) {
-        return { ok: true, sugerencia: "No se encontraron empleados disponibles para esa fecha." };
+        return { ok: true, sugerencia: 'No se encontraron empleados disponibles para esa fecha.' };
       }
 
-      // 4. Preparar data para IA
-      // Limitamos a 20 candidatos par no saturar token limit, priorizando ciudad si coincide
-      const puesto: any = (subpuesto as any).puesto; // Cast to avoid TS array error if inference fails
+      const puesto: any = (subpuesto as any).puesto;
       const ciudadPuesto = puesto?.ciudad?.toLowerCase();
 
-      const candidatosPriorizados = candidatos.sort((a: any, b: any) => {
-        const ciudadA = a.ciudad?.toLowerCase() === ciudadPuesto ? 1 : 0;
-        const ciudadB = b.ciudad?.toLowerCase() === ciudadPuesto ? 1 : 0;
-        return ciudadB - ciudadA;
-      }).slice(0, 30);
+      const candidatosPriorizados = candidatos
+        .sort((a: any, b: any) => {
+          const ciudadA = a.ciudad?.toLowerCase() === ciudadPuesto ? 1 : 0;
+          const ciudadB = b.ciudad?.toLowerCase() === ciudadPuesto ? 1 : 0;
+          return ciudadB - ciudadA;
+        })
+        .slice(0, 30);
 
       const promptInfo = {
         requerimiento: {
@@ -385,7 +799,7 @@ export class IaService {
           ciudad: puesto?.ciudad,
           direccion: puesto?.direccion,
           fecha: params.fecha,
-          hora: `${params.hora_inicio} - ${params.hora_fin}`
+          hora: `${params.hora_inicio} - ${params.hora_fin}`,
         },
         candidatos: candidatosPriorizados.map((c: any) => {
           const perfil: any = c.tipo_vigilante;
@@ -394,45 +808,40 @@ export class IaService {
             nombre: c.nombre_completo,
             ciudad: c.ciudad,
             direccion: c.direccion,
-            perfil: perfil?.nombre || 'General'
+            perfil: perfil?.nombre || 'General',
           };
-        })
+        }),
       };
 
       const prompt = `
       Actúa como jefe de operaciones de seguridad.
-      Recomienda los 3 mejores candidatos para cubrir este turno basándote en UBICACIÓN (cercanía a la ciudad del puesto) y disponibilidad.
-      
-      Detalles del Turno:
-      ${JSON.stringify(promptInfo.requerimiento)}
-
-      Lista de Candidatos Disponibles (Pre-filtrados por disponibilidad horaria):
-      ${JSON.stringify(promptInfo.candidatos)}
-
+      Recomienda los 3 mejores candidatos para cubrir este turno basándote en UBICACIÓN y disponibilidad.
+      Detalles del Turno: ${JSON.stringify(promptInfo.requerimiento)}
+      Candidatos Disponibles: ${JSON.stringify(promptInfo.candidatos)}
       Responde en formato JSON estrictamente:
       {
         "recomendados": [
-          { "id": 123, "nombre": "Nombre", "motivo": "Vive en la misma ciudad y tiene perfil adecuado..." },
-          ...
+          { "id": 123, "nombre": "Nombre", "motivo": "Vive en la misma ciudad..." }
         ],
-        "analisis_general": "Resumen breve de la disponibilidad..."
+        "analisis_general": "Resumen breve..."
       }
       `;
 
       try {
         const respuestaIA = await this.geminiService.humanResponse(prompt);
-        // Intentar parsear si Gemini devuelve texto con JSON dentro
-        // A veces devuelve ```json ... ```
         const jsonMatch = respuestaIA.match(/\{[\s\S]*\}/);
-        const resultado = jsonMatch ? JSON.parse(jsonMatch[0]) : { recomendados: [], analisis_general: respuestaIA };
+        const resultado = jsonMatch
+          ? JSON.parse(jsonMatch[0])
+          : { recomendados: [], analisis_general: respuestaIA };
 
         return { ok: true, ...resultado };
-
-      } catch (parseError) {
-        // Fallback si falla el parseo JSON
-        return { ok: true, analisis_general: "La IA generó una respuesta pero no en el formato estructura esperado.", raw: prompt };
+      } catch {
+        return {
+          ok: true,
+          analisis_general: 'La IA generó una respuesta pero no en el formato esperado.',
+          raw: prompt,
+        };
       }
-
     } catch (err: any) {
       this.logger.error('❌ Error en sugerirEmpleados:', err);
       throw new BadRequestException(err.message);
@@ -440,9 +849,76 @@ export class IaService {
   }
 
   // ============================================================
-  // 📊 8. ESTADO DE API KEYS DE GEMINI
+  // 📊 8. ESTADO DE API KEYS DE GEMINI & MÉTODOS DE CATORCE BRAIN
   // ============================================================
   getGeminiApiKeysStatus() {
     return this.geminiService.getApiKeysStatus();
+  }
+
+  setLiveApiKey(apiKey: string) {
+    this.geminiService.setLiveApiKey(apiKey);
+    return {
+      ok: true,
+      message: 'API Key de Gemini Live API configurada y activada como prioridad #1 para CATORCE.',
+      status: this.geminiService.getApiKeysStatus(),
+    };
+  }
+
+  getLiveSessionConfig(user: any) {
+    return {
+      ok: true,
+      assistantName: 'CATORCE',
+      company: 'PROLISEG LTDA',
+      liveApiKey: this.geminiService.getLiveApiKey(),
+      wsEndpoint:
+        'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent',
+      recommendedModel: 'models/gemini-2.0-flash-exp',
+      user: {
+        id: user?.id,
+        nombre: user?.nombre_completo || user?.nombre || user?.email || 'Operador PROLISEG',
+        rol: user?.rol || 'superusuario',
+      },
+    };
+  }
+
+  async getCatorceTelemetry(user: any) {
+    return this.catorceBrain.getRealtimeBrainTelemetry(user);
+  }
+
+  async addBrainKnowledge(body: any, user: any) {
+    return this.catorceBrain.addCorporateKnowledge(body, user);
+  }
+
+  async executeAutonomousAction(body: any, user: any) {
+    if (body.actionType === 'CREAR_MINUTA_NOVEDAD') {
+      return this.catorceBrain.executeAutonomousMinutaOrNovedad(
+        {
+          edificio_o_puesto: body.edificio_o_puesto || body.puesto || '',
+          persona_involucrada: body.persona_involucrada || body.persona || '',
+          documento_persona: body.documento_persona || '',
+          detalle_novedad: body.detalle_novedad || body.descripcion || '',
+          tipo_novedad: body.tipo_novedad || 'Novedad Radio-Operación CATORCE',
+          nivel_riesgo: body.nivel_riesgo || 'bajo',
+          comando_original: body.comando_original || `Acción directa: ${body.detalle_novedad}`,
+          canal: body.canal || 'voz_live_api',
+        },
+        user,
+      );
+    }
+
+    if (body.actionType === 'ESTADO_PUERTAS') {
+      return this.catorceBrain.checkDoorsAndAccessControlStatus(body.filtro || '', user);
+    }
+
+    return this.processQuery(body.comando || body.query || '', user, body.canal || 'voz_live_api');
+  }
+
+  async synthesizeHumanVoice(text: string, voiceName: string = 'Aoede') {
+    const audioDataUrl = await this.geminiService.generateHumanVoiceAudio(text, voiceName);
+    return {
+      ok: Boolean(audioDataUrl),
+      voiceName,
+      audioDataUrl,
+    };
   }
 }

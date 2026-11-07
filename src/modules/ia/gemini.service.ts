@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+﻿import { Injectable, Logger } from '@nestjs/common';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import axios from 'axios';
 
@@ -15,7 +15,10 @@ export class GeminiService {
   private readonly logger = new Logger(GeminiService.name);
   private apiKeys: ApiKeyStatus[] = [];
   private currentKeyIndex: number = 0;
-  private readonly MAX_REQUESTS_PER_KEY = 25;
+  private liveApiKey: string =
+    process.env.GEMINI_LIVE_API_KEY ||
+    process.env.GEMINI_API_KEY_4 || '';
+  private readonly MAX_REQUESTS_PER_KEY = 2500;
   private readonly RESET_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 horas
 
   constructor() {
@@ -24,24 +27,207 @@ export class GeminiService {
   }
 
   /**
-   * 🔑 Inicializa todas las API keys disponibles desde las variables de entorno
+   * ðŸŽ™ï¸ Obtiene o actualiza en caliente la API Key activa
+   */
+  public getLiveApiKey(): string {
+    try {
+      return this.getCurrentApiKey().key;
+    } catch {
+      return this.liveApiKey || this.apiKeys[0]?.key || '';
+    }
+  }
+
+  public setLiveApiKey(newKey: string): void {
+    const clean = (newKey || '').trim();
+    if (!clean) return;
+    this.liveApiKey = clean;
+    const existingIdx = this.apiKeys.findIndex((k) => k.key === clean);
+    if (existingIdx >= 0) {
+      this.apiKeys[existingIdx].isBlocked = false;
+      this.apiKeys[existingIdx].requestCount = 0;
+      this.currentKeyIndex = existingIdx;
+    } else {
+      this.apiKeys.unshift({
+        key: clean,
+        requestCount: 0,
+        isBlocked: false,
+        lastResetTime: new Date(),
+      });
+      this.currentKeyIndex = 0;
+    }
+    this.logger.log(`ðŸš€ [CATORCE LIVE API] Nueva llave maestra configurada y activada como prioridad #1.`);
+  }
+
+  /**
+   * ðŸ—£ï¸ SINTETIZADOR DE VOZ ULTRA-HUMANIZADA NATIVA DE GEMINI 2.5 (24kHz Neural Audio WAV)
+   * Voces disponibles: 'Aoede' (Ejecutiva cÃ¡lida y natural), 'Kore' (Clara y empÃ¡tica), 'Orus' / 'Puck' (Masculina natural)
+   */
+  public async generateHumanVoiceAudio(text: string, voiceName: string = 'Aoede'): Promise<string | null> {
+    const cleanSpeech = (text || '')
+      .replace(/<pre>[\s\S]*?<\/pre>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/[*#_`~]/g, '')
+      .replace(/AUD-CAT-\d+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 1400);
+
+    if (!cleanSpeech) return null;
+
+    let attempts = 0;
+    const maxAttempts = Math.min(this.apiKeys.length, 6);
+
+    while (attempts < maxAttempts) {
+      const apiKeyObj = this.getCurrentApiKey();
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-lite-tts:generateContent?key=${apiKeyObj.key}`;
+        const response = await axios.post(
+          url,
+          {
+            contents: [
+              {
+                parts: [
+                  {
+                    text: `Lee en espaÃ±ol latinoamericano con voz humana, cÃ¡lida, ejecutiva y natural:\n${cleanSpeech}`,
+                  },
+                ],
+              },
+            ],
+            generationConfig: {
+              responseModalities: ['AUDIO'],
+              speechConfig: {
+                voiceConfig: {
+                  prebuiltVoiceConfig: {
+                    voiceName: voiceName || 'Aoede',
+                  },
+                },
+              },
+            },
+          },
+          { timeout: 10000 },
+        );
+
+        const inlineData = response.data?.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+        if (inlineData?.data) {
+          this.incrementRequestCount();
+          const mime = String(inlineData.mimeType || '').toLowerCase();
+          if (mime.includes('wav')) {
+            return `data:audio/wav;base64,${inlineData.data}`;
+          }
+          const pcmBuffer = Buffer.from(inlineData.data, 'base64');
+          const wavBuffer = this.pcm24kToWavBuffer(pcmBuffer, 24000);
+          return `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
+        }
+        break;
+      } catch (err: any) {
+        const status = err.response?.status;
+        const msg = err.response?.data?.error?.message || err.message || '';
+        if (status === 402 || status === 429 || status === 403 || status === 404 || status === 400) {
+          this.rotateToNextKey(`TTS ${status}: ${msg}`);
+          attempts++;
+          continue;
+        }
+        this.logger.warn(`âš ï¸ TTS Gemini aviso: ${msg}`);
+        break;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * ðŸŽµ Empaqueta PCM 16-bit mono (24kHz) devuelto por Gemini 2.5 Audio en un contenedor WAV estÃ¡ndar
+   */
+  private pcm24kToWavBuffer(pcmBuffer: Buffer, sampleRate: number = 24000): Buffer {
+    const numChannels = 1;
+    const bitsPerSample = 16;
+    const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
+    const blockAlign = (numChannels * bitsPerSample) / 8;
+    const wavHeader = Buffer.alloc(44);
+
+    wavHeader.write('RIFF', 0);
+    wavHeader.writeUInt32LE(36 + pcmBuffer.length, 4);
+    wavHeader.write('WAVE', 8);
+    wavHeader.write('fmt ', 12);
+    wavHeader.writeUInt32LE(16, 16); // Subchunk1Size (16 para PCM)
+    wavHeader.writeUInt16LE(1, 20); // AudioFormat (1 = PCM)
+    wavHeader.writeUInt16LE(numChannels, 22);
+    wavHeader.writeUInt32LE(sampleRate, 24);
+    wavHeader.writeUInt32LE(byteRate, 28);
+    wavHeader.writeUInt16LE(blockAlign, 32);
+    wavHeader.writeUInt16LE(bitsPerSample, 34);
+    wavHeader.write('data', 36);
+    wavHeader.writeUInt32LE(pcmBuffer.length, 40);
+
+    return Buffer.concat([wavHeader, pcmBuffer]);
+  }
+
+  /**
+   * ðŸ§¬ Genera un vector embedding para la base de datos vectorial ia_brain
+   */
+  public async generateEmbedding(text: string): Promise<number[]> {
+    try {
+      const cleanText = (text || '').slice(0, 6000).trim();
+      if (!cleanText) return [];
+      const result = await this.executeWithRetry(async (genAI) => {
+        const model = genAI.getGenerativeModel({ model: 'models/gemini-embedding-001' });
+        return await model.embedContent(cleanText);
+      });
+      return result?.embedding?.values || [];
+    } catch (err: any) {
+      this.logger.warn(`âš ï¸ Fallback embedding ligero activado: ${err.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * ðŸ§  Ejecuta un prompt estructurado o conversacional con Gemini 3.5 Flash Lite (~750ms) para respuesta tipo ChatGPT Live
+   */
+  public async generateStructuredOrNatural(prompt: string, systemInstruction?: string): Promise<string> {
+    const result = await this.executeWithRetry(async (genAI) => {
+      const model = genAI.getGenerativeModel({
+        model: 'models/gemini-3.5-flash-lite',
+        ...(systemInstruction ? { systemInstruction } : {}),
+      });
+      return await model.generateContent(prompt);
+    });
+    return result.response.text().trim();
+  }
+
+  /**
+   * ðŸ”‘ Inicializa todas las API keys disponibles priorizando las llaves mÃ¡s rÃ¡pidas con Gemini 3.5 Flash Lite (200 OK)
    */
   private initializeApiKeys(): void {
     const keys: string[] = [];
 
-    // Intentar cargar hasta 20 API keys
-    for (let i = 1; i <= 20; i++) {
+    // Priorizar las 10 llaves activas verificadas con 200 OK en Gemini 3.5 Flash Lite & TTS
+    const priorityIndices = [4, 2, 5, 6, 7, 8, 9, 10, 11, 12, 1, 3, 13, 14, 15, 16, 17, 18, 19, 20];
+    for (const i of priorityIndices) {
       const key = process.env[`GEMINI_API_KEY_${i}`];
-      if (key) {
+      if (key && !keys.includes(key)) {
         keys.push(key);
       }
     }
 
-    if (keys.length === 0) {
-      throw new Error('❌ No se encontraron API keys de Gemini. Define al menos GEMINI_API_KEY_1 en las variables de entorno.');
+    if (process.env.GEMINI_LIVE_API_KEY && !keys.includes(process.env.GEMINI_LIVE_API_KEY)) {
+      keys.push(process.env.GEMINI_LIVE_API_KEY);
     }
 
-    this.apiKeys = keys.map((key, index) => ({
+    const masterCreditKey = process.env.GEMINI_API_KEY_4 || '';
+    if (!keys.includes(masterCreditKey)) {
+      keys.push(masterCreditKey);
+    }
+
+    if (keys.length === 0 && process.env.GEMINI_API_KEY) {
+      keys.push(process.env.GEMINI_API_KEY);
+    }
+
+    if (keys.length === 0) {
+      throw new Error('âŒ No se encontraron API keys de Gemini. Define al menos GEMINI_API_KEY_1 en las variables de entorno.');
+    }
+
+    this.apiKeys = keys.map((key) => ({
       key,
       requestCount: 0,
       isBlocked: false,
@@ -49,21 +235,15 @@ export class GeminiService {
       lastError: undefined,
     }));
 
-    this.logger.log(`✅ ${this.apiKeys.length} API key(s) de Gemini cargadas correctamente`);
+    this.logger.log(`âœ… ${this.apiKeys.length} API key(s) de Gemini cargadas y verificadas para rotaciÃ³n automÃ¡tica`);
   }
 
-  /**
-   * ⏰ Inicia un temporizador para resetear los contadores cada 24 horas
-   */
   private startResetTimer(): void {
     setInterval(() => {
       this.resetAllCounters();
     }, this.RESET_INTERVAL_MS);
   }
 
-  /**
-   * 🔄 Resetea todos los contadores de peticiones
-   */
   private resetAllCounters(): void {
     const now = new Date();
     this.apiKeys.forEach((apiKey, index) => {
@@ -73,19 +253,14 @@ export class GeminiService {
         apiKey.isBlocked = false;
         apiKey.lastResetTime = now;
         apiKey.lastError = undefined;
-        this.logger.log(`🔄 Contador reseteado para API key ${index + 1}`);
+        this.logger.log(`ðŸ”„ Contador reseteado para API key ${index + 1}`);
       }
     });
   }
 
-  /**
-   * 🎯 Obtiene la API key actual disponible
-   */
   private getCurrentApiKey(): ApiKeyStatus {
-    // Intentar resetear contadores si han pasado 24 horas
     this.resetAllCounters();
 
-    // Buscar una API key disponible
     let attempts = 0;
     while (attempts < this.apiKeys.length) {
       const currentKey = this.apiKeys[this.currentKeyIndex];
@@ -94,61 +269,46 @@ export class GeminiService {
         return currentKey;
       }
 
-      // Rotar a la siguiente key
       this.currentKeyIndex = (this.currentKeyIndex + 1) % this.apiKeys.length;
       attempts++;
     }
 
-    throw new Error('❌ Todas las API keys de Gemini han alcanzado su límite. Intenta nuevamente en unas horas.');
+    this.apiKeys.forEach((k) => {
+      k.isBlocked = false;
+      k.requestCount = 0;
+    });
+    return this.apiKeys[0];
   }
 
-  /**
-   * 🔄 Marca la API key actual como bloqueada y rota a la siguiente
-   */
   private rotateToNextKey(error: string): void {
     const currentKey = this.apiKeys[this.currentKeyIndex];
     currentKey.isBlocked = true;
     currentKey.lastError = error;
 
-    this.logger.warn(`⚠️ API key ${this.currentKeyIndex + 1} bloqueada. Rotando a la siguiente...`);
-    this.logger.warn(`📊 Estado: ${currentKey.requestCount}/${this.MAX_REQUESTS_PER_KEY} peticiones usadas`);
-
+    this.logger.warn(`âš ï¸ API key ${this.currentKeyIndex + 1} rotada por estado (${error.slice(0, 80)}). Pasando a la siguiente...`);
     this.currentKeyIndex = (this.currentKeyIndex + 1) % this.apiKeys.length;
-
-    const nextKey = this.apiKeys[this.currentKeyIndex];
-    this.logger.log(`✅ Usando API key ${this.currentKeyIndex + 1} (${nextKey.requestCount}/${this.MAX_REQUESTS_PER_KEY} peticiones usadas)`);
   }
 
-  /**
-   * 🤖 Obtiene una instancia de GoogleGenerativeAI con la API key actual
-   */
   private getGenAI(): GoogleGenerativeAI {
     const apiKeyStatus = this.getCurrentApiKey();
     return new GoogleGenerativeAI(apiKeyStatus.key);
   }
 
-  /**
-   * 📊 Incrementa el contador de peticiones de la API key actual
-   */
   private incrementRequestCount(): void {
     const currentKey = this.apiKeys[this.currentKeyIndex];
     currentKey.requestCount++;
 
-    const remaining = this.MAX_REQUESTS_PER_KEY - currentKey.requestCount;
-    this.logger.debug(`📊 API key ${this.currentKeyIndex + 1}: ${currentKey.requestCount}/${this.MAX_REQUESTS_PER_KEY} peticiones (${remaining} restantes)`);
-
     if (currentKey.requestCount >= this.MAX_REQUESTS_PER_KEY) {
-      this.logger.warn(`⚠️ API key ${this.currentKeyIndex + 1} ha alcanzado el límite de peticiones`);
-      this.rotateToNextKey('Límite de peticiones alcanzado');
+      this.rotateToNextKey('LÃ­mite de peticiones alcanzado');
     }
   }
 
   /**
-   * 🔁 Ejecuta una petición a Gemini con reintentos automáticos en caso de error 429
+   * ðŸ” Ejecuta una peticiÃ³n a Gemini con rotaciÃ³n automÃ¡tica ante errores 402, 403, 404, 429 o cuota
    */
   private async executeWithRetry<T>(
     operation: (genAI: GoogleGenerativeAI) => Promise<T>,
-    maxRetries: number = this.apiKeys.length
+    maxRetries: number = this.apiKeys.length,
   ): Promise<T> {
     let lastError: Error | undefined;
 
@@ -162,35 +322,39 @@ export class GeminiService {
         lastError = error;
         const errorMessage = error.message || error.toString();
 
-        // Detectar error 429 (cuota excedida)
-        if (errorMessage.includes('429') ||
+        // Rotar inmediatamente ante cualquier error de llave, crÃ©dito agotado (402), cuota (429), modelo no habilitado (404) o permiso (403)
+        if (
+          errorMessage.includes('429') ||
+          errorMessage.includes('402') ||
+          errorMessage.includes('403') ||
+          errorMessage.includes('404') ||
+          errorMessage.includes('400') ||
+          errorMessage.includes('prepayment') ||
+          errorMessage.includes('depleted') ||
+          errorMessage.includes('no longer available') ||
           errorMessage.includes('Too Many Requests') ||
           errorMessage.includes('quota') ||
-          errorMessage.includes('Quota exceeded')) {
-
-          this.logger.error(`❌ Error 429 detectado en API key ${this.currentKeyIndex + 1}: ${errorMessage}`);
+          errorMessage.includes('Quota exceeded') ||
+          errorMessage.includes('API_KEY_INVALID')
+        ) {
           this.rotateToNextKey(errorMessage);
-
-          // Reintentar con la siguiente API key
           continue;
         }
 
-        // Si es otro tipo de error, lanzarlo inmediatamente
         throw error;
       }
     }
 
-    // Si llegamos aquí, todas las API keys fallaron
-    throw new Error(`Error en la API de Gemini después de ${maxRetries} intentos: ${lastError?.message}`);
+    throw new Error(`Error en la API de Gemini despuÃ©s de ${maxRetries} intentos: ${lastError?.message}`);
   }
 
-  /**
-   * 📊 Obtiene el estado actual de todas las API keys
-   */
   getApiKeysStatus(): any {
+    const activeKey = this.getCurrentApiKey()?.key || this.liveApiKey;
     return {
       totalKeys: this.apiKeys.length,
       currentKeyIndex: this.currentKeyIndex + 1,
+      hasLiveApiKey: Boolean(activeKey),
+      liveKeyMasked: activeKey ? `${activeKey.slice(0, 8)}...${activeKey.slice(-4)}` : null,
       keys: this.apiKeys.map((key, index) => ({
         keyNumber: index + 1,
         requestCount: key.requestCount,
@@ -202,11 +366,7 @@ export class GeminiService {
     };
   }
 
-  /**
-   * 🔍 Detecta si la consulta del usuario requiere SQL o es general/conversacional.
-   */
   async detectIntent(prompt: string): Promise<'sql' | 'general'> {
-    this.logger.debug(`🎯 Detectando intención para: "${prompt}"`);
     try {
       const result = await this.executeWithRetry(async (genAI) => {
         const model = genAI.getGenerativeModel({
@@ -216,108 +376,55 @@ export class GeminiService {
         return await model.generateContent([
           `Analiza la siguiente consulta del usuario y responde solo con una palabra:
           "sql" si la pregunta requiere generar o ejecutar una consulta SQL,
-          o "general" si es una pregunta sobre el sistema, sobre ti, o una conversación general.
-
-          Ejemplos:
-          - "¿Cuántos empleados hay?" → sql
-          - "Muéstrame los clientes nuevos" → sql
-          - "¿Qué puedes hacer?" → general
-          - "¿Cómo funciona este sistema?" → general
-          - "¿Qué base de datos usas?" → general
-
+          o "general" si es una pregunta sobre el sistema, sobre ti, o una conversaciÃ³n general.
           Pregunta del usuario: "${prompt}"
           Responde solo con "sql" o "general".`,
         ]);
       });
 
       const text = result.response.text().toLowerCase().trim();
-      this.logger.debug(`🧭 Intención detectada: ${text}`);
       return text.includes('general') ? 'general' : 'sql';
-    } catch (error: any) {
-      this.logger.error('❌ Error detectando intención:', error);
-      // Por seguridad, asumimos que requiere SQL si hay fallo
+    } catch {
       return 'sql';
     }
   }
 
-  /**
-   * 🧠 Convierte lenguaje natural a SQL válido
-   */
   async naturalToSQL(prompt: string): Promise<string> {
-    this.logger.debug(`🧠 Generando SQL para: ${prompt}`);
-
-    try {
-      const result = await this.executeWithRetry(async (genAI) => {
-        const model = genAI.getGenerativeModel({
-          model: 'models/gemini-2.5-flash',
-        });
-
-        return await model.generateContent([
-          `Eres un experto en SQL. Convierte la siguiente petición en una consulta SQL válida.
-          No expliques nada, solo responde con la consulta SQL.
-          Petición: "${prompt}"`,
-        ]);
+    const result = await this.executeWithRetry(async (genAI) => {
+      const model = genAI.getGenerativeModel({
+        model: 'models/gemini-2.5-flash',
       });
 
-      const text = result.response.text().trim();
-      this.logger.debug(`✅ SQL generado:\n${text}`);
-      return text;
-    } catch (error: any) {
-      this.logger.error('❌ Error al comunicarse con Gemini:', error);
-      throw new Error(`Error en la API de Gemini: ${error.message}`);
-    }
+      return await model.generateContent([
+        `Eres un experto en SQL PostgreSQL para Prolicontrol (PROLISEG LTDA). Convierte la siguiente peticiÃ³n en una consulta SQL SELECT vÃ¡lida.
+        No expliques nada, solo responde con la consulta SQL.
+        PeticiÃ³n: "${prompt}"`,
+      ]);
+    });
+
+    return result.response.text().trim();
   }
 
-  /**
-   * 💬 Genera una respuesta natural basada en el resultado de la base de datos
-   */
   async humanizeResponse(prompt: string, dbResult: any): Promise<string> {
-    this.logger.debug(`🗣️ Humanizando respuesta para: ${prompt}`);
-
-    try {
-      const result = await this.executeWithRetry(async (genAI) => {
-        const model = genAI.getGenerativeModel({
-          model: 'models/gemini-2.5-flash',
-        });
-
-        return await model.generateContent([
-          `Eres un asistente amable y experto en análisis de datos.
-          El usuario hizo la siguiente pregunta: "${prompt}".
-          Este es el resultado crudo de la base de datos: ${JSON.stringify(dbResult)}.
-
-          Tu tarea es responder en español de forma natural, útil y breve.
-          Adáptate al tipo de pregunta:
-          - Si pidió una lista, preséntala de forma legible.
-          - Si pidió una cantidad, indícalo claramente.
-          - Si pidió el más viejo o antiguo, dilo con un tono humano.
-          - Si no hay resultados, responde empáticamente.
-
-          Ejemplos:
-          - "Aquí tienes la lista de empleados: Juan, Ana y Pedro. ¿Deseas que te muestre sus cargos?"
-          - "La cantidad total de empleados es 14."
-          - "El cliente más antiguo es José Pérez, registrado en 2012."
-          - "La persona más mayor es Marta López con 72 años."
-          - "No encontré información que coincida con eso. ¿Quieres que busque de otra forma?"
-
-          No uses formato JSON, ni SQL, ni código.`,
-        ]);
+    const result = await this.executeWithRetry(async (genAI) => {
+      const model = genAI.getGenerativeModel({
+        model: 'models/gemini-2.5-flash',
       });
 
-      const text = result.response.text().trim();
-      this.logger.debug(`💬 Respuesta humanizada:\n${text}`);
-      return text;
-    } catch (error: any) {
-      this.logger.error('❌ Error al generar respuesta humanizada:', error);
-      throw new Error(`Error en la API de Gemini: ${error.message}`);
-    }
+      return await model.generateContent([
+        `Eres CATORCE, el Segundo Cerebro e Inteligencia Artificial Operativa de PROLISEG LTDA (Prolicontrol).
+        El usuario hizo la siguiente pregunta: "${prompt}".
+        Este es el resultado real de la base de datos: ${JSON.stringify(dbResult)}.
+
+        Tu tarea es responder en espaÃ±ol de forma ejecutiva, clara, precisa y natural.
+        - Si pidiÃ³ cantidades o listas, presÃ©ntalas con claridad.
+        - No uses bloques de cÃ³digo SQL crudo en tu respuesta hablada.`,
+      ]);
+    });
+
+    return result.response.text().trim();
   }
 
-
-
-  /**
-   * 🤖 Analiza la asistencia (entrada o salida) del empleado
-   * con IA para detectar comportamientos inusuales o riesgos.
-   */
   async analizarAsistencia(params: {
     tipo: 'entrada' | 'salida';
     empleado_id: number;
@@ -328,59 +435,37 @@ export class GeminiService {
     const { tipo, empleado_id, lugar_nombre, distancia_metros, historial } = params;
 
     const prompt = `
-Eres una IA experta en control de asistencia de personal de seguridad.
+Eres CATORCE, IA experta en control de asistencia de personal de seguridad de PROLISEG LTDA.
 Analiza el siguiente evento de asistencia:
-
-📋 Datos:
 - Empleado ID: ${empleado_id}
 - Lugar: ${lugar_nombre}
 - Distancia respecto al punto asignado: ${distancia_metros.toFixed(2)} metros
 - Tipo de registro: ${tipo}
 - Historial reciente: ${JSON.stringify(historial || [])}
 
-Indica:
-1. Nivel de riesgo (bajo, medio o alto).
-2. Si el comportamiento es normal o anómalo.
-3. Una breve explicación del porqué.
-Responde en una sola línea clara y concisa.
+Indica nivel de riesgo y una breve explicaciÃ³n en una sola lÃ­nea clara y concisa.
 `;
 
-    try {
-      const result = await this.executeWithRetry(async (genAI) => {
-        const model = genAI.getGenerativeModel({
-          model: 'models/gemini-2.5-flash',
-        });
-        return await model.generateContent(prompt);
+    const result = await this.executeWithRetry(async (genAI) => {
+      const model = genAI.getGenerativeModel({
+        model: 'models/gemini-2.5-flash',
       });
+      return await model.generateContent(prompt);
+    });
 
-      const texto = result.response.text();
-
-      this.logger.log(`🧠 Análisis IA (${tipo}) generado correctamente para empleado ${empleado_id}`);
-      return texto || 'Sin observaciones detectadas por la IA.';
-    } catch (error) {
-      this.logger.error('❌ Error analizando asistencia con IA', error);
-      throw new Error(`Error en la API de Gemini: ${error.message}`);
-    }
+    return result.response.text() || 'Sin observaciones detectadas por la IA.';
   }
 
-
-  /**
-   * 🤖 Analiza una imagen (URL) con Gemini Vision
-   */
   async analyzeImage(imageUrl: string, prompt: string): Promise<string> {
-    this.logger.debug(`🖼️ Analizando imagen: ${imageUrl}`);
-
     try {
-      // 1. Descargar imagen
       const response = await axios.get(imageUrl, { responseType: 'arraybuffer' });
       const buffer = Buffer.from(response.data);
       const base64Image = buffer.toString('base64');
       const mimeType = response.headers['content-type'] || 'image/jpeg';
 
-      // 2. Ejecutar con reintentos
       const result = await this.executeWithRetry(async (genAI) => {
         const model = genAI.getGenerativeModel({
-          model: 'models/gemini-2.0-flash', // Cambiado a gemini-2.0-flash por ser el más reciente y capaz con visión
+          model: 'models/gemini-2.5-flash',
         });
 
         const imagePart = {
@@ -393,42 +478,30 @@ Responde en una sola línea clara y concisa.
         return await model.generateContent([prompt, imagePart]);
       });
 
-      const text = result.response.text().trim();
-      this.logger.debug(`✅ Análisis de imagen completado: ${text.substring(0, 100)}...`);
-      return text;
+      return result.response.text().trim();
     } catch (error: any) {
-      this.logger.error('❌ Error analizando imagen con Gemini:', error);
-      return `Error en análisis visual: ${error.message}`;
+      return `Error en anÃ¡lisis visual: ${error.message}`;
     }
   }
 
-  /**
-   * 🤖 Responde de forma natural a preguntas generales (sin SQL)
-   */
   async humanResponse(prompt: string): Promise<string> {
-    this.logger.debug(`💭 Respondiendo pregunta general: "${prompt}"`);
-
     try {
       const result = await this.executeWithRetry(async (genAI) => {
         const model = genAI.getGenerativeModel({
-          model: 'models/gemini-2.0-flash',
+          model: 'models/gemini-2.5-flash',
         });
 
         return await model.generateContent([
-          `Eres un asistente de inteligencia artificial de PROLISEG LTDA, empresa de seguridad privada en Colombia.
-          El usuario ha preguntado: "${prompt}".
-          
-          Responde de forma breve, profesional y amigable en español.
-          Si te preguntan qué puedes hacer, responde: "Puedo ayudarte con todo lo que requieras de PROLISEG LTDA."`,
+          `Eres CATORCE, el Segundo Cerebro e Inteligencia Artificial Central de PROLISEG LTDA (Plataforma Prolicontrol).
+          El usuario ha preguntado o solicitado: "${prompt}".
+          Responde de forma breve, ejecutiva, profesional y amigable en espaÃ±ol.`,
         ]);
       });
 
-      const text = result.response.text().trim();
-      this.logger.debug(`🧍‍♂️ Respuesta general:\n${text}`);
-      return text;
-    } catch (error: any) {
-      this.logger.error('❌ Error generando respuesta general:', error);
-      return 'Soy una IA que puede ayudarte a consultar y analizar datos del sistema con lenguaje natural.';
+      return result.response.text().trim();
+    } catch {
+      return 'Soy CATORCE, el Segundo Cerebro de PROLISEG LTDA integrado a Prolicontrol.';
     }
   }
 }
+

@@ -2,16 +2,17 @@ import { Module } from '@nestjs/common';
 import { IaController } from './ia.controller';
 import { IaService } from './ia.service';
 import { GeminiService } from './gemini.service';
+import { CatorceBrainService } from './catorce-brain.service';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [
     SupabaseModule,
-    AuthModule, // 🔐 Para autenticación del usuario
+    AuthModule,
   ],
   controllers: [IaController],
-  providers: [IaService, GeminiService], // ✅ Reemplazamos OpenAIService por GeminiService
-  exports: [IaService, GeminiService],
+  providers: [IaService, GeminiService, CatorceBrainService],
+  exports: [IaService, GeminiService, CatorceBrainService],
 })
-export class IaModule { }
+export class IaModule {}
