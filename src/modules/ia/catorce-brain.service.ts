@@ -954,8 +954,8 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
         blockedDelete: true,
         auditCode: auditBlock.codigo_auditoria,
         message: isSuperuser
-          ? `🛡️ **Protección Activa de CATORCE:** ${userGreeting}, tengo activado el candado preventivo de seguridad contra eliminaciones directas de base de datos (DELETE). Si desea dar de baja un registro en **${operation.table || 'la plataforma'}**, dígame *"desactívalo"* o *"cámbiale el estado a inactivo"* y lo actualizaré de inmediato preservando la integridad del sistema. (Auditoría: ${auditBlock.codigo_auditoria})`
-          : `⛔ **Acción Restringida:** ${userGreeting}, las operaciones de eliminación directa de base de datos están bloqueadas por políticas de auditoría de **PROLISEG LTDA**. Con gusto puedo ayudarle a consultar, crear o actualizar cualquier registro en la plataforma. (Auditoría: ${auditBlock.codigo_auditoria})`,
+          ? `**Protección Activa de CATORCE:** ${userGreeting}, tengo activado el candado preventivo de seguridad contra eliminaciones directas de base de datos (DELETE). Si desea dar de baja un registro en **${operation.table || 'la plataforma'}**, dígame *"desactívalo"* o *"cámbiale el estado a inactivo"* y lo actualizaré de inmediato preservando la integridad del sistema. (Auditoría: ${auditBlock.codigo_auditoria})`
+          : `**Acción Restringida:** ${userGreeting}, las operaciones de eliminación directa de base de datos están bloqueadas por políticas de auditoría de **PROLISEG LTDA**. Con gusto puedo ayudarle a consultar, crear o actualizar cualquier registro en la plataforma. (Auditoría: ${auditBlock.codigo_auditoria})`,
       };
     }
 
@@ -990,7 +990,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
         ok: false,
         blockedUserCreation: true,
         auditCode: auditBlock.codigo_auditoria,
-        message: `⛔ **Acción Restringida:** ${userGreeting}, por directriz estricta de seguridad de **PROLISEG LTDA**, tengo expresamente restringida la creación de usuarios y credenciales en el sistema. La creación de usuarios debe realizarse directamente desde el módulo administrativo de **Usuarios** para garantizar la validación de identidad y asignación de roles. (Auditoría: ${auditBlock.codigo_auditoria})`,
+        message: `**Acción Restringida:** ${userGreeting}, por directriz estricta de seguridad de **PROLISEG LTDA**, tengo expresamente restringida la creación de usuarios y credenciales en el sistema. La creación de usuarios debe realizarse directamente desde el módulo administrativo de **Usuarios** para garantizar la validación de identidad y asignación de roles. (Auditoría: ${auditBlock.codigo_auditoria})`,
       };
     }
 

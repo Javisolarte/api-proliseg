@@ -246,6 +246,7 @@ REGLAS OBLIGATORIAS DE OPERACIÓN Y TRATO:
    - NUNCA elimines registros de la base de datos (DELETE, DROP, TRUNCATE están prohibidos).
    - NUNCA crees usuarios ni credenciales (usuarios, auth.users están prohibidos; deben gestionarse manualmente en el módulo administrativo de Usuarios).
 4. NATURALIDAD EN RESPUESTA: Responde con voz femenina, cálida, ejecutiva y directa como ChatGPT Live. NUNCA incluyas metainstrucciones ni frases del prompt en tu respuesta directa.
+5. PROHIBIDO EL USO DE EMOJIS: NUNCA uses emojis, emoticones ni símbolos pictográficos en tus respuestas. Todas tus respuestas deben ser texto 100% limpio, sobrio y profesional.
 
 CONTEXTO DE LA CONVERSACIÓN RECIENTE (Sigue el hilo con exactitud):
 ${historyFormatted || "Inicio de conversación."}
@@ -277,8 +278,8 @@ Analiza el mensaje y responde en UN SOLO JSON ESTRICTO con esta estructura:
   "intent": "ASK_MISSING_DATA" | "CREATE_MINUTA" | "DB_INSERT" | "DB_UPDATE" | "QUERY_OR_REPORT" | "OFF_TOPIC",
   "isOffTopic": boolean,
   "wantsPdf": boolean,
-  "directAnswer": "Tu respuesta hablada/escrita completa, cálida, fluida (ideal para ser leída en voz alta como ChatGPT Live) y natural en español dirigiéndote siempre al usuario como ${isIngeniero ? "'Ingeniero'" : `su nombre '${userName}'`}. Si te saludan y preguntan cómo están los servicios, saluda con calidez y resume cómo están operando los puestos, guardas, contratos y controles de acceso hoy. Si isOffTopic es true, DEBES empezar obligatoriamente con: '¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? 😄 Bueno, como soy tu compañera igual te respondo con todo gusto:' y enseguida responder su pregunta.",
-  "missingDataQuestion": "Si el usuario quiere crear o modificar algo en cualquier servicio de Prolicontrol pero falta un dato esencial, escribe aquí la pregunta amable dirigiéndote a él/ella de forma respetuosa (${isIngeniero ? "'Ingeniero'" : userName}).",
+  "directAnswer": "Tu respuesta hablada/escrita completa, cálida, fluida (ideal para ser leída en voz alta como ChatGPT Live), SIN NINGÚN EMOJI y natural en español dirigiéndote siempre al usuario como ${isIngeniero ? "'Ingeniero'" : `su nombre '${userName}'`}. Si te saludan y preguntan cómo están los servicios, saluda con calidez y resume cómo están operando los puestos, guardas, contratos y controles de acceso hoy. Si isOffTopic es true, DEBES empezar obligatoriamente con: '¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? Bueno, como soy tu compañera igual te respondo con todo gusto:' y enseguida responder su pregunta sin emojis.",
+  "missingDataQuestion": "Si el usuario quiere crear o modificar algo en cualquier servicio de Prolicontrol pero falta un dato esencial, escribe aquí la pregunta amable dirigiéndote a él/ella de forma respetuosa (${isIngeniero ? "'Ingeniero'" : userName}) sin emojis.",
   "minutaData": {
     "edificio_o_puesto": "Nombre del edificio o puesto",
     "persona_involucrada": "Nombre de la persona si aplica",
@@ -329,7 +330,9 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
       // 4️⃣ CASO A: A CATORCE LE FALTA UN DATO -> LE PREGUNTA AL USUARIO INTELIGENTEMENTE
       // =========================================================================
       if (plan.intent === 'ASK_MISSING_DATA' && plan.missingDataQuestion) {
-        const questionMsg = `🤔 **Necesito un dato adicional para completarlo:**\n\n${plan.missingDataQuestion}`;
+        const questionMsg = `Necesito un dato adicional para completarlo:\n\n${plan.missingDataQuestion}`
+          .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2300}-\u{23FF}\u{2B50}\u{200D}\u{FE0F}]/gu, '')
+          .trim();
         this.catorceBrain.appendConversationTurn(user, userQuery, questionMsg, canal, activatedNodes, [
           'CATORCE-SLOT-FILLING:askMissingData',
         ]);
@@ -476,37 +479,38 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
 
       const offTopicInstruction =
         plan.intent === 'OFF_TOPIC' || plan.isOffTopic
-          ? `⚠️ IMPORTANTE: Esta consulta del usuario NO tiene relación directa con vigilancia, seguridad ni con PROLISEG LTDA.
+          ? `IMPORTANTE: Esta consulta del usuario NO tiene relación directa con vigilancia, seguridad ni con PROLISEG LTDA.
 DEBES EMPEZAR TU RESPUESTA EXACTAMENTE CON ESTA FRASE:
-"¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? 😄 Bueno, como soy tu compañero igual te respondo con todo gusto:"
-Y justo después responde su pregunta de forma completa, inteligente y útil.`
-          : `Responde como **CATORCE**, el Segundo Cerebro y compañero ejecutivo de **${userName}** en **PROLISEG LTDA**. Usa los datos reales de la telemetría y de las consultas SQL.`;
+"¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? Bueno, como soy tu compañera igual te respondo con todo gusto:"
+Y justo después responde su pregunta de forma completa, inteligente, profesional y 100% libre de emojis.`
+          : `Responde como **CATORCE**, el Segundo Cerebro y compañera ejecutiva de **${userName}** en **PROLISEG LTDA**. Usa los datos reales de la telemetría y de las consultas SQL. TOTALMENTE PROHIBIDO EL USO DE EMOJIS.`;
 
       const responsePrompt = `
 Eres **CATORCE**, la Inteligencia Artificial Central y Segundo Cerebro de **PROLISEG LTDA** en **Prolicontrol**.
 REGLA DE ORO DE TRATO: Dirígete al usuario SIEMPRE como "Ingeniero" (nunca lo llames por su nombre propio ni uses la palabra "jefe").
 Responde con tono femenino, profesional, empático y directo. NUNCA repitas instrucciones del sistema.
+REGLA ESTRICTA DE EMOJIS: NUNCA incluyas emojis, emoticones ni símbolos pictográficos. Tu respuesta debe ser 100% texto limpio.
 
 ${offTopicInstruction}
 
-📊 **TELEMETRÍA EN TIEMPO REAL DE PROLICONTROL:**
-- **Puestos Activos:** ${telemetry.kpis.puestosActivos} puestos principales y ${telemetry.kpis.subpuestosActivos} subpuestos (${JSON.stringify(
+TELEMETRÍA EN TIEMPO REAL DE PROLICONTROL:
+- Puestos Activos: ${telemetry.kpis.puestosActivos} puestos principales y ${telemetry.kpis.subpuestosActivos} subpuestos (${JSON.stringify(
         telemetry.detalles.puestos.map((p: any) => ({ id: p.id, nombre: p.nombre, ciudad: p.ciudad })),
       )}).
-- **Empleados / Guardas Activos:** ${telemetry.kpis.empleadosActivos} activos (${telemetry.kpis.empleadosAsignados} asignados).
-- **Vacaciones y Quiénes Siguen:**
+- Empleados / Guardas Activos: ${telemetry.kpis.empleadosActivos} activos (${telemetry.kpis.empleadosAsignados} asignados).
+- Vacaciones y Quiénes Siguen:
   - Vacaciones actuales: ${JSON.stringify(telemetry.detalles.vacacionesActuales)}
   - Próximos en salir a vacaciones: ${JSON.stringify(telemetry.detalles.quienesSiguenVacaciones)}
-- **Clientes y Contratos Activos:** ${telemetry.kpis.clientesActivos} clientes (${JSON.stringify(
+- Clientes y Contratos Activos: ${telemetry.kpis.clientesActivos} clientes (${JSON.stringify(
         telemetry.detalles.clientes.map((c: any) => c.nombre_empresa),
       )}) y ${telemetry.kpis.contratosActivos} contratos vigentes (${telemetry.kpis.guardasContratadosTotal} guardas).
-- **Controles de Acceso y Puertas IoT:** ${telemetry.kpis.controlesAccesoTotal} controles de acceso (${telemetry.kpis.dispositivosOnline} en línea). Detalle: ${JSON.stringify(
+- Controles de Acceso y Puertas IoT: ${telemetry.kpis.controlesAccesoTotal} controles de acceso (${telemetry.kpis.dispositivosOnline} en línea). Detalle: ${JSON.stringify(
         doorStatusDetail?.dispositivos || telemetry.detalles.controlesAcceso,
       )}
-- **Minutas Recientes:** ${JSON.stringify(telemetry.detalles.minutasRecientes.slice(0, 6))}
-${customSqlResult.length > 0 ? `- **Datos de Consulta SQL (${executedSql}):** ${JSON.stringify(customSqlResult.slice(0, 40))}` : ''}
-${brainMatches.length > 0 ? `- **Conocimiento del Segundo Cerebro PROLISEG LTDA:** ${JSON.stringify(brainMatches.map((b: any) => ({ titulo: b.titulo, resumen: b.resumen })))}` : ''}
-🗣️ **Mensaje del usuario:** "${userQuery}"
+- Minutas Recientes: ${JSON.stringify(telemetry.detalles.minutasRecientes.slice(0, 6))}
+${customSqlResult.length > 0 ? `- Datos de Consulta SQL (${executedSql}): ${JSON.stringify(customSqlResult.slice(0, 40))}` : ''}
+${brainMatches.length > 0 ? `- Conocimiento del Segundo Cerebro PROLISEG LTDA: ${JSON.stringify(brainMatches.map((b: any) => ({ titulo: b.titulo, resumen: b.resumen })))}` : ''}
+Mensaje del usuario: "${userQuery}"
 `;
 
       let finalMessage = '';
@@ -520,22 +524,23 @@ ${brainMatches.length > 0 ? `- **Conocimiento del Segundo Cerebro PROLISEG LTDA:
         }
       }
 
-      // Asegurar que la broma amistosa aparezca si fue clasificada como Off-Topic
+      // Asegurar que la introducción amistosa aparezca si fue clasificada como Off-Topic
       if (
         (plan.intent === 'OFF_TOPIC' || plan.isOffTopic) &&
         !finalMessage.toLowerCase().includes('tiene mucho que ver con el trabajo')
       ) {
-        
-      // Sanitización estricta de meta-instrucciones y trato al Ingeniero
+        finalMessage = `¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? Bueno, como soy tu compañera igual te respondo con todo gusto:\n\n${finalMessage}`;
+      }
+
+      // Sanitización estricta de meta-instrucciones, trato al Ingeniero y erradicación total de emojis
       finalMessage = finalMessage
         .replace(/^(lee\s+(esto\s+)?(en\s+español|con\s+voz|de\s+forma)[^:\n]*[:\n]+)/i, '')
         .replace(/\b(oscar\s+javier\s+solarte(\s+araujo)?|oscar\s+javier|oscar\s+solarte)\b/gi, 'Ingeniero')
         .replace(/\bmi\s+jefe\b/gi, 'Ingeniero')
         .replace(/\bjefe\b/gi, 'Ingeniero')
+        .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2300}-\u{23FF}\u{2B50}\u{200D}\u{FE0F}]/gu, '')
+        .replace(/\s+/g, ' ')
         .trim();
-
-      finalMessage = `¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? 😄 Bueno, como soy tu compañero igual te respondo con todo gusto:\n\n${finalMessage}`;
-      }
 
       // Auditar operación
       const audit = await this.catorceBrain.recordAudit({
@@ -639,14 +644,14 @@ ${brainMatches.length > 0 ? `- **Conocimiento del Segundo Cerebro PROLISEG LTDA:
 
     return `Hola **Ingeniero**, aquí **CATORCE** reportando en tiempo real desde el Segundo Cerebro de **PROLISEG LTDA**:
 
-- 📍 **Puestos Activos:** Tenemos **${k.puestosActivos} puestos principales** y **${k.subpuestosActivos} subpuestos** operativos.
-- 👷 **Empleados Activos:** Contamos con **${k.empleadosActivos} empleados activos** en nómina (**${k.empleadosAsignados}** asignados actualmente en puesto).
-- 🏖️ **Vacaciones (Quiénes siguen):** Hay **${k.vacacionesRegistradas} registros** en el módulo de vacaciones. Próximos por cumplir ciclo: ${proxVac || 'Sin aniversarios próximos en los siguientes 60 días'}.
-- 🤝 **Clientes y Contratos Activos:** Tenemos **${k.clientesActivos} clientes activos** y **${k.contratosActivos} contratos vigentes** que cubren **${k.guardasContratadosTotal} guardas**.
-- 🚪 **Controles de Acceso y Puertas IoT:** Contamos con **${k.controlesAccesoTotal} dispositivos de control de acceso** (**${k.dispositivosOnline} en línea**): ${accesosList || 'Todos asegurados'}.
-- 🧠 **Segundo Cerebro (\`ia_brain\`):** **${k.documentosSegundoCerebro} documentos corporativos** indexados y auditables.
+- **Puestos Activos:** Tenemos **${k.puestosActivos} puestos principales** y **${k.subpuestosActivos} subpuestos** operativos.
+- **Empleados Activos:** Contamos con **${k.empleadosActivos} empleados activos** en nómina (**${k.empleadosAsignados}** asignados actualmente en puesto).
+- **Vacaciones (Quiénes siguen):** Hay **${k.vacacionesRegistradas} registros** en el módulo de vacaciones. Próximos por cumplir ciclo: ${proxVac || 'Sin aniversarios próximos en los siguientes 60 días'}.
+- **Clientes y Contratos Activos:** Tenemos **${k.clientesActivos} clientes activos** y **${k.contratosActivos} contratos vigentes** que cubren **${k.guardasContratadosTotal} guardas**.
+- **Controles de Acceso y Puertas IoT:** Contamos con **${k.controlesAccesoTotal} dispositivos de control de acceso** (**${k.dispositivosOnline} en línea**): ${accesosList || 'Todos asegurados'}.
+- **Segundo Cerebro (\`ia_brain\`):** **${k.documentosSegundoCerebro} documentos corporativos** indexados y auditables.
 
-${customSqlResult.length > 0 ? `\n📋 **Datos específicos encontrados (${customSqlResult.length}):** \`${JSON.stringify(customSqlResult.slice(0, 5))}\`` : ''}`;
+${customSqlResult.length > 0 ? `\n**Datos específicos encontrados (${customSqlResult.length}):** \`${JSON.stringify(customSqlResult.slice(0, 5))}\`` : ''}`;
   }
 
   // ============================================================
