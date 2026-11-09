@@ -1,4 +1,4 @@
-﻿import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import axios from 'axios';
 
@@ -71,7 +71,7 @@ export class GeminiService {
       .replace(/AUD-CAT-\d+/g, '')
       .replace(/\s+/g, ' ')
       .trim()
-      .slice(0, 380);
+      .slice(0, 120);
 
     if (!cleanSpeech) return null;
 
