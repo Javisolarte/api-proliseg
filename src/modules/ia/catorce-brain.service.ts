@@ -520,26 +520,60 @@ export class CatorceBrainService implements OnModuleInit {
     const clean = (query || '').trim();
     if (!clean) return [];
 
-    const words = clean
+    const baseWords = clean
       .toLowerCase()
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .split(/\s+/)
       .filter((w) => w.length > 2)
-      .slice(0, 5);
+      .slice(0, 6);
 
-    if (words.length === 0) return [];
+    if (baseWords.length === 0) return [];
+
+    const synonymsMap: Record<string, string[]> = {
+      red: ['mikrotik', 'internet', 'wan', 'tunel', 'vpn', 'wireguard'],
+      internet: ['wan', 'mikrotik', 'contingencia', 'caida', 'enlace'],
+      caida: ['contingencia', 'corte', 'falla', 'desconexion'],
+      luz: ['energia', 'electrica', 'corte', 'ups', 'planta'],
+      energia: ['corte', 'electrica', 'ups', 'planta', 'contingencia'],
+      camara: ['dahua', 'hikvision', 'vms', 'dss', 'video', 'webrtc'],
+      camaras: ['dahua', 'hikvision', 'vms', 'dss', 'video', 'webrtc'],
+      puerta: ['acceso', 'biometrico', 'dahua', 'hikvision', 'isapi', 'netsdk'],
+      puertas: ['acceso', 'biometrico', 'dahua', 'hikvision', 'isapi', 'netsdk'],
+      biometrico: ['acceso', 'hikvision', 'dahua', 'sincronizacion', 'huella'],
+      biometricos: ['acceso', 'hikvision', 'dahua', 'sincronizacion', 'huella'],
+      guarda: ['turno', 'reemplazo', 'relevo', 'asignacion', 'empleado'],
+      guardas: ['turnos', 'reemplazos', 'relevos', 'asignacion', 'empleados'],
+      turno: ['reemplazo', 'relevo', 'horario', 'programacion', 'asignacion'],
+      turnos: ['reemplazos', 'relevos', 'horario', 'programacion', 'asignacion'],
+      relevo: ['reemplazo', 'turno', 'descanso', 'novedad'],
+      reemplazo: ['relevo', 'turno', 'descanso', 'novedad'],
+      problema: ['contingencia', 'runbook', 'protocolo', 'falla'],
+      falla: ['contingencia', 'runbook', 'protocolo', 'caida'],
+      solucion: ['procedimiento', 'runbook', 'protocolo', 'manual'],
+    };
+
+    const expandedTokens = new Set<string>(baseWords);
+    for (const w of baseWords) {
+      if (synonymsMap[w]) {
+        for (const syn of synonymsMap[w]) {
+          expandedTokens.add(syn);
+        }
+      }
+    }
+
+    const words = Array.from(expandedTokens).slice(0, 10);
 
     const likeClauses = words
       .map((w) => `(LOWER(titulo) LIKE '%${w.replace(/'/g, "''")}%' OR LOWER(contenido) LIKE '%${w.replace(/'/g, "''")}%')`)
       .join(' OR ');
 
     const sql = `
-      SELECT id, codigo_documento, titulo, categoria, ruta_archivo, resumen, Left(contenido, 1200) AS fragmento, updated_at
+      SELECT id, codigo_documento, titulo, categoria, ruta_archivo, resumen, Left(contenido, 1800) AS fragmento, updated_at
       FROM ia_brain.conocimiento_corporativo
       WHERE activo = true AND (${likeClauses})
       ORDER BY updated_at DESC
-      LIMIT 6
+      LIMIT 8
     `;
 
     const rows = await this.runSql(sql);

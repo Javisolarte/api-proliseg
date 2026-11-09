@@ -341,6 +341,11 @@ REGLAS OBLIGATORIAS DE OPERACIÓN Y TRATO:
    - Estructura la propuesta detallada (puesto verificado, guarda, fecha, horario y tipo de turno) y pregunta textualmente:
      "¿Me confirma si procedo con el registro oficial en la base de datos de Prolicontrol?"
    - Solo cuando el usuario confirme afirmativamente (ej. "sí", "confirmo", "procede", "créalo"), se debe registrar oficialmente.
+8. GENERACIÓN ACTIVA DE SOLUCIONES OPERATIVAS Y RESOLUCIÓN EN PROLICONTROL:
+   Cuando el usuario plantee cualquier problema, contingencia, novedad, falla técnica o situación operativa (como caída de enlaces WAN/Internet, desconexión de túneles MikroTik, corte de energía, fallas de cámaras o biométricos Hikvision/Dahua, inasistencia de guardas o novedades en puestos):
+   - DIAGNOSTICA LA SITUACIÓN con la telemetría en vivo y la documentación técnica del Segundo Cerebro (Obsidian).
+   - GENERA LA SOLUCIÓN TÉCNICA Y OPERATIVA CONCRETA: Guía al usuario paso a paso indicando los módulos de Prolicontrol (Monitoreo, Dispositivos IoT, Turnos, Reemplazos, Minutas), comandos o procedimientos exactos.
+   - OFRECE LA ACCIÓN RESOLUTIVA EN BASE DE DATOS: Por ejemplo, si falta un guarda en un puesto, propón asignar un relevo en descanso; si ocurrió una novedad, ofrece asentar la Minuta con el puesto verificado; todo bajo confirmación explícita del usuario.
 
 CONTEXTO DE LA CONVERSACIÓN RECIENTE (Sigue el hilo con exactitud):
 ${historyFormatted || "Inicio de conversación."}
@@ -364,7 +369,7 @@ ${historyFormatted || "Inicio de conversación."}
         telemetry.detalles.controlesAcceso.slice(0, 12),
       )})
 - Minutas Recientes: ${JSON.stringify(telemetry.detalles.minutasRecientes.slice(0, 5))}
-${brainMatches.length > 0 ? `- Segundo Cerebro: ${JSON.stringify(brainMatches.map((b: any) => ({ titulo: b.titulo, resumen: b.resumen })))}` : ''}
+${brainMatches.length > 0 ? `- Segundo Cerebro: ${JSON.stringify(brainMatches.map((b: any) => ({ titulo: b.titulo, categoria: b.categoria, resumen: b.resumen, extracto: b.fragmento })))}` : ''}
 ${telemetry.userContext?.memoriasActivas?.length > 0 ? `- Memoria Contextual Personalizada del Usuario (${activeUserName}): ${JSON.stringify(telemetry.userContext.memoriasActivas.map((m: any) => ({ clave: m.clave, hecho: m.hecho_recordado, importancia: m.importancia })))}` : ''}
 
 MENSAJE ACTUAL DEL USUARIO:
@@ -656,7 +661,8 @@ DIRECTIVA DE INDAGACIÓN OPERACIONAL: Si la consulta toca turnos, relevos o pues
       )}
 - Minutas Recientes: ${JSON.stringify(telemetry.detalles.minutasRecientes.slice(0, 6))}
 ${customSqlResult.length > 0 ? `- Datos de Consulta SQL (${executedSql}): ${JSON.stringify(customSqlResult.slice(0, 40))}` : ''}
-${brainMatches.length > 0 ? `- Conocimiento del Segundo Cerebro PROLISEG LTDA: ${JSON.stringify(brainMatches.map((b: any) => ({ titulo: b.titulo, resumen: b.resumen })))}` : ''}
+${brainMatches.length > 0 ? `- Conocimiento del Segundo Cerebro PROLISEG LTDA: ${JSON.stringify(brainMatches.map((b: any) => ({ titulo: b.titulo, categoria: b.categoria, resumen: b.resumen, procedimiento: b.fragmento })))}` : ''}
+DIRECTIVA DE RESOLUCIÓN DE PROBLEMAS: Si la consulta expone un problema, contingencia o novedad operativa (red, MikroTik, cámaras, corte de luz, relevos), diagnostica la situación usando los datos del Segundo Cerebro de PROLISEG y genera una solución paso a paso con acciones concretas en Prolicontrol, ofreciendo ejecutar la acción correspondiente con confirmación previa.
 Mensaje del usuario: "${userQuery}"
 `;
 
