@@ -594,20 +594,7 @@ ${brainMatches.length > 0 ? `- **Conocimiento del Segundo Cerebro PROLISEG LTDA:
 
       this.catorceBrain.appendConversationTurn(user, userQuery, finalMessage, canal, activatedNodes, toolsUsed);
 
-      let audioDataUrl: string | undefined = undefined;
-      if (canal.includes('voz') || canal.includes('live') || canal.includes('radio')) {
-        try {
-          const cleanVoiceText = finalMessage
-            .replace(/<[^>]+>/g, ' ')
-            .replace(/[*#_`~]/g, '')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .slice(0, 320);
-          audioDataUrl = (await this.geminiService.generateHumanVoiceAudio(cleanVoiceText, 'Aoede')) || undefined;
-        } catch (voiceErr: any) {
-          this.logger.warn(`Aviso generando audio neural: ${voiceErr.message}`);
-        }
-      }
+
 
       return {
         ok: true,
@@ -620,7 +607,7 @@ ${brainMatches.length > 0 ? `- **Conocimiento del Segundo Cerebro PROLISEG LTDA:
         activatedNodes: Array.from(new Set(activatedNodes)),
         toolsUsed,
         message: finalMessage,
-        audioDataUrl,
+        audioDataUrl: undefined,
         latencyMs: Date.now() - startTime,
       };
     } catch (err: any) {
