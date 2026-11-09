@@ -602,7 +602,7 @@ ${brainMatches.length > 0 ? `- **Conocimiento del Segundo Cerebro PROLISEG LTDA:
             .replace(/[*#_`~]/g, '')
             .replace(/\s+/g, ' ')
             .trim()
-            .slice(0, 500);
+            .slice(0, 320);
           audioDataUrl = (await this.geminiService.generateHumanVoiceAudio(cleanVoiceText, 'Aoede')) || undefined;
         } catch (voiceErr: any) {
           this.logger.warn(`Aviso generando audio neural: ${voiceErr.message}`);

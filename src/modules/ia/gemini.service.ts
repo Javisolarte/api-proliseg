@@ -71,7 +71,7 @@ export class GeminiService {
       .replace(/AUD-CAT-\d+/g, '')
       .replace(/\s+/g, ' ')
       .trim()
-      .slice(0, 1400);
+      .slice(0, 380);
 
     if (!cleanSpeech) return null;
 
@@ -201,17 +201,19 @@ export class GeminiService {
   private initializeApiKeys(): void {
     const keys: string[] = [];
 
-    // Priorizar las 10 llaves activas verificadas con 200 OK en Gemini 3.5 Flash Lite & TTS
+    // 🌟 PRIORIDAD #1 ABSOLUTA: Llave maestra con crédito/dólares (Gemini Live & TTS de alta velocidad)
+    const paidKey = (process.env.GEMINI_LIVE_API_KEY || process.env.GEMINI_API_KEY || '').trim();
+    if (paidKey && !keys.includes(paidKey)) {
+      keys.push(paidKey);
+    }
+
+    // Llaves secundarias de respaldo para rotación
     const priorityIndices = [4, 2, 5, 6, 7, 8, 9, 10, 11, 12, 1, 3, 13, 14, 15, 16, 17, 18, 19, 20];
     for (const i of priorityIndices) {
-      const key = process.env[`GEMINI_API_KEY_${i}`];
+      const key = process.env[`GEMINI_API_KEY_${i}`]?.trim();
       if (key && !keys.includes(key)) {
         keys.push(key);
       }
-    }
-
-    if (process.env.GEMINI_LIVE_API_KEY && !keys.includes(process.env.GEMINI_LIVE_API_KEY)) {
-      keys.push(process.env.GEMINI_LIVE_API_KEY);
     }
 
     const masterCreditKey = process.env.GEMINI_API_KEY_4 || '';
