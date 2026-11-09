@@ -19,7 +19,8 @@ export class GeminiService {
     process.env.GEMINI_LIVE_API_KEY ||
     process.env.GEMINI_API_KEY_4 || '';
   private readonly MAX_REQUESTS_PER_KEY = 2500;
-  private readonly RESET_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 horas
+  private readonly RESET_INTERVAL_MS = 24 * 60 * 60 * 1000;
+  private readonly audioVoiceCache = new Map<string, string>(); // 24 horas
 
   constructor() {
     this.initializeApiKeys();
@@ -75,6 +76,13 @@ export class GeminiService {
       .slice(0, 1500);
 
     if (!cleanSpeech) return null;
+
+    const selectedVoice = voiceName || 'Aoede';
+    const cacheKey = `${selectedVoice}:${cleanSpeech}`;
+    if (this.audioVoiceCache.has(cacheKey)) {
+      this.logger.debug(`[Aoede Cache 0ms] Audio recuperado de memoria para: "${cleanSpeech.slice(0, 45)}..."`);
+      return this.audioVoiceCache.get(cacheKey)!;
+    }
 
     let attempts = 0;
     const maxAttempts = Math.min(this.apiKeys.length, 6);
