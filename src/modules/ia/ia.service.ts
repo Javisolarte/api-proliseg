@@ -266,7 +266,8 @@ ${historyFormatted || "Inicio de conversación."}
         telemetry.detalles.controlesAcceso.slice(0, 12),
       )})
 - Minutas Recientes: ${JSON.stringify(telemetry.detalles.minutasRecientes.slice(0, 5))}
-${brainMatches.length > 0 ? `- Segundo Cerebro PROLISEG LTDA: ${JSON.stringify(brainMatches.map((b: any) => ({ titulo: b.titulo, resumen: b.resumen })))}` : ''}
+${brainMatches.length > 0 ? `- Segundo Cerebro: ${JSON.stringify(brainMatches.map((b: any) => ({ titulo: b.titulo, resumen: b.resumen })))}` : ''}
+${telemetry.userContext?.memoriasActivas?.length > 0 ? `- Memoria Contextual Personalizada del Usuario (${userName}): ${JSON.stringify(telemetry.userContext.memoriasActivas.map((m: any) => ({ clave: m.clave, hecho: m.hecho_recordado, importancia: m.importancia })))}` : ''}
 
 MENSAJE ACTUAL DEL USUARIO:
 "${userQuery}"
@@ -276,8 +277,8 @@ Analiza el mensaje y responde en UN SOLO JSON ESTRICTO con esta estructura:
   "intent": "ASK_MISSING_DATA" | "CREATE_MINUTA" | "DB_INSERT" | "DB_UPDATE" | "QUERY_OR_REPORT" | "OFF_TOPIC",
   "isOffTopic": boolean,
   "wantsPdf": boolean,
-  "directAnswer": "Tu respuesta hablada/escrita completa, cálida, fluida (ideal para ser leída en voz alta como ChatGPT Live) y natural en español dirigiéndote siempre al usuario como 'Ingeniero'. Si te saludan y preguntan cómo están los servicios, saluda con calidez y resume cómo están operando los puestos, guardas, contratos y controles de acceso hoy. Si isOffTopic es true, DEBES empezar obligatoriamente con: '¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? 😄 Bueno, como soy tu compañera igual te respondo con todo gusto:' y enseguida responder su pregunta.",
-  "missingDataQuestion": "Si el usuario quiere crear o modificar algo en cualquier servicio de Prolicontrol pero falta un dato esencial, escribe aquí la pregunta amable dirigiéndote a él como 'Ingeniero'.",
+  "directAnswer": "Tu respuesta hablada/escrita completa, cálida, fluida (ideal para ser leída en voz alta como ChatGPT Live) y natural en español dirigiéndote siempre al usuario como ${isIngeniero ? "'Ingeniero'" : `su nombre '${userName}'`}. Si te saludan y preguntan cómo están los servicios, saluda con calidez y resume cómo están operando los puestos, guardas, contratos y controles de acceso hoy. Si isOffTopic es true, DEBES empezar obligatoriamente con: '¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? 😄 Bueno, como soy tu compañera igual te respondo con todo gusto:' y enseguida responder su pregunta.",
+  "missingDataQuestion": "Si el usuario quiere crear o modificar algo en cualquier servicio de Prolicontrol pero falta un dato esencial, escribe aquí la pregunta amable dirigiéndote a él/ella de forma respetuosa (${isIngeniero ? "'Ingeniero'" : userName}).",
   "minutaData": {
     "edificio_o_puesto": "Nombre del edificio o puesto",
     "persona_involucrada": "Nombre de la persona si aplica",
