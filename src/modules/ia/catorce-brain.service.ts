@@ -268,20 +268,54 @@ export class CatorceBrainService implements OnModuleInit {
   }
 
   /**
-   * ⚡ Ejecuta SQL de forma segura intentando exec_sql y execute_sql
+   * ⚡ Ejecuta SQL de forma segura intentando exec_sql, execute_sql y fallback directo a Supabase
    */
   public async runSql<T = any>(sql: string): Promise<T[]> {
     const admin = this.supabase.getSupabaseAdminClient();
     const trimmed = sql.trim().replace(/;$/, '');
 
-    const { data, error } = await admin.rpc('exec_sql', { query: trimmed });
-    if (!error && data !== null && data !== undefined) {
-      return Array.isArray(data) ? data : [data];
-    }
+    try {
+      const { data, error } = await admin.rpc('exec_sql', { query: trimmed });
+      if (!error && data !== null && data !== undefined) {
+        return Array.isArray(data) ? data : [data];
+      }
+    } catch {}
 
-    const { data: data2, error: error2 } = await admin.rpc('execute_sql', { query: trimmed });
-    if (!error2 && data2 !== null && data2 !== undefined) {
-      return Array.isArray(data2) ? data2 : [data2];
+    try {
+      const { data: data2, error: error2 } = await admin.rpc('execute_sql', { query: trimmed });
+      if (!error2 && data2 !== null && data2 !== undefined) {
+        return Array.isArray(data2) ? data2 : [data2];
+      }
+    } catch {}
+
+    // Fallback inteligente para SELECT sobre tablas públicas (empleados, eps, fondos_pension, etc.)
+    const selectMatch = trimmed.match(/^SELECT\s+([\s\S]+?)\s+FROM\s+([a-zA-Z0-9_\.]+)(?:\s+WHERE\s+([\s\S]+?))?(?:\s+ORDER\s+BY\s+[\s\S]+?)?(?:\s+LIMIT\s+(\d+))?$/i);
+    if (selectMatch) {
+      try {
+        const rawTable = selectMatch[2].replace(/^public\./i, '').trim();
+        const limit = selectMatch[4] ? Number(selectMatch[4]) : 60;
+
+        // Consulta de cumpleaños por mes (ej. diciembre = 12)
+        if (rawTable === 'empleados' && /extract\s*\(\s*month\s+from\s+fecha_nacimiento\s*\)\s*=\s*(\d+)/i.test(trimmed)) {
+          const monthMatch = trimmed.match(/extract\s*\(\s*month\s+from\s+fecha_nacimiento\s*\)\s*=\s*(\d+)/i);
+          const targetMonth = monthMatch ? Number(monthMatch[1]) : 12;
+          const { data: emps } = await admin.from('empleados').select('*').eq('activo', true);
+          if (emps) {
+            const filtered = emps.filter((e: any) => {
+              if (!e.fecha_nacimiento) return false;
+              const m = new Date(e.fecha_nacimiento).getUTCMonth() + 1;
+              return m === targetMonth;
+            });
+            return filtered.slice(0, limit) as any;
+          }
+        }
+
+        // Consultas generales directas a Supabase
+        const { data: tableData } = await admin.from(rawTable).select('*').limit(limit);
+        if (tableData) return tableData as any;
+      } catch (err: any) {
+        this.logger.warn(`Fallback SQL aviso: ${err.message}`);
+      }
     }
 
     return [];
@@ -308,18 +342,24 @@ export class CatorceBrainService implements OnModuleInit {
       dispositivosRes,
       vacacionesRes,
       minutasHoyRes,
+      epsRes,
+      fondosPensionRes,
+      arlRes,
       brainDocsCount,
       userMemoryRes,
       recentAuditsRes,
     ] = await Promise.all([
       admin.from('puestos_trabajo').select('id, nombre, ciudad, direccion, activo, contrato_id').eq('activo', true),
       admin.from('subpuestos_trabajo').select('id, nombre, puesto_id, guardas_activos, activo').eq('activo', true),
-      admin.from('empleados').select('id, nombre_completo, cedula, ciudad, rol, activo, asignado').eq('activo', true),
+      admin.from('empleados').select('id, nombre_completo, cedula, ciudad, rol, activo, asignado, fecha_nacimiento, eps_id, fondo_pension_id, arl_id').eq('activo', true),
       admin.from('clientes').select('id, nombre_empresa, nit, telefono, contacto, activo').eq('activo', true),
       admin.from('contratos').select('id, cliente_id, valor, guardas_activos, fecha_inicio, fecha_fin, estado').eq('estado', true),
       admin.from('dispositivos_iot').select('id, nombre_identificador, ip_direccion, estado, puesto_id, apertura_desde_app, configuracion_tecnica'),
       admin.from('vacaciones').select('*, empleado:empleado_id(id, nombre_completo, cedula)').order('fecha_inicio', { ascending: false }).limit(25),
       admin.from('minutas').select('id, titulo, contenido, tipo_novedad, nivel_riesgo, fecha, hora, puesto_id, created_at').order('created_at', { ascending: false }).limit(15),
+      admin.from('eps').select('id, nombre, codigo').order('nombre', { ascending: true }),
+      admin.from('fondos_pension').select('id, nombre, codigo').order('nombre', { ascending: true }),
+      admin.from('arl').select('id, nombre, codigo').order('nombre', { ascending: true }),
       this.runSql(`SELECT COUNT(*)::int AS total FROM ia_brain.conocimiento_corporativo WHERE activo = true`),
       user?.id
         ? this.runSql(`SELECT id, tipo_memoria, clave, hecho_recordado, importancia, created_at FROM ia_brain.memoria_usuarios WHERE usuario_id = ${Number(user.id)} AND activo = true ORDER BY importancia DESC, created_at DESC LIMIT 15`)
@@ -374,6 +414,9 @@ export class CatorceBrainService implements OnModuleInit {
     const dispositivos = dispositivosRes.data || [];
     const vacaciones = vacacionesRes.data || [];
     const minutasRecientes = minutasHoyRes.data || [];
+    const epsList = epsRes.data || [];
+    const fondosPensionList = fondosPensionRes.data || [];
+    const arlList = arlRes.data || [];
 
     const controlesAcceso = dispositivos.filter((d: any) => {
       const tipo = String(d.configuracion_tecnica?.tipo || 'control_acceso').toLowerCase();
@@ -412,6 +455,9 @@ export class CatorceBrainService implements OnModuleInit {
         proximosVacacionesCount: proximasVacaciones.length,
         documentosSegundoCerebro: totalBrainDocs,
         minutasRecientesCount: minutasRecientes.length,
+        epsRegistradas: epsList.length,
+        fondosPensionRegistrados: fondosPensionList.length,
+        arlRegistradas: arlList.length,
       },
       detalles: {
         puestos: puestos.slice(0, 30),
@@ -431,6 +477,9 @@ export class CatorceBrainService implements OnModuleInit {
         vacacionesActuales: vacaciones.slice(0, 10),
         quienesSiguenVacaciones: proximasVacaciones,
         minutasRecientes: minutasRecientes.slice(0, 8),
+        eps: epsList,
+        fondosPension: fondosPensionList,
+        arl: arlList,
       },
       subAgents: this.subAgents,
       auditoriaReciente: recentAuditsRes || [],

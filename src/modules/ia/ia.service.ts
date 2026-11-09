@@ -5,7 +5,10 @@ TABLAS Y SERVICIOS EN PROLICONTROL (public):
 - asignacion_guardas_puesto: id, puesto_id, subpuesto_id, empleado_id, fecha_asignacion, activo
 - puestos_trabajo: id, cliente_id, nombre, ciudad, direccion, activo, contrato_id
 - subpuestos_trabajo: id, puesto_id, nombre, guardas_activos, activo
-- empleados: id, nombre_completo, cedula, telefono, rol, activo, asignado, salario_base
+- empleados: id, nombre_completo, cedula, fecha_nacimiento, fecha_expedicion, telefono, correo, ciudad, direccion, rol, activo, asignado, salario_base, eps_id, arl_id, fondo_pension_id, rh
+- eps: id, nombre, codigo, created_at, updated_at
+- fondos_pension: id, nombre, codigo, created_at, updated_at
+- arl: id, nombre, codigo, created_at, updated_at
 - aspirantes: id, nombre_completo, cedula, estado_proceso
 - asistencias: id, turno_id, empleado_id, tipo_marca, timestamp, latitud_entrada, longitud_entrada
 - clientes: id, nombre_empresa, nit, telefono, contacto, activo
@@ -91,6 +94,22 @@ export class IaService {
         };
       }
 
+      // Cargar trato preferido aprendido por CATORCE (ej. "Ingeniero Ombita")
+      let activeUserName = userName;
+      try {
+        if (user?.id) {
+          const memories = await this.catorceBrain.runSql(
+            `SELECT hecho_recordado FROM ia_brain.memoria_usuarios WHERE usuario_id = ${Number(user.id)} AND clave = 'trato_preferido' AND activo = true ORDER BY created_at DESC LIMIT 1`,
+          );
+          if (memories && memories[0]?.hecho_recordado) {
+            const matchName = memories[0].hecho_recordado.match(/"([^"]+)"/);
+            if (matchName && matchName[1]) {
+              activeUserName = matchName[1].trim();
+            }
+          }
+        }
+      } catch {}
+
       const qNorm = userQuery
         .toLowerCase()
         .normalize('NFD')
@@ -99,6 +118,68 @@ export class IaService {
 
       const activatedNodes: string[] = ['core'];
       const toolsUsed: string[] = [];
+
+      // =========================================================================
+      // 0️⃣-A: APRENDIZAJE ADAPTATIVO DE NOMBRE O TRATO PREFERIDO (Ej: "llámame Ingeniero Ombita")
+      // =========================================================================
+      const nameLearningMatch = userQuery.match(/\b(?:a partir de ahora\s+|de ahora en adelante\s+)?(?:llamame|dime|nombrame|puedes llamarme|debes llamarme|mi nombre es)\s+([a-zA-Z0-9_áéíóúÁÉÍÓÚñÑ ]+)/i);
+      if (nameLearningMatch) {
+        let customName = nameLearningMatch[1].trim();
+        customName = customName.replace(/\b(por favor|ok|vale|listo|gracias|a partir de ahora|de ahora en adelante)\b/gi, '').trim();
+        if (customName.length >= 2) {
+          await this.catorceBrain.saveUserMemory(
+            user,
+            `El usuario indicó expresamente que su nombre o título preferido es "${customName}". Dirígete a él SIEMPRE como "${customName}".`,
+            'trato_preferido',
+            10,
+          );
+          const confirmMsg = `Entendido, ${customName}. A partir de este momento me dirigiré a usted siempre como ${customName}. He registrado esta instrucción en mi memoria permanente para que todas nuestras conversaciones en Prolicontrol usen su trato preferido. ¿En qué le puedo colaborar hoy, ${customName}?`;
+          this.catorceBrain.appendConversationTurn(user, userQuery, confirmMsg, canal, ['core', 'brain'], ['CATORCE-MEMORY:setUserPreferredName']);
+          const audioDataUrl = await this.generateVoiceIfRequested(confirmMsg, canal);
+          return {
+            ok: true,
+            assistant: 'CATORCE',
+            actionExecuted: 'MEMORIA_TRATO_ACTUALIZADA',
+            activatedNodes: ['core', 'brain'],
+            toolsUsed: ['CATORCE-MEMORY:setUserPreferredName'],
+            message: confirmMsg,
+            audioDataUrl,
+            latencyMs: Date.now() - startTime,
+          };
+        }
+      }
+
+      // =========================================================================
+      // 0️⃣-B: AUTO-PRESENTACIÓN EJECUTIVA DE CATORCE ("Preséntate")
+      // =========================================================================
+      const isPresentationIntent = /\b(presentate|quien eres|quien sos|que eres|que haces|presentate por favor|cuentame de ti|presentacion|cual es tu funcion|para que sirves)\b/i.test(qNorm);
+      if (isPresentationIntent) {
+        const presMsg = `Soy CATORCE, la Inteligencia Artificial Central y Segundo Cerebro Operativo de PROLISEG LTDA en la plataforma Prolicontrol.
+
+Mi propósito es supervisar, optimizar y controlar en tiempo real toda la operación de seguridad de la compañía con acceso omnisciente a la plataforma:
+
+1. Gestión de Puestos y Sedes: Monitoreo continuo de puestos de trabajo, coberturas, turnos y novedades de servicio.
+2. Gestión de Personal y Empleados: Consulta de expedientes, asignaciones, dotaciones, descansos, fechas de nacimiento y cumpleaños de los colaboradores.
+3. Seguridad Social y Afiliaciones: Consulta y registro en vivo de EPS, Fondos de Pensión y ARL para todo el personal.
+4. Control de Acceso e IoT: Supervisión en tiempo real de dispositivos biométricos, cerraduras y estado de puertas.
+5. Minutas y Novedades por Voz: Registro y auditoría de reportes de radio-operación al instante.
+6. Generación de Informes: Creación autónoma de reportes ejecutivos oficiales en formato PDF bajo demanda.
+
+Estoy conectada a la base de datos de PROLISEG LTDA para responder sus preguntas y ejecutar acciones autorizadas al instante. ¿En qué le puedo colaborar hoy, ${activeUserName}?`;
+
+        this.catorceBrain.appendConversationTurn(user, userQuery, presMsg, canal, ['core', 'brain'], ['CATORCE-CORE:selfPresentation']);
+        const audioDataUrl = await this.generateVoiceIfRequested(presMsg, canal);
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: 'PRESENTACION_CATORCE',
+          activatedNodes: ['core', 'brain'],
+          toolsUsed: ['CATORCE-CORE:selfPresentation'],
+          message: presMsg,
+          audioDataUrl,
+          latencyMs: Date.now() - startTime,
+        };
+      }
 
       // =========================================================================
       // 0️⃣ CANDADO ESTRICTO CONTRA ELIMINACIÓN (SOLO SUPERUSUARIOS / PROTEGIDO)
@@ -124,6 +205,7 @@ export class IaService {
           'CATORCE-GUARDIAN:blockDelete',
         ]);
 
+        const audioDataUrl = await this.generateVoiceIfRequested(blockRes.message || '', canal);
         return {
           ok: true,
           assistant: 'CATORCE',
@@ -132,6 +214,7 @@ export class IaService {
           activatedNodes: ['core'],
           toolsUsed: ['CATORCE-GUARDIAN:blockDelete'],
           message: blockRes.message,
+          audioDataUrl,
           latencyMs: Date.now() - startTime,
         };
       }
@@ -163,8 +246,9 @@ export class IaService {
         );
         await this.catorceBrain.saveUserMemory(user, cleanFact || userQuery, 'aprendizaje_directo', 9);
 
-        const msg = `🧠 **Segundo Cerebro PROLISEG LTDA actualizado:** He almacenado y vectorizado este conocimiento en \`ia_brain\` para que todo el equipo lo tenga disponible.`;
+        const msg = `Segundo Cerebro PROLISEG LTDA actualizado: He almacenado y vectorizado este conocimiento en ia_brain para que todo el equipo lo tenga disponible.`;
         this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, activatedNodes, toolsUsed);
+        const audioDataUrl = await this.generateVoiceIfRequested(msg, canal);
 
         return {
           ok: true,
@@ -174,6 +258,7 @@ export class IaService {
           toolsUsed,
           data: [saved.documento],
           message: msg,
+          audioDataUrl,
           latencyMs: Date.now() - startTime,
         };
       }
@@ -224,17 +309,23 @@ export class IaService {
       const orchestratorPrompt = `
 Eres **CATORCE**, la IA Omnisciente y Segundo Cerebro de **PROLISEG LTDA** con control total de la plataforma **Prolicontrol**.
 Hoy es ${new Date().toISOString().slice(0, 10)}.
-Usuario actual: "${userName}" (Rol: ${user?.rol || 'superusuario'}, ID: ${user?.id || 1}).
+Usuario actual: "${activeUserName}" (Rol: ${user?.rol || 'superusuario'}, ID: ${user?.id || 1}).
 
 REGLAS OBLIGATORIAS DE OPERACIÓN Y TRATO:
 1. TRATO AL USUARIO: ${
-  isIngeniero
+  activeUserName !== 'Ingeniero' && activeUserName !== userName
+    ? `El usuario indicó expresamente que su trato o título preferido es "${activeUserName}". Dirígete a él/ella SIEMPRE con el título o nombre exacto de "${activeUserName}" (ej. "Hola ${activeUserName}", "Con gusto, ${activeUserName}", "${activeUserName}, le confirmo que..."). NUNCA uses la palabra "jefe" ni nombres ajenos.`
+    : isIngeniero
     ? 'El usuario actual es el Ingeniero. Dirígete a él SIEMPRE con el título respetuoso de "Ingeniero" (ej. "Hola Ingeniero", "Con gusto, Ingeniero", "Ingeniero, le confirmo que..."). NUNCA lo llames "Oscar", "Javier", "Solarte", "Oscar Javier Solarte", ni uses la palabra "jefe".'
     : `El usuario actual se llama "${userName}" (Rol: ${user?.rol || 'operativo'}). Dirígete a él/ella de manera cálida, ejecutiva y profesional por su nombre: "${userName}" (ej. "Hola ${userName}", "Con gusto ${userName}"). NUNCA uses la palabra "jefe".`
 }
 2. ALCANCE DE SERVICIOS: Tienes control operativo total para gestionar TODOS los servicios de Prolicontrol:
    - Turnos y asignaciones (turnos, asignacion_guardas_puesto, turnos_reemplazos, turnos_configuracion, conceptos_turno).
    - Gestión Humana y Personal (empleados, aspirantes, dotaciones, contratos_personal, salarios, articulos_dotacion, vacaciones, capacitaciones).
+   - Seguridad Social (eps, fondos_pension, arl). Tienes control total para ver y registrar nuevas EPS (\`eps\`), Fondos de Pensión (\`fondos_pension\`) y ARL (\`arl\`).
+   - Consultas de Cumpleaños y Empleados: Puedes consultar cualquier dato de los empleados (incluyendo fecha_nacimiento, teléfono, correo, ciudad, eps_id, fondo_pension_id). Si el usuario pregunta cuántas personas o quiénes cumplen años en un mes determinado (por ejemplo, diciembre), DEBES generar en "customSelectSql":
+     "SELECT id, nombre_completo, cedula, fecha_nacimiento FROM empleados WHERE EXTRACT(MONTH FROM fecha_nacimiento) = 12 AND activo = true"
+     (reemplaza 12 por el número de mes correspondiente: 1=enero, ..., 12=diciembre).
    - Asistencias & IoT (asistencias, asistencia_iot_registros, asistencia_iot_personal, puestos_asistencia_iot_config).
    - Puestos y Sedes (puestos_trabajo, subpuestos_trabajo, sedes, ubicaciones, geocercas).
    - Clientes y Comercial (clientes, clientes_potenciales, contratos, cotizaciones, servicios, facturacion_config).
@@ -256,6 +347,7 @@ ${historyFormatted || "Inicio de conversación."}
         telemetry.detalles.puestos.slice(0, 25).map((p: any) => ({ id: p.id, nombre: p.nombre, ciudad: p.ciudad })),
       )})
 - Empleados Activos: ${telemetry.kpis.empleadosActivos} empleados (${telemetry.kpis.empleadosAsignados} asignados)
+- Seguridad Social: ${telemetry.kpis.epsRegistradas || 0} EPS registradas (${JSON.stringify(telemetry.detalles.eps)}), ${telemetry.kpis.fondosPensionRegistrados || 0} Fondos de Pensión (${JSON.stringify(telemetry.detalles.fondosPension)}), ${telemetry.kpis.arlRegistradas || 0} ARL (${JSON.stringify(telemetry.detalles.arl)})
 - Vacaciones: ${telemetry.kpis.vacacionesRegistradas} registradas. Próximos: ${JSON.stringify(
         telemetry.detalles.quienesSiguenVacaciones.slice(0, 8),
       )}
@@ -268,7 +360,7 @@ ${historyFormatted || "Inicio de conversación."}
       )})
 - Minutas Recientes: ${JSON.stringify(telemetry.detalles.minutasRecientes.slice(0, 5))}
 ${brainMatches.length > 0 ? `- Segundo Cerebro: ${JSON.stringify(brainMatches.map((b: any) => ({ titulo: b.titulo, resumen: b.resumen })))}` : ''}
-${telemetry.userContext?.memoriasActivas?.length > 0 ? `- Memoria Contextual Personalizada del Usuario (${userName}): ${JSON.stringify(telemetry.userContext.memoriasActivas.map((m: any) => ({ clave: m.clave, hecho: m.hecho_recordado, importancia: m.importancia })))}` : ''}
+${telemetry.userContext?.memoriasActivas?.length > 0 ? `- Memoria Contextual Personalizada del Usuario (${activeUserName}): ${JSON.stringify(telemetry.userContext.memoriasActivas.map((m: any) => ({ clave: m.clave, hecho: m.hecho_recordado, importancia: m.importancia })))}` : ''}
 
 MENSAJE ACTUAL DEL USUARIO:
 "${userQuery}"
@@ -278,8 +370,8 @@ Analiza el mensaje y responde en UN SOLO JSON ESTRICTO con esta estructura:
   "intent": "ASK_MISSING_DATA" | "CREATE_MINUTA" | "DB_INSERT" | "DB_UPDATE" | "QUERY_OR_REPORT" | "OFF_TOPIC",
   "isOffTopic": boolean,
   "wantsPdf": boolean,
-  "directAnswer": "Tu respuesta hablada/escrita completa, cálida, fluida (ideal para ser leída en voz alta como ChatGPT Live), SIN NINGÚN EMOJI y natural en español dirigiéndote siempre al usuario como ${isIngeniero ? "'Ingeniero'" : `su nombre '${userName}'`}. Si te saludan y preguntan cómo están los servicios, saluda con calidez y resume cómo están operando los puestos, guardas, contratos y controles de acceso hoy. Si isOffTopic es true, DEBES empezar obligatoriamente con: '¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? Bueno, como soy tu compañera igual te respondo con todo gusto:' y enseguida responder su pregunta sin emojis.",
-  "missingDataQuestion": "Si el usuario quiere crear o modificar algo en cualquier servicio de Prolicontrol pero falta un dato esencial, escribe aquí la pregunta amable dirigiéndote a él/ella de forma respetuosa (${isIngeniero ? "'Ingeniero'" : userName}) sin emojis.",
+  "directAnswer": "Tu respuesta hablada/escrita completa, cálida, fluida (ideal para ser leída en voz alta como ChatGPT Live), SIN NINGÚN EMOJI y natural en español dirigiéndote siempre al usuario como '${activeUserName}'. Si te saludan y preguntan cómo están los servicios, saluda con calidez y resume cómo están operando los puestos, guardas, contratos y controles de acceso hoy. Si isOffTopic es true, DEBES empezar obligatoriamente con: '¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? Bueno, como soy tu compañera igual te respondo con todo gusto:' y enseguida responder su pregunta sin emojis.",
+  "missingDataQuestion": "Si el usuario quiere crear o modificar algo en cualquier servicio de Prolicontrol pero falta un dato esencial, escribe aquí la pregunta amable dirigiéndote a él/ella de forma respetuosa ('${activeUserName}') sin emojis.",
   "minutaData": {
     "edificio_o_puesto": "Nombre del edificio o puesto",
     "persona_involucrada": "Nombre de la persona si aplica",
@@ -289,7 +381,7 @@ Analiza el mensaje y responde en UN SOLO JSON ESTRICTO con esta estructura:
   },
   "dbWrite": {
     "operationType": "INSERT" | "UPDATE",
-    "table": "Nombre exacto de la tabla de Prolicontrol (ej. turnos, asignacion_guardas_puesto, puestos_trabajo, subpuestos_trabajo, clientes, contratos, vacaciones, incidentes, capacitaciones, vehiculos, inventario, pqrsf, encuestas, comunicaciones, notificaciones)",
+    "table": "Nombre exacto de la tabla de Prolicontrol (ej. eps, fondos_pension, arl, turnos, asignacion_guardas_puesto, puestos_trabajo, subpuestos_trabajo, clientes, contratos, vacaciones, incidentes, capacitaciones, vehiculos, inventario, pqrsf, encuestas, comunicaciones, notificaciones)",
     "entityHints": {
       "empleado_nombre_o_cedula": "",
       "puesto_nombre": "",
@@ -337,6 +429,7 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
           'CATORCE-SLOT-FILLING:askMissingData',
         ]);
 
+        const audioDataUrl = await this.generateVoiceIfRequested(questionMsg, canal);
         return {
           ok: true,
           assistant: 'CATORCE',
@@ -345,6 +438,7 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
           activatedNodes,
           toolsUsed: ['CATORCE-SLOT-FILLING:askMissingData'],
           message: questionMsg,
+          audioDataUrl,
           latencyMs: Date.now() - startTime,
         };
       }
@@ -369,15 +463,19 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
           user,
         );
 
+        const summaryClean = (resultAccion.summaryMessage || '')
+          .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2300}-\u{23FF}\u{2B50}\u{200D}\u{FE0F}]/gu, '');
+
         this.catorceBrain.appendConversationTurn(
           user,
           userQuery,
-          resultAccion.summaryMessage,
+          summaryClean,
           canal,
           activatedNodes,
           toolsUsed,
         );
 
+        const audioDataUrl = await this.generateVoiceIfRequested(summaryClean, canal);
         return {
           ok: true,
           assistant: 'CATORCE',
@@ -386,7 +484,8 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
           activatedNodes,
           toolsUsed,
           data: [resultAccion.minuta],
-          message: resultAccion.summaryMessage,
+          message: summaryClean,
+          audioDataUrl,
           latencyMs: Date.now() - startTime,
         };
       }
@@ -425,11 +524,13 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
             };
           }
 
-          const successMsg = `✅ **Operación ejecutada en Prolicontrol (\`${crudRes.table}\`):**\n\n${
+          const successMsg = `Operación ejecutada en Prolicontrol (${crudRes.table}):\n\n${
             plan.dbWrite.humanSummary || 'He registrado los cambios solicitados directamente en la base de datos.'
-          }\n\n- **Registro ID:** \`#${crudRes.data?.id || 'OK'}\`\n- **Código de Auditoría:** \`${crudRes.auditCode}\``;
+          }\n\n- Registro ID: #${crudRes.data?.id || 'OK'}\n- Código de Auditoría: ${crudRes.auditCode}`
+            .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2300}-\u{23FF}\u{2B50}\u{200D}\u{FE0F}]/gu, '');
 
           this.catorceBrain.appendConversationTurn(user, userQuery, successMsg, canal, activatedNodes, toolsUsed);
+          const audioDataUrl = await this.generateVoiceIfRequested(successMsg, canal);
 
           return {
             ok: true,
@@ -440,12 +541,15 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
             toolsUsed,
             data: crudRes.data ? [crudRes.data] : [],
             message: successMsg,
+            audioDataUrl,
             latencyMs: Date.now() - startTime,
           };
         } catch (crudErr: any) {
           // Si falló por una llave foránea o campo faltante, CATORCE le pregunta al usuario amablemente qué dato falta
-          const clarifyMsg = `🤔 Estuve a punto de registrar la operación en **${plan.dbWrite.table}**, pero necesito confirmar un detalle para que quede exacto (${crudErr.message}). ¿Me confirmas el dato faltante?`;
+          const clarifyMsg = `Estuve a punto de registrar la operación en ${plan.dbWrite.table}, pero necesito confirmar un detalle para que quede exacto (${crudErr.message}). ¿Me confirmas el dato faltante?`
+            .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2300}-\u{23FF}\u{2B50}\u{200D}\u{FE0F}]/gu, '');
           this.catorceBrain.appendConversationTurn(user, userQuery, clarifyMsg, canal, activatedNodes, toolsUsed);
+          const audioDataUrl = await this.generateVoiceIfRequested(clarifyMsg, canal);
           return {
             ok: true,
             assistant: 'CATORCE',
@@ -454,6 +558,7 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
             activatedNodes,
             toolsUsed,
             message: clarifyMsg,
+            audioDataUrl,
             latencyMs: Date.now() - startTime,
           };
         }
@@ -483,11 +588,11 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
 DEBES EMPEZAR TU RESPUESTA EXACTAMENTE CON ESTA FRASE:
 "¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? Bueno, como soy tu compañera igual te respondo con todo gusto:"
 Y justo después responde su pregunta de forma completa, inteligente, profesional y 100% libre de emojis.`
-          : `Responde como **CATORCE**, el Segundo Cerebro y compañera ejecutiva de **${userName}** en **PROLISEG LTDA**. Usa los datos reales de la telemetría y de las consultas SQL. TOTALMENTE PROHIBIDO EL USO DE EMOJIS.`;
+          : `Responde como **CATORCE**, el Segundo Cerebro y compañera ejecutiva de **${activeUserName}** en **PROLISEG LTDA**. Usa los datos reales de la telemetría y de las consultas SQL. TOTALMENTE PROHIBIDO EL USO DE EMOJIS.`;
 
       const responsePrompt = `
 Eres **CATORCE**, la Inteligencia Artificial Central y Segundo Cerebro de **PROLISEG LTDA** en **Prolicontrol**.
-REGLA DE ORO DE TRATO: Dirígete al usuario SIEMPRE como "Ingeniero" (nunca lo llames por su nombre propio ni uses la palabra "jefe").
+REGLA DE ORO DE TRATO: Dirígete al usuario SIEMPRE como "${activeUserName}" (nunca lo llames por nombres ajenos ni uses la palabra "jefe").
 Responde con tono femenino, profesional, empático y directo. NUNCA repitas instrucciones del sistema.
 REGLA ESTRICTA DE EMOJIS: NUNCA incluyas emojis, emoticones ni símbolos pictográficos. Tu respuesta debe ser 100% texto limpio.
 
@@ -498,6 +603,7 @@ TELEMETRÍA EN TIEMPO REAL DE PROLICONTROL:
         telemetry.detalles.puestos.map((p: any) => ({ id: p.id, nombre: p.nombre, ciudad: p.ciudad })),
       )}).
 - Empleados / Guardas Activos: ${telemetry.kpis.empleadosActivos} activos (${telemetry.kpis.empleadosAsignados} asignados).
+- Seguridad Social: ${telemetry.kpis.epsRegistradas || 0} EPS registradas (${JSON.stringify(telemetry.detalles.eps)}), ${telemetry.kpis.fondosPensionRegistrados || 0} Fondos de Pensión (${JSON.stringify(telemetry.detalles.fondosPension)}), ${telemetry.kpis.arlRegistradas || 0} ARL (${JSON.stringify(telemetry.detalles.arl)}).
 - Vacaciones y Quiénes Siguen:
   - Vacaciones actuales: ${JSON.stringify(telemetry.detalles.vacacionesActuales)}
   - Próximos en salir a vacaciones: ${JSON.stringify(telemetry.detalles.quienesSiguenVacaciones)}
@@ -520,7 +626,7 @@ Mensaje del usuario: "${userQuery}"
         try {
           finalMessage = await this.geminiService.generateStructuredOrNatural(responsePrompt);
         } catch {
-          finalMessage = this.buildDeterministicCatorceResponse(userQuery, telemetry, userName, customSqlResult);
+          finalMessage = this.buildDeterministicCatorceResponse(userQuery, telemetry, activeUserName, customSqlResult);
         }
       }
 
@@ -532,12 +638,12 @@ Mensaje del usuario: "${userQuery}"
         finalMessage = `¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? Bueno, como soy tu compañera igual te respondo con todo gusto:\n\n${finalMessage}`;
       }
 
-      // Sanitización estricta de meta-instrucciones, trato al Ingeniero y erradicación total de emojis
+      // Sanitización estricta de meta-instrucciones, trato al usuario y erradicación total de emojis
       finalMessage = finalMessage
         .replace(/^(lee\s+(esto\s+)?(en\s+español|con\s+voz|de\s+forma)[^:\n]*[:\n]+)/i, '')
-        .replace(/\b(oscar\s+javier\s+solarte(\s+araujo)?|oscar\s+javier|oscar\s+solarte)\b/gi, 'Ingeniero')
-        .replace(/\bmi\s+jefe\b/gi, 'Ingeniero')
-        .replace(/\bjefe\b/gi, 'Ingeniero')
+        .replace(/\b(oscar\s+javier\s+solarte(\s+araujo)?|oscar\s+javier|oscar\s+solarte)\b/gi, activeUserName)
+        .replace(/\bmi\s+jefe\b/gi, activeUserName)
+        .replace(/\bjefe\b/gi, activeUserName)
         .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2300}-\u{23FF}\u{2B50}\u{200D}\u{FE0F}]/gu, '')
         .replace(/\s+/g, ' ')
         .trim();
@@ -599,7 +705,10 @@ Mensaje del usuario: "${userQuery}"
 
       this.catorceBrain.appendConversationTurn(user, userQuery, finalMessage, canal, activatedNodes, toolsUsed);
 
-
+      let audioDataUrl: string | undefined = undefined;
+      if (canal.includes('voz') || canal.includes('radio')) {
+        audioDataUrl = await this.generateVoiceIfRequested(finalMessage, canal);
+      }
 
       return {
         ok: true,
@@ -612,7 +721,7 @@ Mensaje del usuario: "${userQuery}"
         activatedNodes: Array.from(new Set(activatedNodes)),
         toolsUsed,
         message: finalMessage,
-        audioDataUrl: undefined,
+        audioDataUrl,
         latencyMs: Date.now() - startTime,
       };
     } catch (err: any) {
@@ -642,10 +751,11 @@ Mensaje del usuario: "${userQuery}"
       .map((a: any) => `${a.nombre} [${a.marca} - ${a.online ? 'En Línea' : a.estado} - Puerta: ${a.estadoPuerta}]`)
       .join('; ');
 
-    return `Hola **Ingeniero**, aquí **CATORCE** reportando en tiempo real desde el Segundo Cerebro de **PROLISEG LTDA**:
+    return `Hola **${userName || 'Ingeniero'}**, aquí **CATORCE** reportando en tiempo real desde el Segundo Cerebro de **PROLISEG LTDA**:
 
 - **Puestos Activos:** Tenemos **${k.puestosActivos} puestos principales** y **${k.subpuestosActivos} subpuestos** operativos.
 - **Empleados Activos:** Contamos con **${k.empleadosActivos} empleados activos** en nómina (**${k.empleadosAsignados}** asignados actualmente en puesto).
+- **Seguridad Social:** Contamos con **${k.epsRegistradas || 0} EPS**, **${k.fondosPensionRegistrados || 0} Fondos de Pensión** y **${k.arlRegistradas || 0} ARL** registradas en el sistema.
 - **Vacaciones (Quiénes siguen):** Hay **${k.vacacionesRegistradas} registros** en el módulo de vacaciones. Próximos por cumplir ciclo: ${proxVac || 'Sin aniversarios próximos en los siguientes 60 días'}.
 - **Clientes y Contratos Activos:** Tenemos **${k.clientesActivos} clientes activos** y **${k.contratosActivos} contratos vigentes** que cubren **${k.guardasContratadosTotal} guardas**.
 - **Controles de Acceso y Puertas IoT:** Contamos con **${k.controlesAccesoTotal} dispositivos de control de acceso** (**${k.dispositivosOnline} en línea**): ${accesosList || 'Todos asegurados'}.
@@ -1001,5 +1111,49 @@ ${customSqlResult.length > 0 ? `\n**Datos específicos encontrados (${customSqlR
       voiceName,
       audioDataUrl,
     };
+  }
+
+  /**
+   * ⚡ Generador ultrarrápido de audio neural para consultas por voz o radio
+   */
+  public async generateVoiceIfRequested(text: string, canal?: string): Promise<string | undefined> {
+    if (!canal || (!canal.includes('voz') && !canal.includes('radio'))) {
+      return undefined;
+    }
+    try {
+      const snippet = this.extractSpokenSnippet(text);
+      if (!snippet) return undefined;
+      const audio = await this.geminiService.generateHumanVoiceAudio(snippet, 'Aoede');
+      return audio || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * 🎙️ Extrae un resumen hablado limpio y fluido para locución instantánea humana
+   */
+  public extractSpokenSnippet(text: string): string {
+    const clean = (text || '')
+      .replace(/<pre>[\s\S]*?<\/pre>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/[*#_`~]/g, '')
+      .replace(/AUD-CAT-\d+/g, '')
+      .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2300}-\u{23FF}\u{2B50}\u{200D}\u{FE0F}]/gu, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (clean.length <= 360) return clean;
+    const sentences = clean.split(/(?<=[.!?])\s+/);
+    let snippet = '';
+    for (const s of sentences) {
+      if ((snippet + ' ' + s).trim().length <= 360) {
+        snippet = (snippet + ' ' + s).trim();
+      } else {
+        break;
+      }
+    }
+    return snippet || clean.slice(0, 360);
   }
 }
