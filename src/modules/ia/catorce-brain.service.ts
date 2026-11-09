@@ -24,6 +24,7 @@ export class CatorceBrainService implements OnModuleInit {
 
   private readonly logger = new Logger(CatorceBrainService.name);
   private readonly brainDirectory = 'C:\\Users\\Admin\\Documents\\PROLISEG LTDA';
+  private readonly obsidianVaultDirectory = 'C:\\Users\\JaviSol\\Documents\\SegundoCerebro';
 
   // Registro modular de Sub-IAs del Microservicio CATORCE
   private subAgents: SubAgentDefinition[] = [
@@ -194,65 +195,81 @@ export class CatorceBrainService implements OnModuleInit {
   }
 
   /**
-   * 📂 Sincroniza los archivos Markdown de "C:\Users\Admin\Documents\PROLISEG LTDA" hacia ia_brain.conocimiento_corporativo
+   * 📂 Sincroniza los archivos Markdown del Segundo Cerebro (Obsidian y PROLISEG LTDA) hacia ia_brain.conocimiento_corporativo
    */
   public async syncLocalProlisegBrainFiles(): Promise<{ indexed: number; totalFiles: number }> {
-    if (!fs.existsSync(this.brainDirectory)) {
+    const targetDirs = [this.obsidianVaultDirectory, this.brainDirectory].filter((d) => fs.existsSync(d));
+    if (targetDirs.length === 0) {
       return { indexed: 0, totalFiles: 0 };
     }
 
     const mdFiles: { fullPath: string; relPath: string; category: string; title: string }[] = [];
+    const seenCodes = new Set<string>();
 
-    const walk = (dir: string) => {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const walk = (baseDir: string, currentDir: string) => {
+      const entries = fs.readdirSync(currentDir, { withFileTypes: true });
       for (const entry of entries) {
         if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
-        const fullPath = path.join(dir, entry.name);
+        const nameLower = entry.name.toLowerCase();
+        // 🛡️ Exclusión obligatoria: no indexar Diplomado ni El Cabuyal
+        if (nameLower.includes('diplomado') || nameLower.includes('cabuyal')) continue;
+
+        const fullPath = path.join(currentDir, entry.name);
         if (entry.isDirectory()) {
-          walk(fullPath);
+          walk(baseDir, fullPath);
         } else if (entry.name.endsWith('.md')) {
-          const relPath = path.relative(this.brainDirectory, fullPath);
+          const relPath = path.relative(baseDir, fullPath);
           const parts = relPath.split(path.sep);
           const category = parts.length > 1 ? parts[0] : 'General';
           const title = entry.name.replace(/\.md$/i, '').replace(/[-_]/g, ' ');
-          mdFiles.push({ fullPath, relPath, category, title });
+          const code = 'OBS_' + relPath.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120);
+
+          if (!seenCodes.has(code)) {
+            seenCodes.add(code);
+            mdFiles.push({ fullPath, relPath, category, title });
+          }
         }
       }
     };
 
-    try {
-      walk(this.brainDirectory);
-    } catch (e: any) {
-      this.logger.warn(`⚠️ Error escaneando carpeta PROLISEG LTDA: ${e.message}`);
+    for (const d of targetDirs) {
+      try {
+        walk(d, d);
+      } catch (e: any) {
+        this.logger.warn(`⚠️ Error escaneando carpeta ${d}: ${e.message}`);
+      }
     }
 
     let indexed = 0;
-    const admin = this.supabase.getSupabaseAdminClient();
 
-    for (const file of mdFiles.slice(0, 80)) {
+    for (const file of mdFiles) {
       try {
         const content = fs.readFileSync(file.fullPath, 'utf8').trim();
         if (!content) continue;
 
-        const code = file.relPath.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 140);
+        const code = 'OBS_' + file.relPath.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120);
         const safeTitle = file.title.replace(/'/g, "''");
         const safeCat = file.category.replace(/'/g, "''");
         const safePath = file.relPath.replace(/\\/g, '/').replace(/'/g, "''");
-        const safeContent = content.slice(0, 8000).replace(/'/g, "''");
+        const safeContent = content.slice(0, 15000).replace(/'/g, "''");
         const summary = content
           .replace(/[#*`-]/g, '')
           .replace(/\s+/g, ' ')
-          .slice(0, 280)
+          .slice(0, 320)
           .replace(/'/g, "''");
 
         const upsertSql = `
           INSERT INTO ia_brain.conocimiento_corporativo
-            (codigo_documento, titulo, categoria, ruta_archivo, contenido, resumen, creado_por_nombre, updated_at)
+            (codigo_documento, titulo, categoria, ruta_archivo, contenido, resumen, creado_por_nombre, activo, updated_at)
           VALUES
-            ('${code}', '${safeTitle}', '${safeCat}', '${safePath}', '${safeContent}', '${summary}', 'Segundo Cerebro PROLISEG LTDA', NOW())
+            ('${code}', '${safeTitle}', '${safeCat}', '${safePath}', '${safeContent}', '${summary}', 'Obsidian Segundo Cerebro PROLISEG LTDA', true, NOW())
           ON CONFLICT (codigo_documento) DO UPDATE SET
+            titulo = EXCLUDED.titulo,
+            categoria = EXCLUDED.categoria,
+            ruta_archivo = EXCLUDED.ruta_archivo,
             contenido = EXCLUDED.contenido,
             resumen = EXCLUDED.resumen,
+            activo = true,
             updated_at = NOW()
         `;
 
