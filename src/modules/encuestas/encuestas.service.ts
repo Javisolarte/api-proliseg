@@ -550,7 +550,7 @@ export class EncuestasService {
                      'puntaje_obtenido', d.puntaje_obtenido,
                      'es_correcta', d.es_correcta,
                      'respuesta_correcta', p.respuesta_correcta
-                   ) ORDER BY p.orden ASC, p.id ASC
+                   ) ORDER BY COALESCE(p.orden, 0) ASC, COALESCE(p.id, 0) ASC
                  ) FILTER (WHERE d.id IS NOT NULL), '[]'::json
                ) as detalles
         FROM encuesta_respuestas r
