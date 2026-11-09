@@ -54,18 +54,19 @@ export class IaService {
   /**
    * 🔐 Verifica si el usuario tiene acceso al servicio CATORCE IA
    */
-  private checkUserAccess(user: any): { hasAccess: boolean; userName: string } {
+  private checkUserAccess(user: any): { hasAccess: boolean; userName: string; isIngeniero: boolean } {
     const rawName = String(user?.nombre_completo || user?.nombre || user?.email || '').toLowerCase();
     const isOscar = rawName.includes('oscar') || rawName.includes('solarte') || !user || String(user?.rol || '').toLowerCase() === 'superusuario';
-    const userName = isOscar ? 'Ingeniero' : (user?.nombre || 'Ingeniero');
+    const firstName = String(user?.nombre || user?.nombre_completo || '').trim().split(' ')[0] || '';
+    const userName = isOscar ? 'Ingeniero' : (firstName || 'Compañero');
     const userRole = (user?.rol || 'superusuario').toLowerCase();
 
     if (this.BLOCKED_ROLES.includes(userRole)) {
       this.logger.warn(`🚫 Acceso restringido para rol externo: ${userRole} (${user?.email})`);
-      return { hasAccess: false, userName };
+      return { hasAccess: false, userName, isIngeniero: false };
     }
 
-    return { hasAccess: true, userName };
+    return { hasAccess: true, userName, isIngeniero: isOscar };
   }
 
   /**
@@ -81,7 +82,7 @@ export class IaService {
     try {
       this.logger.debug(`🧠 [CATORCE] Instrucción recibida (${canal}): "${userQuery}"`);
 
-      const { hasAccess, userName } = this.checkUserAccess(user);
+      const { hasAccess, userName, isIngeniero } = this.checkUserAccess(user);
       if (!hasAccess) {
         return {
           ok: false,
@@ -226,7 +227,11 @@ Hoy es ${new Date().toISOString().slice(0, 10)}.
 Usuario actual: "${userName}" (Rol: ${user?.rol || 'superusuario'}, ID: ${user?.id || 1}).
 
 REGLAS OBLIGATORIAS DE OPERACIÓN Y TRATO:
-1. TRATO AL USUARIO: Dirígete al usuario SIEMPRE con el título respetuoso de "Ingeniero" (ej. "Hola Ingeniero", "Con gusto, Ingeniero", "Ingeniero, le confirmo que..."). NUNCA lo llames "Oscar", "Javier", "Solarte", "Oscar Javier Solarte", ni uses la palabra "jefe".
+1. TRATO AL USUARIO: ${
+  isIngeniero
+    ? 'El usuario actual es el Ingeniero. Dirígete a él SIEMPRE con el título respetuoso de "Ingeniero" (ej. "Hola Ingeniero", "Con gusto, Ingeniero", "Ingeniero, le confirmo que..."). NUNCA lo llames "Oscar", "Javier", "Solarte", "Oscar Javier Solarte", ni uses la palabra "jefe".'
+    : `El usuario actual se llama "${userName}" (Rol: ${user?.rol || 'operativo'}). Dirígete a él/ella de manera cálida, ejecutiva y profesional por su nombre: "${userName}" (ej. "Hola ${userName}", "Con gusto ${userName}"). NUNCA uses la palabra "jefe".`
+}
 2. ALCANCE DE SERVICIOS: Tienes control operativo total para gestionar TODOS los servicios de Prolicontrol:
    - Turnos y asignaciones (turnos, asignacion_guardas_puesto, turnos_reemplazos, turnos_configuracion, conceptos_turno).
    - Gestión Humana y Personal (empleados, aspirantes, dotaciones, contratos_personal, salarios, articulos_dotacion, vacaciones, capacitaciones).

@@ -925,6 +925,9 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
   ) {
     const userRole = String(user?.rol || user?.role || '').toLowerCase();
     const isSuperuser = userRole === 'superusuario';
+    const rawName = String(user?.nombre_completo || user?.nombre || user?.email || '').toLowerCase();
+    const isOscar = rawName.includes('oscar') || rawName.includes('solarte') || !user || isSuperuser;
+    const userGreeting = isOscar ? 'Ingeniero' : (String(user?.nombre || user?.nombre_completo || '').trim().split(' ')[0] || 'Compañero');
 
     // 🛡️ REGLA DE ORO 1: NINGÚN DELETE/DROP/TRUNCATE (Protección inmutable de base de datos)
     const rawSqlUpper = (operation.sqlStatement || '').toUpperCase();
@@ -951,8 +954,8 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
         blockedDelete: true,
         auditCode: auditBlock.codigo_auditoria,
         message: isSuperuser
-          ? `🛡️ **Protección Activa de CATORCE:** Ingeniero, tengo activado el candado preventivo de seguridad contra eliminaciones directas de base de datos (DELETE). Si desea dar de baja un registro en **${operation.table || 'la plataforma'}**, dígame *"desactívalo"* o *"cámbiale el estado a inactivo"* y lo actualizaré de inmediato preservando la integridad del sistema. (Auditoría: ${auditBlock.codigo_auditoria})`
-          : `⛔ **Acción Restringida:** Ingeniero, las operaciones de eliminación directa de base de datos están bloqueadas por políticas de auditoría de **PROLISEG LTDA**. Con gusto puedo ayudarle a consultar, crear o actualizar cualquier registro en la plataforma. (Auditoría: ${auditBlock.codigo_auditoria})`,
+          ? `🛡️ **Protección Activa de CATORCE:** ${userGreeting}, tengo activado el candado preventivo de seguridad contra eliminaciones directas de base de datos (DELETE). Si desea dar de baja un registro en **${operation.table || 'la plataforma'}**, dígame *"desactívalo"* o *"cámbiale el estado a inactivo"* y lo actualizaré de inmediato preservando la integridad del sistema. (Auditoría: ${auditBlock.codigo_auditoria})`
+          : `⛔ **Acción Restringida:** ${userGreeting}, las operaciones de eliminación directa de base de datos están bloqueadas por políticas de auditoría de **PROLISEG LTDA**. Con gusto puedo ayudarle a consultar, crear o actualizar cualquier registro en la plataforma. (Auditoría: ${auditBlock.codigo_auditoria})`,
       };
     }
 
@@ -987,7 +990,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
         ok: false,
         blockedUserCreation: true,
         auditCode: auditBlock.codigo_auditoria,
-        message: `⛔ **Acción Restringida:** Ingeniero, por directriz estricta de seguridad de **PROLISEG LTDA**, tengo expresamente restringida la creación de usuarios y credenciales en el sistema. La creación de usuarios debe realizarse directamente desde el módulo administrativo de **Usuarios** para garantizar la validación de identidad y asignación de roles. (Auditoría: ${auditBlock.codigo_auditoria})`,
+        message: `⛔ **Acción Restringida:** ${userGreeting}, por directriz estricta de seguridad de **PROLISEG LTDA**, tengo expresamente restringida la creación de usuarios y credenciales en el sistema. La creación de usuarios debe realizarse directamente desde el módulo administrativo de **Usuarios** para garantizar la validación de identidad y asignación de roles. (Auditoría: ${auditBlock.codigo_auditoria})`,
       };
     }
 
