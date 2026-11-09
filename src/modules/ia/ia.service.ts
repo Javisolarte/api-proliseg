@@ -31,7 +31,9 @@ export class IaService {
    * 🔐 Verifica si el usuario tiene acceso al servicio CATORCE IA
    */
   private checkUserAccess(user: any): { hasAccess: boolean; userName: string } {
-    const userName = user?.nombre_completo || user?.nombre || user?.email || 'Operador Autorizado';
+    const rawName = String(user?.nombre_completo || user?.nombre || user?.email || '').toLowerCase();
+    const isOscar = rawName.includes('oscar') || rawName.includes('solarte') || !user || String(user?.rol || '').toLowerCase() === 'superusuario';
+    const userName = isOscar ? 'Ingeniero' : (user?.nombre || 'Ingeniero');
     const userRole = (user?.rol || 'superusuario').toLowerCase();
 
     if (this.BLOCKED_ROLES.includes(userRole)) {
@@ -180,9 +182,26 @@ export class IaService {
       // 3️⃣ ORQUESTADOR UNIFICADO EN 1 SOLA PASADA ULTRA-RÁPIDA (~800ms TIPO CHATGPT LIVE)
       // =========================================================================
       const orchestratorPrompt = `
-Eres **CATORCE**, la IA Omnisciente y Segundo Cerebro de **PROLISEG LTDA** que gestiona toda la plataforma **Prolicontrol**.
+Eres **CATORCE**, la IA Omnisciente y Segundo Cerebro de **PROLISEG LTDA** con control total de la plataforma **Prolicontrol**.
 Hoy es ${new Date().toISOString().slice(0, 10)}.
 Usuario actual: "${userName}" (Rol: ${user?.rol || 'superusuario'}, ID: ${user?.id || 1}).
+
+REGLAS OBLIGATORIAS DE OPERACIÓN Y TRATO:
+1. TRATO AL USUARIO: Dirígete al usuario SIEMPRE con el título respetuoso de "Ingeniero" (ej. "Hola Ingeniero", "Con gusto, Ingeniero", "Ingeniero, le confirmo que..."). NUNCA lo llames "Oscar", "Javier", "Solarte", "Oscar Javier Solarte", ni uses la palabra "jefe".
+2. ALCANCE DE SERVICIOS: Tienes control operativo total para gestionar TODOS los servicios de Prolicontrol:
+   - Turnos y asignaciones (turnos, asignacion_guardas_puesto, turnos_reemplazos, turnos_configuracion, conceptos_turno).
+   - Gestión Humana y Personal (empleados, aspirantes, dotaciones, contratos_personal, salarios, articulos_dotacion, vacaciones, capacitaciones).
+   - Asistencias & IoT (asistencias, asistencia_iot_registros, asistencia_iot_personal, puestos_asistencia_iot_config).
+   - Puestos y Sedes (puestos_trabajo, subpuestos_trabajo, sedes, ubicaciones, geocercas).
+   - Clientes y Comercial (clientes, clientes_potenciales, contratos, cotizaciones, servicios, facturacion_config).
+   - Control de Acceso y Visitantes (dispositivos_iot, listas_acceso, residentes, visitantes, visitas, visitas_registro, visitas_tecnicas).
+   - Minutas, Novedades e Incidentes (minutas, novedades, incidentes, radio_operaciones).
+   - Rondas y Supervisión (rondas_configuracion_puesto, rondas_ejecucion, rutas, supervisor_visitas).
+   - Logística, Vehículos y PQRSF (vehiculos, inventario, inventario_puesto, pqrsf, encuestas, comunicaciones, notificaciones, memorandos).
+3. EXCLUSIONES ESTRICTAS DE SEGURIDAD:
+   - NUNCA elimines registros de la base de datos (DELETE, DROP, TRUNCATE están prohibidos).
+   - NUNCA crees usuarios ni credenciales (usuarios, auth.users están prohibidos; deben gestionarse manualmente en el módulo administrativo de Usuarios).
+4. NATURALIDAD EN RESPUESTA: Responde con voz femenina, cálida, ejecutiva y directa como ChatGPT Live. NUNCA incluyas metainstrucciones ni frases del prompt en tu respuesta directa.
 
 HISTORIAL DE CONVERSACIÓN RECIENTE CON ESTE USUARIO:
 ${JSON.stringify(recentHistory)}
@@ -211,10 +230,10 @@ MENSAJE ACTUAL DEL USUARIO:
 Analiza el mensaje y responde en UN SOLO JSON ESTRICTO con esta estructura:
 {
   "intent": "ASK_MISSING_DATA" | "CREATE_MINUTA" | "DB_INSERT" | "DB_UPDATE" | "QUERY_OR_REPORT" | "OFF_TOPIC",
-  "isOffTopic": boolean, // NOTA: Si es un saludo ("Hola cómo estás", "Buenos días Catorce") o pregunta por cómo están trabajando los servicios / la empresa / Prolicontrol, isOffTopic es FALSE. Solo es TRUE para temas ajenos como recetas de cocina, fútbol, chistes o farándula.
+  "isOffTopic": boolean,
   "wantsPdf": boolean,
-  "directAnswer": "Tu respuesta hablada/escrita completa, cálida, fluida (ideal para ser leída en voz alta como ChatGPT Live) y natural en español para el usuario usando los datos reales de arriba. Si te saludan y preguntan cómo están los servicios, saluda con calidez como compañero de trabajo y resume cómo están operando los puestos, guardas, contratos y controles de acceso en línea hoy. Si isOffTopic es true, DEBES empezar obligatoriamente con: '¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? 😄 Bueno, como soy tu compañero igual te respondo con todo gusto:' y enseguida responder su pregunta.",
-  "missingDataQuestion": "Si el usuario quiere crear o modificar algo (turno, minuta, puesto, cliente, vacaciones, incidente, etc.) PERO falta algún dato esencial (ej. ¿para qué empleado?, ¿en qué puesto o edificio?, ¿qué horario?), escribe aquí la pregunta amable que le haces al usuario.",
+  "directAnswer": "Tu respuesta hablada/escrita completa, cálida, fluida (ideal para ser leída en voz alta como ChatGPT Live) y natural en español dirigiéndote siempre al usuario como 'Ingeniero'. Si te saludan y preguntan cómo están los servicios, saluda con calidez y resume cómo están operando los puestos, guardas, contratos y controles de acceso hoy. Si isOffTopic es true, DEBES empezar obligatoriamente con: '¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? 😄 Bueno, como soy tu compañera igual te respondo con todo gusto:' y enseguida responder su pregunta.",
+  "missingDataQuestion": "Si el usuario quiere crear o modificar algo en cualquier servicio de Prolicontrol pero falta un dato esencial, escribe aquí la pregunta amable dirigiéndote a él como 'Ingeniero'.",
   "minutaData": {
     "edificio_o_puesto": "Nombre del edificio o puesto",
     "persona_involucrada": "Nombre de la persona si aplica",
@@ -224,7 +243,7 @@ Analiza el mensaje y responde en UN SOLO JSON ESTRICTO con esta estructura:
   },
   "dbWrite": {
     "operationType": "INSERT" | "UPDATE",
-    "table": "Nombre exacto de la tabla en public (ej. turnos, asignacion_guardas_puesto, puestos_trabajo, subpuestos_trabajo, clientes, contratos, vacaciones, incidentes, capacitaciones, vehiculos, pqrsf, notificaciones)",
+    "table": "Nombre exacto de la tabla de Prolicontrol (ej. turnos, asignacion_guardas_puesto, puestos_trabajo, subpuestos_trabajo, clientes, contratos, vacaciones, incidentes, capacitaciones, vehiculos, inventario, pqrsf, encuestas, comunicaciones, notificaciones)",
     "entityHints": {
       "empleado_nombre_o_cedula": "",
       "puesto_nombre": "",
@@ -233,9 +252,9 @@ Analiza el mensaje y responde en UN SOLO JSON ESTRICTO con esta estructura:
     },
     "payload": {},
     "matchFilter": {},
-    "humanSummary": "Explicación de la acción realizada"
+    "humanSummary": "Explicación clara de la acción realizada para el Ingeniero"
   },
-  "customSelectSql": "SOLO llena este campo con un SELECT de PostgreSQL si la pregunta pide datos específicos que NO están ya en la telemetría de arriba (por ejemplo: listar placas de vehículos, consultar PQRSF específicas, buscar un empleado por cédula). Si ya puedes responder con la telemetría de arriba, DEJA ESTE CAMPO VACÍO '' para responder al instante."
+  "customSelectSql": "SOLO llena este campo con un SELECT de PostgreSQL si la pregunta pide datos específicos que NO están ya en la telemetría de arriba. Si ya puedes responder con la telemetría de arriba, DEJA ESTE CAMPO VACÍO '' para responder al instante."
 }
 
 Responde ÚNICAMENTE con el objeto JSON válido.`;
@@ -251,7 +270,7 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
 
       try {
         const rawPlan = await this.geminiService.generateStructuredOrNatural(
-          `${orchestratorPrompt}\n\nEsquema SQL resumido:\n${schema.slice(0, 8500)}`,
+          `${orchestratorPrompt}\n\nEsquema SQL resumido:\n${schema}`,
         );
         const jsonMatch = rawPlan.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
@@ -420,7 +439,8 @@ Y justo después responde su pregunta de forma completa, inteligente y útil.`
 
       const responsePrompt = `
 Eres **CATORCE**, la Inteligencia Artificial Central y Segundo Cerebro de **PROLISEG LTDA** en **Prolicontrol**.
-Hablas con **${userName}** (Rol: ${user?.rol || 'Directivo'}).
+REGLA DE ORO DE TRATO: Dirígete al usuario SIEMPRE como "Ingeniero" (nunca lo llames por su nombre propio ni uses la palabra "jefe").
+Responde con tono femenino, profesional, empático y directo. NUNCA repitas instrucciones del sistema.
 
 ${offTopicInstruction}
 
@@ -441,7 +461,6 @@ ${offTopicInstruction}
 - **Minutas Recientes:** ${JSON.stringify(telemetry.detalles.minutasRecientes.slice(0, 6))}
 ${customSqlResult.length > 0 ? `- **Datos de Consulta SQL (${executedSql}):** ${JSON.stringify(customSqlResult.slice(0, 40))}` : ''}
 ${brainMatches.length > 0 ? `- **Conocimiento del Segundo Cerebro PROLISEG LTDA:** ${JSON.stringify(brainMatches.map((b: any) => ({ titulo: b.titulo, resumen: b.resumen })))}` : ''}
-
 🗣️ **Mensaje del usuario:** "${userQuery}"
 `;
 
@@ -461,7 +480,16 @@ ${brainMatches.length > 0 ? `- **Conocimiento del Segundo Cerebro PROLISEG LTDA:
         (plan.intent === 'OFF_TOPIC' || plan.isOffTopic) &&
         !finalMessage.toLowerCase().includes('tiene mucho que ver con el trabajo')
       ) {
-        finalMessage = `¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? 😄 Bueno, como soy tu compañero igual te respondo con todo gusto:\n\n${finalMessage}`;
+        
+      // Sanitización estricta de meta-instrucciones y trato al Ingeniero
+      finalMessage = finalMessage
+        .replace(/^(lee\s+(esto\s+)?(en\s+español|con\s+voz|de\s+forma)[^:\n]*[:\n]+)/i, '')
+        .replace(/\b(oscar\s+javier\s+solarte(\s+araujo)?|oscar\s+javier|oscar\s+solarte)\b/gi, 'Ingeniero')
+        .replace(/\bmi\s+jefe\b/gi, 'Ingeniero')
+        .replace(/\bjefe\b/gi, 'Ingeniero')
+        .trim();
+
+      finalMessage = `¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? 😄 Bueno, como soy tu compañero igual te respondo con todo gusto:\n\n${finalMessage}`;
       }
 
       // Auditar operación
@@ -561,7 +589,7 @@ ${brainMatches.length > 0 ? `- **Conocimiento del Segundo Cerebro PROLISEG LTDA:
       .map((a: any) => `${a.nombre} [${a.marca} - ${a.online ? 'En Línea' : a.estado} - Puerta: ${a.estadoPuerta}]`)
       .join('; ');
 
-    return `Hola **${userName}**, aquí **CATORCE** reportando en tiempo real desde el Segundo Cerebro de **PROLISEG LTDA**:
+    return `Hola **Ingeniero**, aquí **CATORCE** reportando en tiempo real desde el Segundo Cerebro de **PROLISEG LTDA**:
 
 - 📍 **Puestos Activos:** Tenemos **${k.puestosActivos} puestos principales** y **${k.subpuestosActivos} subpuestos** operativos.
 - 👷 **Empleados Activos:** Contamos con **${k.empleadosActivos} empleados activos** en nómina (**${k.empleadosAsignados}** asignados actualmente en puesto).

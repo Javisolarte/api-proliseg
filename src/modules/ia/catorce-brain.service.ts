@@ -915,11 +915,11 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
     const userRole = String(user?.rol || user?.role || '').toLowerCase();
     const isSuperuser = userRole === 'superusuario';
 
-    // 🛡️ REGLA DE ORO: NINGÚN DELETE SIN SER SUPERUSUARIO (Y POR AHORA BLOQUEADO POR SEGURIDAD)
+    // 🛡️ REGLA DE ORO 1: NINGÚN DELETE/DROP/TRUNCATE (Protección inmutable de base de datos)
     const rawSqlUpper = (operation.sqlStatement || '').toUpperCase();
     if (
       operation.operationType === 'DELETE_ATTEMPT' ||
-      /\b(DELETE\s+FROM|DROP\s+TABLE|TRUNCATE\s+TABLE|ALTER\s+TABLE)\b/i.test(rawSqlUpper)
+      /(DELETEs+FROM|DROPs+TABLE|TRUNCATEs+TABLE|ALTERs+TABLE)/i.test(rawSqlUpper)
     ) {
       const auditBlock = await this.recordAudit({
         user,
@@ -930,7 +930,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
         registroId: 'PROTECTED',
         comandoOriginal: operation.comandoOriginal,
         parametros: { rol: userRole, isSuperuser },
-        resultado: { bloqueado: true, motivo: 'Eliminación restringida exclusivamente a Superusuarios' },
+        resultado: { bloqueado: true, motivo: 'Eliminación restringida de base de datos' },
         exitoso: false,
         canal: operation.canal || 'voz_live_api',
       });
@@ -940,16 +940,48 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
         blockedDelete: true,
         auditCode: auditBlock.codigo_auditoria,
         message: isSuperuser
-          ? `🛡️ **Protección Activa de CATORCE:** Aunque eres **Superusuario**, tengo activado el candado preventivo contra eliminaciones directas (\`DELETE\`). Si deseas dar de baja un registro en **${operation.table || 'la plataforma'}**, dime *"desactívalo"* o *"cámbiale el estado a inactivo"* y lo haré de inmediato sin borrar el historial contable/operativo. (Auditoría: \`${auditBlock.codigo_auditoria}\`)`
-          : `⛔ **Acción Restringida:** Tu rol actual (**${userRole.toUpperCase()}**) no tiene permisos para eliminar registros de la base de datos. En **PROLISEG LTDA**, la eliminación está reservada exclusivamente para **Superusuarios**. Puedo ayudarte a crear, consultar o actualizar cualquier registro. (Auditoría: \`${auditBlock.codigo_auditoria}\`)`,
+          ? `🛡️ **Protección Activa de CATORCE:** Ingeniero, tengo activado el candado preventivo de seguridad contra eliminaciones directas de base de datos (DELETE). Si desea dar de baja un registro en **${operation.table || 'la plataforma'}**, dígame *"desactívalo"* o *"cámbiale el estado a inactivo"* y lo actualizaré de inmediato preservando la integridad del sistema. (Auditoría: ${auditBlock.codigo_auditoria})`
+          : `⛔ **Acción Restringida:** Ingeniero, las operaciones de eliminación directa de base de datos están bloqueadas por políticas de auditoría de **PROLISEG LTDA**. Con gusto puedo ayudarle a consultar, crear o actualizar cualquier registro en la plataforma. (Auditoría: ${auditBlock.codigo_auditoria})`,
       };
     }
 
     const admin = this.supabase.getSupabaseAdminClient();
-    const cleanTable = (operation.table || '').replace(/^public\./i, '').trim();
+    const cleanTable = (operation.table || '').replace(/^public\./i, '').trim().toLowerCase();
+
+    // ⛔ REGLA DE ORO 2: NINGUNA CREACIÓN DE USUARIOS O CREDENCIALES POR PARTE DE CATORCE
+    if (
+      cleanTable === 'usuarios' ||
+      cleanTable === 'users' ||
+      cleanTable === 'usuarios_externos' ||
+      cleanTable === 'credenciales' ||
+      cleanTable === 'auth_users' ||
+      (operation.operationType === 'INSERT' && (cleanTable.includes('usuario') || cleanTable.includes('user'))) ||
+      /\b(crear|registrar|insertar)\b.*\b(usuario|cuenta|login|password|clave)\b/i.test(operation.comandoOriginal)
+    ) {
+      const auditBlock = await this.recordAudit({
+        user,
+        subagente: 'CATORCE-GUARDIAN',
+        accion: 'BLOQUEO_CREACION_USUARIOS_SEGURIDAD',
+        modulo: 'Usuarios / Control de Acceso',
+        tablaDestino: cleanTable,
+        registroId: 'BLOCKED',
+        comandoOriginal: operation.comandoOriginal,
+        parametros: { rol: userRole, isSuperuser },
+        resultado: { bloqueado: true, motivo: 'Creación de usuarios no permitida para la IA' },
+        exitoso: false,
+        canal: operation.canal || 'voz_live_api',
+      });
+
+      return {
+        ok: false,
+        blockedUserCreation: true,
+        auditCode: auditBlock.codigo_auditoria,
+        message: `⛔ **Acción Restringida:** Ingeniero, por directriz estricta de seguridad de **PROLISEG LTDA**, tengo expresamente restringida la creación de usuarios y credenciales en el sistema. La creación de usuarios debe realizarse directamente desde el módulo administrativo de **Usuarios** para garantizar la validación de identidad y asignación de roles. (Auditoría: ${auditBlock.codigo_auditoria})`,
+      };
+    }
+
     const payload = { ...(operation.payload || {}) };
 
-    // Resolver automáticamente IDs de empleado, puesto, subpuesto o cliente si vienen por nombre
     if (operation.entityHints) {
       const resolved = await this.resolveEntityIds(operation.entityHints);
       if (resolved.empleado && !payload.empleado_id) {

@@ -81,7 +81,7 @@ export class GeminiService {
     while (attempts < maxAttempts) {
       const apiKeyObj = this.getCurrentApiKey();
       try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-lite-tts:generateContent?key=${apiKeyObj.key}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKeyObj.key}`;
         const response = await axios.post(
           url,
           {
@@ -89,7 +89,7 @@ export class GeminiService {
               {
                 parts: [
                   {
-                    text: `Lee en espaÃ±ol latinoamericano con voz humana, cÃ¡lida, ejecutiva y natural:\n${cleanSpeech}`,
+                    text: cleanSpeech
                   },
                 ],
               },
@@ -504,4 +504,5 @@ Indica nivel de riesgo y una breve explicaciÃ³n en una sola lÃ­nea clara y c
     }
   }
 }
+
 
