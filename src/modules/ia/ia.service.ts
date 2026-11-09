@@ -1,3 +1,27 @@
+
+const COMPACT_PROLICONTROL_CATALOG = `
+TABLAS Y SERVICIOS EN PROLICONTROL (public):
+- turnos: id, puesto_id, subpuesto_id, empleado_id, fecha, hora_inicio, hora_fin, tipo_turno, estado_turno, asignado_por
+- asignacion_guardas_puesto: id, puesto_id, subpuesto_id, empleado_id, fecha_asignacion, activo
+- puestos_trabajo: id, cliente_id, nombre, ciudad, direccion, activo, contrato_id
+- subpuestos_trabajo: id, puesto_id, nombre, guardas_activos, activo
+- empleados: id, nombre_completo, cedula, telefono, rol, activo, asignado, salario_base
+- aspirantes: id, nombre_completo, cedula, estado_proceso
+- asistencias: id, turno_id, empleado_id, tipo_marca, timestamp, latitud_entrada, longitud_entrada
+- clientes: id, nombre_empresa, nit, telefono, contacto, activo
+- contratos: id, cliente_id, valor, guardas_activos, fecha_inicio, fecha_fin, estado
+- minutas: id, puesto_id, subpuesto_id, tipo_novedad, detalle_novedad, nivel_riesgo, persona_involucrada, fecha, hora
+- novedades: id, puesto_id, tipo, descripcion, fecha_reporte, estado
+- incidentes: id, puesto_id, tipo_incidente, descripcion, fecha_incidente, nivel_gravedad, estado
+- vacaciones: id, empleado_id, fecha_inicio, fecha_fin, dias_tomados, estado
+- capacitaciones: id, nombre, descripcion, duracion_horas, fecha_programada
+- vehiculos: id, placa, marca, modelo, tipo_vehiculo, estado
+- inventario_puesto: id, puesto_id, articulo_id, cantidad, estado
+- pqrsf: id, cliente_id, tipo, asunto, descripcion, estado, prioridad
+- dispositivos_iot: id, puesto_id, nombre_identificador, ip_direccion, marca, tipo_dispositivo, estado, apertura_desde_app
+- comunicaciones / notificaciones / memorandos: id, titulo, contenido, destinatario_id
+`;
+
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { GeminiService } from './gemini.service';
 import { SupabaseService } from '../supabase/supabase.service';
@@ -52,7 +76,7 @@ export class IaService {
    * - Genera documentos e informes PDF bajo demanda
    * - Si la consulta no tiene nada que ver con PROLISEG LTDA, dice: "¿Y eso tiene mucho que ver con el trabajo? 😄" pero responde igual
    */
-  async processQuery(userQuery: string, user: any, canal: string = 'texto') {
+  async processQuery(userQuery: string, user: any, canal: string = 'texto', clientConversationHistory?: { role: string; text: string }[]) {
     const startTime = Date.now();
     try {
       this.logger.debug(`🧠 [CATORCE] Instrucción recibida (${canal}): "${userQuery}"`);
@@ -156,11 +180,26 @@ export class IaService {
       // =========================================================================
       // 2️⃣ CARGAR CONTEXTO EN VIVO: TELEMETRÍA + HISTORIAL RECIENTE + SEGUNDO CEREBRO
       // =========================================================================
-      const [telemetry, recentHistory, brainMatches] = await Promise.all([
+      const [telemetry, serverHistory, brainMatches] = await Promise.all([
         this.catorceBrain.getRealtimeBrainTelemetry(user),
         this.catorceBrain.getRecentConversationHistory(user),
         this.catorceBrain.searchCorporateBrain(userQuery),
       ]);
+
+      const recentHistory =
+        clientConversationHistory && clientConversationHistory.length > 0
+          ? clientConversationHistory.slice(-8)
+          : serverHistory;
+
+      const historyFormatted = (recentHistory || [])
+        .map(
+          (h: any) =>
+            `${h.role === 'user' ? 'INGENIERO' : 'CATORCE'}: ${String(h.text || '')
+              .replace(/<[^>]+>/g, '')
+              .trim()
+              .slice(0, 300)}`,
+        )
+        .join('\n');
 
       if (qNorm.includes('puesto') || qNorm.includes('sede') || qNorm.includes('edificio')) activatedNodes.push('puestos');
       if (qNorm.includes('empleado') || qNorm.includes('guarda') || qNorm.includes('vigilante') || qNorm.includes('personal') || qNorm.includes('turno')) {
@@ -203,8 +242,8 @@ REGLAS OBLIGATORIAS DE OPERACIÓN Y TRATO:
    - NUNCA crees usuarios ni credenciales (usuarios, auth.users están prohibidos; deben gestionarse manualmente en el módulo administrativo de Usuarios).
 4. NATURALIDAD EN RESPUESTA: Responde con voz femenina, cálida, ejecutiva y directa como ChatGPT Live. NUNCA incluyas metainstrucciones ni frases del prompt en tu respuesta directa.
 
-HISTORIAL DE CONVERSACIÓN RECIENTE CON ESTE USUARIO:
-${JSON.stringify(recentHistory)}
+CONTEXTO DE LA CONVERSACIÓN RECIENTE (Sigue el hilo con exactitud):
+${historyFormatted || "Inicio de conversación."}
 
 📊 TELEMETRÍA EN VIVO DE PROLICONTROL:
 - Puestos Activos: ${telemetry.kpis.puestosActivos} puestos principales y ${telemetry.kpis.subpuestosActivos} subpuestos (${JSON.stringify(
@@ -270,7 +309,7 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
 
       try {
         const rawPlan = await this.geminiService.generateStructuredOrNatural(
-          `${orchestratorPrompt}\n\nEsquema SQL resumido:\n${schema}`,
+          `${orchestratorPrompt}\n\n${COMPACT_PROLICONTROL_CATALOG}`,
         );
         const jsonMatch = rawPlan.match(/\{[\s\S]*\}/);
         if (jsonMatch) {

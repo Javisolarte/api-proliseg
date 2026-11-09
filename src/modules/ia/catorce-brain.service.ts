@@ -16,6 +16,12 @@ export interface SubAgentDefinition {
 
 @Injectable()
 export class CatorceBrainService implements OnModuleInit {
+  private telemetryCache: { data: any; expiresAt: number } | null = null;
+
+  public invalidateTelemetryCache() {
+    this.telemetryCache = null;
+  }
+
   private readonly logger = new Logger(CatorceBrainService.name);
   private readonly brainDirectory = 'C:\\Users\\Admin\\Documents\\PROLISEG LTDA';
 
@@ -286,6 +292,11 @@ export class CatorceBrainService implements OnModuleInit {
    * Consulta en paralelo Puestos, Empleados, Vacaciones, Clientes, Contratos, Controles de Acceso, Minutas y Memoria ia_brain
    */
   public async getRealtimeBrainTelemetry(user?: any) {
+    const now = Date.now();
+    if (this.telemetryCache && this.telemetryCache.expiresAt > now) {
+      return this.telemetryCache.data;
+    }
+
     const admin = this.supabase.getSupabaseAdminClient();
 
     const [
@@ -1021,6 +1032,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
         if (!payload.estado) payload.estado = 'abierto';
       }
 
+      this.invalidateTelemetryCache();
       const { data, error } = await admin.from(cleanTable).insert(payload).select();
       if (error) {
         throw new Error(`Error al insertar en ${cleanTable}: ${error.message}`);
@@ -1031,6 +1043,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
       for (const [k, v] of Object.entries(operation.matchFilter)) {
         queryBuilder = queryBuilder.eq(k, v);
       }
+      this.invalidateTelemetryCache();
       const { data, error } = await queryBuilder.select();
       if (error) {
         throw new Error(`Error al actualizar en ${cleanTable}: ${error.message}`);

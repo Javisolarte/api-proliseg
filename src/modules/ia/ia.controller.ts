@@ -61,7 +61,12 @@ export class IaController {
       user.token = token;
     }
 
-    return this.iaService.processQuery(query, user || {}, canal);
+    const effectiveUser = user?.user || user || {};
+    if (token) {
+      effectiveUser.token = token;
+    }
+    const conversationHistory = Array.isArray(body?.conversationHistory) ? body.conversationHistory : undefined;
+    return this.iaService.processQuery(query, effectiveUser, canal, conversationHistory);
   }
 
   // ============================================================
