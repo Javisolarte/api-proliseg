@@ -345,6 +345,8 @@ export class CatorceBrainService implements OnModuleInit {
       epsRes,
       fondosPensionRes,
       arlRes,
+      turnosRes,
+      turnosReemplazosRes,
       brainDocsCount,
       userMemoryRes,
       recentAuditsRes,
@@ -360,6 +362,8 @@ export class CatorceBrainService implements OnModuleInit {
       admin.from('eps').select('id, nombre, codigo').order('nombre', { ascending: true }),
       admin.from('fondos_pension').select('id, nombre, codigo').order('nombre', { ascending: true }),
       admin.from('arl').select('id, nombre, codigo').order('nombre', { ascending: true }),
+      admin.from('turnos').select('id, puesto_id, subpuesto_id, empleado_id, fecha, hora_inicio, hora_fin, tipo_turno, estado_turno, empleado:empleado_id(nombre_completo, cedula), puesto:puesto_id(nombre)').order('fecha', { ascending: false }).limit(25),
+      admin.from('turnos_reemplazos').select('id, turno_original_id, empleado_reemplazo_id, motivo, estado, fecha_autorizacion').order('created_at', { ascending: false }).limit(15),
       this.runSql(`SELECT COUNT(*)::int AS total FROM ia_brain.conocimiento_corporativo WHERE activo = true`),
       user?.id
         ? this.runSql(`SELECT id, tipo_memoria, clave, hecho_recordado, importancia, created_at FROM ia_brain.memoria_usuarios WHERE usuario_id = ${Number(user.id)} AND activo = true ORDER BY importancia DESC, created_at DESC LIMIT 15`)
@@ -417,6 +421,8 @@ export class CatorceBrainService implements OnModuleInit {
     const epsList = epsRes.data || [];
     const fondosPensionList = fondosPensionRes.data || [];
     const arlList = arlRes.data || [];
+    const turnosList = turnosRes.data || [];
+    const reemplazosList = turnosReemplazosRes.data || [];
 
     const controlesAcceso = dispositivos.filter((d: any) => {
       const tipo = String(d.configuracion_tecnica?.tipo || 'control_acceso').toLowerCase();
@@ -458,6 +464,8 @@ export class CatorceBrainService implements OnModuleInit {
         epsRegistradas: epsList.length,
         fondosPensionRegistrados: fondosPensionList.length,
         arlRegistradas: arlList.length,
+        turnosRegistrados: turnosList.length,
+        reemplazosPendientes: reemplazosList.filter((r: any) => r.estado === 'pendiente').length,
       },
       detalles: {
         puestos: puestos.slice(0, 30),
@@ -480,6 +488,8 @@ export class CatorceBrainService implements OnModuleInit {
         eps: epsList,
         fondosPension: fondosPensionList,
         arl: arlList,
+        turnosRecientes: turnosList.slice(0, 15),
+        reemplazosRecientes: reemplazosList.slice(0, 10),
       },
       subAgents: this.subAgents,
       auditoriaReciente: recentAuditsRes || [],
@@ -637,7 +647,7 @@ ${contenido}
     const admin = this.supabase.getSupabaseAdminClient();
     const searchTarget = (params.edificio_o_puesto || '').trim().toLowerCase();
 
-    // 1. Buscar el puesto de trabajo o edificio más parecido en puestos_trabajo
+    // 1. Buscar el puesto de trabajo o edificio con verificación rigurosa
     const { data: allPuestos } = await admin
       .from('puestos_trabajo')
       .select('id, nombre, ciudad, direccion, activo')
@@ -656,14 +666,30 @@ ${contenido}
         .split(/\s+/)
         .filter((t) => t.length > 2 && !['edificio', 'puesto', 'conjunto', 'sede', 'unidad', 'torre'].includes(t));
 
-      matchedPuesto = (allPuestos || []).find((p: any) => {
-        const pNorm = p.nombre.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-        return tokens.some((tk) => pNorm.includes(tk));
-      });
+      if (tokens.length > 0) {
+        matchedPuesto = (allPuestos || []).find((p: any) => {
+          const pNorm = p.nombre.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+          return tokens.some((tk) => pNorm.includes(tk));
+        });
+      }
     }
 
-    const puestoId = matchedPuesto?.id || (allPuestos?.[0]?.id ?? null);
-    const puestoNombre = matchedPuesto?.nombre || params.edificio_o_puesto || 'Central de Operaciones PROLISEG';
+    // 🛡️ VERIFICACIÓN ESTRICTA: NUNCA asignar a un puesto arbitrario sin confirmación
+    if (!matchedPuesto) {
+      const ejemplosPuestos = (allPuestos || []).slice(0, 5).map((p: any) => `"${p.nombre}"`).join(', ');
+      return {
+        ok: false,
+        puestoVerificado: false,
+        actionExecuted: 'REQUIERE_VERIFICACION_PUESTO',
+        auditCode: 'VERIF-PUESTO-MINUTA',
+        minuta: null,
+        summaryMessage: `No pude verificar con certeza el puesto "${params.edificio_o_puesto || 'indicado'}" en Prolicontrol. Por favor indíqueme el nombre exacto del puesto para registrar la minuta con total precisión (ejemplos: ${ejemplosPuestos}).`,
+      };
+    }
+
+    const puestoId = matchedPuesto.id;
+    const puestoNombre = matchedPuesto.nombre;
+    const puestoCiudad = matchedPuesto.ciudad ? ` (${matchedPuesto.ciudad})` : '';
 
     const tituloMinuta = params.persona_involucrada
       ? `Novedad / Ingreso: ${params.persona_involucrada} — ${puestoNombre}`
@@ -743,9 +769,9 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
       minuta: nuevaMinuta,
       puestoMatched: { id: puestoId, nombre: puestoNombre },
       auditCode: auditRecord.codigo_auditoria,
-      summaryMessage: `¡Listo! He registrado automáticamente la novedad en el Libro de Minutas de **${puestoNombre}** (Minuta #${nuevaMinuta?.id}). ${
-        params.persona_involucrada ? `Quedó asentado el registro de **${params.persona_involucrada}**: ` : ''
-      }"${params.detalle_novedad}". Código de auditoría: \`${auditRecord.codigo_auditoria}\`.`,
+      summaryMessage: `He registrado la novedad en el Libro de Minutas oficial de Prolicontrol:\n\n- Puesto verificado: ${puestoNombre}${puestoCiudad}\n${
+        params.persona_involucrada ? `- Persona o visitante: ${params.persona_involucrada}\n` : ''
+      }- Novedad: ${params.detalle_novedad}\n- Registro ID: #${nuevaMinuta?.id}\n- Código de Auditoría: ${auditRecord.codigo_auditoria}\n\n¿Desea reportar alguna otra novedad en este puesto?`,
     };
   }
 

@@ -82,7 +82,9 @@ export class GeminiService {
     while (attempts < maxAttempts) {
       const apiKeyObj = this.getCurrentApiKey();
       try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-lite-tts:generateContent?key=${apiKeyObj.key}`;
+        const ttsModels = ['gemini-3.1-flash-tts-preview', 'gemini-3.8-flash-tts', 'gemini-2.5-flash-preview-tts'];
+        const model = ttsModels[attempts % ttsModels.length];
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKeyObj.key}`;
         const response = await axios.post(
           url,
           {

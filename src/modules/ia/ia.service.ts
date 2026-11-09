@@ -135,7 +135,6 @@ export class IaService {
           );
           const confirmMsg = `Entendido, ${customName}. A partir de este momento me dirigiré a usted siempre como ${customName}. He registrado esta instrucción en mi memoria permanente para que todas nuestras conversaciones en Prolicontrol usen su trato preferido. ¿En qué le puedo colaborar hoy, ${customName}?`;
           this.catorceBrain.appendConversationTurn(user, userQuery, confirmMsg, canal, ['core', 'brain'], ['CATORCE-MEMORY:setUserPreferredName']);
-          const audioDataUrl = await this.generateVoiceIfRequested(confirmMsg, canal);
           return {
             ok: true,
             assistant: 'CATORCE',
@@ -143,7 +142,6 @@ export class IaService {
             activatedNodes: ['core', 'brain'],
             toolsUsed: ['CATORCE-MEMORY:setUserPreferredName'],
             message: confirmMsg,
-            audioDataUrl,
             latencyMs: Date.now() - startTime,
           };
         }
@@ -168,7 +166,6 @@ Mi propósito es supervisar, optimizar y controlar en tiempo real toda la operac
 Estoy conectada a la base de datos de PROLISEG LTDA para responder sus preguntas y ejecutar acciones autorizadas al instante. ¿En qué le puedo colaborar hoy, ${activeUserName}?`;
 
         this.catorceBrain.appendConversationTurn(user, userQuery, presMsg, canal, ['core', 'brain'], ['CATORCE-CORE:selfPresentation']);
-        const audioDataUrl = await this.generateVoiceIfRequested(presMsg, canal);
         return {
           ok: true,
           assistant: 'CATORCE',
@@ -176,7 +173,6 @@ Estoy conectada a la base de datos de PROLISEG LTDA para responder sus preguntas
           activatedNodes: ['core', 'brain'],
           toolsUsed: ['CATORCE-CORE:selfPresentation'],
           message: presMsg,
-          audioDataUrl,
           latencyMs: Date.now() - startTime,
         };
       }
@@ -205,7 +201,6 @@ Estoy conectada a la base de datos de PROLISEG LTDA para responder sus preguntas
           'CATORCE-GUARDIAN:blockDelete',
         ]);
 
-        const audioDataUrl = await this.generateVoiceIfRequested(blockRes.message || '', canal);
         return {
           ok: true,
           assistant: 'CATORCE',
@@ -214,7 +209,6 @@ Estoy conectada a la base de datos de PROLISEG LTDA para responder sus preguntas
           activatedNodes: ['core'],
           toolsUsed: ['CATORCE-GUARDIAN:blockDelete'],
           message: blockRes.message,
-          audioDataUrl,
           latencyMs: Date.now() - startTime,
         };
       }
@@ -248,7 +242,6 @@ Estoy conectada a la base de datos de PROLISEG LTDA para responder sus preguntas
 
         const msg = `Segundo Cerebro PROLISEG LTDA actualizado: He almacenado y vectorizado este conocimiento en ia_brain para que todo el equipo lo tenga disponible.`;
         this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, activatedNodes, toolsUsed);
-        const audioDataUrl = await this.generateVoiceIfRequested(msg, canal);
 
         return {
           ok: true,
@@ -258,7 +251,7 @@ Estoy conectada a la base de datos de PROLISEG LTDA para responder sus preguntas
           toolsUsed,
           data: [saved.documento],
           message: msg,
-          audioDataUrl,
+          audioDataUrl: undefined,
           latencyMs: Date.now() - startTime,
         };
       }
@@ -338,6 +331,16 @@ REGLAS OBLIGATORIAS DE OPERACIÓN Y TRATO:
    - NUNCA crees usuarios ni credenciales (usuarios, auth.users están prohibidos; deben gestionarse manualmente en el módulo administrativo de Usuarios).
 4. NATURALIDAD EN RESPUESTA: Responde con voz femenina, cálida, ejecutiva y directa como ChatGPT Live. NUNCA incluyas metainstrucciones ni frases del prompt en tu respuesta directa.
 5. PROHIBIDO EL USO DE EMOJIS: NUNCA uses emojis, emoticones ni símbolos pictográficos en tus respuestas. Todas tus respuestas deben ser texto 100% limpio, sobrio y profesional.
+6. INDAGACIÓN CONTINUA Y PROACTIVA EN TURNOS, REEMPLAZOS Y PUESTOS:
+   Cuando el usuario consulte o hable de puestos, turnos, guardas, relevos o novedades:
+   - Analiza activamente: turnos vigentes hoy, reemplazos pendientes, disponibilidad de personal y características operativas del puesto (servicio 24h o 12h diurno/nocturno, armado o sin armas, controles de acceso).
+   - Siempre concluye tu intervención con una pregunta proactiva de seguimiento para asesorar operativamente al usuario.
+7. CONFIRMACIÓN PREVIA OBLIGATORIA PARA PROGRAMAR O ASIGNAR TURNOS:
+   Antes de insertar o crear una nueva programación o turno en la base de datos (turnos, asignacion_guardas_puesto, turnos_reemplazos):
+   - Si el usuario NO ha confirmado explícitamente todavía, NO registres directamente en la base de datos.
+   - Estructura la propuesta detallada (puesto verificado, guarda, fecha, horario y tipo de turno) y pregunta textualmente:
+     "¿Me confirma si procedo con el registro oficial en la base de datos de Prolicontrol?"
+   - Solo cuando el usuario confirme afirmativamente (ej. "sí", "confirmo", "procede", "créalo"), se debe registrar oficialmente.
 
 CONTEXTO DE LA CONVERSACIÓN RECIENTE (Sigue el hilo con exactitud):
 ${historyFormatted || "Inicio de conversación."}
@@ -348,6 +351,8 @@ ${historyFormatted || "Inicio de conversación."}
       )})
 - Empleados Activos: ${telemetry.kpis.empleadosActivos} empleados (${telemetry.kpis.empleadosAsignados} asignados)
 - Seguridad Social: ${telemetry.kpis.epsRegistradas || 0} EPS registradas (${JSON.stringify(telemetry.detalles.eps)}), ${telemetry.kpis.fondosPensionRegistrados || 0} Fondos de Pensión (${JSON.stringify(telemetry.detalles.fondosPension)}), ${telemetry.kpis.arlRegistradas || 0} ARL (${JSON.stringify(telemetry.detalles.arl)})
+- Turnos y Programación Reciente: ${telemetry.kpis.turnosRegistrados || 0} turnos registrados (${JSON.stringify((telemetry.detalles.turnosRecientes || []).slice(0, 10).map((t: any) => ({ id: t.id, fecha: t.fecha, horario: `${t.hora_inicio}-${t.hora_fin}`, tipo: t.tipo_turno, puesto: t.puesto?.nombre, guarda: t.empleado?.nombre_completo })))}).
+- Reemplazos y Relevos: ${telemetry.kpis.reemplazosPendientes || 0} reemplazos pendientes (${JSON.stringify((telemetry.detalles.reemplazosRecientes || []).slice(0, 8))}).
 - Vacaciones: ${telemetry.kpis.vacacionesRegistradas} registradas. Próximos: ${JSON.stringify(
         telemetry.detalles.quienesSiguenVacaciones.slice(0, 8),
       )}
@@ -429,7 +434,7 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
           'CATORCE-SLOT-FILLING:askMissingData',
         ]);
 
-        const audioDataUrl = await this.generateVoiceIfRequested(questionMsg, canal);
+        const audioDataUrl: string | undefined = undefined;
         return {
           ok: true,
           assistant: 'CATORCE',
@@ -475,7 +480,7 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
           toolsUsed,
         );
 
-        const audioDataUrl = await this.generateVoiceIfRequested(summaryClean, canal);
+        const audioDataUrl: string | undefined = undefined;
         return {
           ok: true,
           assistant: 'CATORCE',
@@ -494,6 +499,39 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
       // 6️⃣ CASO C: INSERTAR O ACTUALIZAR EN CUALQUIER MÓDULO DE PROLICONTROL (Turnos, Puestos, Clientes, Vacaciones, etc.)
       // =========================================================================
       if ((plan.intent === 'DB_INSERT' || plan.intent === 'DB_UPDATE') && plan.dbWrite?.table) {
+        const targetTable = String(plan.dbWrite.table || '').toLowerCase().trim();
+        const isSchedulingTable = ['turnos', 'asignacion_guardas_puesto', 'turnos_reemplazos'].includes(targetTable);
+
+        // Detectar si el usuario está confirmando una propuesta previa
+        const isAffirmative = /^(s[ií]|confirmo|confirmar|procede|cr[eé]alo|cr[eé]elo|adelante|de acuerdo|claro|dale|por supuesto|h[aá]zlo|ok|ejecuta|autorizo)/i.test(userQuery.trim());
+        const lastTurn = (recentHistory || []).slice(-1)[0]?.text || '';
+        const wasAwaitingConfirmation = lastTurn.toLowerCase().includes('confirma si procedo') || lastTurn.toLowerCase().includes('procedo con el registro');
+
+        if (isSchedulingTable && !isAffirmative && !wasAwaitingConfirmation) {
+          // 🛡️ PROTOCOLO DE CONFIRMACIÓN OBLIGATORIA ANTES DE CREAR CUALQUIER PROGRAMACIÓN
+          const puestoHint = plan.dbWrite.entityHints?.puesto_nombre || plan.dbWrite.payload?.puesto_id || 'Puesto por verificar';
+          const guardaHint = plan.dbWrite.entityHints?.empleado_nombre_o_cedula || plan.dbWrite.payload?.empleado_id || 'Guarda por verificar';
+          const fechaHint = plan.dbWrite.payload?.fecha || new Date().toISOString().slice(0, 10);
+          const horaInicio = plan.dbWrite.payload?.hora_inicio || '06:00';
+          const horaFin = plan.dbWrite.payload?.hora_fin || '18:00';
+          const tipoTurno = plan.dbWrite.payload?.tipo_turno || 'Diurno 12 Horas';
+
+          const proposalMsg = `He preparado la propuesta de programación en Prolicontrol:\n\n- Puesto: ${puestoHint}\n- Guarda asignado: ${guardaHint}\n- Fecha: ${fechaHint}\n- Horario: ${horaInicio} a ${horaFin} (${tipoTurno})\n- Modalidad: Servicio de vigilancia con control de acceso y minuta activa.\n\n¿Me confirma si procedo con el registro oficial en la base de datos de Prolicontrol?`;
+
+          this.catorceBrain.appendConversationTurn(user, userQuery, proposalMsg, canal, activatedNodes, ['CATORCE-SCHEDULE:proposeShift']);
+
+          return {
+            ok: true,
+            assistant: 'CATORCE',
+            actionExecuted: 'PROPUESTA_PENDIENTE_CONFIRMACION',
+            awaitingFollowUp: true,
+            activatedNodes,
+            toolsUsed: ['CATORCE-SCHEDULE:proposeShift'],
+            message: proposalMsg,
+            latencyMs: Date.now() - startTime,
+          };
+        }
+
         toolsUsed.push(`CATORCE-CRUD:${plan.dbWrite.operationType}_${plan.dbWrite.table}`);
 
         try {
@@ -530,7 +568,7 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
             .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2300}-\u{23FF}\u{2B50}\u{200D}\u{FE0F}]/gu, '');
 
           this.catorceBrain.appendConversationTurn(user, userQuery, successMsg, canal, activatedNodes, toolsUsed);
-          const audioDataUrl = await this.generateVoiceIfRequested(successMsg, canal);
+          const audioDataUrl: string | undefined = undefined;
 
           return {
             ok: true,
@@ -549,7 +587,7 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
           const clarifyMsg = `Estuve a punto de registrar la operación en ${plan.dbWrite.table}, pero necesito confirmar un detalle para que quede exacto (${crudErr.message}). ¿Me confirmas el dato faltante?`
             .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2300}-\u{23FF}\u{2B50}\u{200D}\u{FE0F}]/gu, '');
           this.catorceBrain.appendConversationTurn(user, userQuery, clarifyMsg, canal, activatedNodes, toolsUsed);
-          const audioDataUrl = await this.generateVoiceIfRequested(clarifyMsg, canal);
+          const audioDataUrl: string | undefined = undefined;
           return {
             ok: true,
             assistant: 'CATORCE',
@@ -604,6 +642,9 @@ TELEMETRÍA EN TIEMPO REAL DE PROLICONTROL:
       )}).
 - Empleados / Guardas Activos: ${telemetry.kpis.empleadosActivos} activos (${telemetry.kpis.empleadosAsignados} asignados).
 - Seguridad Social: ${telemetry.kpis.epsRegistradas || 0} EPS registradas (${JSON.stringify(telemetry.detalles.eps)}), ${telemetry.kpis.fondosPensionRegistrados || 0} Fondos de Pensión (${JSON.stringify(telemetry.detalles.fondosPension)}), ${telemetry.kpis.arlRegistradas || 0} ARL (${JSON.stringify(telemetry.detalles.arl)}).
+- Turnos Recientes y Programación: ${telemetry.kpis.turnosRegistrados || 0} registrados (${JSON.stringify((telemetry.detalles.turnosRecientes || []).slice(0, 10).map((t: any) => ({ id: t.id, fecha: t.fecha, horario: `${t.hora_inicio}-${t.hora_fin}`, tipo: t.tipo_turno, puesto: t.puesto?.nombre, guarda: t.empleado?.nombre_completo })))}).
+- Reemplazos y Relevos: ${telemetry.kpis.reemplazosPendientes || 0} pendientes (${JSON.stringify(telemetry.detalles.reemplazosRecientes || [])}).
+DIRECTIVA DE INDAGACIÓN OPERACIONAL: Si la consulta toca turnos, relevos o puestos, cruza activamente las características del puesto (12h/24h, armado/sin armas, controles de acceso) y formula una pregunta proactiva de seguimiento al final.
 - Vacaciones y Quiénes Siguen:
   - Vacaciones actuales: ${JSON.stringify(telemetry.detalles.vacacionesActuales)}
   - Próximos en salir a vacaciones: ${JSON.stringify(telemetry.detalles.quienesSiguenVacaciones)}
@@ -705,10 +746,8 @@ Mensaje del usuario: "${userQuery}"
 
       this.catorceBrain.appendConversationTurn(user, userQuery, finalMessage, canal, activatedNodes, toolsUsed);
 
-      let audioDataUrl: string | undefined = undefined;
-      if (canal.includes('voz') || canal.includes('radio')) {
-        audioDataUrl = await this.generateVoiceIfRequested(finalMessage, canal);
-      }
+      // ⚡ VELOCIDAD MÁXIMA TIPO CHATGPT LIVE: Retorno inmediato de texto (<800ms) sin bloqueo de TTS en backend
+      const audioDataUrl: string | undefined = undefined;
 
       return {
         ok: true,
