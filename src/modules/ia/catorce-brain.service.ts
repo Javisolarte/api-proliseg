@@ -157,6 +157,33 @@ export class CatorceBrainService implements OnModuleInit {
           created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
 
+            CREATE TABLE IF NOT EXISTS ia_brain.memoria_trabajo (
+          id BIGSERIAL PRIMARY KEY,
+          usuario_id INTEGER NOT NULL,
+          tarea_activa VARCHAR(120) NOT NULL,
+          operacion VARCHAR(100) NOT NULL,
+          datos_recolectados JSONB DEFAULT '{}'::jsonb,
+          campos_faltantes JSONB DEFAULT '[]'::jsonb,
+          estado VARCHAR(50) DEFAULT 'EN_PROGRESO',
+          ultimo_prompt TEXT,
+          activo BOOLEAN DEFAULT true,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS ia_brain.alertas_proactivas (
+          id BIGSERIAL PRIMARY KEY,
+          tipo_alerta VARCHAR(80) NOT NULL,
+          severidad VARCHAR(30) DEFAULT 'MEDIA',
+          titulo VARCHAR(250) NOT NULL,
+          descripcion TEXT NOT NULL,
+          metadata JSONB DEFAULT '{}'::jsonb,
+          accion_sugerida TEXT,
+          reconocida BOOLEAN DEFAULT false,
+          resuelta BOOLEAN DEFAULT false,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+
       CREATE TABLE IF NOT EXISTS ia_brain.auditoria_acciones (
           id BIGSERIAL PRIMARY KEY,
           codigo_auditoria VARCHAR(80) NOT NULL,
@@ -1775,5 +1802,343 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
     }
 
     return { codigo_auditoria, timestamp: new Date().toISOString() };
+  }
+
+  // =========================================================================
+  // 🧠 MEMORIA DE TRABAJO (WORKING MEMORY / SCRATCHPAD) MULTI-TURNO
+  // =========================================================================
+  public async getActiveWorkingMemory(user: any): Promise<any | null> {
+    const userId = Number(user?.id) || 1;
+    try {
+      const rows = await this.runSql(`
+        SELECT id, tarea_activa, operacion, datos_recolectados, campos_faltantes, estado, ultimo_prompt
+        FROM ia_brain.memoria_trabajo
+        WHERE usuario_id = ${userId} AND activo = true
+        ORDER BY updated_at DESC LIMIT 1;
+      `);
+      return rows && rows.length > 0 ? rows[0] : null;
+    } catch {
+      return null;
+    }
+  }
+
+  public async saveWorkingMemory(
+    user: any,
+    memory: {
+      tarea_activa: string;
+      operacion: string;
+      datos_recolectados: any;
+      campos_faltantes: string[];
+      estado?: string;
+      ultimo_prompt?: string;
+    },
+  ): Promise<any> {
+    const userId = Number(user?.id) || 1;
+    const safeTask = (memory.tarea_activa || '').replace(/'/g, "''");
+    const safeOp = (memory.operacion || '').replace(/'/g, "''");
+    const safeData = JSON.stringify(memory.datos_recolectados || {}).replace(/'/g, "''");
+    const safeMissing = JSON.stringify(memory.campos_faltantes || []).replace(/'/g, "''");
+    const safeStatus = (memory.estado || 'EN_PROGRESO').replace(/'/g, "''");
+    const safePrompt = (memory.ultimo_prompt || '').replace(/'/g, "''");
+
+    try {
+      await this.runSql(`
+        UPDATE ia_brain.memoria_trabajo SET activo = false WHERE usuario_id = ${userId} AND activo = true;
+        INSERT INTO ia_brain.memoria_trabajo (usuario_id, tarea_activa, operacion, datos_recolectados, campos_faltantes, estado, ultimo_prompt, activo)
+        VALUES (${userId}, '${safeTask}', '${safeOp}', '${safeData}'::jsonb, '${safeMissing}'::jsonb, '${safeStatus}', '${safePrompt}', true);
+      `);
+    } catch (e: any) {
+      this.logger.warn(`No se pudo guardar memoria de trabajo en BD: ${e.message}`);
+    }
+  }
+
+  public async clearWorkingMemory(user: any): Promise<void> {
+    const userId = Number(user?.id) || 1;
+    try {
+      await this.runSql(
+        `UPDATE ia_brain.memoria_trabajo SET activo = false, estado = 'COMPLETADO' WHERE usuario_id = ${userId} AND activo = true;`,
+      );
+    } catch {}
+  }
+
+  // =========================================================================
+  // 🛠️ HERRAMIENTAS OPERATIVAS MAESTRAS (FUNCTION CALLING EXECUTORS)
+  // =========================================================================
+
+  /**
+   * 👤 Tool: Crear empleado con validación de unicidad de cédula y roles
+   */
+  public async toolCrearEmpleado(params: any, user: any) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const cleanCedula = String(params.cedula || '').replace(/\D/g, '').trim();
+    if (!cleanCedula || cleanCedula.length < 5) {
+      throw new Error('La cédula debe contener al menos 5 dígitos numéricos.');
+    }
+    const cleanNombre = String(params.nombre_completo || '').trim();
+    if (!cleanNombre || cleanNombre.length < 3) {
+      throw new Error('Debe proporcionar el nombre completo del empleado.');
+    }
+
+    const { data: existing } = await admin
+      .from('empleados')
+      .select('id, nombre_completo, cedula')
+      .eq('cedula', cleanCedula)
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      throw new Error(`Ya existe un empleado registrado con la cédula ${cleanCedula} (${existing[0].nombre_completo}).`);
+    }
+
+    const payload: any = {
+      nombre_completo: cleanNombre,
+      cedula: cleanCedula,
+      telefono: params.telefono || null,
+      correo: params.correo || null,
+      ciudad: params.ciudad || 'Pasto',
+      direccion: params.direccion || 'No especificada',
+      rol: params.cargo || params.rol || 'Vigilante',
+      activo: true,
+      salario_base: params.salario_base || 1300000,
+    };
+    if (params.eps_id) payload.eps_id = Number(params.eps_id);
+    if (params.arl_id) payload.arl_id = Number(params.arl_id);
+    if (params.fondo_pension_id) payload.fondo_pension_id = Number(params.fondo_pension_id);
+
+    this.invalidateTelemetryCache();
+    const { data, error } = await admin.from('empleados').insert(payload).select();
+    if (error) {
+      throw new Error(`Error al registrar empleado: ${error.message}`);
+    }
+    const empleado = data?.[0] || data;
+
+    const audit = await this.recordAudit({
+      user,
+      subagente: 'CATORCE-TALENTO-HUMANO',
+      accion: 'CREAR_EMPLEADO',
+      modulo: 'Empleados / Gestión Humana',
+      tablaDestino: 'public.empleados',
+      registroId: String(empleado.id),
+      comandoOriginal: `Creación de empleado ${cleanNombre} CC ${cleanCedula}`,
+      parametros: payload,
+      resultado: { id: empleado.id, cedula: cleanCedula },
+      exitoso: true,
+    });
+
+    return { empleado, auditCode: audit.codigo_auditoria };
+  }
+
+  /**
+   * 📞 Tool: Modificar datos de empleado (ej: teléfono, dirección, rol)
+   */
+  public async toolModificarEmpleado(params: { empleadoQuery: string; campo: string; nuevoValor: any }, user: any) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const q = (params.empleadoQuery || '').trim();
+    const isNum = /^\d+$/.test(q);
+
+    let queryBuilder = admin.from('empleados').select('*');
+    if (isNum) {
+      queryBuilder = queryBuilder.eq('cedula', q);
+    } else {
+      queryBuilder = queryBuilder.ilike('nombre_completo', `%${q}%`);
+    }
+    const { data: candidates } = await queryBuilder.limit(2);
+    if (!candidates || candidates.length === 0) {
+      throw new Error(`No se encontró ningún empleado que coincida con "${q}" en Prolicontrol.`);
+    }
+    const emp = candidates[0];
+
+    const allowedFields = ['telefono', 'correo', 'direccion', 'ciudad', 'salario_base', 'rol', 'activo'];
+    const campo = params.campo.toLowerCase();
+    if (!allowedFields.includes(campo)) {
+      throw new Error(`El campo "${campo}" no está autorizado para modificación directa por voz.`);
+    }
+
+    const updatePayload: any = {};
+    updatePayload[campo] = params.nuevoValor;
+
+    this.invalidateTelemetryCache();
+    const { data: updated, error } = await admin
+      .from('empleados')
+      .update(updatePayload)
+      .eq('id', emp.id)
+      .select();
+
+    if (error) {
+      throw new Error(`Error al actualizar empleado: ${error.message}`);
+    }
+
+    const audit = await this.recordAudit({
+      user,
+      subagente: 'CATORCE-TALENTO-HUMANO',
+      accion: 'MODIFICAR_EMPLEADO',
+      modulo: 'Empleados / Gestión Humana',
+      tablaDestino: 'public.empleados',
+      registroId: String(emp.id),
+      comandoOriginal: `Modificación de ${campo} para ${emp.nombre_completo}`,
+      parametros: { campo, valorAnterior: emp[campo], valorNuevo: params.nuevoValor },
+      resultado: { id: emp.id, campo, nuevoValor: params.nuevoValor },
+      exitoso: true,
+    });
+
+    return {
+      empleado: updated?.[0] || emp,
+      campo,
+      valorAnterior: emp[campo],
+      nuevoValor: params.nuevoValor,
+      auditCode: audit.codigo_auditoria,
+    };
+  }
+
+  /**
+   * 📝 Tool: Registrar novedad oficial en minuta de puesto (ej: Cabrachi)
+   */
+  public async toolRegistrarNovedadPuesto(params: { puestoNombre: string; detalleNovedad: string; tipoNovedad?: string; nivelRiesgo?: string; personaInvolucrada?: string }, user: any) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const pName = (params.puestoNombre || '').trim();
+
+    const { data: puestos } = await admin
+      .from('puestos_trabajo')
+      .select('id, nombre, ciudad')
+      .ilike('nombre', `%${pName}%`)
+      .limit(3);
+
+    const puesto = puestos && puestos.length > 0 ? puestos[0] : null;
+    const puestoId = puesto ? puesto.id : null;
+    const puestoNombreReal = puesto ? puesto.nombre : pName;
+
+    const hoy = new Date().toISOString().slice(0, 10);
+    const hora = new Date().toTimeString().slice(0, 8);
+
+    const minutaPayload: any = {
+      puesto_id: puestoId,
+      tipo_novedad: params.tipoNovedad || 'Novedad de Servicio',
+      detalle_novedad: params.detalleNovedad,
+      nivel_riesgo: (params.nivelRiesgo || 'medio').toLowerCase(),
+      persona_involucrada: params.personaInvolucrada || null,
+      fecha: hoy,
+      hora: hora,
+    };
+
+    this.invalidateTelemetryCache();
+    const { data: inserted, error } = await admin.from('minutas').insert(minutaPayload).select();
+    if (error) {
+      throw new Error(`Error al asentar novedad en minuta: ${error.message}`);
+    }
+    const minuta = inserted?.[0] || minutaPayload;
+
+    const audit = await this.recordAudit({
+      user,
+      subagente: 'CATORCE-RADIO-OPERACION',
+      accion: 'REGISTRAR_NOVEDAD_MINUTA',
+      modulo: 'Minutas / Radio-Operación',
+      tablaDestino: 'public.minutas',
+      registroId: String(minuta.id || 'OK'),
+      comandoOriginal: `Novedad en ${puestoNombreReal}: ${params.detalleNovedad}`,
+      parametros: minutaPayload,
+      resultado: { id: minuta.id, puesto: puestoNombreReal },
+      exitoso: true,
+    });
+
+    return { minuta, puestoNombre: puestoNombreReal, auditCode: audit.codigo_auditoria };
+  }
+
+  /**
+   * 📄 Tool: Consultar contrato de cliente o puesto con detalles completos
+   */
+  public async toolConsultarContrato(query: string, user: any) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const cleanQ = (query || '').replace(/\b(contrato|de|del|cliente|puesto|muestrame|ver|abrir)\b/gi, '').trim();
+
+    const { data: contratos } = await admin
+      .from('contratos')
+      .select('id, cliente_id, valor, guardas_activos, fecha_inicio, fecha_fin, estado, contrato_pdf_url, cliente:clientes(id, nombre_empresa, nit, contacto, telefono)')
+      .limit(20);
+
+    let match = (contratos || []).find((c: any) =>
+      c.cliente?.nombre_empresa?.toLowerCase().includes(cleanQ.toLowerCase()),
+    );
+
+    if (!match && cleanQ) {
+      const { data: p } = await admin
+        .from('puestos_trabajo')
+        .select('id, nombre, contrato_id, cliente_id, cliente:clientes(id, nombre_empresa)')
+        .ilike('nombre', `%${cleanQ}%`)
+        .limit(1);
+
+      if (p && p[0]?.contrato_id) {
+        match = (contratos || []).find((c: any) => c.id === p[0].contrato_id);
+      }
+    }
+
+    if (!match && contratos && contratos.length > 0) {
+      match = contratos[0];
+    }
+
+    return match;
+  }
+
+  /**
+   * 📹 Tool: Consultar cámaras y dispositivos IoT desconectados
+   */
+  public async toolConsultarCamarasDesconectadas(user: any) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const { data: offline } = await admin
+      .from('dispositivos_iot')
+      .select('id, nombre_identificador, ip_direccion, marca, tipo_dispositivo, estado, puesto:puestos_trabajo(id, nombre, ciudad)')
+      .or('estado.ilike.%offline%,estado.ilike.%inactivo%,estado.ilike.%desconectado%,estado.ilike.%falla%')
+      .limit(30);
+
+    return offline || [];
+  }
+
+  /**
+   * ⚠️ Tool: Consultar empleados con documentos vencidos (EPS, ARL, cursos)
+   */
+  public async toolConsultarDocumentosVencidos(user: any) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const hoy = new Date().toISOString().slice(0, 10);
+
+    const { data: emps } = await admin
+      .from('empleados')
+      .select('id, nombre_completo, cedula, telefono, rol, fecha_fin_eps, fecha_fin_arl, activo')
+      .eq('activo', true)
+      .or(`fecha_fin_eps.lte.${hoy},fecha_fin_arl.lte.${hoy}`)
+      .limit(25);
+
+    return (emps || []).map((e: any) => {
+      const vencidos: string[] = [];
+      if (e.fecha_fin_eps && e.fecha_fin_eps <= hoy) vencidos.push(`EPS (${e.fecha_fin_eps})`);
+      if (e.fecha_fin_arl && e.fecha_fin_arl <= hoy) vencidos.push(`ARL (${e.fecha_fin_arl})`);
+      return {
+        id: e.id,
+        nombre: e.nombre_completo,
+        cedula: e.cedula,
+        telefono: e.telefono || 'No registrado',
+        cargo: e.rol || 'Vigilante',
+        documentoVencido: vencidos.join(' y ') || 'Seguridad Social',
+        fechaVencimiento: e.fecha_fin_eps || e.fecha_fin_arl || hoy,
+      };
+    });
+  }
+
+  /**
+   * 📊 Tool: Consultar novedades del día para reporte
+   */
+  public async toolGenerarInformeNovedadesHoy(puestoFiltro?: string, user?: any) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const hoy = new Date().toISOString().slice(0, 10);
+
+    let qBuilder = admin
+      .from('minutas')
+      .select('id, tipo_novedad, detalle_novedad, nivel_riesgo, persona_involucrada, fecha, hora, puesto:puestos_trabajo(id, nombre, ciudad)')
+      .eq('fecha', hoy)
+      .order('hora', { ascending: false });
+
+    if (puestoFiltro) {
+      qBuilder = qBuilder.ilike('puesto.nombre', `%${puestoFiltro}%`);
+    }
+
+    const { data: minutas } = await qBuilder.limit(30);
+    return minutas || [];
   }
 }

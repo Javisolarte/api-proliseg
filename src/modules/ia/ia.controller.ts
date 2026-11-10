@@ -9,6 +9,8 @@ import {
   Get,
 } from '@nestjs/common';
 import { IaService } from './ia.service';
+import { CatorceSentinelService } from './catorce-sentinel.service';
+import { CatorceBrainService } from './catorce-brain.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -28,7 +30,11 @@ import { IaDto } from './dto/ia.dto';
 export class IaController {
   private readonly logger = new Logger(IaController.name);
 
-  constructor(private readonly iaService: IaService) {}
+  constructor(
+    private readonly iaService: IaService,
+    private readonly catorceSentinel: CatorceSentinelService,
+    private readonly catorceBrain: CatorceBrainService,
+  ) {}
 
   // ============================================================
   // 🔹 1. CONSULTAS Y COMANDOS OMNISCIENTES A CATORCE IA
@@ -260,5 +266,39 @@ export class IaController {
       ok: true,
       ...this.iaService.getGeminiApiKeysStatus(),
     };
+  }
+
+  // ============================================================
+  // 🔹 13. ALERTAS PROACTIVAS DEL CENTINELA CATORCE
+  // ============================================================
+  @Get('catorce/proactive-alerts')
+  @ApiOperation({
+    summary: 'Obtiene las alertas proactivas detectadas por el Centinela en segundo plano',
+  })
+  async getProactiveAlerts() {
+    const alerts = await this.catorceSentinel.getUnresolvedAlerts();
+    return { ok: true, alerts };
+  }
+
+  @Post('catorce/proactive-alerts/:id/ack')
+  @ApiOperation({
+    summary: 'Reconoce una alerta proactiva',
+  })
+  async acknowledgeAlert(@Req() req: any, @CurrentUser() user: any) {
+    const id = Number(req.params.id);
+    const success = await this.catorceSentinel.acknowledgeAlert(id, user);
+    return { ok: success };
+  }
+
+  // ============================================================
+  // 🔹 14. GESTIÓN DE MEMORIA DE TRABAJO (SCRATCHPAD)
+  // ============================================================
+  @Post('catorce/working-memory/clear')
+  @ApiOperation({
+    summary: 'Limpia la memoria de trabajo activa del usuario actual',
+  })
+  async clearWorkingMemory(@CurrentUser() user: any) {
+    await this.catorceBrain.clearWorkingMemory(user);
+    return { ok: true, message: 'Memoria de trabajo limpiada exitosamente.' };
   }
 }
