@@ -38,10 +38,10 @@ export class CatorceSentinelService implements OnModuleInit {
   }
 
   /**
-   * ⏰ AUDITORÍA PERIÓDICA AUTOMÁTICA CADA 3 MINUTOS
+   * ⏰ AUDITORÍA PERIÓDICA AUTOMÁTICA CADA 12 HORAS (Optimizado para mínimo consumo de recursos)
    * Escanea cámaras desconectadas, turnos sin cubrir, documentos vencidos y novedades críticas.
    */
-  @Cron('*/3 * * * *')
+  @Cron('0 */12 * * *')
   async runProactiveAudit(): Promise<ProactiveAlert[]> {
     this.logger.debug('🛡️ [CATORCE Sentinel] Ejecutando escaneo proactivo de telemetría y seguridad...');
     const admin = this.supabase.getSupabaseAdminClient();
