@@ -84,6 +84,50 @@ export class IaController {
   }
 
   // ============================================================
+  // 🔹 2.1 TELEMETRIA Y DIAGNOSTICO EN TIEMPO REAL DE LA VPS
+  // ============================================================
+  @Get('catorce/vps-status')
+  @ApiOperation({
+    summary: 'Diagnóstico en tiempo real de la VPS: Disco, RAM, CPU, PostgreSQL y Segundo Cerebro',
+  })
+  async getVpsStatus(@CurrentUser() user: any) {
+    return this.iaService.getSystemAndVpsStatus(user);
+  }
+
+  // ============================================================
+  // 🔹 2.2 TEST DE DISPOSITIVOS Y HARDWARE IoT EN CONSOLA (SOCKETS TCP)
+  // ============================================================
+  @Post('catorce/device-test')
+  @ApiOperation({
+    summary: 'Ejecuta prueba de sockets TCP en consola para hardware IoT (Dahua, Hikvision, MikroTik)',
+  })
+  async testDevices(@Body() body: { target?: string; port?: number }, @CurrentUser() user: any) {
+    return this.iaService.testDeviceConnectivity(body?.target, body?.port, user);
+  }
+
+  // ============================================================
+  // 🔹 2.3 CREACION INTEGRAL DE PUESTOS DE TRABAJO
+  // ============================================================
+  @Post('catorce/puesto-completo')
+  @ApiOperation({
+    summary: 'Crea un puesto de trabajo completo con validación de cliente, contrato y subpuesto',
+  })
+  async crearPuesto(@Body() body: any, @CurrentUser() user: any) {
+    return this.iaService.crearPuestoCompleto(body, user);
+  }
+
+  // ============================================================
+  // 🔹 2.4 GESTION Y PROGRAMACION DE TURNOS / HORARIOS
+  // ============================================================
+  @Post('catorce/gestion-turnos')
+  @ApiOperation({
+    summary: 'Gestiona turnos, asignaciones y programación de guardas con validación de horarios',
+  })
+  async gestionarTurnos(@Body() body: any, @CurrentUser() user: any) {
+    return this.iaService.gestionarTurnosYHorarios(body, user);
+  }
+
+  // ============================================================
   // 🔹 3. CONFIGURACIÓN DE GEMINI LIVE API (VOZ EN TIEMPO REAL)
   // ============================================================
   @Get('catorce/live-session')

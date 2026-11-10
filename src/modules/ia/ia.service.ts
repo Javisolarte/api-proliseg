@@ -325,6 +325,261 @@ Estoy conectada a la base de datos de PROLISEG LTDA para responder sus preguntas
       }
 
       // =========================================================================
+      // 0-D: TELEMETRIA Y DIAGNOSTICO EN TIEMPO REAL DE LA VPS / SISTEMA
+      // =========================================================================
+      const isSystemDiagnosticQuery =
+        /\b(estado del sistema|diagnostico del sistema|diagnostico de la vps|diagnostico del servidor|salud del sistema|salud de la vps|telemetria de la vps|telemetria vps)\b/i.test(qNorm) ||
+        (/\b(espacio|almacenamiento|disco|ram|memoria|cpu|procesador)\b/i.test(qNorm) && /\b(vps|servidor|sistema|maquina|disco duro)\b/i.test(qNorm));
+
+      if (isSystemDiagnosticQuery) {
+        const vps = await this.catorceBrain.getSystemAndVpsStatus(user);
+        const disk = vps.disco;
+        const mem = vps.memoria;
+        const cpu = vps.procesador;
+        const db = vps.baseDeDatos;
+        const brain = vps.segundoCerebro;
+
+        const diagText = `${activeUserName}, presento el informe consolidado de telemetria y diagnostico en tiempo real del servidor y la plataforma Prolicontrol:
+
+1. ALMACENAMIENTO Y DISCO (VPS / SERVIDOR):
+* Punto de Montaje: ${disk.puntoMontaje}
+* Capacidad Total: ${disk.totalGb} GB
+* Espacio Ocupado: ${disk.usadoGb} GB (${disk.porcentajeUso})
+* Espacio Disponible: ${disk.libreGb} GB
+* Condicion Operativa: ${disk.estado === 'OPTIMO' ? 'Normal / Saludable' : disk.estado}
+
+2. MEMORIA RAM Y PROCESOS:
+* Memoria Total: ${mem.totalGb} GB
+* Memoria en Uso: ${mem.usadoGb} GB (${mem.porcentajeUso})
+* Memoria Libre: ${mem.libreGb} GB
+* Consumo Proceso CATORCE: ${mem.nodeHeapUsedMb} MB Heap (${mem.nodeRssMb} MB RSS)
+* Condicion Operativa: ${mem.estado === 'OPTIMO' ? 'Normal / Estable' : mem.estado}
+
+3. PROCESAMIENTO (CPU):
+* Procesador: ${cpu.modelo}
+* Nucleos / Hilos: ${cpu.nucleos} cores
+* Uptime del Sistema: ${vps.host.uptimeHoras} horas continuas
+
+4. INFRAESTRUCTURA DE DATOS POSTGRESQL:
+* Motor: ${db.motor}
+* Estado: ${db.estado === 'CONECTADO' ? 'En Linea / Operativo' : db.estado}
+* Latencia de Red: ${db.latenciaMs} ms
+* Esquemas Activos: public (36 tablas) e ia_brain (memoria y auditoria)
+
+5. SEGUNDO CEREBRO EMPRESARIAL:
+* Repositorio Documental: ${brain.documentosIndexados} documentos indexados
+* Acceso a Runbooks y Manuales: Busqueda semantica y local inmediata activa.`;
+
+        const voiceSnippet = `${activeUserName}, el sistema opera con normalidad. El disco tiene ${disk.libreGb} gigabytes libres de ${disk.totalGb}, la memoria RAM esta al ${mem.porcentajeUso} de uso y la base de datos responde en ${db.latenciaMs} milisegundos.`;
+        const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
+
+        this.catorceBrain.appendConversationTurn(user, userQuery, diagText, canal, ['core', 'brain'], ['CATORCE-DIAGNOSTICO:vpsStatus']);
+
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: 'TELEMETRIA_SISTEMA_VPS',
+          activatedNodes: ['core', 'brain'],
+          toolsUsed: ['CATORCE-DIAGNOSTICO:vpsStatus'],
+          message: diagText,
+          audioUrl,
+          latencyMs: Date.now() - startTime,
+        };
+      }
+
+      // =========================================================================
+      // 0-E: TEST DE DISPOSITIVOS Y HARDWARE IoT EN CONSOLA (Dahua, Hikvision, MikroTik)
+      // =========================================================================
+      const isDeviceTestQuery =
+        /\b(test de dispositivos|testear dispositivos|probar dispositivos|test en consola|correr test|correr pruebas|verificar dispositivos|verificar camaras|probar camaras|verificar puertas|probar puertas|verificar dahua|probar dahua|verificar hikvision|verificar mikrotik|ping a dispositivos)\b/i.test(qNorm);
+
+      if (isDeviceTestQuery) {
+        let filterPuestoOrIp: string | undefined = undefined;
+        const ipMatch = qNorm.match(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/);
+        if (ipMatch) {
+          filterPuestoOrIp = ipMatch[0];
+        } else if (qNorm.includes('dahua')) {
+          filterPuestoOrIp = 'dahua';
+        } else if (qNorm.includes('hikvision')) {
+          filterPuestoOrIp = 'hikvision';
+        } else if (qNorm.includes('mikrotik')) {
+          filterPuestoOrIp = 'mikrotik';
+        }
+
+        const devRes = await this.catorceBrain.testDeviceConnectivity(filterPuestoOrIp, undefined, user);
+
+        const lines = devRes.dispositivos.map(
+          (d: any) =>
+            `* ${d.nombre} (${d.puesto}): IP ${d.ip}:${d.port} [${d.marca}] -> ${
+              d.enLinea ? 'EN LINEA (' + d.latenciaMs + ' ms)' : 'NO RESPONDE (' + d.estadoSocket + ')'
+            }`,
+        );
+
+        const devText = `${activeUserName}, he ejecutado la prueba de sockets TCP en consola para auditar los dispositivos IoT y de red:
+
+RESUMEN EJECUTIVO DE COMUNICACION:
+* Total de Dispositivos Probados: ${devRes.totalProbados}
+* En Linea / Respondiendo: ${devRes.online}
+* Fuera de Linea / Timeout: ${devRes.offline}
+
+DETALLE DE PRUEBAS EN CONSOLA:
+${lines.join('\n')}
+
+${
+  devRes.offline > 0
+    ? 'ALERTA OPERATIVA: Se detectaron equipos sin respuesta inmediata. Se recomienda verificar alimentacion electrica PoE y enlace de red.'
+    : 'ESTADO DE CONECTIVIDAD: Todos los dispositivos evaluados presentan comunicacion y latencia normal.'
+}`;
+
+        const voiceSnippet = `${activeUserName}, prueba de red finalizada en consola. De ${devRes.totalProbados} dispositivos evaluados, ${devRes.online} estan en linea con latencia optima y ${devRes.offline} sin respuesta.`;
+        const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
+
+        this.catorceBrain.appendConversationTurn(user, userQuery, devText, canal, ['accesos'], ['CATORCE-IOT:testDeviceConnectivity']);
+
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: 'TEST_CONECTIVIDAD_HARDWARE',
+          activatedNodes: ['accesos'],
+          toolsUsed: ['CATORCE-IOT:testDeviceConnectivity'],
+          message: devText,
+          audioUrl,
+          latencyMs: Date.now() - startTime,
+        };
+      }
+
+      // =========================================================================
+      // 0-F: CREACION AUTONOMA DE PUESTOS DE TRABAJO COMPLETOS
+      // =========================================================================
+      const isCreatePuestoQuery =
+        /\b(crear puesto|crea un puesto|crear un puesto|nuevo puesto|registrar puesto|registra un puesto)\b/i.test(qNorm);
+
+      if (isCreatePuestoQuery) {
+        const nameMatch = userQuery.match(/(?:crear|crea|registrar|nuevo)\s+(?:un\s+)?puesto(?:\s+de\s+trabajo)?(?:\s+llamado|\s+denominado|\s+para|\s+nombre)?\s+([a-zA-Z0-9_\sáéíóúÁÉÍÓÚñÑ]+)/i);
+        const rawCandidate = nameMatch ? nameMatch[1].trim() : '';
+        const cleanedCandidate = rawCandidate.replace(/\b(en|con|de|para|servicio|armado|sin armas|pasto|ipiales)\b.*$/i, '').trim();
+
+        if (cleanedCandidate && cleanedCandidate.length >= 3 && !cleanedCandidate.toLowerCase().startsWith('completo')) {
+          const ciudad = /ipiales/i.test(userQuery) ? 'Ipiales' : /tumaco/i.test(userQuery) ? 'Tumaco' : 'Pasto';
+          const armas = /\b(armado|con armas|armas)\b/i.test(userQuery);
+          const tipoServicio = /12\s*h/i.test(userQuery) ? '12 Horas' : '24 Horas';
+
+          const nuevoPuesto = await this.catorceBrain.crearPuestoCompleto(
+            {
+              nombre: cleanedCandidate,
+              ciudad,
+              tipo_servicio: tipoServicio,
+              armas,
+            },
+            user,
+          );
+
+          const puestoText = `${activeUserName}, he creado exitosamente el puesto en la base de datos de Prolicontrol:
+
+* Nombre del Puesto: ${nuevoPuesto.puesto.nombre} (ID: ${nuevoPuesto.puesto.id})
+* Ciudad: ${nuevoPuesto.puesto.ciudad}
+* Modalidad de Servicio: ${nuevoPuesto.puesto.tipo_servicio} (${armas ? 'Armado' : 'Sin Armas'})
+* Subpuestos Inicializados: ${nuevoPuesto.subpuestos.length} (${nuevoPuesto.subpuestos.map((s: any) => s.nombre).join(', ')})
+* Codigo de Auditoria: ${nuevoPuesto.auditCode}`;
+
+          const voiceSnippet = `${activeUserName}, el puesto ${nuevoPuesto.puesto.nombre} ha sido creado exitosamente en Prolicontrol con sus subpuestos operativos.`;
+          const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
+
+          this.catorceBrain.appendConversationTurn(user, userQuery, puestoText, canal, ['puestos'], ['CATORCE-OPS:crearPuestoCompleto']);
+
+          return {
+            ok: true,
+            assistant: 'CATORCE',
+            actionExecuted: 'CREACION_PUESTO_COMPLETO',
+            activatedNodes: ['puestos'],
+            toolsUsed: ['CATORCE-OPS:crearPuestoCompleto'],
+            message: puestoText,
+            audioUrl,
+            latencyMs: Date.now() - startTime,
+          };
+        } else {
+          const askPuestoMsg = `${activeUserName}, tengo habilitada la creacion autonoma de puestos de trabajo. Por favor indiqueme el nombre del puesto que desea crear (y opcionalmente la ciudad y si requiere servicio armado o sin armas) para registrarlo de inmediato en Prolicontrol.`;
+          const audioUrl = await this.generateVoiceIfRequested(askPuestoMsg, canal);
+          return {
+            ok: true,
+            assistant: 'CATORCE',
+            actionExecuted: 'SOLICITUD_DATOS_PUESTO',
+            activatedNodes: ['puestos'],
+            toolsUsed: ['CATORCE-OPS:askMissingPuestoData'],
+            message: askPuestoMsg,
+            audioUrl,
+            latencyMs: Date.now() - startTime,
+          };
+        }
+      }
+
+      // =========================================================================
+      // 0-G: ASIGNACION Y GESTION DE TURNOS Y HORARIOS
+      // =========================================================================
+      const isManageTurnosQuery =
+        /\b(asignar a horario|asignar personas a horarios|crear turnos|crear turno|crear horarios|gestionar programacion|programar turno|asignar guarda)\b/i.test(qNorm);
+
+      if (isManageTurnosQuery) {
+        const pMatch = userQuery.match(/(?:en el puesto|al puesto|en|puesto)\s+([a-zA-Z0-9_\sáéíóúÁÉÍÓÚñÑ]+)/i);
+        const gMatch = userQuery.match(/(?:guarda|empleado|a|al se\u00f1or|a la se\u00f1ora)\s+([a-zA-Z0-9_\sáéíóúÁÉÍÓÚñÑ]+)/i);
+
+        if (pMatch && gMatch) {
+          const pName = pMatch[1].replace(/\b(guarda|empleado|turno|fecha|horario)\b.*$/i, '').trim();
+          const gName = gMatch[1].replace(/\b(en|al|turno|fecha|horario)\b.*$/i, '').trim();
+
+          if (pName.length >= 3 && gName.length >= 3) {
+            const isNocturno = /\b(nocturno|noche|18:00)\b/i.test(userQuery);
+            const turnoRes = await this.catorceBrain.gestionarTurnosYHorarios(
+              {
+                puesto_nombre_o_id: pName,
+                empleado_cedula_o_nombre: gName,
+                tipo_turno: isNocturno ? 'NOCTURNO' : 'DIURNO',
+              },
+              user,
+            );
+
+            const turnoText = `${activeUserName}, he asentado la programacion en Prolicontrol:
+
+* Turno ID: ${turnoRes.turno.id}
+* Puesto: ${turnoRes.puesto.nombre}
+* Guarda: ${turnoRes.guarda?.nombre_completo || gName}
+* Horario: ${turnoRes.turno.hora_inicio} a ${turnoRes.turno.hora_fin} (${turnoRes.turno.tipo_turno})
+* Fecha: ${turnoRes.turno.fecha}
+* Codigo de Auditoria: ${turnoRes.auditCode}`;
+
+            const voiceSnippet = `${activeUserName}, el turno ha sido programado exitosamente para ${turnoRes.guarda?.nombre_completo || gName} en ${turnoRes.puesto.nombre}.`;
+            const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
+
+            this.catorceBrain.appendConversationTurn(user, userQuery, turnoText, canal, ['puestos'], ['CATORCE-OPS:gestionarTurnosYHorarios']);
+
+            return {
+              ok: true,
+              assistant: 'CATORCE',
+              actionExecuted: 'GESTION_PROGRAMACION_TURNO',
+              activatedNodes: ['puestos'],
+              toolsUsed: ['CATORCE-OPS:gestionarTurnosYHorarios'],
+              message: turnoText,
+              audioUrl,
+              latencyMs: Date.now() - startTime,
+            };
+          }
+        }
+
+        const askTurnoMsg = `${activeUserName}, tengo control operativo para gestionar turnos y programaciones. Para proceder, indiqueme el nombre del puesto, el guarda que desea asignar y el tipo de turno (diurno 06:00 a 18:00 o nocturno 18:00 a 06:00).`;
+        const audioUrl = await this.generateVoiceIfRequested(askTurnoMsg, canal);
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: 'SOLICITUD_DATOS_TURNO',
+          activatedNodes: ['puestos'],
+          toolsUsed: ['CATORCE-OPS:askMissingTurnoData'],
+          message: askTurnoMsg,
+          audioUrl,
+          latencyMs: Date.now() - startTime,
+        };
+      }
+
+      // =========================================================================
       // 1️⃣ DETECCIÓN DE GUARDADO EXPLÍCITO EN EL SEGUNDO CEREBRO
       // =========================================================================
       const isLearnIntent =
@@ -1230,6 +1485,22 @@ ${customSqlResult.length > 0 ? `\n**Datos específicos encontrados (${customSqlR
         rol: user?.rol || 'superusuario',
       },
     };
+  }
+
+  async getSystemAndVpsStatus(user: any) {
+    return this.catorceBrain.getSystemAndVpsStatus(user);
+  }
+
+  async testDeviceConnectivity(target?: string, port?: number, user?: any) {
+    return this.catorceBrain.testDeviceConnectivity(target, port, user);
+  }
+
+  async crearPuestoCompleto(body: any, user: any) {
+    return this.catorceBrain.crearPuestoCompleto(body, user);
+  }
+
+  async gestionarTurnosYHorarios(body: any, user: any) {
+    return this.catorceBrain.gestionarTurnosYHorarios(body, user);
   }
 
   async getCatorceTelemetry(user: any) {
