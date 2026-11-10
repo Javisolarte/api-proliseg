@@ -2852,7 +2852,7 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
 
 
 
-        const audioDataUrl: string | undefined = undefined;
+        const audioDataUrl = await this.generateVoiceIfRequested(questionMsg, canal);
 
         return {
 
@@ -2944,7 +2944,7 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
 
 
 
-        const audioDataUrl: string | undefined = undefined;
+        const audioDataUrl = await this.generateVoiceIfRequested(summaryClean, canal);
 
         return {
 
@@ -3120,7 +3120,7 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
 
           this.catorceBrain.appendConversationTurn(user, userQuery, successMsg, canal, activatedNodes, toolsUsed);
 
-          const audioDataUrl: string | undefined = undefined;
+          const audioDataUrl = await this.generateVoiceIfRequested(successMsg, canal);
 
 
 
@@ -3158,7 +3158,7 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
 
           this.catorceBrain.appendConversationTurn(user, userQuery, clarifyMsg, canal, activatedNodes, toolsUsed);
 
-          const audioDataUrl: string | undefined = undefined;
+          const audioDataUrl = await this.generateVoiceIfRequested(clarifyMsg, canal);
 
           return {
 
@@ -3455,9 +3455,9 @@ Mensaje del usuario: "${userQuery}"
 
 
 
-      // ⚡ VELOCIDAD MÁXIMA TIPO CHATGPT LIVE: Retorno inmediato de texto (<800ms) sin bloqueo de TTS en backend
+      // Retorno inmediato con voz neural de fragmento inicial
 
-      const audioDataUrl: string | undefined = undefined;
+      const audioDataUrl = await this.generateVoiceIfRequested(finalMessage, canal);
 
 
 
@@ -4306,17 +4306,15 @@ ${customSqlResult.length > 0 ? `\n**Datos específicos encontrados (${customSqlR
    */
 
   public async generateVoiceIfRequested(text: string, canal?: string): Promise<string | undefined> {
-    if (!canal || (!canal.includes('voz') && !canal.includes('radio'))) {
+    if (!canal || (!canal.includes('voz') && !canal.includes('radio') && canal !== 'texto')) {
       return undefined;
     }
     try {
       const snippet = this.extractSpokenSnippet(text);
       if (!snippet) return undefined;
-      // Timeout defensivo ultra-rápido de 950ms: si el audio está en caché local (RAM/SSD < 50ms) se entrega de inmediato.
-      // Si la síntesis de un texto nuevo toma más tiempo, no bloqueamos la respuesta HTTP: devolvemos undefined
-      // para que el frontend reciba los datos en milisegundos y reproduzca la voz por fragmentos fluidos.
+      // Sintesis o cache ultra-rapida de la primera oracion para entrega inmediata
       const audioPromise = this.geminiService.generateHumanVoiceAudio(snippet, 'Aoede');
-      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 950));
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200));
       const audio = await Promise.race([audioPromise, timeoutPromise]);
       return audio || undefined;
     } catch {
@@ -4328,54 +4326,26 @@ ${customSqlResult.length > 0 ? `\n**Datos específicos encontrados (${customSqlR
 
   /**
 
-   * 🎙️ Extrae un resumen hablado limpio y fluido para locución instantánea humana
+   * Extrae la primera oracion hablada limpia para locucion instantanea humana
 
    */
 
   public extractSpokenSnippet(text: string): string {
-
     const clean = (text || '')
-
+      .replace(/<div class="audit-pill-msg">[\s\S]*?<\/div>/gi, '')
       .replace(/<pre>[\s\S]*?<\/pre>/gi, '')
-
       .replace(/<[^>]+>/g, ' ')
-
       .replace(/```[\s\S]*?```/g, '')
-
       .replace(/[*#_`~]/g, '')
-
       .replace(/AUD-CAT-\d+/g, '')
-
       .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2300}-\u{23FF}\u{2B50}\u{200D}\u{FE0F}]/gu, '')
-
       .replace(/\s+/g, ' ')
-
       .trim();
 
-
-
-    if (clean.length <= 360) return clean;
-
-    const sentences = clean.split(/(?<=[.!?])\s+/);
-
-    let snippet = '';
-
-    for (const s of sentences) {
-
-      if ((snippet + ' ' + s).trim().length <= 360) {
-
-        snippet = (snippet + ' ' + s).trim();
-
-      } else {
-
-        break;
-
-      }
-
-    }
-
-    return snippet || clean.slice(0, 360);
-
+    if (!clean) return '';
+    const rawSentences = clean.split(/(?<=[.?!])\s+/).map((s) => s.trim()).filter((s) => s.length > 0);
+    const firstSentence = rawSentences[0] || clean;
+    return firstSentence.length > 220 ? firstSentence.slice(0, 210).trim() : firstSentence;
   }
 
 }
