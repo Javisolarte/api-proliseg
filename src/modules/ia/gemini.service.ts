@@ -224,7 +224,7 @@ export class GeminiService {
   public async generateStructuredOrNatural(prompt: string, systemInstruction?: string): Promise<string> {
     const result = await this.executeWithRetry(async (genAI) => {
       const model = genAI.getGenerativeModel({
-        model: 'models/gemini-3.5-flash-lite',
+        model: 'models/gemini-3.1-flash-lite',
         ...(systemInstruction ? { systemInstruction } : {}),
       });
       return await model.generateContent(prompt);
@@ -409,7 +409,7 @@ export class GeminiService {
     try {
       const result = await this.executeWithRetry(async (genAI) => {
         const model = genAI.getGenerativeModel({
-          model: 'models/gemini-2.5-flash',
+          model: 'models/gemini-3.1-flash-lite',
         });
 
         return await model.generateContent([
@@ -431,7 +431,7 @@ export class GeminiService {
   async naturalToSQL(prompt: string): Promise<string> {
     const result = await this.executeWithRetry(async (genAI) => {
       const model = genAI.getGenerativeModel({
-        model: 'models/gemini-2.5-flash',
+        model: 'models/gemini-3.1-flash-lite',
       });
 
       return await model.generateContent([
@@ -447,7 +447,7 @@ export class GeminiService {
   async humanizeResponse(prompt: string, dbResult: any): Promise<string> {
     const result = await this.executeWithRetry(async (genAI) => {
       const model = genAI.getGenerativeModel({
-        model: 'models/gemini-2.5-flash',
+        model: 'models/gemini-3.1-flash-lite',
       });
 
       return await model.generateContent([
@@ -487,7 +487,7 @@ Indica nivel de riesgo y una breve explicaciÃ³n en una sola lÃ­nea clara y c
 
     const result = await this.executeWithRetry(async (genAI) => {
       const model = genAI.getGenerativeModel({
-        model: 'models/gemini-2.5-flash',
+        model: 'models/gemini-3.1-flash-lite',
       });
       return await model.generateContent(prompt);
     });
@@ -504,7 +504,7 @@ Indica nivel de riesgo y una breve explicaciÃ³n en una sola lÃ­nea clara y c
 
       const result = await this.executeWithRetry(async (genAI) => {
         const model = genAI.getGenerativeModel({
-          model: 'models/gemini-2.5-flash',
+          model: 'models/gemini-3.1-flash-lite',
         });
 
         const imagePart = {
@@ -527,7 +527,7 @@ Indica nivel de riesgo y una breve explicaciÃ³n en una sola lÃ­nea clara y c
     try {
       const result = await this.executeWithRetry(async (genAI) => {
         const model = genAI.getGenerativeModel({
-          model: 'models/gemini-2.5-flash',
+          model: 'models/gemini-3.1-flash-lite',
         });
 
         return await model.generateContent([
