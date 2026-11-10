@@ -180,6 +180,117 @@ Estoy conectada a la base de datos de PROLISEG LTDA para responder sus preguntas
       // =========================================================================
       // 0️⃣ CANDADO ESTRICTO CONTRA ELIMINACIÓN (SOLO SUPERUSUARIOS / PROTEGIDO)
       // =========================================================================
+      // =========================================================================
+      // 0-C: CONSULTA DE IDENTIDAD Y PERFIL PERSONAL DEL USUARIO LOGUEADO
+      // =========================================================================
+      const isIdentityOrProfileQuery =
+        /\b(quien soy|quien soy yo|como me llamo|cual es mi nombre|mi nombre|cuantos anos tengo|cuantos anos tengo yo|que edad tengo|cual es mi edad|mi edad|cuando naci|mi fecha de nacimiento|cuando es mi cumpleanos|mi cumpleanos|que cargo tengo|cual es mi rol|mi rol|que rol tengo|cuales son mis datos|mis datos|mi perfil|mi informacion|que hago yo|a que me dedico|que puesto tengo|donde estoy asignado)\b/i.test(qNorm);
+
+      if (isIdentityOrProfileQuery) {
+        let uRow: any = null;
+        let eRow: any = null;
+        let customMemories: any[] = [];
+
+        try {
+          const userFilters: string[] = [];
+          if (user?.id) userFilters.push(`id.eq.${Number(user.id)}`);
+          if (user?.user_id) userFilters.push(`user_id.eq.${user.user_id}`);
+          if (user?.email || user?.correo) userFilters.push(`correo.ilike.${user.email || user.correo}`);
+          if (user?.cedula) userFilters.push(`cedula.eq.${user.cedula}`);
+
+          if (userFilters.length > 0) {
+            const { data: uData } = await this.supabase
+              .getSupabaseAdminClient()
+              .from('usuarios_externos')
+              .select('*')
+              .or(userFilters.join(','))
+              .limit(1);
+            if (uData && uData.length > 0) uRow = uData[0];
+          }
+
+          const empFilters: string[] = [];
+          if (uRow?.id) empFilters.push(`usuario_id.eq.${uRow.id}`);
+          if (uRow?.cedula || user?.cedula) empFilters.push(`cedula.eq.${uRow?.cedula || user?.cedula}`);
+          if (uRow?.correo || user?.email || user?.correo) empFilters.push(`correo.ilike.${uRow?.correo || user?.email || user?.correo}`);
+
+          if (empFilters.length > 0) {
+            const { data: eData } = await this.supabase
+              .getSupabaseAdminClient()
+              .from('empleados')
+              .select('*')
+              .or(empFilters.join(','))
+              .limit(1);
+            if (eData && eData.length > 0) eRow = eData[0];
+          }
+
+          const targetUserId = uRow?.id || user?.id;
+          if (targetUserId) {
+            customMemories = (await this.catorceBrain.runSql(
+              `SELECT clave, hecho_recordado FROM ia_brain.memoria_usuarios WHERE usuario_id = ${Number(targetUserId)} AND activo = true ORDER BY created_at DESC LIMIT 5`,
+            )) || [];
+          }
+        } catch (err: any) {
+          this.logger.warn(`Error al consultar perfil de usuario: ${err?.message}`);
+        }
+
+        const resolvedName = uRow?.nombre_completo || eRow?.nombre_completo || user?.nombre_completo || user?.nombre || activeUserName;
+        const resolvedRol = (uRow?.rol || user?.rol || 'Superusuario').toUpperCase();
+        const resolvedCedula = uRow?.cedula || eRow?.cedula || user?.cedula || 'No registrada';
+        const resolvedCorreo = uRow?.correo || user?.email || user?.correo || 'No registrado';
+        const resolvedTelefono = uRow?.telefono || eRow?.telefono || 'No registrado';
+        const fechaNac = eRow?.fecha_nacimiento;
+
+        let edadStr = '';
+        let cumpleStr = '';
+        if (fechaNac) {
+          try {
+            const bdate = new Date(fechaNac);
+            const today = new Date();
+            let age = today.getFullYear() - bdate.getFullYear();
+            const m = today.getMonth() - bdate.getMonth();
+            if (m < 0 || (m === 0 && today.getDate() < bdate.getDate())) {
+              age--;
+            }
+            edadStr = `${age} anos`;
+            cumpleStr = bdate.toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' });
+          } catch {}
+        }
+
+        let respText = '';
+
+        if (/\b(cuantos anos tengo|que edad tengo|cual es mi edad|mi edad|cuando naci|mi fecha de nacimiento|cuando es mi cumpleanos|mi cumpleanos)\b/i.test(qNorm)) {
+          if (edadStr) {
+            respText = `Usted tiene ${edadStr}. Su fecha de nacimiento registrada en Prolicontrol es el ${cumpleStr}.`;
+          } else {
+            respText = `Ingeniero ${resolvedName}, en este momento su fecha de nacimiento no se encuentra diligenciada en su ficha de empleado de Prolicontrol. Si me indica su fecha de nacimiento, con gusto la guardo en mi memoria permanente para tenerla presente siempre.`;
+          }
+        } else if (/\b(quien soy|quien soy yo|como me llamo|cual es mi nombre|mi nombre)\b/i.test(qNorm)) {
+          respText = `Usted es ${resolvedName}, autenticado en la plataforma Prolicontrol con el rol de ${resolvedRol}. En nuestras conversaciones me dirijo a usted como ${activeUserName}.`;
+        } else if (/\b(que cargo tengo|cual es mi rol|mi rol|que rol tengo|que hago yo|a que me dedico)\b/i.test(qNorm)) {
+          respText = `Su rol en Prolicontrol es ${resolvedRol}. Cuenta con permisos omniscientes para supervisar y operar la plataforma de PROLISEG LTDA: puestos, minutas, empleados, contratos y controles de acceso.`;
+        } else {
+          respText = `Aqui tiene su informacion de perfil registrada en Prolicontrol:\n\n* Nombre: ${resolvedName}\n* Rol / Cargo: ${resolvedRol}\n* Cedula: ${resolvedCedula}\n* Correo: ${resolvedCorreo}\n* Telefono: ${resolvedTelefono}` +
+            (edadStr ? `\n* Edad: ${edadStr} (Nacimiento: ${cumpleStr})` : '\n* Fecha de Nacimiento: No registrada en ficha de personal');
+
+          if (customMemories.length > 0) {
+            respText += `\n\nDatos que he memorizado de usted:\n` +
+              customMemories.map((m: any) => `- ${m.hecho_recordado}`).join('\n');
+          }
+        }
+
+        this.catorceBrain.appendConversationTurn(user, userQuery, respText, canal, ['core', 'brain'], ['CATORCE-USER:profileQuery']);
+
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: 'CONSULTA_PERFIL_USUARIO',
+          activatedNodes: ['core', 'brain'],
+          toolsUsed: ['CATORCE-USER:profileQuery'],
+          message: respText,
+          latencyMs: Date.now() - startTime,
+        };
+      }
+
       const isDeleteAttempt =
         /\b(elimina|eliminar|borra|borrar|suprime|suprimir|destruye|drop|truncate|delete)\b/i.test(qNorm) &&
         /\b(puesto|empleado|guarda|turno|cliente|contrato|minuta|novedad|registro|base de datos|tabla|usuario|vehiculo|incidente|vacacion)\b/i.test(
