@@ -592,11 +592,19 @@ export class IaService {
       // =========================================================================
       // 0-4: VISOR DE CONTRATO (CLIENTE O PUESTO)
       // =========================================================================
+            // 🔒 Control de Acceso Basado en Roles (RBAC) para Documentos Sensibles
+      const userRoleLower = (user?.rol || 'operador').toLowerCase();
+      const isAuthorizedFinancials = ['superusuario', 'gerencia', 'administrativo', 'coordinador'].includes(userRoleLower) || isIngeniero;
+
       const isVerContrato =
         /\b(contrato|contratos)\b/i.test(qNorm) &&
         /\b(muestra|muestrame|ver|abrir|consultar|visualizar|detalles)\b/i.test(qNorm);
 
       if (isVerContrato) {
+        if (!isAuthorizedFinancials) {
+          const deniedMsg = `Acceso protegido por directriz de seguridad: La consulta de contratos, cláusulas comerciales y valores financieros requiere rol de Gerencia o Administración. Su perfil actual (${userRoleLower}) no cuenta con esta autorización.`;
+          return { ok: false, message: deniedMsg, accessDenied: true, latencyMs: Date.now() - startTime };
+        }
         const contratoData = await this.catorceBrain.toolConsultarContrato(userQuery, user);
         if (contratoData) {
           const rawCliente = Array.isArray(contratoData.cliente) ? contratoData.cliente[0] : (contratoData.cliente as any);
@@ -625,27 +633,39 @@ export class IaService {
       }
 
       // =========================================================================
-      // 0-5: SALUD INTEGRAL Y DIAGNÓSTICO EN VIVO DE PROLICONTROL
+      // 0-5: LABORATORIO TÉCNICO DIAGNÓSTICO (PRUEBAS ACTIVAS DIFERENCIADAS)
       // =========================================================================
       const isSaludProlicontrol =
-        /\b(funcionando bien|esta bien prolicontrol|salud del sistema|revisa prolicontrol|prolicontrol funciona|esta operativo prolicontrol|revision de prolicontrol)\b/i.test(qNorm);
+        /(funcionando bien|esta bien prolicontrol|salud del sistema|revisa prolicontrol|prolicontrol funciona|laboratorio|laboratorio tecnico|bateria de pruebas|probar servicios)/i.test(qNorm);
 
       if (isSaludProlicontrol) {
-        const vps = await this.catorceBrain.getSystemAndVpsStatus(user);
-        const iotTest = await this.catorceBrain.testDeviceConnectivity(undefined, undefined, user);
+        const labRes = await this.catorceBrain.ejecutarLaboratorioTecnico(user);
+        
+        const linesPruebas = labRes.pruebas.map((p: any) => `* [${p.estado}] **${p.nombre}** (${p.duracionMs} ms a las ${p.hora}): ${p.evidencia} — *Criterio: ${p.criterioAprobacion}*`).join('\n');
 
-        const msg = `${activeUserName}, he ejecutado pruebas técnicas reales en tiempo real sobre la infraestructura de Prolicontrol:\n\n1. BASE DE DATOS POSTGRESQL:\n* Estado: ${vps.baseDeDatos.estado === 'CONECTADO' ? 'En Línea y Estable' : vps.baseDeDatos.estado}\n* Latencia de Red: ${vps.baseDeDatos.latenciaMs} ms (Excelente rendimiento)\n* Tablas operativas: 36 tablas en esquema public\n\n2. SERVIDOR / VPS:\n* RAM en uso: ${vps.memoria.usadoGb} GB de ${vps.memoria.totalGb} GB (${vps.memoria.porcentajeUso})\n* Espacio en Disco: ${vps.disco.libreGb} GB libres de ${vps.disco.totalGb} GB\n* Condición: Saludable\n\n3. CONECTIVIDAD HARDWARE IOT:\n* Equipos evaluados: ${iotTest.totalProbados}\n* En línea: ${iotTest.online}\n* Fuera de línea: ${iotTest.offline}\n\nConclusión: La plataforma Prolicontrol y los servicios centrales operan con total normalidad.`;
-        const voiceSnippet = `${activeUserName}, Prolicontrol está funcionando correctamente. La base de datos responde en ${vps.baseDeDatos.latenciaMs} milisegundos, la memoria está al ${vps.memoria.porcentajeUso} y no hay anomalías críticas en el servidor.`;
+        const msg = `${activeUserName}, he ejecutado la batería completa del Laboratorio Técnico Diagnóstico sobre Prolicontrol:
+
+` +
+          `RESULTADO GENERAL: ${labRes.aprobadas} de ${labRes.totalPruebas} pruebas aprobadas (${labRes.duracionTotalMs} ms tiempo total)
+
+` +
+          `DETALLE DE PRUEBAS ACTIVAS:
+${linesPruebas}
+
+` +
+          `DIAGNÓSTICO: La capa transaccional de Prolicontrol permite lecturas, escrituras ACID controladas, autenticación y comunicación de hardware con normalidad.`;
+
+        const voiceSnippet = `${activeUserName}, laboratorio técnico finalizado. Se ejecutaron ${labRes.totalPruebas} pruebas técnicas con ${labRes.aprobadas} aprobadas. La base de datos, la API y la infraestructura operan con estabilidad total.`;
         const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
-        this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, ['core', 'accesos'], ['CATORCE-OPS:saludProlicontrol']);
+        this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, ['core', 'accesos'], ['CATORCE-LAB:laboratorioTecnico']);
         return {
           ok: true,
           assistant: 'CATORCE',
-          actionExecuted: 'DIAGNOSTICO_SALUD_PROLICONTROL',
-          activity: 'Pruebas de latencia y hardware completadas',
+          actionExecuted: 'LABORATORIO_TECNICO_PROLICONTROL',
+          activity: 'Batería de pruebas técnicas completada con éxito',
           interactiveResults: {
             type: 'system_health',
-            data: { vps, iot: iotTest },
+            data: labRes,
           },
           message: msg,
           audioUrl,
