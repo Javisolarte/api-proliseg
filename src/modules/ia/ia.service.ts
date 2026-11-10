@@ -4305,29 +4305,22 @@ ${customSqlResult.length > 0 ? `\n**Datos específicos encontrados (${customSqlR
    */
 
   public async generateVoiceIfRequested(text: string, canal?: string): Promise<string | undefined> {
-
     if (!canal || (!canal.includes('voz') && !canal.includes('radio'))) {
-
       return undefined;
-
     }
-
     try {
-
       const snippet = this.extractSpokenSnippet(text);
-
       if (!snippet) return undefined;
-
-      const audio = await this.geminiService.generateHumanVoiceAudio(snippet, 'Aoede');
-
+      // Timeout defensivo ultra-rápido de 950ms: si el audio está en caché local (RAM/SSD < 50ms) se entrega de inmediato.
+      // Si la síntesis de un texto nuevo toma más tiempo, no bloqueamos la respuesta HTTP: devolvemos undefined
+      // para que el frontend reciba los datos en milisegundos y reproduzca la voz por fragmentos fluidos.
+      const audioPromise = this.geminiService.generateHumanVoiceAudio(snippet, 'Aoede');
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 950));
+      const audio = await Promise.race([audioPromise, timeoutPromise]);
       return audio || undefined;
-
     } catch {
-
       return undefined;
-
     }
-
   }
 
 
