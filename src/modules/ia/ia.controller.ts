@@ -65,6 +65,9 @@ export class IaController {
     if (token) {
       effectiveUser.token = token;
     }
+    if (body?.userContext && typeof body.userContext === 'object') {
+      Object.assign(effectiveUser, body.userContext);
+    }
     const conversationHistory = Array.isArray(body?.conversationHistory) ? body.conversationHistory : undefined;
     return this.iaService.processQuery(query, effectiveUser, canal, conversationHistory);
   }
