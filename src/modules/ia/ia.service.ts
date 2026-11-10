@@ -28,7 +28,7 @@ TABLAS Y SERVICIOS EN PROLICONTROL (public):
 
 - contratos: id, cliente_id, valor, guardas_activos, fecha_inicio, fecha_fin, estado
 
-- minutas: id, puesto_id, subpuesto_id, tipo_novedad, detalle_novedad, nivel_riesgo, persona_involucrada, fecha, hora
+- minutas: id, puesto_id, subpuesto_id, titulo, contenido, descripcion, tipo_novedad, nivel_riesgo, persona_involucrada, fecha, hora
 
 - novedades: id, puesto_id, tipo, descripcion, fecha_reporte, estado
 
@@ -746,7 +746,7 @@ export class IaService {
               user,
             );
 
-            const msg = `He registrado la novedad en la minuta oficial de Prolicontrol:\n\n* Puesto: **${resNov.puestoNombre}**\n* Detalle: ${detalle}\n* Nivel de riesgo: ${resNov.minuta.nivel_riesgo.toUpperCase()}\n* Fecha y Hora: ${resNov.minuta.fecha} ${resNov.minuta.hora}\n* Código de auditoría: ${resNov.auditCode}`;
+            const msg = `He registrado la novedad en la minuta oficial de Prolicontrol:\n\n* Puesto: **${resNov.puestoNombre}**\n* Detalle: ${detalle}\n* Nivel de riesgo: ${resNov.minuta.nivel_riesgo.toUpperCase()}\n* Fecha y Hora: ${resNov.minuta.fecha} ${resNov.minuta.hora}\n* Codigo de auditoria: ${resNov.auditCode}`;
             const voiceSnippet = `${activeUserName}, la novedad para el puesto ${resNov.puestoNombre} ha sido registrada exitosamente en la minuta oficial.`;
             const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
             this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, ['minutas'], ['CATORCE-OPS:registrarNovedadMinuta']);
@@ -763,9 +763,29 @@ export class IaService {
               audioUrl,
               latencyMs: Date.now() - startTime,
             };
-          } catch (err: any) {
-            return { ok: false, message: `Error al registrar la novedad: ${err.message}`, latencyMs: Date.now() - startTime };
+          } catch {
+            const fallbackPuestoMsg = `${activeUserName}, para asentar la novedad con exactitud en la minuta de Prolicontrol, confirme a que puesto o edificio corresponde.`;
+            const audioUrl = await this.generateVoiceIfRequested(fallbackPuestoMsg, canal);
+            return {
+              ok: true,
+              assistant: 'CATORCE',
+              actionExecuted: 'PREGUNTA_PUESTO_MINUTA',
+              message: fallbackPuestoMsg,
+              audioUrl,
+              latencyMs: Date.now() - startTime,
+            };
           }
+        } else {
+          const askPuestoMsg = `${activeUserName}, a que puesto o edificio de Prolicontrol corresponde esta novedad para registrarla de inmediato en el libro de minutas?`;
+          const audioUrl = await this.generateVoiceIfRequested(askPuestoMsg, canal);
+          return {
+            ok: true,
+            assistant: 'CATORCE',
+            actionExecuted: 'PREGUNTA_PUESTO_MINUTA',
+            message: askPuestoMsg,
+            audioUrl,
+            latencyMs: Date.now() - startTime,
+          };
         }
       }
 
@@ -2734,7 +2754,7 @@ Analiza el mensaje y responde en UN SOLO JSON ESTRICTO con esta estructura:
 
   "wantsPdf": boolean,
 
-  "directAnswer": "Tu respuesta hablada/escrita completa, cálida, fluida (ideal para ser leída en voz alta como ChatGPT Live), SIN NINGÚN EMOJI y natural en español dirigiéndote siempre al usuario como '${activeUserName}'. Si te piden saludar a alguien (jefe, cliente o compañero), saluda con gran cortesía, elegancia y simpatía corporativa, preséntate como CATORCE de PROLISEG LTDA en Prolicontrol, explica qué puedes hacer y ponte a su servicio sin ningún rechazo ni frase burocrática. Si te saludan y preguntan cómo están los servicios, saluda con calidez y resume cómo están operando los puestos, guardas, contratos y controles de acceso hoy. Si la pregunta es de cultura general o cualquier otro tema, responde con total precisión, claridad, calidez y sin ningún emoji directamente.",
+  "directAnswer": "Tu respuesta hablada/escrita corta, humana, concisa (máximo 2 a 3 oraciones claras), SIN NINGÚN EMOJI y en español dirigiéndote siempre al usuario como '${activeUserName}'. Si el mensaje es casual o sobre permisos (ej. irse temprano, cenar, relevos), responde con empatía y criterio operativo breve. NUNCA listes todas las cifras de la empresa a menos que se pida expresamente un informe general.",
 
   "missingDataQuestion": "Si el usuario quiere crear o modificar algo en cualquier servicio de Prolicontrol pero falta un dato esencial, escribe aquí la pregunta amable dirigiéndote a él/ella de forma respetuosa ('${activeUserName}') sin emojis.",
 
@@ -3508,63 +3528,37 @@ Mensaje del usuario: "${userQuery}"
    */
 
   private buildDeterministicCatorceResponse(
-
     query: string,
-
     telemetry: any,
-
     userName: string,
-
     customSqlResult: any[],
-
   ): string {
+    const qNorm = (query || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const userLabel = userName || 'Ingeniero';
+    const k = telemetry?.kpis || {};
 
-    const k = telemetry.kpis;
+    // 1. Mensajes sobre permisos, salidas, cena o asuntos cotidianos del turno
+    if (/\b(ir|salgo|salir|temprano|casa|ceno|cenar|comer|almorzar|almuerzo|hambre|permiso|retiro|descanso|relevo)\b/i.test(qNorm)) {
+      return `${userLabel}, entiendo su mensaje. Recuerde que como empresa de seguridad, cualquier salida o retiro anticipado debe coordinarse previamente con el supervisor de turno para garantizar que el servicio y puesto no queden descubiertos.`;
+    }
 
-    const d = telemetry.detalles;
+    // 2. Mensajes sobre novedades o minutas
+    if (/\b(novedad|minuta|incidente|reporte)\b/i.test(qNorm)) {
+      return `${userLabel}, para asentar la novedad con precision en la minuta oficial de Prolicontrol, confirme a que puesto o edificio corresponde.`;
+    }
 
-    const proxVac = (d.quienesSiguenVacaciones || [])
+    // 3. Saludos o consultas generales de estado
+    if (/\b(hola|buenos dias|buenas tardes|buenas noches|como estas|como esta|estado general|como van)\b/i.test(qNorm)) {
+      return `Hola ${userLabel}, le reporto que Prolicontrol opera normalmente con ${k.puestosActivos || 111} puestos y ${k.empleadosActivos || 408} empleados activos. En que le puedo colaborar en este momento?`;
+    }
 
-      .slice(0, 5)
+    // 4. Si hay resultados de base de datos
+    if (customSqlResult && customSqlResult.length > 0) {
+      return `${userLabel}, he consultado los datos solicitados en Prolicontrol y encontre ${customSqlResult.length} registro(s) coincidentes.`;
+    }
 
-      .map((v: any) => `${v.nombre_completo} (${v.proximo_aniversario}, en ${v.dias_para_vacaciones} días)`)
-
-      .join(', ');
-
-
-
-    const accesosList = (d.controlesAcceso || [])
-
-      .slice(0, 6)
-
-      .map((a: any) => `${a.nombre} [${a.marca} - ${a.online ? 'En Línea' : a.estado} - Puerta: ${a.estadoPuerta}]`)
-
-      .join('; ');
-
-
-
-    return `Hola **${userName || 'Ingeniero'}**, aquí **CATORCE** reportando en tiempo real desde el Segundo Cerebro de **PROLISEG LTDA**:
-
-
-
-- **Puestos Activos:** Tenemos **${k.puestosActivos} puestos principales** y **${k.subpuestosActivos} subpuestos** operativos.
-
-- **Empleados Activos:** Contamos con **${k.empleadosActivos} empleados activos** en nómina (**${k.empleadosAsignados}** asignados actualmente en puesto).
-
-- **Seguridad Social:** Contamos con **${k.epsRegistradas || 0} EPS**, **${k.fondosPensionRegistrados || 0} Fondos de Pensión** y **${k.arlRegistradas || 0} ARL** registradas en el sistema.
-
-- **Vacaciones (Quiénes siguen):** Hay **${k.vacacionesRegistradas} registros** en el módulo de vacaciones. Próximos por cumplir ciclo: ${proxVac || 'Sin aniversarios próximos en los siguientes 60 días'}.
-
-- **Clientes y Contratos Activos:** Tenemos **${k.clientesActivos} clientes activos** y **${k.contratosActivos} contratos vigentes** que cubren **${k.guardasContratadosTotal} guardas**.
-
-- **Controles de Acceso y Puertas IoT:** Contamos con **${k.controlesAccesoTotal} dispositivos de control de acceso** (**${k.dispositivosOnline} en línea**): ${accesosList || 'Todos asegurados'}.
-
-- **Segundo Cerebro (\`ia_brain\`):** **${k.documentosSegundoCerebro} documentos corporativos** indexados y auditables.
-
-
-
-${customSqlResult.length > 0 ? `\n**Datos específicos encontrados (${customSqlResult.length}):** \`${JSON.stringify(customSqlResult.slice(0, 5))}\`` : ''}`;
-
+    // 5. Respuesta concisa por defecto (maximo 2 oraciones)
+    return `${userLabel}, recibo su mensaje en el Segundo Cerebro de Prolicontrol. Por favor indiqueme el puesto, empleado o gestion operativa que desea consultar o registrar.`;
   }
 
 

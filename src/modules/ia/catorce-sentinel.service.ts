@@ -117,7 +117,7 @@ export class CatorceSentinelService implements OnModuleInit {
         const haceDosHoras = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
         const { data: minutasCriticas } = await admin
           .from('minutas')
-          .select('id, tipo_novedad, detalle_novedad, nivel_riesgo, puesto:puestos_trabajo(nombre)')
+          .select('id, tipo_novedad, descripcion, contenido, nivel_riesgo, puesto:puestos_trabajo(nombre)')
           .gte('created_at', haceDosHoras)
           .or('nivel_riesgo.eq.alto,nivel_riesgo.eq.critico')
           .limit(5);
@@ -129,7 +129,7 @@ export class CatorceSentinelService implements OnModuleInit {
               tipo_alerta: 'NOVEDAD_CRITICA',
               severidad: 'CRITICA',
               titulo: `Novedad crítica en ${puestoNombre}`,
-              descripcion: `${m.tipo_novedad}: ${m.detalle_novedad.slice(0, 140)}...`,
+              descripcion: `${m.tipo_novedad}: ${(m.descripcion || m.contenido || '').slice(0, 140)}...`,
               metadata: { minutaId: m.id },
               accion_sugerida: 'Coordinar con patrulla de reacción y supervisor de cuadrante.',
             });

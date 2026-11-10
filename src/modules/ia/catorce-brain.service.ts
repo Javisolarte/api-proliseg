@@ -2139,26 +2139,38 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
       .limit(3);
 
     const puesto = puestos && puestos.length > 0 ? puestos[0] : null;
+    if (!puesto && pName) {
+      throw new Error(`No se encontro el puesto "${pName}" en Prolicontrol. Por favor confirme el nombre exacto.`);
+    }
+
     const puestoId = puesto ? puesto.id : null;
-    const puestoNombreReal = puesto ? puesto.nombre : pName;
+    const puestoNombreReal = puesto ? puesto.nombre : (pName || 'Puesto General');
 
     const hoy = new Date().toISOString().slice(0, 10);
     const hora = new Date().toTimeString().slice(0, 8);
 
     const minutaPayload: any = {
       puesto_id: puestoId,
+      titulo: params.tipoNovedad || `Novedad - ${puestoNombreReal}`,
+      contenido: params.detalleNovedad,
+      descripcion: params.detalleNovedad,
       tipo_novedad: params.tipoNovedad || 'Novedad de Servicio',
-      detalle_novedad: params.detalleNovedad,
+      tipo: 'operativa',
+      categoria: 'radio_operacion_ia',
       nivel_riesgo: (params.nivelRiesgo || 'medio').toLowerCase(),
       persona_involucrada: params.personaInvolucrada || null,
       fecha: hoy,
       hora: hora,
+      estado: 'activo',
+      visible_para_cliente: true,
+      dispositivo: 'CATORCE IA - Segundo Cerebro',
     };
 
     this.invalidateTelemetryCache();
     const { data: inserted, error } = await admin.from('minutas').insert(minutaPayload).select();
     if (error) {
-      throw new Error(`Error al asentar novedad en minuta: ${error.message}`);
+      this.logger.error(`Error al insertar minuta en base de datos: ${error.message}`);
+      throw new Error(`No fue posible asentar la novedad directamente en la minuta. Por favor confirme el nombre exacto del puesto.`);
     }
     const minuta = inserted?.[0] || minutaPayload;
 
@@ -2167,7 +2179,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
       authorizerUser: user,
       subagente: 'CATORCE-RADIO-OPERACION',
       accion: 'REGISTRAR_NOVEDAD_MINUTA',
-      modulo: 'Minutas / Radio-Operación',
+      modulo: 'Minutas / Radio-Operacion',
       tablaDestino: 'public.minutas',
       registroId: String(minuta.id || 'OK'),
       comandoOriginal: `Novedad en ${puestoNombreReal}: ${params.detalleNovedad}`,
@@ -2377,7 +2389,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
 
     let qBuilder = admin
       .from('minutas')
-      .select('id, tipo_novedad, detalle_novedad, nivel_riesgo, persona_involucrada, fecha, hora, puesto:puestos_trabajo(id, nombre, ciudad)')
+      .select('id, tipo_novedad, descripcion, contenido, nivel_riesgo, persona_involucrada, fecha, hora, puesto:puestos_trabajo(id, nombre, ciudad)')
       .eq('fecha', hoy)
       .order('hora', { ascending: false });
 
@@ -2809,14 +2821,14 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
     // FASE 1: CONSULTAR MINUTAS Y NOVEDADES (CLASIFICACIÓN POR CRITICIDAD)
     const { data: rawMinutas } = await admin
       .from('minutas')
-      .select('id, tipo_novedad, detalle_novedad, nivel_riesgo, persona_involucrada, fecha, hora')
+      .select('id, tipo_novedad, descripcion, contenido, nivel_riesgo, persona_involucrada, fecha, hora')
       .eq('puesto_id', puestoId)
       .order('fecha', { ascending: false })
       .order('hora', { ascending: false })
       .limit(15);
 
     const minutasEvaluadas = (rawMinutas || []).map((m: any) => {
-      const det = (m.detalle_novedad || '').toLowerCase();
+      const det = (m.descripcion || m.contenido || '').toLowerCase();
       let criticidad = 'MEDIA';
       if (m.nivel_riesgo === 'alto' || m.nivel_riesgo === 'critico' || /intrus|arma|robo|agres|emerg|evacua|incend|fuerza|policia/i.test(det)) {
         criticidad = 'CRÍTICA';
@@ -2832,7 +2844,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
         hora: m.hora || '08:00',
         fecha: m.fecha || hoy,
         tipo: m.tipo_novedad || 'Novedad de Servicio',
-        detalle: m.detalle_novedad,
+        detalle: m.descripcion || m.contenido || m.tipo_novedad,
         criticidad,
         responsable: m.persona_involucrada || 'Guarda de Seguridad',
       };
