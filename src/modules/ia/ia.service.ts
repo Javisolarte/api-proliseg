@@ -161,7 +161,7 @@ export class IaService {
 
    * - Genera documentos e informes PDF bajo demanda
 
-   * - Si la consulta no tiene nada que ver con PROLISEG LTDA, dice: "¿Y eso tiene mucho que ver con el trabajo? 😄" pero responde igual
+   * - Si la consulta no tiene nada que ver con PROLISEG LTDA, responde directamente con amabilidad, rigor y respeto profesional.
 
    */
 
@@ -2540,7 +2540,7 @@ Analiza el mensaje y responde en UN SOLO JSON ESTRICTO con esta estructura:
 
   "wantsPdf": boolean,
 
-  "directAnswer": "Tu respuesta hablada/escrita completa, cálida, fluida (ideal para ser leída en voz alta como ChatGPT Live), SIN NINGÚN EMOJI y natural en español dirigiéndote siempre al usuario como '${activeUserName}'. Si te saludan y preguntan cómo están los servicios, saluda con calidez y resume cómo están operando los puestos, guardas, contratos y controles de acceso hoy. Si isOffTopic es true, DEBES empezar obligatoriamente con: '¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? Bueno, como soy tu compañera igual te respondo con todo gusto:' y enseguida responder su pregunta sin emojis.",
+  "directAnswer": "Tu respuesta hablada/escrita completa, cálida, fluida (ideal para ser leída en voz alta como ChatGPT Live), SIN NINGÚN EMOJI y natural en español dirigiéndote siempre al usuario como '${activeUserName}'. Si te saludan y preguntan cómo están los servicios, saluda con calidez y resume cómo están operando los puestos, guardas, contratos y controles de acceso hoy. Si la pregunta es de cultura general o cualquier otro tema, responde con total precisión, claridad, calidez y sin ningún emoji directamente.",
 
   "missingDataQuestion": "Si el usuario quiere crear o modificar algo en cualquier servicio de Prolicontrol pero falta un dato esencial, escribe aquí la pregunta amable dirigiéndote a él/ella de forma respetuosa ('${activeUserName}') sin emojis.",
 
@@ -3034,13 +3034,7 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
 
         plan.intent === 'OFF_TOPIC' || plan.isOffTopic
 
-          ? `IMPORTANTE: Esta consulta del usuario NO tiene relación directa con vigilancia, seguridad ni con PROLISEG LTDA.
-
-DEBES EMPEZAR TU RESPUESTA EXACTAMENTE CON ESTA FRASE:
-
-"¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? Bueno, como soy tu compañera igual te respondo con todo gusto:"
-
-Y justo después responde su pregunta de forma completa, inteligente, profesional y 100% libre de emojis.`
+          ? `Responde a la consulta de forma directa, inteligente, completa, profesional y 100% libre de emojis, dirigiéndote a ${activeUserName}. No hagas reclamos ni advertencias de que no es sobre el trabajo; responde directamente con total claridad y calidez.`
 
           : `Responde como **CATORCE**, el Segundo Cerebro y compañera ejecutiva de **${activeUserName}** en **PROLISEG LTDA**. Usa los datos reales de la telemetría y de las consultas SQL. TOTALMENTE PROHIBIDO EL USO DE EMOJIS.`;
 
@@ -3136,17 +3130,7 @@ Mensaje del usuario: "${userQuery}"
 
       // Asegurar que la introducción amistosa aparezca si fue clasificada como Off-Topic
 
-      if (
-
-        (plan.intent === 'OFF_TOPIC' || plan.isOffTopic) &&
-
-        !finalMessage.toLowerCase().includes('tiene mucho que ver con el trabajo')
-
-      ) {
-
-        finalMessage = `¿Y eso tiene mucho que ver con el trabajo en PROLISEG LTDA? Bueno, como soy tu compañera igual te respondo con todo gusto:\n\n${finalMessage}`;
-
-      }
+      // Respuesta directa y profesional sin advertencia de off-topic
 
 
 
