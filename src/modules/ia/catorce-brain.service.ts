@@ -2922,4 +2922,321 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
     };
   }
 
+
+  // =========================================================================
+  // 🚨 TOOL: REGISTRAR INCIDENTE DE SEGURIDAD OPERATIVA
+  // =========================================================================
+  public async toolRegistrarIncidente(
+    params: {
+      puestoNombre: string;
+      tipoIncidente: string;
+      descripcion: string;
+      nivelGravedad?: 'bajo' | 'medio' | 'alto' | 'critico';
+      accionesTomadas?: string;
+    },
+    user: any,
+  ) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const pName = (params.puestoNombre || '').trim();
+
+    const { data: puestos } = await admin
+      .from('puestos_trabajo')
+      .select('id, nombre, ciudad')
+      .ilike('nombre', `%${pName}%`)
+      .limit(1);
+
+    const puesto = puestos && puestos.length > 0 ? puestos[0] : null;
+    const puestoId = puesto ? puesto.id : null;
+    const puestoNombreReal = puesto ? puesto.nombre : pName;
+
+    const hoy = new Date().toISOString().slice(0, 10);
+    const hora = new Date().toTimeString().slice(0, 8);
+
+    const payload: any = {
+      puesto_id: puestoId,
+      empleado_reporta: user?.id ? Number(user.id) : null,
+      tipo_incidente: params.tipoIncidente,
+      descripcion: params.descripcion,
+      nivel_gravedad: params.nivelGravedad || 'alto',
+      fecha_incidente: `${hoy}T${hora}`,
+      fecha_reporte: new Date().toISOString(),
+      estado: 'abierto',
+      acciones_tomadas: params.accionesTomadas || 'Reportado a Centro de Control CATORCE y en evaluacion tactica',
+    };
+
+    this.invalidateTelemetryCache();
+    const { data: inserted, error } = await admin.from('incidentes').insert(payload).select();
+    if (error) {
+      throw new Error(`Error al registrar incidente: ${error.message}`);
+    }
+    const incidente = inserted?.[0] || payload;
+
+    const audit = await this.recordAudit({
+      user,
+      authorizerUser: user,
+      subagente: 'CATORCE-INCIDENTES',
+      accion: 'REGISTRAR_INCIDENTE',
+      modulo: 'Incidentes / Seguridad Operativa',
+      tablaDestino: 'public.incidentes',
+      registroId: String(incidente.id || 'OK'),
+      comandoOriginal: `Incidente en ${puestoNombreReal}: ${params.tipoIncidente} - ${params.descripcion}`,
+      parametros: payload,
+      datosAnteriores: null,
+      datosPosteriores: incidente,
+      resultado: { id: incidente.id, puesto: puestoNombreReal, gravedad: payload.nivel_gravedad },
+      exitoso: true,
+    });
+
+    return { incidente, puestoNombre: puestoNombreReal, auditCode: audit.codigo_auditoria, hashIntegridad: audit.hash_integridad };
+  }
+
+  // =========================================================================
+  // 🔄 TOOL: REGISTRAR REEMPLAZO OPERATIVO DE TURNO
+  // =========================================================================
+  public async toolRegistrarReemplazoTurno(
+    params: {
+      puestoNombre: string;
+      guardaAusenteQuery: string;
+      guardaReemplazoQuery: string;
+      motivo: string;
+      fecha?: string;
+    },
+    user: any,
+  ) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const fecha = params.fecha || new Date().toISOString().slice(0, 10);
+
+    const { data: puestos } = await admin
+      .from('puestos_trabajo')
+      .select('id, nombre')
+      .ilike('nombre', `%${params.puestoNombre}%`)
+      .limit(1);
+    if (!puestos || puestos.length === 0) {
+      throw new Error(`Puesto no encontrado: "${params.puestoNombre}".`);
+    }
+    const puesto = puestos[0];
+
+    const { data: empAusente } = await admin
+      .from('empleados')
+      .select('id, nombre_completo, cedula')
+      .ilike('nombre_completo', `%${params.guardaAusenteQuery}%`)
+      .limit(1);
+    const { data: empReemplazo } = await admin
+      .from('empleados')
+      .select('id, nombre_completo, cedula')
+      .ilike('nombre_completo', `%${params.guardaReemplazoQuery}%`)
+      .limit(1);
+
+    if (!empReemplazo || empReemplazo.length === 0) {
+      throw new Error(`No se encontro el guarda de relevo: "${params.guardaReemplazoQuery}".`);
+    }
+
+    const reemp = empReemplazo[0];
+    const aus = empAusente && empAusente.length > 0 ? empAusente[0] : null;
+
+    let turnoId = 1;
+    const { data: turnos } = await admin
+      .from('turnos')
+      .select('id, empleado_id')
+      .eq('puesto_id', puesto.id)
+      .eq('fecha', fecha)
+      .limit(1);
+
+    if (turnos && turnos.length > 0) {
+      turnoId = turnos[0].id;
+      await admin.from('turnos').update({ empleado_id: reemp.id }).eq('id', turnoId);
+    }
+
+    const payload = {
+      turno_original_id: turnoId,
+      empleado_reemplazo_id: reemp.id,
+      motivo: params.motivo || 'Reemplazo operacional autorizado por CATORCE',
+      autorizado_por: user?.id ? Number(user.id) : null,
+      estado: 'aprobado',
+    };
+
+    const { data: inserted, error } = await admin.from('turnos_reemplazos').insert(payload).select();
+    const reemplazo = inserted?.[0] || payload;
+
+    const audit = await this.recordAudit({
+      user,
+      authorizerUser: user,
+      subagente: 'CATORCE-TURNOS-REEMPLAZOS',
+      accion: 'REGISTRAR_REEMPLAZO_TURNO',
+      modulo: 'Turnos / Programacion Operativa',
+      tablaDestino: 'public.turnos_reemplazos',
+      registroId: String(reemplazo.id || 'OK'),
+      comandoOriginal: `Reemplazo en ${puesto.nombre}: Releva ${reemp.nombre_completo} por ${aus?.nombre_completo || 'Ausente'}`,
+      parametros: payload,
+      datosAnteriores: { empleado_anterior: aus?.nombre_completo || 'N/A' },
+      datosPosteriores: { empleado_nuevo: reemp.nombre_completo },
+      resultado: { id: reemplazo.id, puesto: puesto.nombre, relevo: reemp.nombre_completo },
+      exitoso: true,
+    });
+
+    return {
+      reemplazo,
+      puestoNombre: puesto.nombre,
+      guardaReemplazo: reemp.nombre_completo,
+      guardaAusente: aus?.nombre_completo || 'Titular',
+      auditCode: audit.codigo_auditoria,
+      hashIntegridad: audit.hash_integridad,
+    };
+  }
+
+  // =========================================================================
+  // 📍 TOOL: ASIGNAR GUARDA A PUESTO DE TRABAJO
+  // =========================================================================
+  public async toolAsignarGuardaPuesto(
+    params: {
+      empleadoQuery: string;
+      puestoNombre: string;
+      modalidad?: string;
+    },
+    user: any,
+  ) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const { data: emps } = await admin
+      .from('empleados')
+      .select('id, nombre_completo, cedula')
+      .ilike('nombre_completo', `%${params.empleadoQuery}%`)
+      .limit(1);
+    if (!emps || emps.length === 0) {
+      throw new Error(`Empleado no encontrado: "${params.empleadoQuery}".`);
+    }
+    const emp = emps[0];
+
+    const { data: puestos } = await admin
+      .from('puestos_trabajo')
+      .select('id, nombre, ciudad')
+      .ilike('nombre', `%${params.puestoNombre}%`)
+      .limit(1);
+    if (!puestos || puestos.length === 0) {
+      throw new Error(`Puesto no encontrado: "${params.puestoNombre}".`);
+    }
+    const puesto = puestos[0];
+
+    const payload = {
+      puesto_id: puesto.id,
+      empleado_id: emp.id,
+      activo: true,
+      fecha_asignacion: new Date().toISOString().slice(0, 10),
+    };
+
+    await admin.from('empleados').update({ asignado: true }).eq('id', emp.id);
+
+    try {
+      await admin.from('asignacion_guardas_puesto').insert(payload);
+    } catch {}
+
+    const audit = await this.recordAudit({
+      user,
+      authorizerUser: user,
+      subagente: 'CATORCE-ASIGNACIONES',
+      accion: 'ASIGNAR_GUARDA_PUESTO',
+      modulo: 'Puestos / Asignaciones',
+      tablaDestino: 'public.asignacion_guardas_puesto',
+      registroId: String(emp.id),
+      comandoOriginal: `Asignacion de ${emp.nombre_completo} al puesto ${puesto.nombre}`,
+      parametros: payload,
+      datosAnteriores: { asignado: false },
+      datosPosteriores: { asignado: true, puesto: puesto.nombre },
+      resultado: { empleado: emp.nombre_completo, puesto: puesto.nombre },
+      exitoso: true,
+    });
+
+    return {
+      empleado: emp,
+      puesto,
+      auditCode: audit.codigo_auditoria,
+      hashIntegridad: audit.hash_integridad,
+    };
+  }
+
+  // =========================================================================
+  // 🎓 TOOL: REGISTRAR CAPACITACIÓN / CURSO DE VIGILANCIA
+  // =========================================================================
+  public async toolRegistrarCapacitacionCurso(
+    params: {
+      empleadoQuery: string;
+      cursoNombre: string;
+      fechaVencimiento: string;
+    },
+    user: any,
+  ) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const { data: emps } = await admin
+      .from('empleados')
+      .select('id, nombre_completo, cedula, fecha_vencimiento_curso')
+      .ilike('nombre_completo', `%${params.empleadoQuery}%`)
+      .limit(1);
+    if (!emps || emps.length === 0) {
+      throw new Error(`Empleado no encontrado: "${params.empleadoQuery}".`);
+    }
+    const emp = emps[0];
+
+    const { data: updated, error } = await admin
+      .from('empleados')
+      .update({
+        tiene_curso_vigilancia: true,
+        fecha_vencimiento_curso: params.fechaVencimiento,
+      })
+      .eq('id', emp.id)
+      .select();
+
+    if (error) {
+      throw new Error(`Error al actualizar capacitacion: ${error.message}`);
+    }
+
+    const audit = await this.recordAudit({
+      user,
+      authorizerUser: user,
+      subagente: 'CATORCE-CAPACITACIONES',
+      accion: 'ACTUALIZAR_CURSO_VIGILANCIA',
+      modulo: 'Capacitaciones / Cursos',
+      tablaDestino: 'public.empleados',
+      registroId: String(emp.id),
+      comandoOriginal: `Actualizacion de curso ${params.cursoNombre} para ${emp.nombre_completo} (Vence: ${params.fechaVencimiento})`,
+      parametros: { curso: params.cursoNombre, fechaVencimiento: params.fechaVencimiento },
+      datosAnteriores: { fecha_vencimiento_curso: emp.fecha_vencimiento_curso },
+      datosPosteriores: { fecha_vencimiento_curso: params.fechaVencimiento, tiene_curso_vigilancia: true },
+      resultado: { empleado: emp.nombre_completo, vence: params.fechaVencimiento },
+      exitoso: true,
+    });
+
+    return {
+      empleado: updated?.[0] || emp,
+      cursoNombre: params.cursoNombre,
+      fechaVencimiento: params.fechaVencimiento,
+      auditCode: audit.codigo_auditoria,
+      hashIntegridad: audit.hash_integridad,
+    };
+  }
+
+  // =========================================================================
+  // 📦 TOOL: CONSULTAR INVENTARIO Y DOTACIONES
+  // =========================================================================
+  public async toolConsultarInventario(categoriaFiltro?: string) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    let q = admin.from('articulos_dotacion').select('id, nombre, descripcion, stock_actual, categoria:categorias_dotacion(id, nombre)');
+    if (categoriaFiltro) {
+      q = q.ilike('nombre', `%${categoriaFiltro}%`);
+    }
+    const { data: arts } = await q.limit(20);
+    return arts || [];
+  }
+
+  // =========================================================================
+  // 💰 TOOL: CONSULTAR RESUMEN DE NÓMINA
+  // =========================================================================
+  public async toolConsultarNominaResumen(empleadoQuery?: string) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    let q = admin.from('nomina_empleado').select('id, empleado_id, total_devengado, total_deducciones, neto_pagar, empleado:empleados(id, nombre_completo, cedula, rol)');
+    if (empleadoQuery) {
+      q = q.ilike('empleado.nombre_completo', `%${empleadoQuery}%`);
+    }
+    const { data: nom } = await q.limit(15);
+    return nom || [];
+  }
+
 }

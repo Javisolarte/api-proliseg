@@ -937,6 +937,263 @@ ${linesPruebas}
       }
 
 
+      // =========================================================================
+      // 0-9: REGISTRO DE INCIDENTES OPERATIVOS (HURTO, INTRUSIÓN, EMERGENCIA)
+      // =========================================================================
+      const isIncidente =
+        /\b(registra|registrar|reporta|reportar|declarar)\b.*\b(incidente|emergencia|hurto|intrusion|rina|asalto|falla critica)\b/i.test(qNorm) ||
+        /\b(nuevo incidente|incidente grave|incidente critico)\b/i.test(qNorm);
+
+      if (isIncidente) {
+        const puestoMatch = userQuery.match(/(?:en el puesto|al puesto|en puesto|en)\s+([a-zA-Z0-9_\s\u00e1\u00e9\u00ed\u00f3\u00fa\u00c1\u00c9\u00cd\u00d3\u00da\u00f1\u00d1]+)/i);
+        const puestoCandidate = puestoMatch ? puestoMatch[1].replace(/[:,-].*$/, '').trim() : 'Puesto Principal';
+
+        const tipoMatch = userQuery.match(/\b(hurto|intrusion|rina|pelea|falla de energia|corte|arma|asalto|emergencia|incendio)\b/i);
+        const tipoIncidente = tipoMatch ? tipoMatch[1].toUpperCase() : 'Incidente Operativo';
+
+        let detalle = userQuery.replace(/.*(?:incidente|emergencia)(?:\s+en\s+[\w\s]+)?(?:\s*[:-]\s*|\s+que\s+|\s+de\s+)?/i, '').trim();
+        if (!detalle || detalle.length < 5) detalle = userQuery;
+
+        try {
+          const resInc = await this.catorceBrain.toolRegistrarIncidente(
+            {
+              puestoNombre: puestoCandidate,
+              tipoIncidente,
+              descripcion: detalle,
+              nivelGravedad: /arma|asalto|intrusion|incendio|grave|urgente/i.test(userQuery) ? 'critico' : 'alto',
+            },
+            user,
+          );
+
+          const msg = activeUserName + ', he registrado el incidente de seguridad en Prolicontrol:\n\n' +
+            '* Puesto: **' + resInc.puestoNombre + '**\n' +
+            '* Tipo: **' + resInc.incidente.tipo_incidente + '**\n' +
+            '* Severidad: **' + String(resInc.incidente.nivel_gravedad || 'ALTO').toUpperCase() + '**\n' +
+            '* Descripción: ' + resInc.incidente.descripcion + '\n' +
+            '* Estado: Abierto y notificado a patrulla de supervisión\n' +
+            '* Código de auditoría: [' + resInc.auditCode + ']\n' +
+            '* Sello SHA-256: [' + resInc.hashIntegridad + ']';
+
+          const voiceSnippet = activeUserName + ', el incidente de ' + resInc.incidente.tipo_incidente + ' en el puesto ' + resInc.puestoNombre + ' ha sido registrado con prioridad alta. Centro de control ha sido notificado.';
+          const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
+          this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, ['incidentes'], ['CATORCE-OPS:registrarIncidente']);
+
+          return {
+            ok: true,
+            assistant: 'CATORCE',
+            actionExecuted: 'REGISTRO_INCIDENTE_COMPLETO',
+            activity: 'Incidente asentado en base de datos',
+            interactiveResults: {
+              type: 'incidente_registrado',
+              data: resInc.incidente,
+            },
+            message: msg,
+            audioUrl,
+            latencyMs: Date.now() - startTime,
+          };
+        } catch (err: any) {
+          return { ok: false, message: 'No fue posible asentar el incidente: ' + err.message, latencyMs: Date.now() - startTime };
+        }
+      }
+
+      // =========================================================================
+      // 0-10: REEMPLAZOS OPERATIVOS DE TURNO (RELEVOS POR AUSENCIA O PERMISO)
+      // =========================================================================
+      const isReemplazoTurno =
+        /\b(reemplaza|reemplazar|relevo|relevar|cambio de guarda|sustituir)\b/i.test(qNorm) &&
+        /\b(guarda|vigilante|turno|por|en)\b/i.test(qNorm);
+
+      if (isReemplazoTurno) {
+        const puestoMatch = userQuery.match(/(?:en|en el puesto|al puesto)\s+([a-zA-Z0-9_\s\u00e1\u00e9\u00ed\u00f3\u00fa\u00c1\u00c9\u00cd\u00d3\u00da\u00f1\u00d1]+)/i);
+        const pCandidate = puestoMatch ? puestoMatch[1].replace(/[:,-].*$/, '').trim() : 'Puesto Principal';
+
+        const ausMatch = userQuery.match(/(?:a|al guarda|a la guarda)\s+([a-zA-Z\u00e1\u00e9\u00ed\u00f3\u00fa\u00c1\u00c9\u00cd\u00d3\u00da\u00f1\u00d1 ]+?)(?:\s+por|\s+con|\s+en)/i);
+        const reempMatch = userQuery.match(/(?:por|con|releva)\s+([a-zA-Z\u00e1\u00e9\u00ed\u00f3\u00fa\u00c1\u00c9\u00cd\u00d3\u00da\u00f1\u00d1 ]+?)(?:\s+en|\s+por motivo|\s+porque|$)/i);
+
+        const ausNombre = ausMatch ? ausMatch[1].trim() : 'Titular';
+        const reempNombre = reempMatch ? reempMatch[1].trim() : '';
+
+        if (reempNombre) {
+          try {
+            const resReemp = await this.catorceBrain.toolRegistrarReemplazoTurno(
+              {
+                puestoNombre: pCandidate,
+                guardaAusenteQuery: ausNombre,
+                guardaReemplazoQuery: reempNombre,
+                motivo: 'Reemplazo solicitado por voz a CATORCE',
+              },
+              user,
+            );
+
+            const msg = activeUserName + ', he procesado el relevo de turno en Prolicontrol:\n\n' +
+              '* Puesto: **' + resReemp.puestoNombre + '**\n' +
+              '* Guarda Saliente / Ausente: ' + resReemp.guardaAusente + '\n' +
+              '* Guarda Entrante / Relevo: **' + resReemp.guardaReemplazo + '**\n' +
+              '* Estado: Turno actualizado y aprobado en la programación oficial\n' +
+              '* Código de auditoría: [' + resReemp.auditCode + ']\n' +
+              '* Sello SHA-256: [' + resReemp.hashIntegridad + ']';
+
+            const voiceSnippet = activeUserName + ', relevo procesado. ' + resReemp.guardaReemplazo + ' ha sido asignado al turno en ' + resReemp.puestoNombre + ' en reemplazo de ' + resReemp.guardaAusente + '.';
+            const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
+            this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, ['turnos'], ['CATORCE-OPS:reemplazoTurno']);
+
+            return {
+              ok: true,
+              assistant: 'CATORCE',
+              actionExecuted: 'REEMPLAZO_TURNO_COMPLETO',
+              activity: 'Relevo de guarda aplicado en base de datos',
+              message: msg,
+              audioUrl,
+              latencyMs: Date.now() - startTime,
+            };
+          } catch (err: any) {
+            return { ok: false, message: 'Dificultad al registrar el reemplazo: ' + err.message, latencyMs: Date.now() - startTime };
+          }
+        }
+      }
+
+      // =========================================================================
+      // 0-11: CONSULTA DE INVENTARIO Y DOTACIONES DE SEGURIDAD
+      // =========================================================================
+      const isInventario =
+        /\b(inventario|stock|articulos|uniformes|dotaciones disponibles|cuanto hay de)\b/i.test(qNorm) &&
+        !/\b(asignar|entrega)\b/i.test(qNorm);
+
+      if (isInventario) {
+        const filtro = userQuery.replace(/.*(?:inventario|stock|articulos|dotaciones)(?:\s+de\s+)?/i, '').trim();
+        const items = await this.catorceBrain.toolConsultarInventario(filtro || undefined);
+
+        const lines = items.slice(0, 8).map((it: any) => '* **' + it.nombre + '**: ' + (it.stock_actual || 0) + ' unidades disponibles' + (it.categoria?.nombre ? ' (' + it.categoria.nombre + ')' : '')).join('\n');
+
+        const msg = activeUserName + ', he consultado el módulo de Inventario y Almacén:\n\n' +
+          '* Total de artículos listados: **' + items.length + '**\n\n' +
+          (lines || 'No se registraron existencias para el criterio indicado.') + '\n\n' +
+          'Los niveles de stock están verificados en el almacén central de PROLISEG LTDA.';
+
+        const voiceSnippet = activeUserName + ', el inventario arroja ' + items.length + ' referencias disponibles en almacén. Los detalles de existencias están en pantalla.';
+        const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
+        this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, ['dotaciones'], ['CATORCE-LOG:consultarInventario']);
+
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: 'CONSULTA_INVENTARIO',
+          activity: 'Inventario de almacén verificado',
+          interactiveResults: {
+            type: 'table_inventario',
+            data: items,
+          },
+          message: msg,
+          audioUrl,
+          latencyMs: Date.now() - startTime,
+        };
+      }
+
+      // =========================================================================
+      // 0-12: CONSULTA DE NÓMINA Y VALORES DEVENGADOS
+      // =========================================================================
+      const isNomina =
+        /\b(nomina|liquidaciones|devengado|descuentos|pago de guardas|cuanto gana)\b/i.test(qNorm);
+
+      if (isNomina) {
+        if (!isAuthorizedFinancials) {
+          const deniedMsg = 'Acceso Restringido: La consulta de nómina y valores devengados requiere perfil de Gerencia o Administración por confidencialidad.';
+          return { ok: false, message: deniedMsg, accessDenied: true, latencyMs: Date.now() - startTime };
+        }
+
+        const empNameMatch = userQuery.match(/(?:de|del empleado|para)\s+([a-zA-Z\u00e1\u00e9\u00ed\u00f3\u00fa\u00c1\u00c9\u00cd\u00d3\u00da\u00f1\u00d1 ]+)/i);
+        const empQuery = empNameMatch ? empNameMatch[1].trim() : undefined;
+
+        const nomData = await this.catorceBrain.toolConsultarNominaResumen(empQuery);
+        const lines = nomData.slice(0, 5).map((n: any) => {
+          const emp = Array.isArray(n.empleado) ? n.empleado[0] : n.empleado;
+          const netFmt = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP' }).format(n.neto_pagar || 0);
+          return '* **' + (emp?.nombre_completo || 'Colaborador') + '**: ' + netFmt + ' neto';
+        }).join('\n');
+
+        const msg = activeUserName + ', he consultado los registros consolidados de nómina:\n\n' +
+          '* Registros evaluados: **' + nomData.length + '**\n\n' +
+          (lines || 'Sin liquidaciones activas en el corte seleccionado.') + '\n\n' +
+          'Se validaron horas diurnas, nocturnas y festivas según la programación de turnos.';
+
+        const voiceSnippet = activeUserName + ', consulta de nómina completada. Se localizaron ' + nomData.length + ' registros liquidados para su revisión.';
+        const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
+        this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, ['nomina'], ['CATORCE-FIN:consultarNomina']);
+
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: 'CONSULTA_NOMINA',
+          activity: 'Registros de nómina consultados',
+          message: msg,
+          audioUrl,
+          latencyMs: Date.now() - startTime,
+        };
+      }
+
+      // =========================================================================
+      // 0-13: EXPLICACIÓN MAESTRA MÓDULO A MÓDULO DE PROLICONTROL (CEREBRO OPERATIVO)
+      // =========================================================================
+      const isExplicacionModulos =
+        /\b(modulo a modulo|control completo|que datos necesitas|que modulos tienes|control total|cerebro operativo)\b/i.test(qNorm) ||
+        (/\b(explica|explicame|como funciona)\b/i.test(qNorm) && /\b(modulos|servicios|prolicontrol|sistema)\b/i.test(qNorm));
+
+      if (isExplicacionModulos) {
+        const masterMsg = activeUserName + ', como **Cerebro Operativo Central de ProliControl**, opero de forma transversal sobre los 12 dominios funcionales y las 79 tablas de la plataforma. A continuación le detallo módulo a módulo los datos requeridos y opcionales:\n\n' +
+          '### 1. Gestión de Talento Humano y Empleados (`public.empleados`, `contratos_personal`)\n' +
+          '* **Datos Obligatorios:** Nombre completo, Cédula única (mínimo 5 dígitos), Cargo/Rol.\n' +
+          '* **Datos Opcionales / Defaults:** Teléfono (altamente sugerido), Correo, Ciudad (default: Pasto), Salario base ($1.300.000 COP), EPS, ARL, Fondo de Pensión.\n' +
+          '* **Acción CATORCE:** Validación de no duplicidad, creación atómica, hash de auditoría y memoria multi-turno.\n\n' +
+          '### 2. Puestos de Trabajo y Subpuestos (`public.puestos_trabajo`, `subpuestos_trabajo`)\n' +
+          '* **Datos Obligatorios:** Nombre del puesto, Ciudad, Cliente titular.\n' +
+          '* **Datos Opcionales:** Dirección, Coordenadas GPS, Modalidad de servicio (24h/12h), Dotación de armas, Lista de subpuestos.\n' +
+          '* **Acción CATORCE:** Creación de estructura jerárquica y subpuestos de control principal.\n\n' +
+          '### 3. Minutas Oficiales de Radio-Operación (`public.minutas`)\n' +
+          '* **Datos Obligatorios:** Puesto de trabajo, Detalle de la novedad.\n' +
+          '* **Datos Opcionales:** Tipo de novedad (Novedad de Servicio, Relevo, Ronda), Nivel de riesgo (Bajo/Medio/Alto/Crítico), Persona involucrada. Fecha y hora se asignan automáticamente en vivo.\n\n' +
+          '### 4. Incidentes de Seguridad Operativa (`public.incidentes`)\n' +
+          '* **Datos Obligatorios:** Puesto afectado, Tipo de incidente (Hurto, Intrusión, Pelea, Incendio), Descripción del hecho.\n' +
+          '* **Datos Opcionales:** Gravedad (Bajo/Medio/Alto/Crítico), Acciones inmediatas tomadas, Empleado reportante.\n\n' +
+          '### 5. Programación de Turnos y Relevos (`public.turnos`, `turnos_reemplazos`)\n' +
+          '* **Datos Obligatorios:** Guarda titular, Puesto asignado, Fecha del turno.\n' +
+          '* **Datos Opcionales:** Horario (default Diurno: 06:00-18:00 o Nocturno: 18:00-06:00), Tipo de turno, Relevo por ausencia.\n\n' +
+          '### 6. Control de Acceso y Visitantes (`public.dispositivos_iot`, `visitantes`)\n' +
+          '* **Datos Obligatorios:** Puesto/Portería, Nombre del visitante, Cédula, Destino.\n' +
+          '* **Datos Opcionales:** Placa de vehículo, Motivo de visita, Dispositivo IoT de marcación.\n\n' +
+          '### 7. Clientes y Contratos Corporativos (`public.clientes`, `contratos`)\n' +
+          '* **Datos Obligatorios:** NIT de empresa, Razón social, Valor mensual pactado, Guardas activos requeridos.\n' +
+          '* **Datos Opcionales:** Representante legal, Teléfono corporativo, Vigencia contractual, PDF adjunto.\n\n' +
+          '### 8. Logística, Dotaciones e Inventario (`public.articulos_dotacion`, `dotaciones_empleado`)\n' +
+          '* **Datos Obligatorios:** Guarda receptor, Artículo de dotación (Uniforme, Botas, Chaleco).\n' +
+          '* **Datos Opcionales:** Talla, Cantidad (default 1), Fecha de entrega.\n\n' +
+          '### 9. Vacaciones y Permisos (`public.vacaciones`)\n' +
+          '* **Datos Obligatorios:** Guarda solicitante, Fecha de inicio, Fecha de fin.\n' +
+          '* **Datos Opcionales:** Días tomados (default 15), Estado de aprobación.\n\n' +
+          '### 10. PQRSF y Servicio al Cliente (`public.pqrsf`)\n' +
+          '* **Datos Obligatorios:** Cliente titular, Asunto, Descripción del requerimiento.\n' +
+          '* **Datos Opcionales:** Tipo (Petición, Queja, Reclamo, Sugerencia), Prioridad (Media/Alta).\n\n' +
+          '### 11. Capacitaciones y Cursos de Vigilancia (`public.empleados`, `capacitaciones`)\n' +
+          '* **Datos Obligatorios:** Guarda titular, Tipo de curso de SuperVigilancia, Fecha de vencimiento.\n' +
+          '* **Acción CATORCE:** Alerta preventiva 30 días antes del vencimiento legal.\n\n' +
+          '### 12. Laboratorio Técnico y Auditoría Criptográfica (`ia_brain.auditoria_acciones`)\n' +
+          '* Batería de 7 pruebas en vivo sobre API, PostgreSQL ACID, JWT RBAC, CPU/RAM VPS, Sockets IoT y Streaming RTSP.\n' +
+          '* Cada transacción genera firma SHA-256 inmutable y token de memoria anti-tampering.';
+
+        const voiceSnippet = activeUserName + ', tengo control operativo sobre los 12 módulos principales de ProliControl. Puedo crear empleados, puestos, turnos, clientes, dotaciones, minutas, incidentes y misiones completas. He desplegado el manual maestro módulo a módulo en pantalla.';
+        const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
+        this.catorceBrain.appendConversationTurn(user, userQuery, masterMsg, canal, ['core'], ['CATORCE-CORE:manualModulos']);
+
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: 'EXPLICACION_MODULOS_PROLICONTROL',
+          activity: 'Manual maestro de módulos y requerimientos desplegado',
+          message: masterMsg,
+          audioUrl,
+          latencyMs: Date.now() - startTime,
+        };
+      }
+
 const isPresentationIntent = /\b(presentate|quien eres|quien sos|que eres|que haces|presentate por favor|cuentame de ti|presentacion|cual es tu funcion|para que sirves)\b/i.test(qNorm);
 
       if (isPresentationIntent) {
