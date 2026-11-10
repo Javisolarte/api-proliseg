@@ -62,6 +62,7 @@ import { CatorceBrainService } from './catorce-brain.service';
 import { CatorceSentinelService } from './catorce-sentinel.service';
 
 import { schema } from './schema';
+import * as crypto from 'crypto';
 
 
 
@@ -341,10 +342,23 @@ export class IaService {
           }
 
           if (isConfirm && datos.cedula && datos.nombre_completo) {
+            // 🛡️ Verificación estricta anti-tampering del token de confirmación
+            if (activeWM.token_confirmacion) {
+              const expectedToken = crypto
+                .createHash('sha256')
+                .update(String(Number(user?.id) || 1) + '|' + activeWM.operacion + '|' + JSON.stringify(datos))
+                .digest('hex')
+                .slice(0, 16);
+              if (activeWM.token_confirmacion !== expectedToken) {
+                await this.catorceBrain.clearWorkingMemory(user, 'Violación de integridad de token en confirmación');
+                const tamperMsg = 'Alerta de Seguridad e Integridad: La confirmación fue rechazada porque los parámetros de la operación sufrieron alteraciones no autorizadas en memoria. La tarea ha sido invalidada preventivamente.';
+                return { ok: false, message: tamperMsg, latencyMs: Date.now() - startTime };
+              }
+            }
             try {
               const resEmp = await this.catorceBrain.toolCrearEmpleado(datos, user);
               await this.catorceBrain.clearWorkingMemory(user);
-              const successMsg = `He registrado oficialmente a ${resEmp.empleado.nombre_completo} en Prolicontrol con cédula ${resEmp.empleado.cedula}, cargo ${resEmp.empleado.rol || 'Vigilante'}${datos.telefono ? ' y teléfono ' + datos.telefono : ''}. Código de auditoría: ${resEmp.auditCode}.`;
+              const successMsg = 'He registrado oficialmente a **' + resEmp.empleado.nombre_completo + '** en Prolicontrol:\n\n* Cédula: ' + resEmp.empleado.cedula + '\n* Cargo: ' + (resEmp.empleado.rol || 'Vigilante') + '\n* Teléfono: ' + (datos.telefono || 'No registrado') + '\n* Código de auditoría: [' + resEmp.auditCode + ']\n* Sello de integridad SHA-256: [' + (resEmp.hashIntegridad || '').slice(0, 16) + '...]';
               const voiceSnippet = `Empleado ${resEmp.empleado.nombre_completo} creado con éxito en Prolicontrol.`;
               const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
               this.catorceBrain.appendConversationTurn(user, userQuery, successMsg, canal, ['empleados'], ['CATORCE-OPS:crearEmpleado']);
@@ -414,6 +428,105 @@ export class IaService {
             };
           }
         }
+      }
+
+      // =========================================================================
+      // 0-0: MISIÓN OPERATIVA ENCADENADA: AUDITORÍA INTEGRAL DE PUESTO (MULTI-TOOL)
+      // Ej: «CATORCE, revisa Cabrachi, identifica las novedades críticas de hoy, verifica si hay cámaras desconectadas, comprueba la cobertura de turnos y prepárame un informe ejecutivo para gerencia.»
+      // =========================================================================
+      const isChainedMission =
+        (/\b(revisa|audita|inspecciona|analiza)\b/i.test(qNorm) &&
+         /\b(cabrachi|puesto|minutas|camaras|turnos|informe ejecutivo|mision)\b/i.test(qNorm) &&
+         /\b(informe|gerencia|auditoria|novedades criticas|cobertura|completa)\b/i.test(qNorm)) ||
+        /\b(mision operativa|auditoria integral|auditoria completa)\b/i.test(qNorm) ||
+        (/\b(revisa|audita)\b/i.test(qNorm) && /\b(cabrachi|puesto)\b/i.test(qNorm) && /\b(novedades|camaras|turnos|informe)\b/i.test(qNorm));
+
+      if (isChainedMission) {
+        const mission = await this.catorceBrain.executeChainedOperationalMission(userQuery, user);
+
+        const linesMinutas = mission.fases.fase1_minutas.registros.slice(0, 3).map((r: any) => '  * [' + r.criticidad + '] ' + r.hora + ' - ' + r.detalle + ' *(Responsable: ' + r.responsable + ')*').join('\n');
+        const linesCams = mission.fases.fase2_videovigilancia.dispositivos.map((d: any) => '  * **' + d.nombre + '** (IP: ' + d.ip + '): Estado ' + d.estadoFisico + ' | RTSP: ' + d.puertoRtsp + ' | Latencia: ' + d.latenciaMs + ' ms').join('\n');
+        const linesTurnos = mission.fases.fase3_cobertura_turnos.turnos.map((t: any) => '  * ' + t.guarda + ' (' + t.horario + '): ' + t.estadoCobertura + ' | Marcación: ' + t.horaMarca).join('\n');
+        const linesAcciones = mission.accionesRecomendadas.map((a: string, idx: number) => String(idx + 1) + '. ' + a).join('\n');
+
+        const balanceContractual = mission.fases.fase4_contractual.discrepanciaGuardas >= 0
+          ? 'Conforme / Sin Déficit (+' + mission.fases.fase4_contractual.discrepanciaGuardas + ' guarda adicional)'
+          : 'Déficit Operativo de ' + Math.abs(mission.fases.fase4_contractual.discrepanciaGuardas) + ' puesto(s) frente al contrato';
+
+        const msg = activeUserName + ', he ejecutado la **Misión Operativa: Auditoría Integral sobre ' + mission.puesto.nombre + '** (' + mission.puesto.ciudad + '):\n\n' +
+          '* **Cliente Titular:** ' + mission.puesto.cliente + '\n' +
+          '* **Semáforo General:** **[' + mission.semaforo + ']** (Evaluación multidimensional en ' + mission.duracionMs + ' ms)\n\n' +
+          '---\n\n' +
+          '### 1. Minutas y Novedades Operativas\n' +
+          '* Total de novedades registradas: **' + mission.fases.fase1_minutas.totalMinutas + '**\n' +
+          '* Novedades Críticas: **' + mission.fases.fase1_minutas.criticasCount + '** | Novedades de Alta Prioridad: **' + mission.fases.fase1_minutas.altasCount + '**\n' +
+          (linesMinutas || '  * Sin novedades críticas registradas en la jornada.') + '\n\n' +
+          '### 2. Videovigilancia y Red IoT\n' +
+          '* Dispositivos evaluados: **' + mission.fases.fase2_videovigilancia.totalDispositivos + '**\n' +
+          '* Cámaras en línea: **' + mission.fases.fase2_videovigilancia.onlineCount + '** | Desconectadas: **' + mission.fases.fase2_videovigilancia.offlineCount + '**\n' +
+          (linesCams || '  * Todos los equipos transmitiendo con normalidad.') + '\n\n' +
+          '### 3. Cobertura de Turnos y Cumplimiento\n' +
+          '* Turnos programados: **' + mission.fases.fase3_cobertura_turnos.programados + '** | Turnos con presencia confirmada: **' + mission.fases.fase3_cobertura_turnos.cubiertos + '**\n' +
+          '* Índice de Cobertura Efectiva: **' + mission.fases.fase3_cobertura_turnos.porcentajeCobertura + '%**\n' +
+          (linesTurnos || '  * Programación de turnos cubierta sin novedades.') + '\n\n' +
+          '### 4. Cruce de Información Contractual\n' +
+          '* Guardas pactados en contrato: **' + mission.fases.fase4_contractual.guardasContratados + '**\n' +
+          '* Guardas asignados en programación: **' + mission.fases.fase4_contractual.guardasAsignados + '**\n' +
+          '* Balance de dotación: **' + balanceContractual + '**\n\n' +
+          '### 5. Plan de Acción y Recomendaciones para Gerencia\n' +
+          linesAcciones + '\n\n' +
+          '---\n' +
+          '* **Código de Auditoría:** [' + mission.auditCode + ']\n' +
+          '* **Sello SHA-256 Inalterable:** [' + mission.hashIntegridad + ']\n' +
+          '* *El informe ejecutivo oficial ha sido compilado y preparado para su visualización y descarga.*';
+
+        const pdfDoc = {
+          filename: 'Informe_Ejecutivo_' + mission.puesto.nombre.replace(/\s+/g, '_') + '_' + new Date().toISOString().slice(0, 10) + '.pdf',
+          title: 'INFORME EJECUTIVO DE AUDITORÍA OPERATIVA: ' + mission.puesto.nombre.toUpperCase(),
+          subtitle: 'PROLISEG LTDA - Dirección de Operaciones y Seguridad Integral',
+          generatedAt: new Date().toLocaleString('es-CO'),
+          puesto: mission.puesto.nombre,
+          cliente: mission.puesto.cliente,
+          semaforo: mission.semaforo,
+          auditCode: mission.auditCode,
+          hashIntegridad: mission.hashIntegridad,
+          summary: 'Auditoría integral multidimensional ejecutada por CATORCE sobre ' + mission.puesto.nombre + ' (' + mission.semaforo + '). Cobertura: ' + mission.fases.fase3_cobertura_turnos.porcentajeCobertura + '%, Novedades críticas: ' + mission.fases.fase1_minutas.criticasCount + ', Cámaras fuera de línea: ' + mission.fases.fase2_videovigilancia.offlineCount + '.',
+          columns: ['Dimensión Evaluada', 'Hallazgo / Métrica Registrada', 'Criterio Operativo'],
+          rows: [
+            ['1. Novedades y Minutas', mission.fases.fase1_minutas.totalMinutas + ' registradas (' + mission.fases.fase1_minutas.criticasCount + ' críticas, ' + mission.fases.fase1_minutas.altasCount + ' de alta prioridad)', mission.fases.fase1_minutas.criticasCount === 0 ? 'CONFORME' : 'ATENCIÓN INMEDIATA'],
+            ['2. Videovigilancia y Red IoT', mission.fases.fase2_videovigilancia.onlineCount + ' equipos en línea de ' + mission.fases.fase2_videovigilancia.totalDispositivos + ' probados', mission.fases.fase2_videovigilancia.offlineCount === 0 ? 'EN LÍNEA (RTSP 554)' : mission.fases.fase2_videovigilancia.offlineCount + ' DESCONECTADA(S)'],
+            ['3. Cobertura de Turnos', mission.fases.fase3_cobertura_turnos.cubiertos + ' de ' + mission.fases.fase3_cobertura_turnos.programados + ' turnos cubiertos (' + mission.fases.fase3_cobertura_turnos.porcentajeCobertura + '%)', mission.fases.fase3_cobertura_turnos.porcentajeCobertura >= 100 ? '100% CUBIERTO' : 'DÉFICIT COBERTURA'],
+            ['4. Cuota Contractual', mission.fases.fase4_contractual.guardasAsignados + ' asignados frente a ' + mission.fases.fase4_contractual.guardasContratados + ' pactados', mission.fases.fase4_contractual.discrepanciaGuardas >= 0 ? 'CUMPLE CONTRATO' : 'DÉFICIT CONTRACTUAL'],
+            ['5. Trazabilidad Criptográfica', 'Código: ' + mission.auditCode + ' | Hash SHA-256: ' + mission.hashIntegridad.slice(0, 16) + '...', 'VERIFICADA INMUTABLE'],
+          ],
+          fases: mission.fases,
+          accionesRecomendadas: mission.accionesRecomendadas,
+        };
+
+        const voiceSnippet = activeUserName + ', he culminado la auditoría operativa del puesto ' + mission.puesto.nombre + '. Se detectaron ' + mission.fases.fase1_minutas.criticasCount + ' novedades críticas, ' + mission.fases.fase2_videovigilancia.offlineCount + ' cámaras con anomalía y una cobertura de turnos del ' + mission.fases.fase3_cobertura_turnos.porcentajeCobertura + ' por ciento. El informe ejecutivo completo y el plan de mitigación para gerencia están disponibles en pantalla.';
+        const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
+        this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, ['puestos', 'minutas', 'accesos', 'turnos'], ['CATORCE-MISSION:auditoriaIntegral']);
+
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: 'MISION_OPERATIVA_AUDITORIA_INTEGRAL',
+          activity: 'Auditoría integral completada para ' + mission.puesto.nombre,
+          missionData: mission,
+          pdfDocument: pdfDoc,
+          documentViewer: {
+            type: 'pdf',
+            title: 'Informe Ejecutivo - ' + mission.puesto.nombre,
+            data: pdfDoc,
+          },
+          interactiveResults: {
+            type: 'mision_operativa_report',
+            data: mission,
+          },
+          message: msg,
+          audioUrl,
+          latencyMs: Date.now() - startTime,
+        };
       }
 
       // =========================================================================

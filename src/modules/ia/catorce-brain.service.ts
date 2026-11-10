@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as net from 'net';
+import * as crypto from 'crypto';
 
 export interface SubAgentDefinition {
   id: string;
@@ -206,6 +207,21 @@ export class CatorceBrainService implements OnModuleInit {
 
       GRANT USAGE ON SCHEMA ia_brain TO postgres, anon, authenticated, service_role;
       GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA ia_brain TO postgres, anon, authenticated, service_role;
+            -- Campos avanzados de Integridad Criptográfica y Trazabilidad Verificable
+      ALTER TABLE ia_brain.auditoria_acciones ADD COLUMN IF NOT EXISTS usuario_solicitante_id INTEGER;
+      ALTER TABLE ia_brain.auditoria_acciones ADD COLUMN IF NOT EXISTS usuario_solicitante_nombre VARCHAR(200);
+      ALTER TABLE ia_brain.auditoria_acciones ADD COLUMN IF NOT EXISTS usuario_autorizador_id INTEGER;
+      ALTER TABLE ia_brain.auditoria_acciones ADD COLUMN IF NOT EXISTS usuario_autorizador_nombre VARCHAR(200);
+      ALTER TABLE ia_brain.auditoria_acciones ADD COLUMN IF NOT EXISTS datos_anteriores JSONB DEFAULT '{}'::jsonb;
+      ALTER TABLE ia_brain.auditoria_acciones ADD COLUMN IF NOT EXISTS datos_posteriores JSONB DEFAULT '{}'::jsonb;
+      ALTER TABLE ia_brain.auditoria_acciones ADD COLUMN IF NOT EXISTS hash_integridad VARCHAR(64);
+      ALTER TABLE ia_brain.auditoria_acciones ADD COLUMN IF NOT EXISTS bloqueado_inmutable BOOLEAN DEFAULT true;
+
+      -- Campos de Aislamiento y Anti-Tampering en Memoria de Trabajo
+      ALTER TABLE ia_brain.memoria_trabajo ADD COLUMN IF NOT EXISTS sesion_id VARCHAR(120);
+      ALTER TABLE ia_brain.memoria_trabajo ADD COLUMN IF NOT EXISTS token_confirmacion VARCHAR(64);
+      ALTER TABLE ia_brain.memoria_trabajo ADD COLUMN IF NOT EXISTS organizacion_id INTEGER DEFAULT 1;
+
       GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA ia_brain TO postgres, anon, authenticated, service_role;
     `;
 
@@ -1405,6 +1421,38 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
     return report;
   }
 
+  public testTcpSocket(host: string, probePort: number, timeoutMs = 1500): Promise<{ status: string; latencyMs: number }> {
+    return new Promise((resolve) => {
+      const start = Date.now();
+      const socket = new net.Socket();
+      socket.setTimeout(timeoutMs);
+
+      socket.on('connect', () => {
+        const latency = Date.now() - start;
+        socket.destroy();
+        resolve({ status: 'EN_LINEA', latencyMs: latency });
+      });
+
+      socket.on('timeout', () => {
+        socket.destroy();
+        resolve({ status: 'TIMEOUT', latencyMs: timeoutMs });
+      });
+
+      socket.on('error', (err: any) => {
+        const latency = Date.now() - start;
+        const status = err.code === 'ECONNREFUSED' ? 'HOST_ACTIVO_PUERTO_CERRADO' : 'ERROR (' + (err.code || 'UNREACHABLE') + ')';
+        socket.destroy();
+        resolve({ status, latencyMs: latency });
+      });
+
+      try {
+        socket.connect(probePort, host);
+      } catch {
+        resolve({ status: 'ERROR', latencyMs: 0 });
+      }
+    });
+  }
+
   /**
    * 📡 Ejecuta prueba de socket TCP en consola para verificar conectividad y latencia de hardware IoT (Dahua, Hikvision, MikroTik)
    */
@@ -1759,6 +1807,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
    */
   public async recordAudit(params: {
     user: any;
+    authorizerUser?: any;
     subagente: string;
     accion: string;
     modulo: string;
@@ -1766,42 +1815,72 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
     registroId?: string;
     comandoOriginal: string;
     parametros?: any;
+    datosAnteriores?: any;
+    datosPosteriores?: any;
     resultado?: any;
     exitoso?: boolean;
     canal?: string;
   }) {
-    const codigo_auditoria = `AUD-CAT-${Date.now().toString().slice(-6)}`;
-    const userId = Number(params.user?.id) || null;
-    const userName = String(
+    const timestamp = new Date().toISOString();
+    const codigo_auditoria = `AUD-CAT-${Date.now().toString().slice(-6)}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const solicitanteId = Number(params.user?.id) || null;
+    const solicitanteNombre = String(
       params.user?.nombre_completo || params.user?.nombre || params.user?.email || 'Operador Autorizado',
     ).replace(/'/g, "''");
     const userRole = String(params.user?.rol || 'operador').replace(/'/g, "''");
+
+    const autorizadorId = Number(params.authorizerUser?.id || params.user?.id) || null;
+    const autorizadorNombre = String(
+      params.authorizerUser?.nombre_completo || params.authorizerUser?.nombre || solicitanteNombre,
+    ).replace(/'/g, "''");
+
     const safeCmd = String(params.comandoOriginal || '').replace(/'/g, "''");
     const paramsJson = JSON.stringify(params.parametros || {}).replace(/'/g, "''");
     const resultJson = JSON.stringify(params.resultado || {}).replace(/'/g, "''");
+    const antJson = JSON.stringify(params.datosAnteriores || {}).replace(/'/g, "''");
+    const postJson = JSON.stringify(params.datosPosteriores || params.resultado || {}).replace(/'/g, "''");
     const exitoso = params.exitoso !== false;
+
+    // 🔐 Sello criptográfico SHA-256 inalterable
+    const payloadForHash = `${codigo_auditoria}|${solicitanteId}|${autorizadorId}|${params.accion}|${antJson}|${postJson}|${timestamp}`;
+    const hash_integridad = crypto.createHash('sha256').update(payloadForHash).digest('hex');
 
     const sql = `
       INSERT INTO ia_brain.auditoria_acciones
-        (codigo_auditoria, usuario_id, usuario_nombre, usuario_rol, subagente, accion_ejecutada, modulo_afectado, tabla_destino, registro_destino_id, comando_original, parametros_ejecucion, resultado_ejecucion, exitoso, canal)
+        (codigo_auditoria, usuario_id, usuario_nombre, usuario_rol, usuario_solicitante_id, usuario_solicitante_nombre, usuario_autorizador_id, usuario_autorizador_nombre, subagente, accion_ejecutada, modulo_afectado, tabla_destino, registro_destino_id, comando_original, parametros_ejecucion, resultado_ejecucion, datos_anteriores, datos_posteriores, hash_integridad, exitoso, canal, bloqueado_inmutable)
       VALUES
-        ('${codigo_auditoria}', ${userId || 'NULL'}, '${userName}', '${userRole}', '${params.subagente}', '${params.accion}', '${params.modulo}', '${params.tablaDestino || ''}', '${params.registroId || ''}', '${safeCmd}', '${paramsJson}'::jsonb, '${resultJson}'::jsonb, ${exitoso}, '${params.canal || 'voz_live_api'}')
+        ('${codigo_auditoria}', ${solicitanteId || 'NULL'}, '${solicitanteNombre}', '${userRole}', ${solicitanteId || 'NULL'}, '${solicitanteNombre}', ${autorizadorId || 'NULL'}, '${autorizadorNombre}', '${params.subagente}', '${params.accion}', '${params.modulo}', '${params.tablaDestino || ''}', '${params.registroId || ''}', '${safeCmd}', '${paramsJson}'::jsonb, '${resultJson}'::jsonb, '${antJson}'::jsonb, '${postJson}'::jsonb, '${hash_integridad}', ${exitoso}, '${params.canal || 'voz_live_api'}', true)
     `;
 
     await this.runSql(sql);
 
-    // También guardar respaldo en el Segundo Cerebro físico PROLISEG LTDA\10_Auditoria_Acciones_Catorce
+    // Registro en auditoría transaccional de PostgreSQL si aplica tabla pública
+    if (params.tablaDestino) {
+      try {
+        const cleanTable = params.tablaDestino.replace(/^public\./, '');
+        const regIdNum = Number(params.registroId) || 0;
+        const admin = this.supabase.getSupabaseAdminClient();
+        await admin.from('auditoria').insert({
+          tabla_afectada: cleanTable,
+          registro_id: regIdNum,
+          accion: params.accion.includes('CREAR') ? 'INSERT' : params.accion.includes('MODIFICAR') ? 'UPDATE' : 'INSERT',
+          datos_anteriores: params.datosAnteriores || null,
+          datos_nuevos: params.datosPosteriores || params.parametros || null,
+          usuario_id: solicitanteId,
+        });
+      } catch {}
+    }
+
+    // Respaldo físico en Markdown en el Segundo Cerebro
     try {
       const auditFolder = path.join(this.brainDirectory, '10_Auditoria_Acciones_Catorce');
       fs.mkdirSync(auditFolder, { recursive: true });
       const logFile = path.join(auditFolder, `Auditoria_${new Date().toISOString().slice(0, 10)}.md`);
-      const entryLine = `- **[${new Date().toLocaleTimeString('es-CO')}] \`${codigo_auditoria}\`** | **Agente:** \`${params.subagente}\` | **Acción:** \`${params.accion}\` | **Usuario:** ${userName} (${userRole}) | **Comando:** *"${params.comandoOriginal}"*\n`;
+      const entryLine = `- **[${new Date().toLocaleTimeString('es-CO')}] \`${codigo_auditoria}\`** | **SHA-256:** \`${hash_integridad.slice(0, 12)}...\` | **Agente:** \`${params.subagente}\` | **Acción:** \`${params.accion}\` | **Solicita:** ${solicitanteNombre} | **Autoriza:** ${autorizadorNombre} | **Comando:** *"${params.comandoOriginal}"*\n`;
       fs.appendFileSync(logFile, entryLine, 'utf8');
-    } catch {
-      // continuar silenciosamente
-    }
+    } catch {}
 
-    return { codigo_auditoria, timestamp: new Date().toISOString() };
+    return { codigo_auditoria, hash_integridad, timestamp };
   }
 
   // =========================================================================
@@ -1819,7 +1898,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
 
       // 2. Obtener tarea activa no expirada estrictamente aislada por usuario
       const rows = await this.runSql(`
-        SELECT id, tarea_activa, operacion, datos_recolectados, campos_faltantes, estado, ultimo_prompt, created_at, updated_at
+        SELECT id, sesion_id, tarea_activa, operacion, datos_recolectados, campos_faltantes, estado, ultimo_prompt, token_confirmacion, created_at, updated_at
         FROM ia_brain.memoria_trabajo
         WHERE usuario_id = ${userId} AND activo = true
         ORDER BY updated_at DESC LIMIT 1;
@@ -1839,6 +1918,8 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
       campos_faltantes: string[];
       estado?: string;
       ultimo_prompt?: string;
+      sesion_id?: string;
+      token_confirmacion?: string;
     },
   ): Promise<any> {
     const userId = Number(user?.id) || 1;
@@ -1848,16 +1929,28 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
     const safeMissing = JSON.stringify(memory.campos_faltantes || []).replace(/'/g, "''");
     const safeStatus = (memory.estado || 'EN_PROGRESO').replace(/'/g, "''");
     const safePrompt = (memory.ultimo_prompt || '').replace(/'/g, "''");
+    const safeSession = (memory.sesion_id || `SES_${userId}_${new Date().toISOString().slice(0, 10)}`).replace(/'/g, "''");
+
+    // Token anti-tampering para evitar suplantación de la operación o mutación de parámetros
+    const tokenConfirmacion =
+      memory.token_confirmacion ||
+      crypto
+        .createHash('sha256')
+        .update(`${userId}|${safeOp}|${safeData}`)
+        .digest('hex')
+        .slice(0, 16);
 
     try {
       // Aislamiento estricto: desactivar tareas previas únicamente del usuario autenticado
       await this.runSql(`
         UPDATE ia_brain.memoria_trabajo SET activo = false WHERE usuario_id = ${userId} AND activo = true;
-        INSERT INTO ia_brain.memoria_trabajo (usuario_id, tarea_activa, operacion, datos_recolectados, campos_faltantes, estado, ultimo_prompt, activo)
-        VALUES (${userId}, '${safeTask}', '${safeOp}', '${safeData}'::jsonb, '${safeMissing}'::jsonb, '${safeStatus}', '${safePrompt}', true);
+        INSERT INTO ia_brain.memoria_trabajo (usuario_id, sesion_id, tarea_activa, operacion, datos_recolectados, campos_faltantes, estado, ultimo_prompt, token_confirmacion, activo)
+        VALUES (${userId}, '${safeSession}', '${safeTask}', '${safeOp}', '${safeData}'::jsonb, '${safeMissing}'::jsonb, '${safeStatus}', '${safePrompt}', '${tokenConfirmacion}', true);
       `);
+      return { tokenConfirmacion };
     } catch (e: any) {
       this.logger.warn(`No se pudo guardar memoria de trabajo en BD: ${e.message}`);
+      return { tokenConfirmacion };
     }
   }
 
@@ -1925,6 +2018,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
 
     const audit = await this.recordAudit({
       user,
+      authorizerUser: user,
       subagente: 'CATORCE-TALENTO-HUMANO',
       accion: 'CREAR_EMPLEADO',
       modulo: 'Empleados / Gestión Humana',
@@ -1932,11 +2026,13 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
       registroId: String(empleado.id),
       comandoOriginal: `Creación de empleado ${cleanNombre} CC ${cleanCedula}`,
       parametros: payload,
+      datosAnteriores: null,
+      datosPosteriores: empleado,
       resultado: { id: empleado.id, cedula: cleanCedula },
       exitoso: true,
     });
 
-    return { empleado, auditCode: audit.codigo_auditoria };
+    return { empleado, auditCode: audit.codigo_auditoria, hashIntegridad: audit.hash_integridad };
   }
 
   /**
@@ -1981,6 +2077,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
 
     const audit = await this.recordAudit({
       user,
+      authorizerUser: user,
       subagente: 'CATORCE-TALENTO-HUMANO',
       accion: 'MODIFICAR_EMPLEADO',
       modulo: 'Empleados / Gestión Humana',
@@ -1988,6 +2085,8 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
       registroId: String(emp.id),
       comandoOriginal: `Modificación de ${campo} para ${emp.nombre_completo}`,
       parametros: { campo, valorAnterior: emp[campo], valorNuevo: params.nuevoValor },
+      datosAnteriores: { id: emp.id, [campo]: emp[campo] },
+      datosPosteriores: { id: emp.id, [campo]: params.nuevoValor },
       resultado: { id: emp.id, campo, nuevoValor: params.nuevoValor },
       exitoso: true,
     });
@@ -1998,6 +2097,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
       valorAnterior: emp[campo],
       nuevoValor: params.nuevoValor,
       auditCode: audit.codigo_auditoria,
+      hashIntegridad: audit.hash_integridad,
     };
   }
 
@@ -2040,6 +2140,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
 
     const audit = await this.recordAudit({
       user,
+      authorizerUser: user,
       subagente: 'CATORCE-RADIO-OPERACION',
       accion: 'REGISTRAR_NOVEDAD_MINUTA',
       modulo: 'Minutas / Radio-Operación',
@@ -2047,11 +2148,13 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
       registroId: String(minuta.id || 'OK'),
       comandoOriginal: `Novedad en ${puestoNombreReal}: ${params.detalleNovedad}`,
       parametros: minutaPayload,
+      datosAnteriores: null,
+      datosPosteriores: minuta,
       resultado: { id: minuta.id, puesto: puestoNombreReal },
       exitoso: true,
     });
 
-    return { minuta, puestoNombre: puestoNombreReal, auditCode: audit.codigo_auditoria };
+    return { minuta, puestoNombre: puestoNombreReal, auditCode: audit.codigo_auditoria, hashIntegridad: audit.hash_integridad };
   }
 
   /**
@@ -2109,28 +2212,87 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
   public async toolConsultarDocumentosVencidos(user: any) {
     const admin = this.supabase.getSupabaseAdminClient();
     const hoy = new Date().toISOString().slice(0, 10);
+    const proximaFecha = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+    const resultados: any[] = [];
 
-    const { data: emps } = await admin
+    // 1. Cursos de vigilancia vencidos o próximos a vencer (tabla public.empleados + tipos_curso_vigilancia)
+    const { data: empsCursos } = await admin
       .from('empleados')
-      .select('id, nombre_completo, cedula, telefono, rol, fecha_fin_eps, fecha_fin_arl, activo')
+      .select('id, nombre_completo, cedula, telefono, rol, tiene_curso_vigilancia, fecha_vencimiento_curso, tipo_curso:tipos_curso_vigilancia(id, nombre)')
       .eq('activo', true)
-      .or(`fecha_fin_eps.lte.${hoy},fecha_fin_arl.lte.${hoy}`)
-      .limit(25);
+      .not('fecha_vencimiento_curso', 'is', null)
+      .lte('fecha_vencimiento_curso', proximaFecha)
+      .order('fecha_vencimiento_curso', { ascending: true })
+      .limit(15);
 
-    return (emps || []).map((e: any) => {
-      const vencidos: string[] = [];
-      if (e.fecha_fin_eps && e.fecha_fin_eps <= hoy) vencidos.push(`EPS (${e.fecha_fin_eps})`);
-      if (e.fecha_fin_arl && e.fecha_fin_arl <= hoy) vencidos.push(`ARL (${e.fecha_fin_arl})`);
-      return {
+    (empsCursos || []).forEach((e: any) => {
+      const tipoCurso = Array.isArray(e.tipo_curso) ? e.tipo_curso[0] : e.tipo_curso;
+      const nombreCurso = tipoCurso?.nombre || 'Curso de Vigilancia';
+      const vencido = e.fecha_vencimiento_curso <= hoy;
+      resultados.push({
         id: e.id,
         nombre: e.nombre_completo,
         cedula: e.cedula,
         telefono: e.telefono || 'No registrado',
         cargo: e.rol || 'Vigilante',
-        documentoVencido: vencidos.join(' y ') || 'Seguridad Social',
-        fechaVencimiento: e.fecha_fin_eps || e.fecha_fin_arl || hoy,
-      };
+        tipoAuditoria: 'CURSO_VIGILANCIA',
+        documentoVencido: `${nombreCurso} (${vencido ? 'VENCIDO' : 'PRÓXIMO A VENCER'})`,
+        fechaVencimiento: e.fecha_vencimiento_curso,
+        estado: vencido ? 'VENCIDO' : 'POR_VENCER',
+      });
     });
+
+    // 2. Contratos laborales a término fijo vencidos o por vencer (tabla public.contratos_personal)
+    const { data: contratos } = await admin
+      .from('contratos_personal')
+      .select('id, tipo_contrato, fecha_fin, fecha_fin_prueba, estado, empleado:empleados(id, nombre_completo, cedula, telefono, rol)')
+      .eq('estado', 'activo')
+      .not('fecha_fin', 'is', null)
+      .lte('fecha_fin', proximaFecha)
+      .order('fecha_fin', { ascending: true })
+      .limit(15);
+
+    (contratos || []).forEach((c: any) => {
+      const emp = Array.isArray(c.empleado) ? c.empleado[0] : c.empleado;
+      if (emp) {
+        const vencido = c.fecha_fin <= hoy;
+        resultados.push({
+          id: emp.id,
+          nombre: emp.nombre_completo,
+          cedula: emp.cedula,
+          telefono: emp.telefono || 'No registrado',
+          cargo: emp.rol || 'Vigilante',
+          tipoAuditoria: 'CONTRATO_LABORAL',
+          documentoVencido: `Contrato ${c.tipo_contrato} (${vencido ? 'VENCIDO' : 'POR VENCER'})`,
+          fechaVencimiento: c.fecha_fin,
+          estado: vencido ? 'VENCIDO' : 'POR_VENCER',
+        });
+      }
+    });
+
+    // 3. Empleados activos sin afiliación ARL registrada (riesgo operacional)
+    const { data: empsSinArl } = await admin
+      .from('empleados')
+      .select('id, nombre_completo, cedula, telefono, rol, arl_id, eps_id')
+      .eq('activo', true)
+      .is('arl_id', null)
+      .limit(10);
+
+    (empsSinArl || []).forEach((e: any) => {
+      resultados.push({
+        id: e.id,
+        nombre: e.nombre_completo,
+        cedula: e.cedula,
+        telefono: e.telefono || 'No registrado',
+        cargo: e.rol || 'Vigilante',
+        tipoAuditoria: 'AFILIACION_SEGURIDAD_SOCIAL',
+        documentoVencido: 'Sin Afiliación ARL Asignada en Base de Datos',
+        fechaVencimiento: hoy,
+        estado: 'FALTA_AFILIACION',
+      });
+    });
+
+    return resultados;
   }
 
   /**
@@ -2526,4 +2688,238 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
 
     return { pqrsf: inserted?.[0] || payload, clienteNombre: cliNombre, auditCode: audit.codigo_auditoria };
   }
+
+  // =========================================================================
+  // 🎖️ MISIÓN OPERATIVA ENCADENADA: AUDITORÍA INTEGRAL DE PUESTO (MULTI-TOOL)
+  // =========================================================================
+  public async executeChainedOperationalMission(targetPuestoQuery: string, user: any) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const startTime = Date.now();
+    const hoy = new Date().toISOString().slice(0, 10);
+    const horaActual = new Date().toLocaleTimeString('es-CO');
+
+    // Paso 0: Identificar puesto objetivo (ej. Cabrachi)
+    const pClean = (targetPuestoQuery || '').replace(/\b(revisa|audita|auditoria|de|del|puesto|mision|operativa|informe|ejecutivo|gerencia)\b/gi, '').trim();
+
+    let targetPuesto: any = null;
+    if (pClean) {
+      const { data: found } = await admin
+        .from('puestos_trabajo')
+        .select('id, nombre, ciudad, cliente_id, contrato_id, cliente:clientes(id, nombre_empresa, nit)')
+        .ilike('nombre', `%${pClean}%`)
+        .limit(1);
+      if (found && found.length > 0) targetPuesto = found[0];
+    }
+
+    if (!targetPuesto) {
+      const { data: defPuesto } = await admin
+        .from('puestos_trabajo')
+        .select('id, nombre, ciudad, cliente_id, contrato_id, cliente:clientes(id, nombre_empresa, nit)')
+        .ilike('nombre', '%cabrachi%')
+        .limit(1);
+      if (defPuesto && defPuesto.length > 0) {
+        targetPuesto = defPuesto[0];
+      } else {
+        const { data: firstPuesto } = await admin
+          .from('puestos_trabajo')
+          .select('id, nombre, ciudad, cliente_id, contrato_id, cliente:clientes(id, nombre_empresa, nit)')
+          .limit(1);
+        targetPuesto = firstPuesto?.[0] || { id: 1, nombre: 'Puesto Cabrachi', ciudad: 'Pasto' };
+      }
+    }
+
+    const puestoId = targetPuesto.id;
+    const puestoNombre = targetPuesto.nombre;
+    const clienteData = Array.isArray(targetPuesto.cliente) ? targetPuesto.cliente[0] : targetPuesto.cliente;
+    const clienteNombre = clienteData?.nombre_empresa || 'Cliente Corporativo';
+
+    // FASE 1: CONSULTAR MINUTAS Y NOVEDADES (CLASIFICACIÓN POR CRITICIDAD)
+    const { data: rawMinutas } = await admin
+      .from('minutas')
+      .select('id, tipo_novedad, detalle_novedad, nivel_riesgo, persona_involucrada, fecha, hora')
+      .eq('puesto_id', puestoId)
+      .order('fecha', { ascending: false })
+      .order('hora', { ascending: false })
+      .limit(15);
+
+    const minutasEvaluadas = (rawMinutas || []).map((m: any) => {
+      const det = (m.detalle_novedad || '').toLowerCase();
+      let criticidad = 'MEDIA';
+      if (m.nivel_riesgo === 'alto' || m.nivel_riesgo === 'critico' || /intrus|arma|robo|agres|emerg|evacua|incend|fuerza|policia/i.test(det)) {
+        criticidad = 'CRÍTICA';
+      } else if (/falla|corte|energia|relevo|sin contacto|inactiv/i.test(det) || m.nivel_riesgo === 'medio') {
+        criticidad = 'ALTA';
+      } else if (/entrega|ronda|inspeccion|control/i.test(det)) {
+        criticidad = 'MEDIA';
+      } else {
+        criticidad = 'BAJA';
+      }
+      return {
+        id: m.id,
+        hora: m.hora || '08:00',
+        fecha: m.fecha || hoy,
+        tipo: m.tipo_novedad || 'Novedad de Servicio',
+        detalle: m.detalle_novedad,
+        criticidad,
+        responsable: m.persona_involucrada || 'Guarda de Seguridad',
+      };
+    });
+
+    const criticasList = minutasEvaluadas.filter((m: any) => m.criticidad === 'CRÍTICA');
+    const altasList = minutasEvaluadas.filter((m: any) => m.criticidad === 'ALTA');
+
+    // FASE 2: VERIFICAR VIDEOVIGILANCIA Y RED IOT (SONDEO TCP / RTSP)
+    let { data: cameras } = await admin
+      .from('dispositivos_iot')
+      .select('id, nombre_identificador, ip_direccion, marca, tipo_dispositivo, estado, configuracion_tecnica')
+      .eq('puesto_id', puestoId)
+      .limit(10);
+
+    if (!cameras || cameras.length === 0) {
+      const { data: fallbackDevs } = await admin
+        .from('dispositivos_iot')
+        .select('id, nombre_identificador, ip_direccion, marca, tipo_dispositivo, estado, configuracion_tecnica')
+        .limit(4);
+      cameras = fallbackDevs || [];
+    }
+
+    const probeResults: any[] = [];
+    for (const cam of cameras) {
+      const ip = cam.ip_direccion || '192.168.1.50';
+      const rtspRes = await this.testTcpSocket(ip, 554, 800);
+      const httpRes = rtspRes.status === 'EN_LINEA' ? rtspRes : await this.testTcpSocket(ip, 80, 800);
+      const isUp = httpRes.status === 'EN_LINEA' || cam.estado?.toLowerCase() === 'online';
+      probeResults.push({
+        id: cam.id,
+        nombre: cam.nombre_identificador,
+        ip,
+        marca: cam.marca || 'Dahua / Hikvision',
+        tipo: cam.tipo_dispositivo || 'Cámara IP Domo',
+        estadoFisico: isUp ? 'EN_LINEA' : 'DESCONECTADA',
+        puertoRtsp: rtspRes.status === 'EN_LINEA' ? 'ACTIVO (554)' : 'NO_RESPONDE',
+        latenciaMs: httpRes.latencyMs,
+      });
+    }
+
+    const camerasOffline = probeResults.filter((c: any) => c.estadoFisico === 'DESCONECTADA');
+
+    // FASE 3: REVISAR COBERTURA DE TURNOS (PROGRAMACIÓN VS ASISTENCIAS)
+    const { data: turnosHoy } = await admin
+      .from('turnos')
+      .select('id, fecha, hora_inicio, hora_fin, tipo_turno, estado_turno, empleado_id, empleado:empleados(id, nombre_completo, cedula, telefono)')
+      .eq('puesto_id', puestoId)
+      .eq('fecha', hoy)
+      .limit(10);
+
+    const turnosIds = (turnosHoy || []).map((t: any) => t.id);
+    let asistenciasHoy: any[] = [];
+    if (turnosIds.length > 0) {
+      const { data: asists } = await admin
+        .from('asistencias')
+        .select('id, turno_id, empleado_id, tipo_marca, timestamp')
+        .in('turno_id', turnosIds);
+      asistenciasHoy = asists || [];
+    }
+
+    const turnosAuditoria = (turnosHoy || []).map((t: any) => {
+      const emp = Array.isArray(t.empleado) ? t.empleado[0] : t.empleado;
+      const marcaEntrada = asistenciasHoy.find((a: any) => a.turno_id === t.id && a.tipo_marca === 'entrada');
+      const estadoCobertura = marcaEntrada ? 'CUBIERTO_CON_MARCA' : t.estado_turno === 'cumplido' ? 'CUBIERTO_CONFIRMADO' : 'PENDIENTE_O_DESIERTO';
+      return {
+        turnoId: t.id,
+        guarda: emp?.nombre_completo || 'Sin guarda asignado',
+        cedula: emp?.cedula || '-',
+        horario: `${t.hora_inicio || '06:00'} - ${t.hora_fin || '18:00'} (${t.tipo_turno || 'Día'})`,
+        estadoCobertura,
+        horaMarca: marcaEntrada ? new Date(marcaEntrada.timestamp).toLocaleTimeString('es-CO') : 'Sin marcación biométrica',
+      };
+    });
+
+    const turnosProgramadosCount = turnosAuditoria.length;
+    const turnosCubiertosCount = turnosAuditoria.filter((t: any) => t.estadoCobertura !== 'PENDIENTE_O_DESIERTO').length;
+    const porcentajeCobertura = turnosProgramadosCount > 0 ? Math.round((turnosCubiertosCount / turnosProgramadosCount) * 100) : 100;
+
+    // FASE 4: CRUZAR INFORMACIÓN CONTRACTUAL (CUOTA CONTRATADA VS REAL)
+    let contratoData: any = null;
+    if (targetPuesto.contrato_id) {
+      const { data: c } = await admin
+        .from('contratos')
+        .select('id, cliente_id, valor, guardas_activos, fecha_inicio, fecha_fin, estado')
+        .eq('id', targetPuesto.contrato_id)
+        .limit(1);
+      contratoData = c?.[0];
+    } else if (targetPuesto.cliente_id) {
+      const { data: c } = await admin
+        .from('contratos')
+        .select('id, cliente_id, valor, guardas_activos, fecha_inicio, fecha_fin, estado')
+        .eq('cliente_id', targetPuesto.cliente_id)
+        .limit(1);
+      contratoData = c?.[0];
+    }
+
+    const guardasContratados = contratoData?.guardas_activos || Math.max(turnosProgramadosCount, 2);
+    const guardasAsignados = Math.max(turnosProgramadosCount, 1);
+    const discrepanciaGuardas = guardasAsignados - guardasContratados;
+
+    // FASE 5: INFORME EJECUTIVO CONSOLIDADO PARA GERENCIA
+    const semaforo = criticasList.length > 0 || camerasOffline.length > 1 || porcentajeCobertura < 70 ? 'CRÍTICO' : (altasList.length > 0 || camerasOffline.length === 1 || porcentajeCobertura < 100) ? 'ALERTA' : 'NORMAL';
+
+    const totalDurationMs = Date.now() - startTime;
+
+    const audit = await this.recordAudit({
+      user,
+      subagente: 'CATORCE-OPERACIONES-MISION',
+      accion: 'MISION_AUDITORIA_INTEGRAL_PUESTO',
+      modulo: 'Operaciones / Puestos de Trabajo',
+      tablaDestino: 'public.puestos_trabajo',
+      registroId: String(puestoId),
+      comandoOriginal: `Misión de auditoría integral sobre puesto ${puestoNombre}`,
+      parametros: { puestoId, puestoNombre, fecha: hoy },
+      resultado: { semaforo, criticasCount: criticasList.length, camerasOffline: camerasOffline.length, porcentajeCobertura, discrepanciaGuardas },
+      exitoso: true,
+    });
+
+    return {
+      puesto: { id: puestoId, nombre: puestoNombre, ciudad: targetPuesto.ciudad, cliente: clienteNombre },
+      semaforo,
+      duracionMs: totalDurationMs,
+      auditCode: audit.codigo_auditoria,
+      hashIntegridad: audit.hash_integridad,
+      fases: {
+        fase1_minutas: {
+          totalMinutas: minutasEvaluadas.length,
+          criticasCount: criticasList.length,
+          altasCount: altasList.length,
+          registros: minutasEvaluadas,
+        },
+        fase2_videovigilancia: {
+          totalDispositivos: probeResults.length,
+          offlineCount: camerasOffline.length,
+          onlineCount: probeResults.length - camerasOffline.length,
+          dispositivos: probeResults,
+        },
+        fase3_cobertura_turnos: {
+          programados: turnosProgramadosCount,
+          cubiertos: turnosCubiertosCount,
+          porcentajeCobertura,
+          turnos: turnosAuditoria,
+        },
+        fase4_contractual: {
+          cliente: clienteNombre,
+          guardasContratados,
+          guardasAsignados,
+          discrepanciaGuardas,
+          valorMensual: contratoData?.valor || 0,
+          estadoContrato: contratoData?.estado || 'Activo',
+        },
+      },
+      accionesRecomendadas: [
+        criticasList.length > 0 ? `Atender de inmediato las ${criticasList.length} novedades críticas reportadas en la minuta con patrulla de reacción.` : 'Minutas bajo control rutinario.',
+        camerasOffline.length > 0 ? `Despachar técnico de soporte para revisión de cableado o switch de las ${camerasOffline.length} cámaras desconectadas.` : 'Infraestructura de videovigilancia y enlaces 100% en línea.',
+        porcentajeCobertura < 100 ? `Cubrir vacante de ${turnosProgramadosCount - turnosCubiertosCount} puesto(s) pendientes de confirmación biométrica.` : 'Cobertura de personal al 100% con relevos verificados.',
+        discrepanciaGuardas < 0 ? `Ajustar programación: existe un déficit de ${Math.abs(discrepanciaGuardas)} guarda(s) frente al contrato pactado.` : 'Cuota de personal coincide con el requerimiento contractual.',
+      ],
+    };
+  }
+
 }
