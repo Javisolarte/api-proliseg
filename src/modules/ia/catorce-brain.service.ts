@@ -18,7 +18,8 @@ export interface SubAgentDefinition {
 }
 
 @Injectable()
-export class CatorceBrainService implements OnModuleInit {
+export class CatorceBrainService {
+  private inMemoryWorkingMemory = new Map<number, any>();
   private telemetryCache: { data: any; expiresAt: number } | null = null;
 
   public invalidateTelemetryCache() {
@@ -1243,6 +1244,38 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
       }
     }
 
+    // Normalización inteligente de esquemas para tablas con nombres de columna divergentes
+    if (cleanTable === 'contratos') {
+      if (payload.activo !== undefined && payload.estado === undefined) {
+        payload.estado = typeof payload.activo === 'string'
+          ? !/inactiv|false|desactiv/i.test(payload.activo)
+          : Boolean(payload.activo);
+        delete payload.activo;
+      }
+      if (payload.estado !== undefined && typeof payload.estado === 'string') {
+        payload.estado = !/inactiv|false|desactiv|cerrad/i.test(payload.estado);
+      }
+      if (operation.matchFilter && (operation.matchFilter as any).activo !== undefined) {
+        (operation.matchFilter as any).estado = Boolean((operation.matchFilter as any).activo);
+        delete (operation.matchFilter as any).activo;
+      }
+    } else if (cleanTable === 'puestos_trabajo' || cleanTable === 'empleados') {
+      if (payload.estado !== undefined && payload.activo === undefined) {
+        payload.activo = typeof payload.estado === 'string'
+          ? !/inactiv|false|desactiv|baja/i.test(payload.estado)
+          : Boolean(payload.estado);
+        delete payload.estado;
+      }
+      if (payload.activo !== undefined && typeof payload.activo === 'string') {
+        payload.activo = !/inactiv|false|desactiv|baja/i.test(payload.activo);
+      }
+    }
+
+    if (payload.id && operation.matchFilter && !operation.matchFilter.id) {
+      operation.matchFilter.id = payload.id;
+      delete payload.id;
+    }
+
     let resultData: any = null;
 
     if (operation.operationType === 'INSERT' && cleanTable) {
@@ -1886,27 +1919,21 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
   // =========================================================================
   // 🧠 MEMORIA DE TRABAJO (WORKING MEMORY / SCRATCHPAD) MULTI-TURNO
   // =========================================================================
+  // MEMORIA DE TRABAJO EN RAM AISLADA POR USUARIO (CERO LATENCIA Y TOLERANTE A FALLOS)
+  // =========================================================================
   public async getActiveWorkingMemory(user: any): Promise<any | null> {
     const userId = Number(user?.id) || 1;
-    try {
-      // 1. Expirar tareas abandonadas de más de 30 minutos de inactividad
-      await this.runSql(`
-        UPDATE ia_brain.memoria_trabajo 
-        SET activo = false, estado = 'EXPIRADA' 
-        WHERE usuario_id = ${userId} AND activo = true AND updated_at < NOW() - INTERVAL '30 minutes';
-      `);
+    const record = this.inMemoryWorkingMemory.get(userId);
+    if (!record || !record.activo) return null;
 
-      // 2. Obtener tarea activa no expirada estrictamente aislada por usuario
-      const rows = await this.runSql(`
-        SELECT id, sesion_id, tarea_activa, operacion, datos_recolectados, campos_faltantes, estado, ultimo_prompt, token_confirmacion, created_at, updated_at
-        FROM ia_brain.memoria_trabajo
-        WHERE usuario_id = ${userId} AND activo = true
-        ORDER BY updated_at DESC LIMIT 1;
-      `);
-      return rows && rows.length > 0 ? rows[0] : null;
-    } catch {
+    // Expirar tareas abandonadas de más de 30 minutos
+    if (Date.now() - new Date(record.updated_at).getTime() > 30 * 60 * 1000) {
+      record.activo = false;
+      record.estado = 'EXPIRADA';
       return null;
     }
+
+    return record;
   }
 
   public async saveWorkingMemory(
@@ -1923,47 +1950,44 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
     },
   ): Promise<any> {
     const userId = Number(user?.id) || 1;
-    const safeTask = (memory.tarea_activa || '').replace(/'/g, "''");
-    const safeOp = (memory.operacion || '').replace(/'/g, "''");
-    const safeData = JSON.stringify(memory.datos_recolectados || {}).replace(/'/g, "''");
-    const safeMissing = JSON.stringify(memory.campos_faltantes || []).replace(/'/g, "''");
-    const safeStatus = (memory.estado || 'EN_PROGRESO').replace(/'/g, "''");
-    const safePrompt = (memory.ultimo_prompt || '').replace(/'/g, "''");
-    const safeSession = (memory.sesion_id || `SES_${userId}_${new Date().toISOString().slice(0, 10)}`).replace(/'/g, "''");
-
-    // Token anti-tampering para evitar suplantación de la operación o mutación de parámetros
+    const safeData = memory.datos_recolectados || {};
     const tokenConfirmacion =
       memory.token_confirmacion ||
       crypto
         .createHash('sha256')
-        .update(`${userId}|${safeOp}|${safeData}`)
+        .update(String(userId) + '|' + (memory.operacion || '') + '|' + JSON.stringify(safeData))
         .digest('hex')
         .slice(0, 16);
 
-    try {
-      // Aislamiento estricto: desactivar tareas previas únicamente del usuario autenticado
-      await this.runSql(`
-        UPDATE ia_brain.memoria_trabajo SET activo = false WHERE usuario_id = ${userId} AND activo = true;
-        INSERT INTO ia_brain.memoria_trabajo (usuario_id, sesion_id, tarea_activa, operacion, datos_recolectados, campos_faltantes, estado, ultimo_prompt, token_confirmacion, activo)
-        VALUES (${userId}, '${safeSession}', '${safeTask}', '${safeOp}', '${safeData}'::jsonb, '${safeMissing}'::jsonb, '${safeStatus}', '${safePrompt}', '${tokenConfirmacion}', true);
-      `);
-      return { tokenConfirmacion };
-    } catch (e: any) {
-      this.logger.warn(`No se pudo guardar memoria de trabajo en BD: ${e.message}`);
-      return { tokenConfirmacion };
-    }
+    const record = {
+      id: Date.now(),
+      usuario_id: userId,
+      sesion_id: memory.sesion_id || 'SES_' + userId + '_' + new Date().toISOString().slice(0, 10),
+      tarea_activa: memory.tarea_activa || 'Tarea activa',
+      operacion: memory.operacion || 'GENERAL',
+      datos_recolectados: safeData,
+      campos_faltantes: memory.campos_faltantes || [],
+      estado: memory.estado || 'EN_PROGRESO',
+      ultimo_prompt: memory.ultimo_prompt || '',
+      token_confirmacion: tokenConfirmacion,
+      activo: true,
+      updated_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+    };
+
+    this.inMemoryWorkingMemory.set(userId, record);
+    return { tokenConfirmacion };
   }
 
   public async clearWorkingMemory(user: any, motivo: string = 'Cancelado por usuario'): Promise<void> {
     const userId = Number(user?.id) || 1;
-    const safeMotivo = motivo.replace(/'/g, "''");
-    try {
-      await this.runSql(
-        `UPDATE ia_brain.memoria_trabajo 
-         SET activo = false, estado = 'CANCELADO', ultimo_prompt = '${safeMotivo}', updated_at = NOW() 
-         WHERE usuario_id = ${userId} AND activo = true;`,
-      );
-    } catch {}
+    const record = this.inMemoryWorkingMemory.get(userId);
+    if (record) {
+      record.activo = false;
+      record.estado = 'CANCELADO';
+      record.ultimo_prompt = motivo;
+      record.updated_at = new Date().toISOString();
+    }
   }
 
   // =========================================================================
@@ -2162,34 +2186,83 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
    */
   public async toolConsultarContrato(query: string, user: any) {
     const admin = this.supabase.getSupabaseAdminClient();
-    const cleanQ = (query || '').replace(/\b(contrato|de|del|cliente|puesto|muestrame|ver|abrir)\b/gi, '').trim();
+    const cleanWords = (query || '')
+      .toLowerCase()
+      .replace(/\b(busca|buscar|el|la|los|las|un|una|contrato|contratos|de|del|cliente|clientes|puesto|puestos|muestrame|ver|abrir|consultar|detalles)\b/gi, ' ')
+      .trim()
+      .replace(/\s+/g, ' ');
 
-    const { data: contratos } = await admin
-      .from('contratos')
-      .select('id, cliente_id, valor, guardas_activos, fecha_inicio, fecha_fin, estado, contrato_pdf_url, cliente:clientes(id, nombre_empresa, nit, contacto, telefono)')
-      .limit(20);
+    if (cleanWords && cleanWords.length >= 2) {
+      const parts = cleanWords.split(' ').filter(p => p.length >= 3);
+      const pattern = '%' + (parts.length > 0 ? parts.join('%') : cleanWords) + '%';
+      const { data: matchedClientes } = await admin
+        .from('clientes')
+        .select('id, nombre_empresa, nit, contacto, telefono')
+        .ilike('nombre_empresa', pattern)
+        .limit(10);
 
-    let match = (contratos || []).find((c: any) =>
-      c.cliente?.nombre_empresa?.toLowerCase().includes(cleanQ.toLowerCase()),
-    );
+      if (matchedClientes && matchedClientes.length > 0) {
+        const clientIds = matchedClientes.map((c: any) => c.id);
+        const { data: cWithClients } = await admin
+          .from('contratos')
+          .select('id, cliente_id, valor, guardas_activos, fecha_inicio, fecha_fin, estado')
+          .in('cliente_id', clientIds)
+          .order('id', { ascending: false })
+          .limit(1);
 
-    if (!match && cleanQ) {
-      const { data: p } = await admin
+        if (cWithClients && cWithClients[0]) {
+          const cli = matchedClientes.find((c: any) => c.id === cWithClients[0].cliente_id);
+          return {
+            ...cWithClients[0],
+            cliente: cli,
+          };
+        }
+      }
+
+      // Buscar por puesto de trabajo si no se encontró por cliente
+      const { data: puestos } = await admin
         .from('puestos_trabajo')
-        .select('id, nombre, contrato_id, cliente_id, cliente:clientes(id, nombre_empresa)')
-        .ilike('nombre', `%${cleanQ}%`)
+        .select('id, nombre, contrato_id, cliente_id, cliente:clientes(id, nombre_empresa, nit, contacto, telefono)')
+        .ilike('nombre', pattern)
         .limit(1);
 
-      if (p && p[0]?.contrato_id) {
-        match = (contratos || []).find((c: any) => c.id === p[0].contrato_id);
+      if (puestos && puestos[0]?.contrato_id) {
+        const { data: cData } = await admin
+          .from('contratos')
+          .select('id, cliente_id, valor, guardas_activos, fecha_inicio, fecha_fin, estado')
+          .eq('id', puestos[0].contrato_id)
+          .limit(1);
+
+        if (cData && cData[0]) {
+          return {
+            ...cData[0],
+            cliente: puestos[0].cliente,
+          };
+        }
       }
     }
 
-    if (!match && contratos && contratos.length > 0) {
-      match = contratos[0];
+    // Fallback: traer el contrato activo más reciente
+    const { data: fallbackContratos } = await admin
+      .from('contratos')
+      .select('id, cliente_id, valor, guardas_activos, fecha_inicio, fecha_fin, estado')
+      .order('id', { ascending: false })
+      .limit(1);
+
+    if (fallbackContratos && fallbackContratos[0]) {
+      const { data: cli } = await admin
+        .from('clientes')
+        .select('id, nombre_empresa, nit, contacto, telefono')
+        .eq('id', fallbackContratos[0].cliente_id)
+        .limit(1);
+
+      return {
+        ...fallbackContratos[0],
+        cliente: cli?.[0] || { nombre_empresa: 'Cliente Corporativo' },
+      };
     }
 
-    return match;
+    return null;
   }
 
   /**

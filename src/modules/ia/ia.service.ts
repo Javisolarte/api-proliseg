@@ -428,6 +428,73 @@ export class IaService {
             };
           }
         }
+
+        if (activeWM.operacion === 'GESTION_CONTRATO') {
+          const dContrato = activeWM.datos_recolectados || {};
+          const isValor = /\b(valor|cuanto vale|cuanto cuesta|precio|costo|cuanto es|deme el valor|dame el valor|valor mensual)\b/i.test(qNorm);
+          if (isValor) {
+            const valorFmt = dContrato.valor ? new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP' }).format(dContrato.valor) : 'No especificado';
+            const valMsg = activeUserName + ', el valor mensual del contrato de **' + (dContrato.clienteNombre || 'este cliente') + '** es de **' + valorFmt + '** (con ' + (dContrato.guardasActivos || 'cuota establecida') + ' guardas contratados).';
+            const voiceSnippet = activeUserName + ', el valor del contrato de ' + (dContrato.clienteNombre || 'este cliente') + ' es de ' + valorFmt + '.';
+            const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
+            this.catorceBrain.appendConversationTurn(user, userQuery, valMsg, canal, ['clientes'], ['CATORCE-DOCS:consultarValorContrato']);
+            return {
+              ok: true,
+              assistant: 'CATORCE',
+              actionExecuted: 'CONSULTA_VALOR_CONTRATO_CONTEXTO',
+              activity: 'Consultando valor de contrato de ' + (dContrato.clienteNombre || 'cliente'),
+              message: valMsg,
+              audioUrl,
+              latencyMs: Date.now() - startTime,
+            };
+          }
+
+          const isInactivar = /\b(inactivalo|inactivar|desactivalo|desactivar|dar de baja|cancela el contrato|cancelalo)\b/i.test(qNorm);
+          if (isInactivar) {
+            try {
+              const admin = this.supabase.getSupabaseAdminClient();
+              const { error: updErr } = await admin
+                .from('contratos')
+                .update({ estado: false, updated_at: new Date().toISOString() })
+                .eq('id', dContrato.contratoId);
+
+              if (updErr) throw updErr;
+
+              this.catorceBrain.invalidateTelemetryCache();
+              const audit = await this.catorceBrain.recordAudit({
+                user,
+                subagente: 'CATORCE-OMNISCIENTE',
+                accion: 'INACTIVAR_CONTRATO',
+                modulo: 'Contratos / Clientes',
+                tablaDestino: 'public.contratos',
+                registroId: String(dContrato.contratoId),
+                comandoOriginal: userQuery,
+                parametros: { contratoId: dContrato.contratoId, cliente: dContrato.clienteNombre, nuevoEstado: false },
+                resultado: { exitoso: true, estado: false },
+                exitoso: true,
+                canal,
+              });
+
+              await this.catorceBrain.clearWorkingMemory(user);
+              const inactMsg = activeUserName + ', he procedido a **inactivar el contrato** de **' + (dContrato.clienteNombre || 'este cliente') + '** (Contrato #' + dContrato.contratoId + ') en Prolicontrol:\n\n* Estado actualizado: **INACTIVO**\n* Fecha: ' + new Date().toLocaleString('es-CO') + '\n* Código de auditoría: [' + audit.codigo_auditoria + ']';
+              const voiceSnippet = activeUserName + ', el contrato de ' + (dContrato.clienteNombre || 'este cliente') + ' ha sido inactivado oficialmente en la base de datos.';
+              const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
+              this.catorceBrain.appendConversationTurn(user, userQuery, inactMsg, canal, ['clientes'], ['CATORCE-CRUD:inactivarContrato']);
+              return {
+                ok: true,
+                assistant: 'CATORCE',
+                actionExecuted: 'INACTIVAR_CONTRATO_COMPLETO',
+                auditCode: audit.codigo_auditoria,
+                activity: 'Contrato de ' + (dContrato.clienteNombre || 'cliente') + ' inactivado',
+                message: inactMsg,
+                audioUrl,
+                latencyMs: Date.now() - startTime,
+              };
+            } catch (err: any) {
+              return { ok: false, message: 'Dificultad al inactivar el contrato: ' + err.message, latencyMs: Date.now() - startTime };
+            }
+          }
+        }
       }
 
       // =========================================================================
@@ -435,11 +502,11 @@ export class IaService {
       // Ej: «CATORCE, revisa Cabrachi, identifica las novedades críticas de hoy, verifica si hay cámaras desconectadas, comprueba la cobertura de turnos y prepárame un informe ejecutivo para gerencia.»
       // =========================================================================
       const isChainedMission =
-        (/\b(revisa|audita|inspecciona|analiza)\b/i.test(qNorm) &&
+        (/\b(revisa|audita|inspecciona|analiza|como estamos|como va|como esta|situacion|estado)\b/i.test(qNorm) &&
          /\b(cabrachi|puesto|minutas|camaras|turnos|informe ejecutivo|mision)\b/i.test(qNorm) &&
-         /\b(informe|gerencia|auditoria|novedades criticas|cobertura|completa)\b/i.test(qNorm)) ||
+         (/\b(informe|gerencia|auditoria|novedades criticas|cobertura|completa|hoy)\b/i.test(qNorm) || /\bcabrachi\b/i.test(qNorm))) ||
         /\b(mision operativa|auditoria integral|auditoria completa)\b/i.test(qNorm) ||
-        (/\b(revisa|audita)\b/i.test(qNorm) && /\b(cabrachi|puesto)\b/i.test(qNorm) && /\b(novedades|camaras|turnos|informe)\b/i.test(qNorm));
+        (/\b(revisa|audita|como esta|como estamos|como va)\b/i.test(qNorm) && /\b(cabrachi|puesto)\b/i.test(qNorm));
 
       if (isChainedMission) {
         const mission = await this.catorceBrain.executeChainedOperationalMission(userQuery, user);
@@ -710,8 +777,7 @@ export class IaService {
       const isAuthorizedFinancials = ['superusuario', 'gerencia', 'administrativo', 'coordinador'].includes(userRoleLower) || isIngeniero;
 
       const isVerContrato =
-        /\b(contrato|contratos)\b/i.test(qNorm) &&
-        /\b(muestra|muestrame|ver|abrir|consultar|visualizar|detalles)\b/i.test(qNorm);
+        /\b(contrato|contratos)\b/i.test(qNorm) && /\b(muestra|muestrame|ver|abrir|consultar|visualizar|detalles|busca|buscar|encuentra|localiza)\b/i.test(qNorm);
 
       if (isVerContrato) {
         if (!isAuthorizedFinancials) {
@@ -727,6 +793,21 @@ export class IaService {
           const voiceSnippet = `${activeUserName}, aquí tiene el contrato de ${clienteNombre}. El valor mensual es de ${valorFmt} con ${contratoData.guardas_activos || 'varios'} guardas contratados y estado activo.`;
           const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
           this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, ['clientes'], ['CATORCE-DOCS:mostrarContrato']);
+          await this.catorceBrain.saveWorkingMemory(user, {
+            tarea_activa: 'Gestión de contrato de ' + clienteNombre,
+            operacion: 'GESTION_CONTRATO',
+            datos_recolectados: {
+              contratoId: contratoData.id,
+              clienteId: contratoData.cliente_id,
+              clienteNombre,
+              valor: contratoData.valor,
+              estado: contratoData.estado,
+              guardasActivos: contratoData.guardas_activos,
+            },
+            campos_faltantes: [],
+            estado: 'EN_CONTEXTO',
+            ultimo_prompt: userQuery,
+          });
           return {
             ok: true,
             assistant: 'CATORCE',
@@ -736,7 +817,7 @@ export class IaService {
               type: 'contract',
               title: `Contrato - ${clienteNombre}`,
               data: contratoData,
-              url: contratoData.contrato_pdf_url || null,
+              url: (contratoData as any).contrato_pdf_url || null,
             },
             message: msg,
             audioUrl,
@@ -746,7 +827,113 @@ export class IaService {
       }
 
       // =========================================================================
-      // 0-5: LABORATORIO TÉCNICO DIAGNÓSTICO (PRUEBAS ACTIVAS DIFERENCIADAS)
+            // =========================================================================
+      // 0-4B: DIAGNSTICO DE RELEVOS Y PROBLEMAS DE COBERTURA
+      // Ej: Tenemos un problema con los relevos, revisa qu est pasando
+      // =========================================================================
+      const isDiagnosticoRelevos =
+        /\b(relevo|relevos|reemplazo|reemplazos)\b/i.test(qNorm) &&
+        /\b(problema|pasando|que pasa|revisa|situacion|como estan|pendientes|sin cubrir|descubierto)\b/i.test(qNorm);
+
+      if (isDiagnosticoRelevos) {
+        const admin = this.supabase.getSupabaseAdminClient();
+        const { data: reemps } = await admin
+          .from('turnos_reemplazos')
+          .select('id, motivo, fecha_reemplazo, puesto:puestos_trabajo(nombre), guarda_ausente:empleados!turnos_reemplazos_empleado_ausente_id_fkey(nombre_completo)')
+          .limit(5);
+
+        const { data: turnosSinGuarda } = await admin
+          .from('turnos')
+          .select('id, fecha, hora_inicio, hora_fin, puesto:puestos_trabajo(nombre)')
+          .is('empleado_id', null)
+          .limit(5);
+
+        const sinGuardaCount = turnosSinGuarda?.length || 0;
+        const reempCount = reemps?.length || 0;
+
+        let detRelevos = '';
+        if (reemps && reemps.length > 0) {
+          detRelevos = reemps.map((r: any) => '  * Puesto **' + (r.puesto?.nombre || 'General') + '**: Ausencia de ' + (r.guarda_ausente?.nombre_completo || 'Guarda') + ' (' + (r.motivo || 'Sin relevo asignado') + ').').join('\n');
+        } else {
+          detRelevos = '  * No hay solicitudes formales de relevo represadas.';
+        }
+
+        const msg = activeUserName + ', he diagnosticado la situacin operativa de los relevos en Prolicontrol:\n\n* **Reemplazos registrados en curso:** ' + reempCount + '\n* **Turnos sin guarda asignado:** ' + sinGuardaCount + '\n\n**Detalle Operativo:**\n' + detRelevos + '\n\n' + (sinGuardaCount > 0 ? 'Desea que asigne un relevo disponible de la lista de descanso para cubrir los turnos faltantes?' : 'La cobertura de los puestos se encuentra bajo monitoreo activo de CATORCE.');
+        const voiceSnippet = activeUserName + ', diagnostiqu los relevos. Hay ' + reempCount + ' reemplazos en curso y ' + sinGuardaCount + ' turnos pendientes por cubrir. He detallado la situacin en pantalla.';
+        const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
+        this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, ['turnos'], ['CATORCE-OPS:diagnosticoRelevos']);
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: 'DIAGNOSTICO_RELEVOS_OPERATIVOS',
+          activity: 'Diagnstico de relevos completado',
+          message: msg,
+          audioUrl,
+          latencyMs: Date.now() - startTime,
+        };
+      }
+
+      // =========================================================================
+      // 0-4C: SITUACIONES QUE REQUIEREN ATENCIN INMEDIATA (ALERTAS PROACTIVAS)
+      // Ej: Qu situaciones requieren atencin inmediata?
+      // =========================================================================
+      const isSituacionesAtencionInmediata =
+        /\b(atencion inmediata|situaciones|alertas criticas|requieren atencion|que pasa en la empresa|novedades urgentes)\b/i.test(qNorm) &&
+        /\b(que|cuales|hay|situaciones|alertas|atencion|inmediata)\b/i.test(qNorm);
+
+      if (isSituacionesAtencionInmediata) {
+        const alertas = await this.catorceSentinel.runProactiveAudit();
+        const msgLines = alertas.map((a: any, idx: number) => {
+          return '### ' + (idx + 1) + '. [' + a.severidad + '] ' + a.titulo + '\n* **Diagnstico:** ' + a.descripcion + '\n* **Accin sugerida:** ' + (a.accion_sugerida || 'Verificar en Prolicontrol');
+        }).join('\n\n');
+
+        const msg = activeUserName + ', he ejecutado el escaneo proactivo de seguridad y detect las siguientes situaciones prioritarias:\n\n' + (msgLines || 'Actualmente no hay anomalas crticas activas en Prolicontrol. Todos los servicios y dispositivos operan conforme a la norma.');
+        const voiceSnippet = activeUserName + ', detect ' + alertas.length + ' situaciones que requieren atencin en Prolicontrol. Las he presentado en pantalla con sus planes de accin.';
+        const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
+        this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, ['dispositivos', 'minutas', 'turnos'], ['CATORCE-SENTINEL:atencionInmediata']);
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: 'ALERTAS_ATENCION_INMEDIATA',
+          activity: 'Escaneo de situaciones urgentes ejecutado',
+          interactiveResults: {
+            type: 'proactive_alerts',
+            data: alertas,
+          },
+          message: msg,
+          audioUrl,
+          latencyMs: Date.now() - startTime,
+        };
+      }
+
+      // =========================================================================
+      // 0-4D: NMERO TOTAL DE NOVEDADES
+      // Ej: numero total de novedades, cuantas novedades hay
+      // =========================================================================
+      const isTotalNovedades =
+        /\b(numero total|total|cuantas)\b.*\b(novedades|minutas)\b/i.test(qNorm) ||
+        /\b(total de novedades|total de minutas)\b/i.test(qNorm);
+
+      if (isTotalNovedades) {
+        const admin = this.supabase.getSupabaseAdminClient();
+        const { count } = await admin.from('minutas').select('*', { count: 'exact', head: true });
+        const total = count || 0;
+        const msg = activeUserName + ', actualmente Prolicontrol tiene registradas un total de **' + total + ' novedades y minutas operativas** en la base de datos de PROLISEG LTDA.';
+        const voiceSnippet = activeUserName + ', el sistema registra un total de ' + total + ' novedades y minutas operativas.';
+        const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
+        this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, ['minutas'], ['CATORCE-SQL:totalNovedades']);
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: 'CONSULTAR_TOTAL_NOVEDADES',
+          activity: 'Total de novedades consultado',
+          message: msg,
+          audioUrl,
+          latencyMs: Date.now() - startTime,
+        };
+      }
+
+      // 0-5: LABORATORIO TECNICO DIAGNOSTICO
       // =========================================================================
       const isSaludProlicontrol =
         /(funcionando bien|esta bien prolicontrol|salud del sistema|revisa prolicontrol|prolicontrol funciona|laboratorio|laboratorio tecnico|bateria de pruebas|probar servicios)/i.test(qNorm);
@@ -838,8 +1025,7 @@ ${linesPruebas}
       // 0-7: INFORME Y REPORTE DE NOVEDADES DEL DÍA EN PDF
       // =========================================================================
       const isInformeNovedadesHoy =
-        /\b(informe|reporte)\b.*\b(novedades|minutas)\b/i.test(qNorm) ||
-        /\b(novedades de hoy|minutas de hoy|reporte de hoy)\b/i.test(qNorm);
+        /\b(informe|reporte)\b.*\b(novedades|minutas|gerencia|general|ejecutivo|operativo)\b/i.test(qNorm) || /\b(novedades de hoy|minutas de hoy|reporte de hoy|prepara el informe|informe para gerencia)\b/i.test(qNorm);
 
       if (isInformeNovedadesHoy) {
         const minutasHoy = await this.catorceBrain.toolGenerarInformeNovedadesHoy(undefined, user);
