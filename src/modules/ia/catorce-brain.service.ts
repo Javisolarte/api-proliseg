@@ -23,6 +23,7 @@ export class CatorceBrainService {
   private inMemoryWorkingMemory = new Map<number, any>();
   private telemetryCache: { data: any; expiresAt: number } | null = null;
   private corporateFilesCache: { docs: Array<{ codigo_documento: string; titulo: string; categoria: string; ruta_archivo: string; resumen: string; fragmento: string; contentLower: string }>; expiresAt: number } | null = null;
+  private corporateDbDocsCache: { docs: Array<any>; expiresAt: number } | null = null;
 
   public invalidateTelemetryCache() {
     this.telemetryCache = null;
@@ -101,7 +102,8 @@ export class CatorceBrainService {
       this.initializeIaBrainSchemaAndSync().catch((err) =>
         this.logger.warn(`⚠️ Inicialización diferida de ia_brain: ${err.message}`),
       );
-    }, 3500);
+      this.getRealtimeBrainTelemetry().catch(() => {});
+    }, 2500);
   }
 
   /**
@@ -560,7 +562,7 @@ export class CatorceBrainService {
       subAgents: this.subAgents,
       auditoriaReciente: recentAuditsRes || [],
     };
-    this.telemetryCache = { data: telemetryResult, expiresAt: Date.now() + 20_000 };
+    this.telemetryCache = { data: telemetryResult, expiresAt: Date.now() + 45_000 };
     return telemetryResult;
   }
 
@@ -619,17 +621,28 @@ export class CatorceBrainService {
       .map((w) => `(LOWER(titulo) LIKE '%${w.replace(/'/g, "''")}%' OR LOWER(contenido) LIKE '%${w.replace(/'/g, "''")}%')`)
       .join(' OR ');
 
-    const sql = `
-      SELECT id, codigo_documento, titulo, categoria, ruta_archivo, resumen, Left(contenido, 1800) AS fragmento, updated_at
-      FROM ia_brain.conocimiento_corporativo
-      WHERE activo = true AND (${likeClauses})
-      ORDER BY updated_at DESC
-      LIMIT 8
-    `;
-
     let rows: any[] = [];
     try {
-      rows = await this.runSql(sql);
+      const now = Date.now();
+      if (!this.corporateDbDocsCache || this.corporateDbDocsCache.expiresAt <= now) {
+        const allDocs = await this.runSql<any>(
+          `SELECT id, codigo_documento, titulo, categoria, ruta_archivo, resumen, Left(contenido, 1800) AS fragmento, LOWER(CONCAT(COALESCE(titulo, ''), ' ', COALESCE(Left(contenido, 1800), ''))) AS search_text, updated_at FROM ia_brain.conocimiento_corporativo WHERE activo = true ORDER BY updated_at DESC LIMIT 200`,
+        );
+        this.corporateDbDocsCache = { docs: allDocs || [], expiresAt: now + 120_000 };
+      }
+      rows = this.corporateDbDocsCache.docs
+        .map((doc) => {
+          const hay = doc.search_text || '';
+          let score = 0;
+          for (const w of words) {
+            if (hay.includes(w)) score++;
+          }
+          return { doc, score };
+        })
+        .filter((x) => x.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 8)
+        .map((x) => x.doc);
     } catch {
       rows = [];
     }
