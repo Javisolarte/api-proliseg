@@ -797,7 +797,8 @@ export class IaService {
       const isAuthorizedFinancials = ['superusuario', 'gerencia', 'administrativo', 'coordinador'].includes(userRoleLower) || isIngeniero;
 
       const isVerContrato =
-        /\b(contrato|contratos)\b/i.test(qNorm) && /\b(muestra|muestrame|ver|abrir|consultar|visualizar|detalles|busca|buscar|encuentra|localiza)\b/i.test(qNorm);
+        /\b(contrato|contratos)\b/i.test(qNorm) &&
+        !/\b(crear|crea|nuevo|nueva|registrar|registra|asentar|actualizar|modificar|eliminar|borrar|inactivar|inactiva|desactivar|desactiva|cancela|cancelar)\b/i.test(qNorm);
 
       if (isVerContrato) {
         if (!isAuthorizedFinancials) {
@@ -805,12 +806,50 @@ export class IaService {
           return { ok: false, message: deniedMsg, accessDenied: true, latencyMs: Date.now() - startTime };
         }
         const contratoData = await this.catorceBrain.toolConsultarContrato(userQuery, user);
+
+        if (contratoData?.notFound) {
+          const notFoundMsg = `${activeUserName}, no he localizado ningún contrato o cliente asociado a "${contratoData.searchedTerm}" en Prolicontrol. Por favor indíqueme el nombre exacto de la empresa, edificio o puesto para consultar sus términos.`;
+          const audioUrl = await this.generateVoiceIfRequested(notFoundMsg, canal);
+          return {
+            ok: true,
+            assistant: 'CATORCE',
+            actionExecuted: 'CONTRATO_NO_ENCONTRADO',
+            message: notFoundMsg,
+            audioUrl,
+            latencyMs: Date.now() - startTime,
+          };
+        }
+
+        if (contratoData?.noContract) {
+          const cliName = contratoData.cliente?.nombre_empresa || 'el cliente';
+          const noContMsg = `${activeUserName}, encontré el registro de **${cliName}** en Prolicontrol, pero actualmente no registra un contrato comercial formalizado en el sistema.`;
+          const audioUrl = await this.generateVoiceIfRequested(noContMsg, canal);
+          return {
+            ok: true,
+            assistant: 'CATORCE',
+            actionExecuted: 'CLIENTE_SIN_CONTRATO',
+            message: noContMsg,
+            audioUrl,
+            latencyMs: Date.now() - startTime,
+          };
+        }
+
         if (contratoData) {
           const rawCliente = Array.isArray(contratoData.cliente) ? contratoData.cliente[0] : (contratoData.cliente as any);
           const clienteNombre = rawCliente?.nombre_empresa || 'Cliente Corporativo';
           const valorFmt = contratoData.valor ? new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP' }).format(contratoData.valor) : 'No especificado';
-          const msg = `He localizado el contrato de **${clienteNombre}** en Prolicontrol:\n\n* Cliente / Empresa: ${clienteNombre} (NIT: ${rawCliente?.nit || 'No registrado'})\n* Valor mensual: ${valorFmt}\n* Guardas contratados: ${contratoData.guardas_activos || 'No indicado'}\n* Vigencia: ${contratoData.fecha_inicio || '-'} al ${contratoData.fecha_fin || 'Indefinido'}\n* Estado: ${String(contratoData.estado || 'Activo').toUpperCase()}\n\nHe desplegado los términos en el panel de documentos interactivo para su revisión.`;
-          const voiceSnippet = `${activeUserName}, aquí tiene el contrato de ${clienteNombre}. El valor mensual es de ${valorFmt} con ${contratoData.guardas_activos || 'varios'} guardas contratados y estado activo.`;
+          const isActivo = contratoData.estado === true || String(contratoData.estado).toLowerCase() === 'activo' || String(contratoData.estado).toLowerCase() === 'true';
+          const estadoFmt = isActivo ? 'ACTIVO' : 'INACTIVO';
+          const guardasCount = Number(contratoData.guardas_activos) || 1;
+          const guardasFmt = `${guardasCount} ${guardasCount === 1 ? 'guarda activo' : 'guardas activos'}`;
+
+          let altNotice = '';
+          if (contratoData.candidatosAlternativos && contratoData.candidatosAlternativos.length > 0) {
+            altNotice = `\n\n*(Nota: también se encuentran registrados: ${contratoData.candidatosAlternativos.join(', ')})*`;
+          }
+
+          const msg = `He localizado el contrato de **${clienteNombre}** en Prolicontrol:\n\n* Cliente / Empresa: ${clienteNombre} (NIT: ${rawCliente?.nit || 'No registrado'})\n* Valor mensual: ${valorFmt}\n* Guardas contratados: ${guardasFmt}\n* Vigencia: ${contratoData.fecha_inicio || '-'} al ${contratoData.fecha_fin || 'Indefinido'}\n* Estado: ${estadoFmt}${altNotice}\n\nHe desplegado los términos en el panel de documentos interactivo para su revisión.`;
+          const voiceSnippet = `${activeUserName}, aquí tiene el contrato de ${clienteNombre}. El valor mensual es de ${valorFmt} con ${guardasFmt} y estado ${estadoFmt.toLowerCase()}.`;
           const audioUrl = await this.generateVoiceIfRequested(voiceSnippet, canal);
           this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, ['clientes'], ['CATORCE-DOCS:mostrarContrato']);
           await this.catorceBrain.saveWorkingMemory(user, {
@@ -2718,7 +2757,7 @@ ${historyFormatted || "Inicio de conversación."}
 
 - Clientes Activos: ${telemetry.kpis.clientesActivos} clientes (${JSON.stringify(
 
-        telemetry.detalles.clientes.slice(0, 20).map((c: any) => ({ id: c.id, nombre: c.nombre_empresa })),
+        telemetry.detalles.clientes.slice(0, 75).map((c: any) => ({ id: c.id, nombre: c.nombre_empresa })),
 
       )})
 
@@ -3545,6 +3584,11 @@ Mensaje del usuario: "${userQuery}"
     // 2. Mensajes sobre novedades o minutas
     if (/\b(novedad|minuta|incidente|reporte)\b/i.test(qNorm)) {
       return `${userLabel}, para asentar la novedad con precision en la minuta oficial de Prolicontrol, confirme a que puesto o edificio corresponde.`;
+    }
+
+    // 2b. Mensajes sobre contratos
+    if (/\b(contrato|contratos)\b/i.test(qNorm)) {
+      return `${userLabel}, para consultar los detalles de un contrato en Prolicontrol, por favor indíqueme el nombre del cliente o puesto correspondiente.`;
     }
 
     // 3. Saludos o consultas generales de estado

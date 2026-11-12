@@ -531,9 +531,9 @@ export class CatorceBrainService {
         reemplazosPendientes: reemplazosList.filter((r: any) => r.estado === 'pendiente').length,
       },
       detalles: {
-        puestos: puestos.slice(0, 30),
-        clientes: clientes.slice(0, 30),
-        contratos: contratos.slice(0, 20),
+        puestos: puestos.map((p: any) => ({ id: p.id, nombre: p.nombre, ciudad: p.ciudad, cliente_id: p.cliente_id })),
+        clientes: clientes.map((c: any) => ({ id: c.id, nombre_empresa: c.nombre_empresa, nit: c.nit, contacto: c.contacto })),
+        contratos: contratos.slice(0, 50),
         controlesAcceso: controlesAcceso.map((d: any) => ({
           id: d.id,
           nombre: d.nombre_identificador,
@@ -2193,71 +2193,181 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
     return { minuta, puestoNombre: puestoNombreReal, auditCode: audit.codigo_auditoria, hashIntegridad: audit.hash_integridad };
   }
 
+  private calculateLevenshtein(a: string, b: string): number {
+    const m = a.length, n = b.length;
+    const d: number[][] = [];
+    for (let i = 0; i <= m; i++) d[i] = [i];
+    for (let j = 0; j <= n; j++) d[0][j] = j;
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+      }
+    }
+    return d[m][n];
+  }
+
+  public normalizeFuzzy(str: string): string {
+    return (str || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  public scoreFuzzyMatch(cleanQuery: string, targetName: string): number {
+    const qNorm = this.normalizeFuzzy(cleanQuery);
+    const tNorm = this.normalizeFuzzy(targetName);
+    if (!qNorm || !tNorm) return 0;
+    if (tNorm === qNorm) return 100;
+    if (tNorm.includes(qNorm)) return 80;
+
+    const qTokens = qNorm.split(' ').filter(t => t.length >= 3);
+    const tTokens = tNorm.split(' ').filter(t => t.length >= 3);
+    if (qTokens.length === 0 || tTokens.length === 0) return 0;
+
+    let totalScore = 0;
+    for (const q of qTokens) {
+      let bestTokenScore = 0;
+      for (const t of tTokens) {
+        if (t === q) {
+          bestTokenScore = Math.max(bestTokenScore, 10);
+        } else if (t.includes(q) || q.includes(t)) {
+          bestTokenScore = Math.max(bestTokenScore, 8);
+        } else {
+          const dist = this.calculateLevenshtein(q, t);
+          const maxLen = Math.max(q.length, t.length);
+          const sim = (maxLen - dist) / maxLen;
+          if (sim >= 0.45) {
+            bestTokenScore = Math.max(bestTokenScore, sim * 8);
+          }
+        }
+      }
+      totalScore += bestTokenScore;
+    }
+    return totalScore;
+  }
+
   /**
-   * 📄 Tool: Consultar contrato de cliente o puesto con detalles completos
+   * Tool: Consultar contrato de cliente o puesto con tolerancia fonetica y difusa
    */
   public async toolConsultarContrato(query: string, user: any) {
     const admin = this.supabase.getSupabaseAdminClient();
-    const cleanWords = (query || '')
-      .toLowerCase()
-      .replace(/\b(busca|buscar|el|la|los|las|un|una|contrato|contratos|de|del|cliente|clientes|puesto|puestos|muestrame|ver|abrir|consultar|detalles)\b/gi, ' ')
-      .trim()
-      .replace(/\s+/g, ' ');
+    const stopWordsRegex = /\b(informacion|información|info|datos|valor|vigencia|cuanto|vale|contrato|contratos|cliente|clientes|puesto|puestos|edificio|conjunto|condominio|urbanizacion|p\.?h|busca|buscar|muestrame|ver|abrir|consultar|detalles|el|la|los|las|un|una|de|del|por|favor|catorce|inge|solarte|que|dice|como|esta|estado|sobre|me|das|da|dame|hola)\b/gi;
+    const cleanWords = this.normalizeFuzzy(query)
+      .replace(stopWordsRegex, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
 
     if (cleanWords && cleanWords.length >= 2) {
-      const parts = cleanWords.split(' ').filter(p => p.length >= 3);
-      const pattern = '%' + (parts.length > 0 ? parts.join('%') : cleanWords) + '%';
-      const { data: matchedClientes } = await admin
+      // 1. Cargar clientes activos para coincidencia inteligente
+      const { data: allClientes } = await admin
         .from('clientes')
         .select('id, nombre_empresa, nit, contacto, telefono')
-        .ilike('nombre_empresa', pattern)
-        .limit(10);
+        .eq('activo', true);
 
-      if (matchedClientes && matchedClientes.length > 0) {
-        const clientIds = matchedClientes.map((c: any) => c.id);
-        const { data: cWithClients } = await admin
+      let scoredClientes: any[] = [];
+      if (allClientes && allClientes.length > 0) {
+        scoredClientes = allClientes
+          .map((c: any) => ({
+            ...c,
+            score: this.scoreFuzzyMatch(cleanWords, c.nombre_empresa),
+          }))
+          .filter((c: any) => c.score >= 5)
+          .sort((a: any, b: any) => b.score - a.score);
+      }
+
+      if (scoredClientes.length > 0) {
+        const topCliente = scoredClientes[0];
+        const { data: contratos } = await admin
           .from('contratos')
           .select('id, cliente_id, valor, guardas_activos, fecha_inicio, fecha_fin, estado')
-          .in('cliente_id', clientIds)
+          .eq('cliente_id', topCliente.id)
+          .order('estado', { ascending: false })
           .order('id', { ascending: false })
           .limit(1);
 
-        if (cWithClients && cWithClients[0]) {
-          const cli = matchedClientes.find((c: any) => c.id === cWithClients[0].cliente_id);
+        if (contratos && contratos[0]) {
+          const alternativos = scoredClientes
+            .slice(1, 4)
+            .filter((c: any) => c.id !== topCliente.id)
+            .map((c: any) => c.nombre_empresa);
+
           return {
-            ...cWithClients[0],
-            cliente: cli,
+            ...contratos[0],
+            cliente: topCliente,
+            matchScore: topCliente.score,
+            candidatosAlternativos: alternativos,
+          };
+        } else {
+          return {
+            noContract: true,
+            cliente: topCliente,
           };
         }
       }
 
-      // Buscar por puesto de trabajo si no se encontró por cliente
-      const { data: puestos } = await admin
+      // 2. Si no hubo coincidencia en clientes, buscar en puestos de trabajo
+      const { data: allPuestos } = await admin
         .from('puestos_trabajo')
         .select('id, nombre, contrato_id, cliente_id, cliente:clientes(id, nombre_empresa, nit, contacto, telefono)')
-        .ilike('nombre', pattern)
-        .limit(1);
+        .eq('activo', true);
 
-      if (puestos && puestos[0]?.contrato_id) {
-        const { data: cData } = await admin
-          .from('contratos')
-          .select('id, cliente_id, valor, guardas_activos, fecha_inicio, fecha_fin, estado')
-          .eq('id', puestos[0].contrato_id)
-          .limit(1);
+      if (allPuestos && allPuestos.length > 0) {
+        const scoredPuestos = allPuestos
+          .map((p: any) => ({
+            ...p,
+            score: this.scoreFuzzyMatch(cleanWords, p.nombre),
+          }))
+          .filter((p: any) => p.score >= 5)
+          .sort((a: any, b: any) => b.score - a.score);
 
-        if (cData && cData[0]) {
-          return {
-            ...cData[0],
-            cliente: puestos[0].cliente,
-          };
+        if (scoredPuestos.length > 0) {
+          const topPuesto = scoredPuestos[0];
+          let cData: any = null;
+
+          if (topPuesto.contrato_id) {
+            const res = await admin
+              .from('contratos')
+              .select('id, cliente_id, valor, guardas_activos, fecha_inicio, fecha_fin, estado')
+              .eq('id', topPuesto.contrato_id)
+              .limit(1);
+            cData = res.data?.[0];
+          } else if (topPuesto.cliente_id) {
+            const res = await admin
+              .from('contratos')
+              .select('id, cliente_id, valor, guardas_activos, fecha_inicio, fecha_fin, estado')
+              .eq('cliente_id', topPuesto.cliente_id)
+              .order('estado', { ascending: false })
+              .limit(1);
+            cData = res.data?.[0];
+          }
+
+          if (cData) {
+            return {
+              ...cData,
+              cliente: topPuesto.cliente,
+              puesto: topPuesto,
+              matchScore: topPuesto.score,
+            };
+          }
         }
       }
+
+      // No se encontro ningun cliente ni puesto coincidente
+      return {
+        notFound: true,
+        searchedTerm: cleanWords,
+      };
     }
 
-    // Fallback: traer el contrato activo más reciente
+    // Fallback: traer el contrato activo mas reciente si la consulta fue generica
     const { data: fallbackContratos } = await admin
       .from('contratos')
       .select('id, cliente_id, valor, guardas_activos, fecha_inicio, fecha_fin, estado')
+      .eq('estado', true)
       .order('id', { ascending: false })
       .limit(1);
 
