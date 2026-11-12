@@ -324,7 +324,7 @@ export class IaService {
       // =========================================================================
       const activeWM = await this.catorceBrain.getActiveWorkingMemory(user);
       if (activeWM && activeWM.estado !== 'COMPLETADO') {
-        const isCancel = /\b(cancela|cancelar|olvida|olvidalo|deja asi|descartar|olvida la tarea)\b/i.test(qNorm);
+        const isCancel = /\b(cancela|cancelar|olvida|olvidalo|deja asi|descartar|olvida la tarea|salir|detente|ya no|no quiero|otra cosa)\b/i.test(qNorm) || /^(no|para|basta)$/i.test(qNorm);
         if (isCancel) {
           await this.catorceBrain.clearWorkingMemory(user);
           const cancelMsg = `Entendido ${activeUserName}, he cancelado la tarea en progreso y limpiado la memoria de trabajo. ¿En qué más le puedo colaborar?`;
@@ -340,6 +340,9 @@ export class IaService {
 
         if (activeWM.operacion === 'CREAR_EMPLEADO') {
           const datos = activeWM.datos_recolectados || {};
+          const prevCed = datos.cedula;
+          const prevTel = datos.telefono;
+          const prevCargo = datos.cargo;
           const isConfirm = /\b(si|confirmo|procede|crealo|registralo|adelante|dale|de acuerdo)\b/i.test(qNorm);
 
           const cedMatch = userQuery.match(/\b(?:cedula|cc|identificacion|doc)?\s*(\d{6,12})\b/i);
@@ -395,9 +398,25 @@ export class IaService {
             }
           }
 
+          const madeProgress =
+            Boolean(datos.cedula && datos.cedula !== prevCed) ||
+            Boolean(datos.telefono && datos.telefono !== prevTel) ||
+            Boolean(datos.cargo && datos.cargo !== prevCargo) ||
+            /\b(se llama|llamado|nombre es|su nombre)\b/i.test(qNorm);
+
+          // Evitar bucle infinito en CREAR_EMPLEADO cuando el usuario dice otra cosa o cambia de tema
+          const shouldContinueEmpleado =
+            madeProgress || (isConfirm && activeWM.estado === 'PENDIENTE_CONFIRMACION');
+          if (!shouldContinueEmpleado) {
+            await this.catorceBrain.clearWorkingMemory(user, 'Cambio de tema o entrada no relacionada');
+          }
+          // Continuar CREAR_EMPLEADO solo si el usuario aporto datos o confirmo
           const missing: string[] = [];
           if (!datos.cedula) missing.push('cédula');
           if (!datos.telefono) missing.push('número de teléfono');
+          if (!shouldContinueEmpleado) {
+            // Ya limpiada memoria de trabajo; continuar flujo normal fuera de CREAR_EMPLEADO
+          } else
 
           if (missing.length > 0) {
             await this.catorceBrain.saveWorkingMemory(user, {
@@ -710,7 +729,7 @@ export class IaService {
       // =========================================================================
       const isCreateEmpleado =
         /\b(crear|crea|nuevo|registrar|registra)\b.*\b(empleado|colaborador|guarda|vigilante|personal)\b/i.test(qNorm) &&
-        !/\b(turno|puesto|minuta|novedad)\b/i.test(qNorm);
+        !/\b(turno|puesto|minuta|novedad|por que|pide|pregunta|bucle|error|cancela)\b/i.test(qNorm);
 
       if (isCreateEmpleado) {
         const nameMatch = userQuery.match(/(?:empleado|colaborador|guarda|vigilante)\s+(?:llamado\s+|denominado\s+|a\s+|al\s+se\u00f1or\s+|a\s+la\s+se\u00f1ora\s+)?([a-zA-Z\u00e1\u00e9\u00ed\u00f3\u00fa\u00c1\u00c9\u00cd\u00d3\u00da\u00f1\u00d1 ]+)/i);
