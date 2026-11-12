@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { GeminiService } from './gemini.service';
+import { ControlAccesoService } from '../control-acceso/control-acceso.service';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -21,6 +22,7 @@ export interface SubAgentDefinition {
 export class CatorceBrainService {
   private inMemoryWorkingMemory = new Map<number, any>();
   private telemetryCache: { data: any; expiresAt: number } | null = null;
+  private corporateFilesCache: { docs: Array<{ codigo_documento: string; titulo: string; categoria: string; ruta_archivo: string; resumen: string; fragmento: string; contentLower: string }>; expiresAt: number } | null = null;
 
   public invalidateTelemetryCache() {
     this.telemetryCache = null;
@@ -65,8 +67,8 @@ export class CatorceBrainService {
       role: 'Guardián de Hardware Hikvision / Dahua',
       nodeKey: 'accesos',
       status: 'online',
-      description: 'Audita los dispositivos IoT, controles de acceso, estado de puertas (abiertas/cerradas/en línea) y personas enroladas.',
-      capabilities: ['Estado de Puertas en Vivo', 'Inventario Hikvision/Dahua', 'Auditoría de Accesos'],
+      description: 'Opera remotamente y audita dispositivos IoT, controles de acceso, apertura y cierre físico de puertas (Hikvision/Dahua), modos siempre abierta/cerrada y personas enroladas.',
+      capabilities: ['Apertura y Cierre Remoto de Puertas', 'Modos Siempre Abierta y Bloqueo Total', 'Estado de Puertas en Vivo', 'Inventario Hikvision/Dahua', 'Auditoría de Accesos'],
     },
     {
       id: 'CATORCE-RADIO',
@@ -91,6 +93,7 @@ export class CatorceBrainService {
   constructor(
     private readonly supabase: SupabaseService,
     private readonly gemini: GeminiService,
+    private readonly controlAccesoService: ControlAccesoService,
   ) {}
 
   async onModuleInit() {
@@ -498,7 +501,7 @@ export class CatorceBrainService {
 
     const totalBrainDocs = brainDocsCount?.[0]?.total || 45;
 
-    return {
+    const telemetryResult = {
       timestamp: new Date().toISOString(),
       assistantName: 'CATORCE',
       brainName: 'PROLISEG LTDA — Segundo Cerebro',
@@ -557,6 +560,8 @@ export class CatorceBrainService {
       subAgents: this.subAgents,
       auditoriaReciente: recentAuditsRes || [],
     };
+    this.telemetryCache = { data: telemetryResult, expiresAt: Date.now() + 20_000 };
+    return telemetryResult;
   }
 
   /**
@@ -633,45 +638,61 @@ export class CatorceBrainService {
       return rows;
     }
 
-    // Fallback inmediato sobre los 158 documentos fisicos del Segundo Cerebro (Obsidian + PROLISEG LTDA)
+    // Indice en RAM de documentos locales (TTL 5 min) para no recorrer disco en cada consulta
     try {
-      const targetDirs = [this.obsidianVaultDirectory, this.brainDirectory].filter((d) => fs.existsSync(d));
-      const localMatches: any[] = [];
+      const now = Date.now();
+      if (!this.corporateFilesCache || this.corporateFilesCache.expiresAt <= now) {
+        const indexedDocs: Array<{ codigo_documento: string; titulo: string; categoria: string; ruta_archivo: string; resumen: string; fragmento: string; contentLower: string }> = [];
+        const targetDirs = [this.obsidianVaultDirectory, this.brainDirectory].filter((d) => fs.existsSync(d));
 
-      const walkScan = (dir: string) => {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (const ent of entries) {
-          if (ent.name.startsWith('.') || ent.name === 'node_modules') continue;
-          const nameLower = ent.name.toLowerCase();
-          if (nameLower.includes('diplomado') || nameLower.includes('cabuyal')) continue;
-          const fullP = path.join(dir, ent.name);
-          if (ent.isDirectory()) {
-            walkScan(fullP);
-          } else if (ent.name.endsWith('.md')) {
-            const fileContent = fs.readFileSync(fullP, 'utf8');
-            const fileLower = fileContent.toLowerCase();
-            let score = 0;
-            for (const t of words) {
-              if (fileLower.includes(t)) score++;
-            }
-            if (score > 0) {
-              localMatches.push({
-                id: localMatches.length + 1000,
+        const walkScan = (dir: string) => {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const ent of entries) {
+            if (ent.name.startsWith('.') || ent.name === 'node_modules') continue;
+            const nameLower = ent.name.toLowerCase();
+            if (nameLower.includes('diplomado') || nameLower.includes('cabuyal')) continue;
+            const fullP = path.join(dir, ent.name);
+            if (ent.isDirectory()) {
+              walkScan(fullP);
+            } else if (ent.name.endsWith('.md')) {
+              const fileContent = fs.readFileSync(fullP, 'utf8');
+              indexedDocs.push({
                 codigo_documento: 'LOCAL_' + ent.name.replace(/\.[^/.]+$/, ''),
                 titulo: ent.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '),
                 categoria: path.basename(dir),
                 ruta_archivo: fullP,
                 resumen: fileContent.replace(/[#*`_]/g, '').replace(/\s+/g, ' ').slice(0, 300),
                 fragmento: fileContent.slice(0, 1800),
-                score,
+                contentLower: fileContent.toLowerCase(),
               });
             }
           }
-        }
-      };
+        };
 
-      for (const d of targetDirs) {
-        walkScan(d);
+        for (const d of targetDirs) {
+          walkScan(d);
+        }
+        this.corporateFilesCache = { docs: indexedDocs, expiresAt: now + 300_000 };
+      }
+
+      const localMatches: any[] = [];
+      for (const doc of this.corporateFilesCache.docs) {
+        let score = 0;
+        for (const t of words) {
+          if (doc.contentLower.includes(t)) score++;
+        }
+        if (score > 0) {
+          localMatches.push({
+            id: localMatches.length + 1000,
+            codigo_documento: doc.codigo_documento,
+            titulo: doc.titulo,
+            categoria: doc.categoria,
+            ruta_archivo: doc.ruta_archivo,
+            resumen: doc.resumen,
+            fragmento: doc.fragmento,
+            score,
+          });
+        }
       }
 
       localMatches.sort((a, b) => b.score - a.score);
@@ -3432,6 +3453,284 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
     }
     const { data: nom } = await q.limit(15);
     return nom || [];
+  }
+
+  // =========================================================================
+  // CONTROL REMOTO DE PUERTAS Y ACCESOS IOT (BRAZOS FISICOS HIKVISION / DAHUA)
+  // =========================================================================
+  public parseDoorCommandAndId(query: string): {
+    command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada' | null;
+    doorId?: number;
+    applyAll: boolean;
+  } {
+    const qNorm = this.normalizeFuzzy(query || '');
+
+    let command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada' | null = null;
+    if (/\b(siempre abierta|mantener abierta|deja abierta|dejar abierta|modo libre|puerta libre|apertura permanente)\b/i.test(qNorm)) {
+      command = 'siempre-abierta';
+    } else if (/\b(siempre cerrada|mantener cerrada|deja cerrada|dejar cerrada|bloqueo total|cierre permanente|tranca total)\b/i.test(qNorm)) {
+      command = 'siempre-cerrada';
+    } else if (/\b(abre|abrir|abreme|abra|abrirle|desbloquea|desbloquear|destraba|destrabar|libera|liberar|da paso|dar paso|apertura)\b/i.test(qNorm)) {
+      command = 'abrir';
+    } else if (/\b(cierra|cerrar|cierrame|cierre|bloquea|bloquear|asegura|asegurar|traba|trabar)\b/i.test(qNorm)) {
+      command = 'cerrar';
+    }
+
+    let doorId: number | undefined = undefined;
+    const numMatch = qNorm.match(/(?:puerta|canal|rele|acceso)\s*(?:numero|num|#)?\s*(\d{1,2})\b/i);
+    if (numMatch?.[1]) {
+      doorId = Number(numMatch[1]);
+    } else if (/\b(puerta dos|canal dos|segunda puerta)\b/i.test(qNorm)) {
+      doorId = 2;
+    } else if (/\b(puerta tres|canal tres|tercera puerta)\b/i.test(qNorm)) {
+      doorId = 3;
+    }
+
+    const applyAll = /\b(todas las puertas|todos los accesos|todos los portones|todas las entradas)\b/i.test(qNorm);
+    return { command, doorId, applyAll };
+  }
+
+  public async toolListarPuertasYDispositivos(filtro?: string) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const { data: devices, error } = await admin
+      .from('dispositivos_iot')
+      .select('*, puesto:puestos_trabajo(id, nombre, ciudad, direccion)');
+    if (error) {
+      throw new Error(`Error consultando dispositivos_iot: ${error.message}`);
+    }
+
+    const allDevices = devices || [];
+    const fNorm = this.normalizeFuzzy(filtro || '');
+    const filtered = fNorm
+      ? allDevices.filter((d: any) => {
+          const hay = this.normalizeFuzzy(
+            `${d.nombre_identificador || ''} ${d.puesto?.nombre || ''} ${d.ip_direccion || ''} ${d.configuracion_tecnica?.marca || ''} ${d.configuracion_tecnica?.ubicacion || ''}`,
+          );
+          return hay.includes(fNorm) || this.scoreFuzzyMatch(fNorm, hay) >= 4;
+        })
+      : allDevices;
+
+    return filtered.map((d: any) => ({
+      id: d.id,
+      nombre: d.nombre_identificador || 'Control de Acceso',
+      puesto: d.puesto?.nombre || 'Sede Principal',
+      ciudad: d.puesto?.ciudad || '',
+      ip: d.ip_direccion || '',
+      marca: d.configuracion_tecnica?.marca || d.marca || 'Hikvision',
+      modelo: d.configuracion_tecnica?.modelo || d.modelo || '',
+      estadoConexion: d.estado || 'operativo',
+      estadoPuerta: d.configuracion_tecnica?.estado_puerta || 'Cerrada / Asegurada',
+      doorIdDefault: Number(d.configuracion_tecnica?.numero_puerta ?? d.configuracion_tecnica?.canal_puerta ?? 1),
+    }));
+  }
+
+  public async toolControlarPuerta(
+    params: {
+      targetQuery?: string;
+      deviceId?: string;
+      ip?: string;
+      doorId?: number;
+      command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada';
+      applyAll?: boolean;
+    },
+    user?: any,
+  ) {
+    const admin = this.supabase.getSupabaseAdminClient();
+    const { data: devices, error } = await admin
+      .from('dispositivos_iot')
+      .select('*, puesto:puestos_trabajo(id, nombre, ciudad, direccion)');
+
+    if (error) {
+      throw new Error(`No se pudo consultar dispositivos de control de acceso: ${error.message}`);
+    }
+
+    const allDevices = (devices || []).filter((d: any) => Boolean(d.ip_direccion || d.id));
+    if (allDevices.length === 0) {
+      return {
+        ok: false,
+        noDevices: true,
+        mensaje: 'No hay dispositivos de control de acceso registrados en Prolicontrol.',
+        candidates: [],
+      };
+    }
+
+    const toCandidateSummary = (d: any) => ({
+      id: d.id,
+      nombre: d.nombre_identificador || 'Control de Acceso',
+      puesto: d.puesto?.nombre || 'Sede Principal',
+      ip: d.ip_direccion || '',
+      marca: d.configuracion_tecnica?.marca || d.marca || 'Hikvision',
+      estado: d.estado || 'operativo',
+      estadoPuerta: d.configuracion_tecnica?.estado_puerta || 'Cerrada / Asegurada',
+    });
+
+    const executeOnSingleDevice = async (dev: any, explicitDoorId?: number) => {
+      const cfg = dev.configuracion_tecnica || {};
+      const resolvedDoorId = Number(explicitDoorId ?? cfg?.numero_puerta ?? cfg?.canal_puerta ?? 1) || 1;
+      const resolvedMarca = cfg?.marca || dev.marca || undefined;
+      const resolvedPort = Number(cfg?.puertos_mapeados?.mapped_http || cfg?.puerto || 80);
+
+      const hwResult = await this.controlAccesoService.controlPuerta(
+        dev.ip_direccion || '',
+        resolvedDoorId,
+        params.command,
+        {
+          deviceId: dev.id,
+          marca: resolvedMarca,
+          port: resolvedPort,
+          operator: user,
+        },
+      );
+
+      const estadoLabelMap: Record<string, string> = {
+        abrir: 'Abierta remotamente (CATORCE)',
+        cerrar: 'Cerrada / Asegurada',
+        'siempre-abierta': 'Siempre Abierta (Modo Libre)',
+        'siempre-cerrada': 'Siempre Cerrada (Bloqueo Total)',
+      };
+
+      if (hwResult.ok) {
+        try {
+          const nextCfg = {
+            ...cfg,
+            estado_puerta: estadoLabelMap[params.command] || 'Cerrada / Asegurada',
+            ultimo_comando_catorce: params.command,
+            ultima_accion_ia_en: new Date().toISOString(),
+          };
+          await admin
+            .from('dispositivos_iot')
+            .update({ configuracion_tecnica: nextCfg })
+            .eq('id', dev.id);
+        } catch {
+          // No interrumpir confirmacion de hardware si falla la actualizacion auxiliar de metadata
+        }
+        this.invalidateTelemetryCache();
+      }
+
+      const audit = await this.recordAudit({
+        user,
+        authorizerUser: user,
+        subagente: 'CATORCE-IOT',
+        accion: `CONTROL_PUERTA_${params.command.toUpperCase().replace(/-/g, '_')}`,
+        modulo: 'Control de Acceso IoT',
+        tablaDestino: 'public.dispositivos_iot',
+        registroId: String(dev.id),
+        comandoOriginal: `${params.command} puerta ${resolvedDoorId} (${dev.nombre_identificador || dev.ip_direccion})`,
+        parametros: {
+          deviceId: dev.id,
+          ip: dev.ip_direccion,
+          doorId: resolvedDoorId,
+          command: params.command,
+          targetQuery: params.targetQuery || '',
+        },
+        resultado: hwResult,
+        exitoso: Boolean(hwResult.ok),
+        canal: 'voz_live_api',
+      });
+
+      return {
+        ok: Boolean(hwResult.ok),
+        device: toCandidateSummary(dev),
+        puestoName: dev.puesto?.nombre || 'Sede Principal',
+        command: params.command,
+        doorId: resolvedDoorId,
+        hwResult,
+        auditCode: audit.codigo_auditoria,
+        mensaje: hwResult.mensaje,
+      };
+    };
+
+    if (params.deviceId) {
+      const found = allDevices.find((d: any) => String(d.id) === String(params.deviceId));
+      if (found) return executeOnSingleDevice(found, params.doorId);
+    }
+    if (params.ip) {
+      const cleanIp = String(params.ip).trim();
+      const found = allDevices.find((d: any) => String(d.ip_direccion || '').trim() === cleanIp);
+      if (found) return executeOnSingleDevice(found, params.doorId);
+    }
+
+    const rawTarget = this.normalizeFuzzy(params.targetQuery || '');
+    const ipInQuery = rawTarget.match(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/)?.[0];
+    if (ipInQuery) {
+      const foundByIp = allDevices.find((d: any) => String(d.ip_direccion || '').trim() === ipInQuery);
+      if (foundByIp) return executeOnSingleDevice(foundByIp, params.doorId);
+    }
+
+    const doorStopWords = /\b(catorce|por|favor|abre|abrir|abreme|abra|abrirle|cierra|cerrar|cierrame|cierre|desbloquea|desbloquear|destraba|destrabar|libera|liberar|da|paso|dar|bloquea|bloquear|asegura|asegurar|traba|trabar|deja|dejar|mantener|siempre|abierta|cerrada|modo|libre|permanente|emergencia|puerta|puertas|acceso|accesos|control|controles|biometrico|biometricos|porton|torniquete|talanquera|citofono|del|de|la|el|los|las|en|al|a|un|una|remoto|remotamente|puesto|edificio|sede|numero|canal|todas|todos)\b/gi;
+    const cleanTarget = rawTarget.replace(doorStopWords, ' ').replace(/\s+/g, ' ').trim();
+
+    if (params.applyAll) {
+      const targetList = cleanTarget
+        ? allDevices.filter((d: any) => {
+            const hay = `${d.nombre_identificador || ''} ${d.puesto?.nombre || ''} ${d.puesto?.ciudad || ''} ${d.configuracion_tecnica?.ubicacion || ''}`;
+            return this.scoreFuzzyMatch(cleanTarget, hay) >= 4;
+          })
+        : allDevices;
+
+      const execList = targetList.length > 0 ? targetList : allDevices;
+      const settled = await Promise.allSettled(execList.map((dev: any) => executeOnSingleDevice(dev, params.doorId)));
+      const results = settled
+        .map((s) => (s.status === 'fulfilled' ? s.value : { ok: false, mensaje: (s.reason as any)?.message || 'Error inesperado' }))
+        .filter(Boolean);
+      const okCount = results.filter((r: any) => r.ok).length;
+      return {
+        ok: okCount > 0,
+        batch: true,
+        command: params.command,
+        totalAttempted: results.length,
+        okCount,
+        failCount: results.length - okCount,
+        results,
+        auditCode: (results[0] as any)?.auditCode,
+      };
+    }
+
+    if (!cleanTarget) {
+      if (allDevices.length === 1) {
+        return executeOnSingleDevice(allDevices[0], params.doorId);
+      }
+      return {
+        ok: false,
+        ambiguous: true,
+        command: params.command,
+        candidates: allDevices.slice(0, 6).map(toCandidateSummary),
+      };
+    }
+
+    const scored = allDevices
+      .map((d: any) => {
+        const hay = `${d.nombre_identificador || ''} ${d.puesto?.nombre || ''} ${d.puesto?.ciudad || ''} ${d.ip_direccion || ''} ${d.configuracion_tecnica?.marca || ''} ${d.configuracion_tecnica?.ubicacion || ''}`;
+        return {
+          dev: d,
+          score: this.scoreFuzzyMatch(cleanTarget, hay),
+        };
+      })
+      .filter((item) => item.score >= 4)
+      .sort((a, b) => b.score - a.score);
+
+    if (scored.length === 0) {
+      return {
+        ok: false,
+        notFound: true,
+        command: params.command,
+        targetQuery: cleanTarget,
+        candidates: allDevices.slice(0, 6).map(toCandidateSummary),
+      };
+    }
+
+    if (scored.length > 1 && Math.abs(scored[0].score - scored[1].score) <= 2) {
+      const tied = scored.filter((s) => Math.abs(scored[0].score - s.score) <= 2).slice(0, 5);
+      return {
+        ok: false,
+        ambiguous: true,
+        command: params.command,
+        targetQuery: cleanTarget,
+        candidates: tied.map((t) => toCandidateSummary(t.dev)),
+      };
+    }
+
+    return executeOnSingleDevice(scored[0].dev, params.doorId);
   }
 
 }

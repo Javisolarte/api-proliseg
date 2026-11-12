@@ -6,11 +6,13 @@ import { CatorceBrainService } from './catorce-brain.service';
 import { CatorceSentinelService } from './catorce-sentinel.service';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { AuthModule } from '../auth/auth.module';
+import { ControlAccesoModule } from '../control-acceso/control-acceso.module';
 
 @Module({
   imports: [
     SupabaseModule,
     AuthModule,
+    ControlAccesoModule,
   ],
   controllers: [IaController],
   providers: [IaService, GeminiService, CatorceBrainService, CatorceSentinelService],

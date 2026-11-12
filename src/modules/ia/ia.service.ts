@@ -97,6 +97,7 @@ export class IaService {
   ];
 
   private readonly BLOCKED_ROLES = ['cliente'];
+  private preferredNameCache = new Map<number, { name: string; expiresAt: number }>();
 
 
 
@@ -193,34 +194,24 @@ export class IaService {
 
 
 
-      // Cargar trato preferido aprendido por CATORCE (ej. "Ingeniero Ombita")
-
+      // Cargar trato preferido aprendido por CATORCE con cache en RAM (TTL 60s)
       let activeUserName = userName;
-
       try {
-
-        if (user?.id) {
-
-          const memories = await this.catorceBrain.runSql(
-
-            `SELECT hecho_recordado FROM ia_brain.memoria_usuarios WHERE usuario_id = ${Number(user.id)} AND clave = 'trato_preferido' AND activo = true ORDER BY created_at DESC LIMIT 1`,
-
-          );
-
-          if (memories && memories[0]?.hecho_recordado) {
-
-            const matchName = memories[0].hecho_recordado.match(/"([^"]+)"/);
-
-            if (matchName && matchName[1]) {
-
-              activeUserName = matchName[1].trim();
-
-            }
-
+        const uid = Number(user?.id);
+        if (uid) {
+          const cachedName = this.preferredNameCache.get(uid);
+          if (cachedName && cachedName.expiresAt > Date.now()) {
+            activeUserName = cachedName.name;
+          } else {
+            const memories = await this.catorceBrain.runSql(
+              `SELECT hecho_recordado FROM ia_brain.memoria_usuarios WHERE usuario_id = ${uid} AND clave = 'trato_preferido' AND activo = true ORDER BY created_at DESC LIMIT 1`,
+            );
+            const matchName = memories?.[0]?.hecho_recordado?.match(/"([^"]+)"/);
+            const resolved = matchName?.[1]?.trim() || userName;
+            activeUserName = resolved;
+            this.preferredNameCache.set(uid, { name: resolved, expiresAt: Date.now() + 60_000 });
           }
-
         }
-
       } catch {}
 
 
@@ -517,6 +508,101 @@ export class IaService {
               return { ok: false, message: 'Dificultad al inactivar el contrato: ' + err.message, latencyMs: Date.now() - startTime };
             }
           }
+        }
+      }
+
+
+      // =========================================================================
+      // 0-0B: CONTROL FISICO REMOTO DE PUERTAS Y ACCESOS IOT (BRAZOS CATORCE-IOT)
+      // =========================================================================
+      const parsedDoorCmd = this.catorceBrain.parseDoorCommandAndId(userQuery);
+      const mentionsAccessNoun =
+        /\b(puerta|puertas|acceso|accesos|porton|portones|torniquete|torniquetes|talanquera|biometrico|citofono|entrada|salida|porteria|hikvision|dahua|rele)\b/i.test(qNorm);
+      const isDoorReadOnlyQuestion =
+        /\b(cuantas puertas|cuantos controles|estado de las puertas|estado de puertas|como funciona|manual|protocolo|test de dispositivos|testear dispositivos|probar puertas|verificar puertas)\b/i.test(qNorm);
+      const isListDoorsQuery =
+        !parsedDoorCmd.command &&
+        /\b(que puertas|cuales puertas|lista de puertas|listar puertas|muestra.*puertas|muestrame.*puertas|ver puertas|ver controles de acceso)\b/i.test(qNorm);
+
+      if (isListDoorsQuery) {
+        const puertas = await this.catorceBrain.toolListarPuertasYDispositivos();
+        const listado = puertas
+          .slice(0, 12)
+          .map((d: any, idx: number) => `${idx + 1}. **${d.nombre}** (${d.puesto}, ${d.marca}, IP ${d.ip}, estado: ${d.estadoPuerta})`)
+          .join('\n');
+        const msg = puertas.length > 0
+          ? `${activeUserName}, tenemos ${puertas.length} dispositivos de control de acceso registrados:\n\n${listado}\n\nSi desea abrir o cerrar alguno, solo indiqueme cual.`
+          : `${activeUserName}, no hay dispositivos de control de acceso registrados en Prolicontrol.`;
+        this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, ['accesos'], ['CATORCE-IOT:listarPuertas']);
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: 'LISTAR_PUERTAS_ACCESO',
+          activatedNodes: ['accesos'],
+          toolsUsed: ['CATORCE-IOT:listarPuertas'],
+          data: puertas,
+          message: msg,
+          latencyMs: Date.now() - startTime,
+        };
+      }
+
+      if (parsedDoorCmd.command && mentionsAccessNoun && !isDoorReadOnlyQuestion) {
+        const doorRes = await this.catorceBrain.toolControlarPuerta(
+          {
+            targetQuery: userQuery,
+            doorId: parsedDoorCmd.doorId,
+            command: parsedDoorCmd.command,
+            applyAll: parsedDoorCmd.applyAll,
+          },
+          user,
+        );
+        return await this.buildAndReturnDoorControlResponse(
+          doorRes,
+          parsedDoorCmd.command,
+          userQuery,
+          activeUserName,
+          user,
+          canal,
+          startTime,
+        );
+      }
+
+      // 0-0C: Continuacion rapida en RAM si el turno anterior pregunto que puerta operar
+      if (!parsedDoorCmd.command && qNorm.split(/\s+/).length <= 6 && !qNorm.includes('?')) {
+        const memHistory = await this.catorceBrain.getRecentConversationHistory(user);
+        const lastBotTurn = [...(memHistory || [])].reverse().find((h) => h.role !== 'user')?.text || '';
+        const doorAskMatch = lastBotTurn.match(/Cual desea (abrir|cerrar|dejar siempre abierta|dejar siempre cerrada)\?|Indiqueme cual desea operar/i);
+        if (doorAskMatch) {
+          const prevUserTurn = [...(memHistory || [])].reverse().find((h) => h.role === 'user')?.text || '';
+          const prevCmd = this.catorceBrain.parseDoorCommandAndId(prevUserTurn).command || 'abrir';
+          const numSelectionMatch = qNorm.match(/\b(primera|uno|1|segunda|dos|2|tercera|tres|3|cuarta|cuatro|4|quinta|cinco|5)\b/i);
+          let resolvedDeviceId: string | undefined = undefined;
+          if (numSelectionMatch) {
+            const idxMap: Record<string, number> = { primera: 0, uno: 0, '1': 0, segunda: 1, dos: 1, '2': 1, tercera: 2, tres: 2, '3': 2, cuarta: 3, cuatro: 3, '4': 3, quinta: 4, cinco: 4, '5': 4 };
+            const pickIdx = idxMap[numSelectionMatch[1].toLowerCase()];
+            const wm = await this.catorceBrain.getActiveWorkingMemory(user);
+            const cands = wm?.datos_recolectados?.candidates || [];
+            if (cands[pickIdx]?.id) {
+              resolvedDeviceId = String(cands[pickIdx].id);
+            }
+          }
+          const doorRes = await this.catorceBrain.toolControlarPuerta(
+            {
+              deviceId: resolvedDeviceId,
+              targetQuery: resolvedDeviceId ? undefined : userQuery,
+              command: prevCmd,
+            },
+            user,
+          );
+          return await this.buildAndReturnDoorControlResponse(
+            doorRes,
+            prevCmd,
+            userQuery,
+            activeUserName,
+            user,
+            canal,
+            startTime,
+          );
         }
       }
 
@@ -2684,7 +2770,7 @@ REGLAS OBLIGATORIAS DE OPERACIÓN Y TRATO:
 
    - Clientes y Comercial (clientes, clientes_potenciales, contratos, cotizaciones, servicios, facturacion_config).
 
-   - Control de Acceso y Visitantes (dispositivos_iot, listas_acceso, residentes, visitantes, visitas, visitas_registro, visitas_tecnicas).
+   - Control de Acceso Físico y Visitantes (dispositivos_iot, listas_acceso, residentes, visitantes, visitas, visitas_registro, visitas_tecnicas): TIENES BRAZOS REALES para ABRIR, CERRAR, dejar SIEMPRE ABIERTA o SIEMPRE CERRADA cualquier puerta Hikvision o Dahua usando intent "DOOR_CONTROL".
 
    - Minutas, Novedades e Incidentes (minutas, novedades, incidentes, radio_operaciones).
 
@@ -2810,13 +2896,23 @@ Analiza el mensaje y responde en UN SOLO JSON ESTRICTO con esta estructura:
 
 {
 
-  "intent": "ASK_MISSING_DATA" | "CREATE_MINUTA" | "DB_INSERT" | "DB_UPDATE" | "QUERY_OR_REPORT" | "OFF_TOPIC",
+  "intent": "DOOR_CONTROL" | "ASK_MISSING_DATA" | "CREATE_MINUTA" | "DB_INSERT" | "DB_UPDATE" | "QUERY_OR_REPORT" | "OFF_TOPIC",
 
   "isOffTopic": boolean,
 
   "wantsPdf": boolean,
 
   "directAnswer": "Tu respuesta hablada/escrita corta, humana, concisa (máximo 2 a 3 oraciones claras), SIN NINGÚN EMOJI y en español dirigiéndote siempre al usuario como '${activeUserName}'. Si el mensaje es casual o sobre permisos (ej. irse temprano, cenar, relevos), responde con empatía y criterio operativo breve. NUNCA listes todas las cifras de la empresa a menos que se pida expresamente un informe general.",
+
+  "doorControl": {
+
+    "command": "abrir" | "cerrar" | "siempre-abierta" | "siempre-cerrada",
+
+    "targetQuery": "Nombre de la puerta, puesto o IP destino",
+
+    "doorId": 1
+
+  },
 
   "missingDataQuestion": "Si el usuario quiere crear o modificar algo en cualquier servicio de Prolicontrol pero falta un dato esencial, escribe aquí la pregunta amable dirigiéndote a él/ella de forma respetuosa ('${activeUserName}') sin emojis.",
 
@@ -2911,6 +3007,29 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
       }
 
 
+
+      // =========================================================================
+      // 4-0: EJECUCION DIRECTA DE CONTROL DE PUERTAS DESDE ORQUESTADOR
+      // =========================================================================
+      if (plan.intent === 'DOOR_CONTROL' && plan.doorControl?.command) {
+        const doorRes = await this.catorceBrain.toolControlarPuerta(
+          {
+            targetQuery: plan.doorControl.targetQuery || userQuery,
+            doorId: Number(plan.doorControl.doorId) || undefined,
+            command: plan.doorControl.command,
+          },
+          user,
+        );
+        return await this.buildAndReturnDoorControlResponse(
+          doorRes,
+          plan.doorControl.command,
+          userQuery,
+          activeUserName,
+          user,
+          canal,
+          startTime,
+        );
+      }
 
       // =========================================================================
 
@@ -4334,6 +4453,21 @@ Mensaje del usuario: "${userQuery}"
 
     }
 
+    if (body.actionType === 'CONTROL_PUERTA') {
+      const cmd = body.command || 'abrir';
+      return this.catorceBrain.toolControlarPuerta(
+        {
+          deviceId: body.deviceId,
+          ip: body.ip,
+          doorId: body.doorId ? Number(body.doorId) : undefined,
+          targetQuery: body.targetQuery || body.puerta || body.puesto || '',
+          command: cmd,
+          applyAll: Boolean(body.applyAll),
+        },
+        user,
+      );
+    }
+
 
 
     return this.processQuery(body.comando || body.query || '', user, body.canal || 'voz_live_api');
@@ -4409,6 +4543,111 @@ Mensaje del usuario: "${userQuery}"
     const rawSentences = clean.split(/(?<=[.?!])\s+/).map((s) => s.trim()).filter((s) => s.length > 0);
     const firstSentence = rawSentences[0] || clean;
     return firstSentence.length > 220 ? firstSentence.slice(0, 210).trim() : firstSentence;
+  }
+
+  private formatDoorControlReply(doorRes: any, command: string, activeUserName: string): { ok: boolean; message: string; awaitingFollowUp?: boolean } {
+    const cmdVerbMap: Record<string, string> = {
+      abrir: 'abrir',
+      cerrar: 'cerrar',
+      'siempre-abierta': 'dejar siempre abierta',
+      'siempre-cerrada': 'dejar siempre cerrada',
+    };
+    const cmdDoneMap: Record<string, string> = {
+      abrir: 'Puerta abierta correctamente',
+      cerrar: 'Puerta cerrada y asegurada',
+      'siempre-abierta': 'Puerta dejada en modo siempre abierta',
+      'siempre-cerrada': 'Bloqueo total aplicado (siempre cerrada)',
+    };
+    const cmdVerb = cmdVerbMap[command] || command;
+
+    if (doorRes?.noDevices) {
+      return {
+        ok: false,
+        message: `${activeUserName}, no hay dispositivos de control de acceso registrados actualmente en Prolicontrol.`,
+      };
+    }
+
+    if (doorRes?.batch) {
+      return {
+        ok: Boolean(doorRes.ok),
+        message: `${activeUserName}, comando de ${cmdVerb} ejecutado en control de acceso: ${doorRes.okCount} de ${doorRes.totalAttempted} puertas respondieron correctamente${doorRes.failCount > 0 ? `, con ${doorRes.failCount} sin respuesta` : ''}.`,
+      };
+    }
+
+    if (doorRes?.ambiguous || doorRes?.notFound) {
+      const cands = (doorRes.candidates || []).slice(0, 5);
+      const listText = cands.map((c: any, idx: number) => `${idx + 1}. ${c.nombre} (${c.puesto})`).join(', ');
+      const prefix = doorRes.ambiguous
+        ? `${activeUserName}, encontre varias puertas posibles`
+        : `${activeUserName}, no identifique una puerta exacta para "${doorRes.targetQuery || ''}"`;
+      const tail = listText ? `: ${listText}. Cual desea ${cmdVerb}?` : '. Por favor indiqueme el nombre del puesto o puerta.';
+      return {
+        ok: false,
+        awaitingFollowUp: true,
+        message: `${prefix}${tail}`,
+      };
+    }
+
+    if (doorRes?.ok) {
+      const devName = doorRes.device?.nombre || 'Control de Acceso';
+      const puesto = doorRes.puestoName || doorRes.device?.puesto || 'Sede Principal';
+      const marca = doorRes.hwResult?.marca || doorRes.device?.marca || '';
+      return {
+        ok: true,
+        message: `${activeUserName}, ${cmdDoneMap[command] || 'comando ejecutado'} en **${devName}** (${puesto}${marca ? ', ' + marca : ''}, puerta ${doorRes.doorId}).${doorRes.auditCode ? ' Auditoria: [' + doorRes.auditCode + ']' : ''}`,
+      };
+    }
+
+    const devLabel = doorRes?.device?.nombre ? `**${doorRes.device.nombre}** (${doorRes.device.ip || ''})` : 'el dispositivo';
+    const errDetail = doorRes?.hwResult?.mensaje || doorRes?.mensaje || 'sin comunicacion';
+    return {
+      ok: false,
+      message: `${activeUserName}, intente ${cmdVerb} ${devLabel}, pero el hardware respondio con error: ${errDetail}.`,
+    };
+  }
+
+  private async buildAndReturnDoorControlResponse(
+    doorRes: any,
+    command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada',
+    userQuery: string,
+    activeUserName: string,
+    user: any,
+    canal: string,
+    startTime: number,
+  ) {
+    const formatted = this.formatDoorControlReply(doorRes, command, activeUserName);
+    const tools = [`CATORCE-IOT:controlPuerta(${command})`];
+
+    if (formatted.awaitingFollowUp) {
+      await this.catorceBrain.saveWorkingMemory(user, {
+        tarea_activa: `Control de Puerta (${command})`,
+        operacion: 'DOOR_CONTROL_FOLLOWUP',
+        datos_recolectados: { command, candidates: doorRes?.candidates || [] },
+        campos_faltantes: ['dispositivo'],
+        estado: 'EN_PROGRESO',
+        ultimo_prompt: userQuery,
+      });
+    } else {
+      await this.catorceBrain.clearWorkingMemory(user).catch(() => {});
+    }
+
+    this.catorceBrain.appendConversationTurn(user, userQuery, formatted.message, canal, ['accesos'], tools);
+    const voiceText = formatted.message.replace(/Auditoria:\s*\[[^\]]+\]/gi, '').trim();
+    const audioDataUrl = await this.generateVoiceIfRequested(voiceText, canal);
+
+    return {
+      ok: formatted.ok,
+      assistant: 'CATORCE',
+      actionExecuted: formatted.awaitingFollowUp ? 'SELECCIONAR_PUERTA_ACCESO' : `CONTROL_PUERTA_${command.toUpperCase().replace(/-/g, '_')}`,
+      awaitingFollowUp: Boolean(formatted.awaitingFollowUp),
+      auditCode: doorRes?.auditCode,
+      activatedNodes: ['accesos'],
+      toolsUsed: tools,
+      data: doorRes,
+      message: formatted.message,
+      audioDataUrl,
+      latencyMs: Date.now() - startTime,
+    };
   }
 
 }
