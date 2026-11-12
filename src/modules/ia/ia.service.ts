@@ -244,6 +244,29 @@ export class IaService {
 
 
       // =========================================================================
+      // 0-0: SALUDOS DIRECTOS Y RESPUESTA ULTRA-VELOZ (<50ms)
+      // =========================================================================
+      const isPureGreeting =
+        /^(hola|buenos dias|buenas tardes|buenas noches|buen dia|como estas|como esta|como te va|que tal|como va todo|hola catorce|saludos)\b/i.test(qNorm) &&
+        !/\b(contrato|minuta|turno|empleado|puesto|dispositivo|alarma|cabrachi|crear|inactivar|novedad|guarda|informe|auditoria|buscar)\b/i.test(qNorm) &&
+        qNorm.length < 50;
+
+      if (isPureGreeting) {
+        const greetingMsg = `Hola ${activeUserName}, todo en orden por aquí en el Segundo Cerebro de Prolicontrol. ¿En qué le puedo colaborar en este momento?`;
+        const audioUrl = await this.generateVoiceIfRequested(greetingMsg, canal);
+        this.catorceBrain.appendConversationTurn(user, userQuery, greetingMsg, canal, ['core'], ['CATORCE-CORE:saludoDirecto']);
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: 'SALUDO_CORDIAL',
+          activity: 'Saludando al Ingeniero',
+          message: greetingMsg,
+          audioUrl,
+          latencyMs: Date.now() - startTime,
+        };
+      }
+
+      // =========================================================================
 
       // 0️⃣-A: APRENDIZAJE ADAPTATIVO DE NOMBRE O TRATO PREFERIDO (Ej: "llámame Ingeniero Ombita")
 
