@@ -63,22 +63,34 @@ export class GeminiService {
    * ðŸ—£ï¸ SINTETIZADOR DE VOZ ULTRA-HUMANIZADA NATIVA DE GEMINI 2.5 (24kHz Neural Audio WAV)
    * Voces disponibles: 'Aoede' (Ejecutiva cÃ¡lida y natural), 'Kore' (Clara y empÃ¡tica), 'Orus' / 'Puck' (Masculina natural)
    */
-  public async generateHumanVoiceAudio(text: string, voiceName: string = 'Aoede'): Promise<string | null> {
-    const cleanSpeech = (text || '')
-      .replace(/<pre>[\s\S]*?<\/pre>/gi, '')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/```[\s\S]*?```/g, '')
-      .replace(/[*#_`~]/g, '')
-      .replace(/AUD-CAT-\d+/g, '')
-      .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2300}-\u{23FF}\u{2B50}\u{200D}\u{FE0F}]/gu, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 1500);
-
-    if (!cleanSpeech) return null;
-
-    const selectedVoice = voiceName || 'Aoede';
-    const cacheKey = `${selectedVoice}:${cleanSpeech}`;
+  public cleanSpeechText(text: string): string {
+    return (text || '')
+      .replace(/<pre>[\s\S]*?<\/pre>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/[*#_`~]/g, '')
+      .replace(/AUD-CAT-\d+/g, '')
+      .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2300}-\u{23FF}\u{2B50}\u{200D}\u{FE0F}]/gu, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 1500);
+  }
+
+  public getCachedVoiceAudio(text: string, voiceName: string = 'Aoede'): string | null {
+    const cleanSpeech = this.cleanSpeechText(text);
+    if (!cleanSpeech) return null;
+    const selectedVoice = voiceName || 'Aoede';
+    const cacheKey = `${selectedVoice}:${cleanSpeech}`;
+    return this.audioVoiceCache.get(cacheKey) || null;
+  }
+
+  public async generateHumanVoiceAudio(text: string, voiceName: string = 'Aoede'): Promise<string | null> {
+    const cleanSpeech = this.cleanSpeechText(text);
+
+    if (!cleanSpeech) return null;
+
+    const selectedVoice = voiceName || 'Aoede';
+    const cacheKey = `${selectedVoice}:${cleanSpeech}`;
     if (this.audioVoiceCache.has(cacheKey)) {
       this.logger.debug(`[Aoede Cache 0ms] Audio recuperado de memoria para: "${cleanSpeech.slice(0, 45)}..."`);
       return this.audioVoiceCache.get(cacheKey)!;
@@ -116,7 +128,7 @@ export class GeminiService {
     while (attempts < maxAttempts) {
       const apiKeyObj = this.getCurrentApiKey();
       try {
-        const ttsModels = ['gemini-3.8-flash-tts', 'gemini-2.5-flash-preview-tts'];
+        const ttsModels = ['gemini-2.5-flash-preview-tts', 'gemini-3.8-flash-tts'];
         const model = ttsModels[attempts % ttsModels.length];
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKeyObj.key}`;
         const response = await axios.post(

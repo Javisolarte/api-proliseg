@@ -4373,9 +4373,16 @@ Mensaje del usuario: "${userQuery}"
     try {
       const snippet = this.extractSpokenSnippet(text);
       if (!snippet) return undefined;
-      // Sintesis o cache ultra-rapida de la primera oracion para entrega inmediata
+
+      // En voz_live_api el cliente ya cuenta con streaming PCM en tiempo real:
+      // devolver SOLO cache RAM instantanea (0ms) para no bloquear 1.2s esperando TTS remoto
+      if (canal === 'voz_live_api') {
+        const cached = this.geminiService.getCachedVoiceAudio(snippet, 'Aoede');
+        return cached || undefined;
+      }
+
       const audioPromise = this.geminiService.generateHumanVoiceAudio(snippet, 'Aoede');
-      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200));
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500));
       const audio = await Promise.race([audioPromise, timeoutPromise]);
       return audio || undefined;
     } catch {
@@ -4383,15 +4390,10 @@ Mensaje del usuario: "${userQuery}"
     }
   }
 
-
-
   /**
-
    * Extrae la primera oracion hablada limpia para locucion instantanea humana
-
    */
-
-  public extractSpokenSnippet(text: string): string {
+    public extractSpokenSnippet(text: string): string {
     const clean = (text || '')
       .replace(/<div class="audit-pill-msg">[\s\S]*?<\/div>/gi, '')
       .replace(/<pre>[\s\S]*?<\/pre>/gi, '')
