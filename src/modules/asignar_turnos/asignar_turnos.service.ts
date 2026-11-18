@@ -51,9 +51,13 @@ export class AsignarTurnosService {
    */
   private normalizarTipoTurno(tipo: string): string {
     const t = (tipo || '').toUpperCase().trim();
-    if (t === 'D' || t === 'DIA' || t === 'DIURNO' || t === 'D12') return 'D';
-    if (t === 'N' || t === 'NOCHE' || t === 'NOCTURNO' || t === 'N12') return 'N';
-    if (t === 'Z' || t === 'DESCANSO' || t === 'X' || t === 'OFF' || t === 'Z_RELEVO') return 'Z';
+    if (t === 'D' || t === 'DIA' || t === 'DÍA' || t === 'DIURNO' || t === 'D12' || t === 'TRABAJO' || t === 'NORMAL' || t === 'OFICINA' || t === 'D9H' || t === '9H') return 'D';
+    if (t === 'N' || t === 'NOCHE' || t === 'NOCTURNO' || t === 'N12' || t === 'NOCHE_FINDE' || t === 'NOCHE_FESTIVO') return 'N';
+    if (t === 'M' || t === 'MAÑANA' || t === 'MANANA') return 'M';
+    if (t === 'T' || t === 'TARDE') return 'T';
+    if (t === 'MT' || t === 'MEDIO TIEMPO' || t === 'SABADO_CORTO' || t === '6H' || t === 'D6H' || t === '7H') return 'MT';
+    if (t === 'DIS' || t === 'DISPONIBLE') return 'DIS';
+    if (t === 'Z' || t === 'DESCANSO' || t === 'OFF' || t === 'Z_RELEVO') return 'Z';
     return t;
   }
 
@@ -397,25 +401,20 @@ export class AsignarTurnosService {
       };
     }
 
-    // ✅ 3. VALIDAR que la asignación esté COMPLETA antes de generar turnos
+    // ✅ 3. VALIDAR estado de la asignación antes de generar turnos
     const validacion = await this.turnosHelper.validarAsignacionCompleta(
       subpuesto_id,
       subpuesto.guardas_activos,
       subpuesto.configuracion_id
     );
 
-    // Nota: Si usamos lista manual (rotación), asumimos que es válida o ignoramos la validación estricta de cantidad
     if (!empleadosManual && !validacion.valido) {
       this.logger.warn(
-        `⚠️ ${validacion.mensaje}. No se pueden generar turnos hasta que todos los empleados estén asignados.`
+        `⚠️ ${validacion.mensaje}. Se generarán turnos con los ${empleados.length} empleado(s) activo(s) asignado(s) en ${subpuesto.nombre}.`
       );
-      throw new BadRequestException(
-        `No se pueden generar turnos: ${validacion.mensaje}. ` +
-        `Asigna ${validacion.faltantes} empleado(s) más antes de generar turnos.`
-      );
+    } else {
+      this.logger.log(`✅ Validación completa: ${empleados.length} empleados asignados correctamente`);
     }
-
-    this.logger.log(`✅ Validación completa: ${empleados.length} empleados asignados correctamente`);
 
     // ✅ 4. Obtener detalles de la configuración de turnos
     const { data: detalles, error: detallesError } = await supabase
@@ -556,57 +555,62 @@ export class AsignarTurnosService {
           }
 
           const diaSemana = fechaTurno.getDay();
+          const esFestivo = festivos.includes(fechaStr);
           const diaDelCiclo = (dia + offsetInicial) % cicloLength;
           const detalle = detalles[diaDelCiclo];
-          const tipoTurno = detalle.tipo?.toUpperCase() || 'NORMAL';
+          let tipoTurno = detalle.tipo?.toUpperCase() || 'NORMAL';
+          if (detalle.aplica_festivos === 'no_aplica' && (diaSemana === 0 || esFestivo)) {
+            tipoTurno = 'DESCANSO';
+          }
           const esDescanso = tipoTurno === 'DESCANSO' || tipoTurno === 'Z';
           const plazaNo = (index % guardasActivos) + 1;
 
           if (isOficina) {
-            // LÓGICA OFICINA (No usa Relevantes Cíclicos usualmente, pero se mantiene coherencia)
-            if (diaSemana === 0) continue;
-
-            const turnosOficina: { hora_inicio: string; hora_fin: string; }[] = [];
-            if (diaSemana === 6) {
-              turnosOficina.push({ hora_inicio: '08:00:00', hora_fin: '12:00:00' });
-            } else {
-              turnosOficina.push({ hora_inicio: '08:00:00', hora_fin: '12:00:00' });
-              turnosOficina.push({ hora_inicio: '14:00:00', hora_fin: '18:00:00' });
-            }
-
             if (!skipInsert) {
-              const conceptoInfoOficina = inferirConcepto('NORMAL');
-              turnosOficina.forEach(t => {
-                turnosParaInsertar.push({
-                  empleado_id: empleado.id,
-                  puesto_id: subpuesto.puesto_id,
-                  subpuesto_id: subpuesto_id,
-                  fecha: fechaStr,
-                  hora_inicio: t.hora_inicio,
-                  hora_fin: t.hora_fin,
-                  tipo_turno: conceptoInfoOficina.nombre,
-                  concepto_id: conceptoInfoOficina.id,
-                  configuracion_id: subpuesto.configuracion_id,
-                  orden_en_ciclo: diaSemana,
-                  plaza_no: 1,
-                  grupo: 'OFICINA',
-                  asignado_por,
-                  estado_turno: 'programado',
-                });
+              const esDescansoOficina = diaSemana === 0 || esFestivo;
+              const esMedioTiempoEmp = empRaw.patron_descanso === 'MT' || (empleado.nombre_completo || '').toUpperCase().includes('OSCAR JAVIER SOLARTE');
+              const esSabado = diaSemana === 6;
+
+              let tipoOficina = 'DIA';
+              let hIni: string | null = '08:00:00';
+              let hFin: string | null = '18:00:00';
+              if (esDescansoOficina) {
+                tipoOficina = 'DESCANSO';
+                hIni = null;
+                hFin = null;
+              } else if (esSabado || esMedioTiempoEmp) {
+                tipoOficina = 'MEDIO TIEMPO';
+                hIni = '08:00:00';
+                hFin = '12:00:00';
+              }
+
+              const conceptoInfoOficina = inferirConcepto(tipoOficina);
+              turnosParaInsertar.push({
+                empleado_id: empleado.id,
+                puesto_id: subpuesto.puesto_id,
+                subpuesto_id: subpuesto_id,
+                fecha: fechaStr,
+                hora_inicio: hIni,
+                hora_fin: hFin,
+                tipo_turno: conceptoInfoOficina.nombre,
+                concepto_id: conceptoInfoOficina.id,
+                configuracion_id: subpuesto.configuracion_id,
+                orden_en_ciclo: diaSemana,
+                plaza_no: 1,
+                grupo: 'OFICINA',
+                asignado_por,
+                estado_turno: 'programado',
               });
             }
           } else {
             // LÓGICA CÍCLICA REGULAR
-            if (esDescanso) {
-              const key = `${fechaStr}_${plazaNo}`;
+            if (esDescanso && detalle.aplica_festivos !== 'no_aplica') {
+              const key = `${fechaStr}_${index}`;
               if (!huecosPorDia.has(key)) {
-                // Buscamos un horario válido para este hueco. 
-                // Si el detalle tiene 00:00:00, intentamos buscar el horario de la misma plaza 
-                // en otros días del ciclo si fuera posible, o simplemente tomamos el del detalle 
-                // si el admin configuró el horario deseado en el día de "Z".
                 huecosPorDia.set(key, {
                   fecha: fechaStr,
                   plaza: plazaNo,
+                  titularNombre: empleado.nombre_completo,
                   hora_inicio: detalle.hora_inicio,
                   hora_fin: detalle.hora_fin,
                   orden: detalle.orden
@@ -637,46 +641,71 @@ export class AsignarTurnosService {
         }
       });
 
-      // 3. Generar turnos para RELEVANTES (Llenar huecos)
+      // 3. Generar turnos para RELEVANTES (Llenar huecos reales no cubiertos por otros titulares)
       if (relevantes.length > 0 && huecosPorDia.size > 0 && !isOficina) {
-        this.logger.log(`🔍 Llenando ${huecosPorDia.size} huecos con ${relevantes.length} relevantes`);
+        this.logger.log(`🔍 Evaluando ${huecosPorDia.size} descansos con ${relevantes.length} relevantes`);
+
+        // Identificar qué tipos de turnos laborales existen en el ciclo (D, N, M, T) y sus horarios base
+        const turnosLaboralesCiclo = new Map<string, { hora_inicio: string | null; hora_fin: string | null; rawTipo: string }>();
+        detalles.forEach(d => {
+          const norm = this.normalizarTipoTurno(d.tipo);
+          if (norm !== 'Z' && !turnosLaboralesCiclo.has(norm)) {
+            turnosLaboralesCiclo.set(norm, { hora_inicio: d.hora_inicio, hora_fin: d.hora_fin, rawTipo: d.tipo });
+          }
+        });
 
         const huecosOrdenados = Array.from(huecosPorDia.values()).sort((a, b) => {
           if (a.fecha !== b.fecha) return a.fecha.localeCompare(b.fecha);
           return a.plaza - b.plaza;
         });
 
-        huecosOrdenados.forEach((hueco, hIndex) => {
-          const relevante = relevantes[hIndex % relevantes.length];
+        let relCounter = 0;
+        huecosOrdenados.forEach((hueco) => {
           const fechaHueco = new Date(hueco.fecha + 'T00:00:00');
           if (!fillFromMonthStart && fechaHueco < fechaInicioInsert) return;
 
-          // DETERMINAR HORARIO: Si la config tiene 00:00:00 en el descanso Z de la DB, 
-          // usaremos una heurística o simplemente lo que diga el detalle.
-          // Para el 3-3-2 de 7-7, el relevo debería trabajar 07-19 o 19-07 según la plaza.
+          // Verificar qué turnos laborales ya están cubiertos en hueco.fecha en este subpuesto
+          const cubiertosHoy = new Set<string>();
+          turnosParaInsertar.forEach(t => {
+            if (t.fecha === hueco.fecha) {
+              const norm = this.normalizarTipoTurno(t.tipo_turno);
+              if (norm !== 'Z') cubiertosHoy.add(norm);
+            }
+          });
 
-          const conceptoInfoRelevo = inferirConcepto('RELEVO');
-          const horaInicio = hueco.hora_inicio || '';
-          const esNoche = horaInicio.startsWith('19') || horaInicio.startsWith('18');
-          const tipoTurnoVisual = esNoche ? 'Noche' : 'Día';
-          const conceptoInfoVisual = inferirConcepto(tipoTurnoVisual);
+          // Buscar cuál turno laboral del ciclo falta cubrir hoy
+          let turnoFaltante: { norm: string; hora_inicio: string | null; hora_fin: string | null; rawTipo: string } | null = null;
+          for (const [norm, info] of turnosLaboralesCiclo.entries()) {
+            if (!cubiertosHoy.has(norm)) {
+              turnoFaltante = { norm, ...info };
+              break;
+            }
+          }
+
+          // Si todos los turnos laborales del ciclo ya están cubiertos hoy por los demás titulares, no se requiere relevo hoy
+          if (!turnoFaltante) return;
+
+          const relevante = relevantes[relCounter % relevantes.length];
+          relCounter++;
+
+          const conceptoInfoVisual = inferirConcepto(turnoFaltante.rawTipo);
 
           turnosParaInsertar.push({
             empleado_id: relevante.empleado_id,
             puesto_id: subpuesto.puesto_id,
             subpuesto_id: subpuesto_id,
             fecha: hueco.fecha,
-            hora_inicio: hueco.hora_inicio,
-            hora_fin: hueco.hora_fin,
-            tipo_turno: conceptoInfoVisual.nombre, // 'Día' o 'Noche'
-            concepto_id: conceptoInfoRelevo.id, // Sigue siendo RELEVO para nómina
+            hora_inicio: turnoFaltante.hora_inicio || hueco.hora_inicio,
+            hora_fin: turnoFaltante.hora_fin || hueco.hora_fin,
+            tipo_turno: conceptoInfoVisual.nombre,
+            concepto_id: conceptoInfoVisual.id,
             configuracion_id: subpuesto.configuracion_id,
             orden_en_ciclo: hueco.orden,
             plaza_no: hueco.plaza,
             grupo: 'RELEVO',
             asignado_por,
             estado_turno: 'programado',
-            observaciones: `Cubre descanso de Titular en Plaza ${hueco.plaza}`
+            observaciones: `Cubre descanso de ${hueco.titularNombre || 'Titular'}`
           });
         });
       }

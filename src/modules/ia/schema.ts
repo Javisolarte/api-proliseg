@@ -300,6 +300,8 @@ CREATE TABLE public.empleados (
   tiene_curso_vigilancia boolean DEFAULT false,
   tipo_curso_vigilancia_id integer,
   fecha_vencimiento_curso date,
+  esta_acreditado boolean DEFAULT false,
+  fecha_acreditacion date,
   CONSTRAINT empleados_pkey PRIMARY KEY (id),
   CONSTRAINT empleados_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.usuarios_externos(id),
   CONSTRAINT empleados_eps_id_fkey FOREIGN KEY (eps_id) REFERENCES public.eps(id),

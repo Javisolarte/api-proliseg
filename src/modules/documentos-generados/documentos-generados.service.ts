@@ -201,17 +201,34 @@ export class DocumentosGeneradosService {
     async generarPdf(id: number) {
         const supabase = this.supabaseService.getClient();
 
-        // 1. Obtener documento con su plantilla
+        // 1. Obtener documento
         const { data: doc, error: docError } = await supabase
             .from("documentos_generados")
-            .select(`
-                *,
-                plantilla:plantillas_documentos(*)
-            `)
+            .select("*")
             .eq("id", id)
             .single();
 
-        if (docError || !doc) throw new NotFoundException("Documento no encontrado");
+        if (docError || !doc) {
+            this.logger.error(`Documento no encontrado ${id}:`, docError);
+            throw new NotFoundException("Documento no encontrado");
+        }
+
+        // Obtener plantilla asociada
+        if (!doc.plantilla_id) {
+            throw new BadRequestException("El documento no tiene una plantilla configurada");
+        }
+
+        const { data: plantilla, error: plantillaError } = await supabase
+            .from("plantillas_documentos")
+            .select("*")
+            .eq("id", doc.plantilla_id)
+            .single();
+
+        if (plantillaError || !plantilla) {
+            this.logger.error(`Plantilla ${doc.plantilla_id} no encontrada:`, plantillaError);
+            throw new NotFoundException("Plantilla del documento no encontrada");
+        }
+        doc.plantilla = plantilla;
 
         // Solo se puede generar PDF si está en borrador, generando_pdf (reintento) o pendiente_firmas
         if (doc.estado !== 'borrador' && doc.estado !== 'generando_pdf' && doc.estado !== 'pendiente_firmas') {
@@ -410,7 +427,10 @@ export class DocumentosGeneradosService {
 
         } catch (error) {
             this.logger.error(`Error generando PDF para documento ${id}:`, error);
-            throw new InternalServerErrorException("Falló la generación del PDF con Puppeteer");
+            if (error instanceof NotFoundException || error instanceof BadRequestException || error instanceof ForbiddenException) {
+                throw error;
+            }
+            throw new InternalServerErrorException(error?.message || "Falló la generación del PDF con Puppeteer");
         }
     }
 

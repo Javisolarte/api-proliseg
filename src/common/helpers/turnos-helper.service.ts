@@ -100,10 +100,10 @@ export class TurnosHelperService {
             configuracionId,
         );
 
-        // Contar empleados asignados activos
-        const { count: empleadosAsignados, error } = await supabase
+        // Contar empleados asignados activos (y cuyo empleado esté activo)
+        const { data: asignacionesActivas, error } = await supabase
             .from('asignacion_guardas_puesto')
-            .select('*', { count: 'exact', head: true })
+            .select('id, empleado:empleado_id(id, activo)')
             .eq('subpuesto_id', subpuestoId)
             .eq('activo', true);
 
@@ -111,7 +111,10 @@ export class TurnosHelperService {
             this.logger.error(`❌ Error contando asignaciones: ${error.message}`);
         }
 
-        const asignados = empleadosAsignados || 0;
+        const asignados = (asignacionesActivas || []).filter((a: any) => {
+            const emp = Array.isArray(a.empleado) ? a.empleado[0] : a.empleado;
+            return emp && emp.activo !== false;
+        }).length;
         const faltantes = Math.max(0, empleadosNecesarios - asignados);
         const valido = asignados === empleadosNecesarios;
 

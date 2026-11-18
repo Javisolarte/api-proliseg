@@ -280,6 +280,17 @@ export class CreateEmpleadoDto {
   @IsDateString()
   fecha_vencimiento_curso?: string;
 
+  @ApiProperty({ example: false, required: false, description: "Indica si el empleado está acreditado ante Supervigilancia" })
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
+  esta_acreditado?: boolean;
+
+  @ApiProperty({ example: "2025-12-31", required: false, description: "Fecha de acreditación ante Supervigilancia" })
+  @IsOptional()
+  @IsDateString()
+  fecha_acreditacion?: string;
+
   @ApiProperty({ example: "123456789", required: false, description: "Número de cuenta bancaria" })
   @IsOptional()
   @IsString()

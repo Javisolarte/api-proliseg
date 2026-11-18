@@ -1,5 +1,5 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, UseGuards } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiBearerAuth } from "@nestjs/swagger";
+import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards } from "@nestjs/common";
+import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiQuery, ApiBearerAuth } from "@nestjs/swagger";
 import { AsignacionesService } from "./asignaciones.service";
 import { CreateAsignacionDto, UpdateAsignacionDto } from "./dto/asignacion.dto";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
@@ -15,9 +15,23 @@ export class AsignacionesController {
 
   @Get()
   @RequirePermissions("asignaciones")
-  @ApiOperation({ summary: "Listar todas las asignaciones" })
-  async findAll() {
-    return this.asignacionesService.findAll();
+  @ApiOperation({ summary: "Listar todas las asignaciones (con filtros opcionales)" })
+  @ApiQuery({ name: "puesto_id", required: false, type: Number })
+  @ApiQuery({ name: "subpuesto_id", required: false, type: Number })
+  @ApiQuery({ name: "empleado_id", required: false, type: Number })
+  @ApiQuery({ name: "activo", required: false, type: Boolean })
+  async findAll(
+    @Query("puesto_id") puesto_id?: string,
+    @Query("subpuesto_id") subpuesto_id?: string,
+    @Query("empleado_id") empleado_id?: string,
+    @Query("activo") activo?: string,
+  ) {
+    return this.asignacionesService.findAll({
+      puesto_id: puesto_id !== undefined && puesto_id !== "" ? Number(puesto_id) : undefined,
+      subpuesto_id: subpuesto_id !== undefined && subpuesto_id !== "" ? Number(subpuesto_id) : undefined,
+      empleado_id: empleado_id !== undefined && empleado_id !== "" ? Number(empleado_id) : undefined,
+      activo: activo !== undefined && activo !== "" ? activo === "true" : undefined,
+    });
   }
 
   @Get(":id")

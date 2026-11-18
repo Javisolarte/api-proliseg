@@ -283,7 +283,13 @@ export class IaService {
 
             10,
 
+            'preferencia_usuario',
+
           );
+
+          if (Number(user?.id)) {
+            this.preferredNameCache.set(Number(user.id), { name: customName, expiresAt: Date.now() + 60_000 });
+          }
 
           const confirmMsg = `Entendido, ${customName}. A partir de este momento me dirigiré a usted siempre como ${customName}. He registrado esta instrucción en mi memoria permanente para que todas nuestras conversaciones en Prolicontrol usen su trato preferido. ¿En qué le puedo colaborar hoy, ${customName}?`;
 
@@ -336,6 +342,44 @@ export class IaService {
             message: cancelMsg,
             latencyMs: Date.now() - startTime,
           };
+        }
+
+        if (activeWM.operacion === 'MODO_ENSENANZA') {
+          const isEndTeaching =
+            /\b(eso es todo|nada mas|termina|terminamos|listo|ya|suficiente|salir)\b/i.test(qNorm) &&
+            qNorm.length < 40;
+          if (isEndTeaching) {
+            await this.catorceBrain.clearWorkingMemory(user);
+            const doneMsg = `Perfecto, ${activeUserName}. He cerrado el modo enseñanza y mantenido todo lo aprendido en mi memoria permanente.`;
+            this.catorceBrain.appendConversationTurn(user, userQuery, doneMsg, canal, ['core', 'brain'], ['CATORCE-WM:endTeachingMode']);
+            const audioUrl = await this.generateVoiceIfRequested(doneMsg, canal);
+            return {
+              ok: true,
+              assistant: 'CATORCE',
+              actionExecuted: 'MODO_ENSENANZA_FINALIZADO',
+              activatedNodes: ['core', 'brain'],
+              toolsUsed: ['CATORCE-WM:endTeachingMode'],
+              message: doneMsg,
+              audioDataUrl: audioUrl,
+              latencyMs: Date.now() - startTime,
+            };
+          }
+
+          const looksLikeQuestionOrCommand =
+            /^(cuantos|cuantas|cual|cuales|quien|quienes|como esta|que has aprendido|que te he ensenado|abre|cierra|crea|muestra|dime|lista)\b/i.test(qNorm) ||
+            (userQuery.includes('?') && userQuery.trim().length < 75);
+
+          await this.catorceBrain.clearWorkingMemory(user);
+          if (!looksLikeQuestionOrCommand) {
+            return await this.executeTeachAndRespond(
+              userQuery,
+              user,
+              activeUserName,
+              canal,
+              startTime,
+              ['CATORCE-WM:modoEnsenanza'],
+            );
+          }
         }
 
         if (activeWM.operacion === 'CREAR_EMPLEADO') {
@@ -1123,7 +1167,7 @@ export class IaService {
       // 0-5: LABORATORIO TECNICO DIAGNOSTICO
       // =========================================================================
       const isSaludProlicontrol =
-        /(funcionando bien|esta bien prolicontrol|salud del sistema|revisa prolicontrol|prolicontrol funciona|laboratorio|laboratorio tecnico|bateria de pruebas|probar servicios)/i.test(qNorm);
+        /\b(funcionando bien|esta bien prolicontrol|salud del sistema|revisa prolicontrol|prolicontrol funciona|laboratorio|laboratorio tecnico|bateria de pruebas|probar servicios)\b/i.test(qNorm);
 
       if (isSaludProlicontrol) {
         const labRes = await this.catorceBrain.ejecutarLaboratorioTecnico(user);
@@ -2435,7 +2479,7 @@ ${
 
       const isAccessControlTelemetry =
 
-        /\b(controles de acceso|control de acceso|cuantos controles|estado de las puertas|estado de puertas)\b/i.test(qNorm) &&
+        /\b(cuantos controles|cuantos dispositivos|total de controles|total de dispositivos|estado de las puertas|estado de puertas|estado general de los controles de acceso|resumen de los controles de acceso|como estan los controles de acceso)\b/i.test(qNorm) &&
 
         !/\b(crear|agregar|modificar|insertar)\b/i.test(qNorm);
 
@@ -2478,6 +2522,9 @@ ${
       }
 
 
+
+      const deviceLookupReply = await this.tryDeviceLookupFastPath(userQuery, qNorm, user, activeUserName, canal, startTime);
+      if (deviceLookupReply) return deviceLookupReply;
 
       const isPuestosCountQuery =
 
@@ -2572,87 +2619,66 @@ ${
 
 
       // =========================================================================
-
-      // 1️⃣ DETECCIÓN DE GUARDADO EXPLÍCITO EN EL SEGUNDO CEREBRO
-
+      // 1️⃣ DETECCIÓN INTELIGENTE DE ENSEÑANZA, MEMORIA Y REGLAS OPERATIVAS
       // =========================================================================
+      const teachingCmd = this.detectExplicitTeachingCommand(userQuery, qNorm);
+      if (teachingCmd) {
+        if (teachingCmd.mode === 'start_mode') {
+          await this.catorceBrain.saveWorkingMemory(user, {
+            tarea_activa: 'Modo Enseñanza CATORCE',
+            operacion: 'MODO_ENSENANZA',
+            datos_recolectados: {},
+            campos_faltantes: ['leccion'],
+            estado: 'ESPERANDO_LECCION',
+            ultimo_prompt: userQuery,
+          });
+          const promptMsg = `Listo, ${activeUserName}. Estoy atenta para aprender. Digame que regla, procedimiento o dato desea enseñarme y lo incorporo de inmediato a mi memoria permanente.`;
+          this.catorceBrain.appendConversationTurn(user, userQuery, promptMsg, canal, ['core', 'brain'], ['CATORCE-WM:startTeachingMode']);
+          const audioUrl = await this.generateVoiceIfRequested(promptMsg, canal);
+          return {
+            ok: true,
+            assistant: 'CATORCE',
+            actionExecuted: 'MODO_ENSENANZA_ACTIVO',
+            awaitingFollowUp: true,
+            activatedNodes: ['core', 'brain'],
+            toolsUsed: ['CATORCE-WM:startTeachingMode'],
+            message: promptMsg,
+            audioDataUrl: audioUrl,
+            latencyMs: Date.now() - startTime,
+          };
+        }
 
-      const isLearnIntent =
+        if (teachingCmd.mode === 'list') {
+          return await this.executeListLearnedAndRespond(
+            teachingCmd.listFilter || '',
+            userQuery,
+            user,
+            activeUserName,
+            canal,
+            startTime,
+          );
+        }
 
-        qNorm.startsWith('recuerda que') ||
+        if (teachingCmd.mode === 'forget') {
+          return await this.executeForgetAndRespond(
+            teachingCmd.forgetTopic || userQuery,
+            userQuery,
+            user,
+            activeUserName,
+            canal,
+            startTime,
+          );
+        }
 
-        qNorm.startsWith('guarda en el segundo cerebro') ||
-
-        qNorm.startsWith('aprende que') ||
-
-        qNorm.includes('agregar al segundo cerebro');
-
-
-
-      if (isLearnIntent) {
-
-        activatedNodes.push('brain');
-
-        toolsUsed.push('CATORCE-BRAIN:addCorporateKnowledge');
-
-
-
-        const cleanFact = userQuery
-
-          .replace(/^(recuerda que|guarda en el segundo cerebro|aprende que|catorce recuerda que)/i, '')
-
-          .trim();
-
-
-
-        const saved = await this.catorceBrain.addCorporateKnowledge(
-
-          {
-
-            titulo: cleanFact.slice(0, 55) || 'Conocimiento Operativo CATORCE',
-
-            categoria: '09_Memoria_Colectiva_Catorce',
-
-            contenido: cleanFact || userQuery,
-
-          },
-
-          user,
-
-        );
-
-        await this.catorceBrain.saveUserMemory(user, cleanFact || userQuery, 'aprendizaje_directo', 9);
-
-
-
-        const msg = `Segundo Cerebro PROLISEG LTDA actualizado: He almacenado y vectorizado este conocimiento en ia_brain para que todo el equipo lo tenga disponible.`;
-
-        this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, activatedNodes, toolsUsed);
-
-
-
-        return {
-
-          ok: true,
-
-          assistant: 'CATORCE',
-
-          actionExecuted: 'CONOCIMIENTO_GUARDADO',
-
-          activatedNodes,
-
-          toolsUsed,
-
-          data: [saved.documento],
-
-          message: msg,
-
-          audioDataUrl: undefined,
-
-          latencyMs: Date.now() - startTime,
-
-        };
-
+        if (teachingCmd.mode === 'teach') {
+          return await this.executeTeachAndRespond(
+            teachingCmd.rawLesson || userQuery,
+            user,
+            activeUserName,
+            canal,
+            startTime,
+          );
+        }
       }
 
 
@@ -2855,6 +2881,10 @@ REGLAS OBLIGATORIAS DE OPERACIÓN Y TRATO:
 
 
 
+10. PODER OPERATIVO TOTAL (SIN ELIMINAR): Tienes autorización plena del Ingeniero para consultar, crear, modificar y gestionar CUALQUIER dato y servicio de Prolicontrol (puestos, dispositivos IoT, IPs, empleados, clientes, contratos, turnos, minutas, inventario, etc.). Actúa con iniciativa: ejecuta directamente lo pedido (consulta SQL, DB_INSERT, DB_UPDATE, CREATE_MINUTA, DOOR_CONTROL) sin pedir permiso innecesario y pregunta solo el dato esencial que falte. Si el usuario pide un dato concreto, responde con ese dato exacto, nunca con un resumen general. La única prohibición absoluta es ELIMINAR: nunca DELETE, DROP ni TRUNCATE; para dar de baja un registro usa DB_UPDATE con activo=false o estado inactivo y dilo con claridad. Mantén la prohibición de crear usuarios o credenciales.
+
+
+
 CONTEXTO DE LA CONVERSACIÓN RECIENTE (Sigue el hilo con exactitud):
 
 ${historyFormatted || "Inicio de conversación."}
@@ -2915,13 +2945,13 @@ Analiza el mensaje y responde en UN SOLO JSON ESTRICTO con esta estructura:
 
 {
 
-  "intent": "DOOR_CONTROL" | "ASK_MISSING_DATA" | "CREATE_MINUTA" | "DB_INSERT" | "DB_UPDATE" | "QUERY_OR_REPORT" | "OFF_TOPIC",
+  "intent": "DOOR_CONTROL" | "LEARN_KNOWLEDGE" | "FORGET_KNOWLEDGE" | "LIST_KNOWLEDGE" | "ASK_MISSING_DATA" | "CREATE_MINUTA" | "DB_INSERT" | "DB_UPDATE" | "QUERY_OR_REPORT" | "OFF_TOPIC",
 
   "isOffTopic": boolean,
 
   "wantsPdf": boolean,
 
-  "directAnswer": "Tu respuesta hablada/escrita corta, humana, concisa (máximo 2 a 3 oraciones claras), SIN NINGÚN EMOJI y en español dirigiéndote siempre al usuario como '${activeUserName}'. Si el mensaje es casual o sobre permisos (ej. irse temprano, cenar, relevos), responde con empatía y criterio operativo breve. NUNCA listes todas las cifras de la empresa a menos que se pida expresamente un informe general.",
+  "directAnswer": "Tu respuesta hablada/escrita corta, humana, concisa (máximo 2 a 3 oraciones claras), SIN NINGÚN EMOJI y en español dirigiéndote siempre al usuario como '${activeUserName}'. Si el mensaje es casual o sobre permisos (ej. irse temprano, cenar, relevos), responde con empatía y criterio operativo breve. NUNCA listes todas las cifras de la empresa a menos que se pida expresamente un informe general. Responde EXACTAMENTE lo que se preguntó con el dato concreto (nombre, IP, cifra, estado); jamás sustituyas un dato específico por un resumen genérico de totales. Si el dato pedido no aparece textualmente en la telemetría, NO lo inventes ni lo resumas: deja directAnswer vacío y llena customSelectSql.",
 
   "doorControl": {
 
@@ -2931,6 +2961,17 @@ Analiza el mensaje y responde en UN SOLO JSON ESTRICTO con esta estructura:
 
     "doorId": 1
 
+  },
+
+  "learningPayload": {
+    "titulo": "Titulo corto de la regla, dato o procedimiento (solo si intent es LEARN_KNOWLEDGE)",
+    "contenido": "Regla o conocimiento completo auto-contenido que CATORCE debe recordar",
+    "tipoAprendizaje": "regla_comportamiento" | "procedimiento_operativo" | "dato_operativo" | "preferencia_usuario",
+    "categoria": "Reglas de Comportamiento" | "Procedimientos Operativos" | "Datos de Puestos y Clientes" | "Preferencias de Usuario",
+    "tags": ["palabra1", "palabra2"],
+    "reemplazaTema": "Tema previo a reemplazar si es una correccion o actualizacion",
+    "forgetTopic": "Tema a desactivar si intent es FORGET_KNOWLEDGE",
+    "confirmacionHablada": "Confirmacion breve y natural para el usuario diciendo exactamente que se aprendio (sin emojis)"
   },
 
   "missingDataQuestion": "Si el usuario quiere crear o modificar algo en cualquier servicio de Prolicontrol pero falta un dato esencial, escribe aquí la pregunta amable dirigiéndote a él/ella de forma respetuosa ('${activeUserName}') sin emojis.",
@@ -2975,11 +3016,13 @@ Analiza el mensaje y responde en UN SOLO JSON ESTRICTO con esta estructura:
 
   },
 
-  "customSelectSql": "SOLO llena este campo con un SELECT de PostgreSQL si la pregunta pide datos específicos que NO están ya en la telemetría de arriba. Si ya puedes responder con la telemetría de arriba, DEJA ESTE CAMPO VACÍO '' para responder al instante."
+  "customSelectSql": "Un solo SELECT de PostgreSQL (solo lectura) OBLIGATORIO cuando la pregunta pide un dato específico que no aparezca textualmente en la telemetría: IP, nombre, teléfono, cédula, estado o detalle de un dispositivo, puesto, empleado, cliente o contrato concreto, y listados completos o filtrados. Usa ILIKE con comodines y las tablas del catálogo (ej. dispositivos_iot con JOIN puestos_trabajo por puesto_id). La telemetría solo muestra muestras parciales. Déjalo vacío ('') únicamente si la cifra o el dato ya está textual en la telemetría de arriba."
 
 }
 
 
+
+REGLA DE APRENDIZAJE CONVERSACIONAL: Usa intent "LEARN_KNOWLEDGE" SOLO cuando el usuario esté enseñando, corrigiendo o definiendo una regla permanente, protocolo, dato estable de puesto/cliente o preferencia de trato/formato (NO cuando reporte una minuta puntual ni pida insertar turnos/empleados/EPS en tablas SQL). Usa "FORGET_KNOWLEDGE" si pide olvidar/desactivar una regla previa y "LIST_KNOWLEDGE" si pregunta qué ha aprendido.
 
 Responde ÚNICAMENTE con el objeto JSON válido.`;
 
@@ -3048,6 +3091,33 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
           canal,
           startTime,
         );
+      }
+
+      if (plan.intent === 'LEARN_KNOWLEDGE' && (plan.learningPayload?.contenido || plan.learningPayload?.titulo)) {
+        return await this.executeTeachAndRespond(
+          userQuery,
+          user,
+          activeUserName,
+          canal,
+          startTime,
+          ['CATORCE-ORCHESTRATOR:implicitLearning'],
+          plan.learningPayload,
+        );
+      }
+
+      if (plan.intent === 'FORGET_KNOWLEDGE' && plan.learningPayload?.forgetTopic) {
+        return await this.executeForgetAndRespond(
+          plan.learningPayload.forgetTopic,
+          userQuery,
+          user,
+          activeUserName,
+          canal,
+          startTime,
+        );
+      }
+
+      if (plan.intent === 'LIST_KNOWLEDGE') {
+        return await this.executeListLearnedAndRespond('', userQuery, user, activeUserName, canal, startTime);
       }
 
       // =========================================================================
@@ -3210,7 +3280,7 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
 
         // Detectar si el usuario está confirmando una propuesta previa
 
-        const isAffirmative = /^(s[ií]|confirmo|confirmar|procede|cr[eé]alo|cr[eé]elo|adelante|de acuerdo|claro|dale|por supuesto|h[aá]zlo|ok|ejecuta|autorizo)/i.test(userQuery.trim());
+        const isAffirmative = /^(s[ií]|confirmo|confirmar|procede|cr[eé]alo|cr[eé]elo|adelante|de acuerdo|claro|dale|por supuesto|h[aá]zlo|ok|ejecuta|autorizo)(?![a-záéíóúñ])/i.test(userQuery.trim());
 
         const lastTurn = (recentHistory || []).slice(-1)[0]?.text || '';
 
@@ -3420,7 +3490,7 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
 
 
 
-      if (plan.customSelectSql && String(plan.customSelectSql).trim().toUpperCase().startsWith('SELECT')) {
+      if (plan.customSelectSql && this.catorceBrain.isReadOnlySelect(String(plan.customSelectSql))) {
 
         executedSql = String(plan.customSelectSql).trim().replace(/;$/, '');
 
@@ -3506,6 +3576,7 @@ DIRECTIVA DE INDAGACIÓN OPERACIONAL: Si la consulta toca turnos, relevos o pues
 ${customSqlResult.length > 0 ? `- Datos de Consulta SQL (${executedSql}): ${JSON.stringify(customSqlResult.slice(0, 40))}` : ''}
 
 ${brainMatches.length > 0 ? `- Conocimiento del Segundo Cerebro PROLISEG LTDA: ${JSON.stringify(brainMatches.map((b: any) => ({ titulo: b.titulo, categoria: b.categoria, resumen: b.resumen, procedimiento: b.fragmento })))}` : ''}
+${telemetry.userContext?.memoriasActivas?.length > 0 ? `- REGLAS Y APRENDIZAJES PERMANENTES ENSEÑADOS POR ${activeUserName} (CUMPLIMIENTO OBLIGATORIO): ${JSON.stringify(telemetry.userContext.memoriasActivas.map((m: any) => ({ clave: m.clave, regla_o_dato: m.hecho_recordado, tipo: m.tipo_memoria })))}` : ''}
 
 DIRECTIVA DE RESOLUCIÓN DE PROBLEMAS: Si la consulta expone un problema, contingencia o novedad operativa (red, MikroTik, cámaras, corte de luz, relevos), diagnostica la situación usando los datos del Segundo Cerebro de PROLISEG y genera una solución paso a paso con acciones concretas en Prolicontrol, ofreciendo ejecutar la acción correspondiente con confirmación previa.
 
@@ -3584,6 +3655,8 @@ Mensaje del usuario: "${userQuery}"
         resultado: { kpis: telemetry.kpis },
 
         canal,
+
+        background: true,
 
       });
 
@@ -4665,6 +4738,405 @@ Mensaje del usuario: "${userQuery}"
       data: doorRes,
       message: formatted.message,
       audioDataUrl,
+      latencyMs: Date.now() - startTime,
+    };
+  }
+
+  /**
+   * Respuesta instantanea (sin LLM) a consultas de IP / estado de controles de acceso y dispositivos IoT por nombre, puesto o marca.
+   * Devuelve null si no hay coincidencias para que el orquestador resuelva con SQL.
+   */
+  private async tryDeviceLookupFastPath(
+    userQuery: string,
+    qNorm: string,
+    user: any,
+    activeUserName: string,
+    canal: string,
+    startTime: number,
+  ) {
+    const asksNetworkData = /\b(ip|ips|direccion ip|direccion de red)\b/.test(qNorm);
+    const mentionsDevice =
+      /\b(control(?:es)? de acceso|dispositivos?|camaras?|biometricos?|lectores?|terminales?|puertas?|equipos?|hikvision|dahua)\b/.test(qNorm);
+    if (!asksNetworkData || !mentionsDevice) return null;
+    if (/\b(cambia|cambiar|modifica|modificar|actualiza|actualizar|configura|configurar|asigna|asignar|establece|crea|crear|registra|registrar|abre|abrir|cierra|cerrar)\b/.test(qNorm)) {
+      return null;
+    }
+
+    const stop = new Set([
+      'que', 'cual', 'cuales', 'es', 'son', 'la', 'las', 'el', 'los', 'de', 'del', 'en', 'ip', 'ips', 'tiene', 'tienen',
+      'tengo', 'control', 'controles', 'acceso', 'accesos', 'dispositivo', 'dispositivos', 'camara', 'camaras',
+      'biometrico', 'biometricos', 'lector', 'lectores', 'terminal', 'terminales', 'puerta', 'puertas', 'equipo', 'equipos',
+      'direccion', 'red', 'dime', 'dame', 'por', 'favor', 'catorce', 'me', 'un', 'una', 'y', 'al', 'sede', 'puesto',
+      'esta', 'estan', 'todos', 'todas', 'muestra', 'necesito', 'quiero', 'saber', 'con', 'para', 'donde', 'ubicado',
+      'ubicada', 'esa', 'ese', 'mi', 'nuestro', 'nuestra', 'hay', 'cuanto', 'cuantos',
+    ]);
+
+    const telemetry = await this.catorceBrain.getRealtimeBrainTelemetry(user);
+    const devices: any[] = telemetry?.detalles?.controlesAcceso || [];
+    if (devices.length === 0) return null;
+
+    const puestoById = new Map<number, string>(
+      (telemetry?.detalles?.puestos || []).map((p: any) => [Number(p.id), String(p.nombre || '')] as [number, string]),
+    );
+    const normText = (t: string) => this.catorceBrain.normalizeBrainText(t);
+    const tokens = normText(userQuery)
+      .split(' ')
+      .filter((w) => w.length > 2 && !stop.has(w));
+
+    const enriched = devices.map((d: any) => {
+      const puesto = puestoById.get(Number(d.puesto_id)) || '';
+      const hay = normText(`${d.nombre || ''} ${puesto} ${d.marca || ''} ${d.modelo || ''}`);
+      const score = tokens.filter((t) => hay.includes(t)).length;
+      return { d, puesto, score };
+    });
+
+    let matches = enriched;
+    if (tokens.length > 0) {
+      const best = Math.max(...enriched.map((e) => e.score));
+      if (best === 0) return null;
+      matches = enriched.filter((e) => e.score === best);
+    }
+
+    const describe = (e: { d: any; puesto: string }) => {
+      const where = e.puesto ? ` del puesto ${e.puesto}` : '';
+      const estado = e.d.online ? 'en línea' : 'fuera de línea';
+      return `${e.d.nombre}${where}, IP ${e.d.ip || 'no registrada'} (${estado})`;
+    };
+
+    let msg: string;
+    if (matches.length === 1) {
+      const m = matches[0];
+      const extra = [m.d.marca, m.d.modelo].filter(Boolean).join(' ');
+      msg = `${activeUserName}, el dispositivo ${m.d.nombre}${m.puesto ? ` del puesto ${m.puesto}` : ''} tiene la dirección IP ${m.d.ip || 'no registrada'}. Se encuentra ${m.d.online ? 'en línea' : 'fuera de línea'}${extra ? `, equipo ${extra}` : ''}.`;
+    } else if (matches.length <= 6) {
+      msg = `${activeUserName}, encontré ${matches.length} dispositivos que coinciden: ` + matches.map((m, i) => `${i + 1}. ${describe(m)}`).join('; ') + '.';
+    } else {
+      msg = `${activeUserName}, encontré ${matches.length} dispositivos. Los primeros son: ` + matches.slice(0, 6).map((m, i) => `${i + 1}. ${describe(m)}`).join('; ') + `. Dígame cuál desea revisar o filtre por nombre o puesto.`;
+    }
+
+    const toolsUsed = ['CATORCE-IOT:deviceLookup'];
+    this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, ['accesos'], toolsUsed);
+    const audioDataUrl = await this.generateVoiceIfRequested(msg, canal);
+
+    return {
+      ok: true,
+      assistant: 'CATORCE',
+      actionExecuted: 'CONSULTA_DISPOSITIVOS_IP',
+      activatedNodes: ['accesos'],
+      toolsUsed,
+      data: matches.slice(0, 12).map((m) => ({
+        nombre: m.d.nombre,
+        puesto: m.puesto || undefined,
+        ip: m.d.ip,
+        estado: m.d.online ? 'en línea' : 'fuera de línea',
+        marca: m.d.marca,
+        modelo: m.d.modelo,
+      })),
+      message: msg,
+      audioDataUrl,
+      latencyMs: Date.now() - startTime,
+    };
+  }
+
+  private detectExplicitTeachingCommand(
+    userQuery: string,
+    qNorm: string,
+  ): {
+    mode: 'start_mode' | 'teach' | 'list' | 'forget';
+    rawLesson?: string;
+    forgetTopic?: string;
+    listFilter?: string;
+  } | null {
+    const cleaned = qNorm
+      .replace(/^(oye\s+)?catorce[\s,.:;-]*/i, '')
+      .replace(/^[¿¡\s]+|[?!.\s]+$/g, '')
+      .trim();
+
+    if (
+      /^(te voy a ensenar|quiero ensenarte|voy a ensenarte|necesito ensenarte|modo aprendizaje|modo ensenanza|quiero que aprendas algo|aprende algo nuevo|escucha te voy a ensenar)(\s+(algo|una cosa|una regla|un protocolo))?$/i.test(
+        cleaned,
+      )
+    ) {
+      return { mode: 'start_mode' };
+    }
+
+    const listMatch = cleaned.match(
+      /^(?:que\s+(?:has\s+aprendido|te\s+he\s+ensenado|reglas\s+(?:tienes|recuerdas|has\s+guardado)|cosas\s+recuerdas)|lista\s+(?:lo\s+que\s+aprendiste|tus\s+reglas|tu\s+memoria)|muestra(?:me)?\s+(?:lo\s+que\s+(?:has\s+aprendido|te\s+ensene)|tus\s+reglas))(?:\s+sobre\s+(.+))?$/i,
+    );
+    if (listMatch) {
+      return { mode: 'list', listFilter: (listMatch[1] || '').trim() };
+    }
+
+    const forgetMatch = cleaned.match(
+      /^(?:olvida(?:\s+lo\s+que\s+te\s+ensene(?:\s+sobre|\s+de)?)?|borra(?:\s+de\s+tu\s+memoria)?(?:\s+lo\s+(?:de|que\s+te\s+ensene\s+sobre))?|desactiva\s+(?:la\s+regla(?:\s+de|\s+sobre)?|el\s+aprendizaje(?:\s+de)?)|elimina\s+(?:la\s+regla(?:\s+de|\s+sobre)?|lo\s+que\s+aprendiste\s+(?:de|sobre))|deja\s+de\s+(?:aplicar|usar|recordar)\s+(?:la\s+regla\s+(?:de|sobre)|lo\s+de)|ya\s+no\s+(?:recuerdes|apliques)\s+(?:que|la\s+regla\s+de)?)\s*(.+)$/i,
+    );
+    if (forgetMatch && forgetMatch[1] && forgetMatch[1].trim().length >= 3) {
+      return { mode: 'forget', forgetTopic: forgetMatch[1].trim() };
+    }
+
+    const strippedOriginal = (userQuery || '')
+      .replace(/^\s*(?:oye\s+)?catorce[\s,.:;-]*/i, '')
+      .replace(/^\s*por\s+favor[\s,.:;-]*/i, '')
+      .trim();
+
+    const teachPrefixRegex =
+      /^(?:recuerda\s+que|recuerda\s+siempre(?:\s+que)?|no\s+olvides\s+que|ten\s+en\s+cuenta\s+que|ten\s+presente\s+que|aprende(?:\s+que|\s+esto|\s+a)?|te\s+(?:voy\s+a\s+)?ensen(?:ar|o)(?:\s+algo)?\s*(?:que|:)|quiero\s+ensenarte\s*(?:que|:)|memoriza(?:\s+que|\s+esto)?|anota(?:\s+que|\s+esto)?|guarda\s+(?:en\s+(?:el\s+segundo\s+cerebro|tu\s+memoria)|esta\s+regla|este\s+protocolo|esta\s+informacion)|agregar\s+al\s+segundo\s+cerebro|(?:nueva\s+regla|regla\s+nueva|correccion)\s*[:,-]|corrige\s+(?:eso|esto)\s*[:,-]?|de\s+ahora\s+en\s+adelante(?:\s*,)?)\s*/i;
+
+    if (teachPrefixRegex.test(strippedOriginal) && strippedOriginal.length >= 12) {
+      const lessonBody = strippedOriginal.replace(teachPrefixRegex, '').replace(/^[:,-]\s*/, '').trim();
+      if (lessonBody.length >= 4) {
+        return { mode: 'teach', rawLesson: lessonBody };
+      }
+    }
+
+    if (
+      /^(?:siempre\s+que|cada\s+vez\s+que|cuando\s+te\s+pida)\s+.{8,}/i.test(cleaned) &&
+      !userQuery.includes('?') &&
+      !/\b(que hago|que pasa|como funciona|quien|cuantos)\b/i.test(qNorm)
+    ) {
+      return { mode: 'teach', rawLesson: strippedOriginal };
+    }
+
+    return null;
+  }
+
+  private async extractStructuredLesson(
+    rawLesson: string,
+    recentHistory: any[],
+    activeUserName: string,
+    preExtracted?: any,
+  ): Promise<{
+    titulo: string;
+    contenido: string;
+    tipoAprendizaje: 'regla_comportamiento' | 'procedimiento_operativo' | 'dato_operativo' | 'preferencia_usuario';
+    categoria: string;
+    tags: string[];
+    reemplazaTema: string;
+    confirmacionHablada: string;
+  }> {
+    const allowedTypes = new Set([
+      'regla_comportamiento',
+      'procedimiento_operativo',
+      'dato_operativo',
+      'preferencia_usuario',
+    ]);
+
+    if (preExtracted?.contenido && preExtracted?.titulo) {
+      const tipo = allowedTypes.has(preExtracted.tipoAprendizaje) ? preExtracted.tipoAprendizaje : 'dato_operativo';
+      return {
+        titulo: String(preExtracted.titulo).trim().slice(0, 90),
+        contenido: String(preExtracted.contenido).trim(),
+        tipoAprendizaje: tipo,
+        categoria: String(preExtracted.categoria || this.mapLearningCategory(tipo)).trim(),
+        tags: Array.isArray(preExtracted.tags) ? preExtracted.tags.map((t: any) => String(t).toLowerCase()).slice(0, 8) : [],
+        reemplazaTema: String(preExtracted.reemplazaTema || '').trim(),
+        confirmacionHablada:
+          String(preExtracted.confirmacionHablada || '').trim() ||
+          `Entendido, ${activeUserName}. Aprendi esto y lo deje guardado en mi memoria permanente: ${String(preExtracted.contenido).trim()}.`,
+      };
+    }
+
+    const recentText = (recentHistory || [])
+      .slice(-4)
+      .map((h: any) => `${h.role === 'user' ? 'USUARIO' : 'CATORCE'}: ${String(h.text || '').slice(0, 220)}`)
+      .join('\n');
+
+    const prompt = `Eres el modulo de aprendizaje de CATORCE (IA operativa de PROLISEG LTDA / Prolicontrol).
+El usuario "${activeUserName}" te esta enseñando o corrigiendo una regla, procedimiento o dato permanente.
+
+Contexto reciente de la conversacion (por si el usuario dice "eso", "ahi" o corrige el turno anterior):
+${recentText || 'Sin historial previo.'}
+
+Mensaje o enseñanza a estructurar:
+"${rawLesson}"
+
+Devuelve UN SOLO JSON valido con esta estructura exacta (sin markdown ni emojis):
+{
+  "titulo": "Titulo corto y claro de maximo 60 caracteres",
+  "contenido": "Enseñanza completa, clara y auto-contenida (resolviendo pronombres segun contexto si aplica)",
+  "tipoAprendizaje": "regla_comportamiento" | "procedimiento_operativo" | "dato_operativo" | "preferencia_usuario",
+  "categoria": "Reglas de Comportamiento" | "Procedimientos Operativos" | "Datos de Puestos y Clientes" | "Preferencias de Usuario",
+  "tags": ["palabra1", "palabra2", "palabra3"],
+  "reemplazaTema": "Si corrige o reemplaza una regla previa, indica el tema corto a sustituir; si no, cadena vacia",
+  "confirmacionHablada": "Confirmacion breve y natural dirigiendote a ${activeUserName} explicando exactamente lo que entendiste y guardaste, sin emojis"
+}`;
+
+    try {
+      const rawJson = await this.geminiService.generateStructuredOrNatural(prompt);
+      const match = rawJson.match(/\{[\s\S]*\}/);
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+        if (parsed?.contenido) {
+          const tipo = allowedTypes.has(parsed.tipoAprendizaje) ? parsed.tipoAprendizaje : 'dato_operativo';
+          return {
+            titulo: String(parsed.titulo || rawLesson.slice(0, 55)).trim().slice(0, 90),
+            contenido: String(parsed.contenido).trim(),
+            tipoAprendizaje: tipo,
+            categoria: String(parsed.categoria || this.mapLearningCategory(tipo)).trim(),
+            tags: Array.isArray(parsed.tags)
+              ? parsed.tags.map((t: any) => this.catorceBrain.normalizeBrainText(String(t))).filter(Boolean).slice(0, 8)
+              : [],
+            reemplazaTema: String(parsed.reemplazaTema || '').trim(),
+            confirmacionHablada:
+              String(parsed.confirmacionHablada || '').replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}]/gu, '').trim() ||
+              `Entendido, ${activeUserName}. Ya incorpore ese aprendizaje en mi memoria permanente.`,
+          };
+        }
+      }
+    } catch {}
+
+    const fallbackClean = (rawLesson || '').trim();
+    const isRule = /\b(siempre|nunca|cada vez|cuando|formato|responde|regla|debes)\b/i.test(fallbackClean);
+    const tipoFallback = isRule ? 'regla_comportamiento' : 'dato_operativo';
+    return {
+      titulo: fallbackClean.slice(0, 55) || 'Conocimiento Operativo CATORCE',
+      contenido: fallbackClean,
+      tipoAprendizaje: tipoFallback,
+      categoria: this.mapLearningCategory(tipoFallback),
+      tags: this.catorceBrain
+        .normalizeBrainText(fallbackClean)
+        .split(' ')
+        .filter((w) => w.length > 3)
+        .slice(0, 6),
+      reemplazaTema: '',
+      confirmacionHablada: `Entendido, ${activeUserName}. Ya aprendi y guarde de forma permanente: ${fallbackClean}.`,
+    };
+  }
+
+  private mapLearningCategory(tipo: string): string {
+    switch (tipo) {
+      case 'regla_comportamiento':
+        return 'Reglas de Comportamiento';
+      case 'procedimiento_operativo':
+        return 'Procedimientos Operativos';
+      case 'preferencia_usuario':
+        return 'Preferencias de Usuario';
+      default:
+        return 'Datos de Puestos y Clientes';
+    }
+  }
+
+  private async executeTeachAndRespond(
+    rawLesson: string,
+    user: any,
+    activeUserName: string,
+    canal: string,
+    startTime: number,
+    extraTools: string[] = [],
+    preExtractedPayload?: any,
+  ) {
+    const recentHistory = await this.catorceBrain.getRecentConversationHistory(user).catch(() => []);
+    const structured = await this.extractStructuredLesson(rawLesson, recentHistory, activeUserName, preExtractedPayload);
+
+    const saved = await this.catorceBrain.teachCatorce(
+      {
+        titulo: structured.titulo,
+        contenido: structured.contenido,
+        tipoAprendizaje: structured.tipoAprendizaje,
+        categoria: structured.categoria,
+        tags: structured.tags,
+        reemplazaTema: structured.reemplazaTema,
+      },
+      user,
+    );
+
+    const tools = ['CATORCE-BRAIN:teachCatorce', ...extraTools];
+    const msg =
+      structured.confirmacionHablada +
+      (saved.replacedCount > 0 ? ` Actualice ${saved.replacedCount} registro previo equivalente para evitar contradicciones.` : '');
+
+    this.catorceBrain.appendConversationTurn(user, rawLesson, msg, canal, ['brain', 'core'], tools);
+    const audioUrl = await this.generateVoiceIfRequested(msg, canal);
+
+    return {
+      ok: true,
+      assistant: 'CATORCE',
+      actionExecuted: 'CONOCIMIENTO_GUARDADO',
+      activatedNodes: ['brain', 'core'],
+      toolsUsed: tools,
+      data: [saved.documento],
+      learned: {
+        titulo: structured.titulo,
+        categoria: structured.categoria,
+        tipoAprendizaje: structured.tipoAprendizaje,
+        replacedCount: saved.replacedCount,
+      },
+      message: msg,
+      audioDataUrl: audioUrl,
+      latencyMs: Date.now() - startTime,
+    };
+  }
+
+  private async executeListLearnedAndRespond(
+    filterText: string,
+    userQuery: string,
+    user: any,
+    activeUserName: string,
+    canal: string,
+    startTime: number,
+  ) {
+    const items = await this.catorceBrain.listLearnedKnowledge(user, filterText);
+    const msg =
+      items.length === 0
+        ? `${activeUserName}, aun no tengo reglas o aprendizajes personalizados activos${filterText ? ` sobre ${filterText}` : ''}. Puede enseñarme cualquiera diciendo por ejemplo "Catorce, aprende que..." o "Te voy a enseñar algo".`
+        : `${activeUserName}, tengo ${items.length} aprendizajes activos en mi memoria` +
+          (filterText ? ` sobre ${filterText}` : '') +
+          ':\n' +
+          items
+            .slice(0, 8)
+            .map((it, i) => `${i + 1}. ${it.titulo}: ${it.contenido}`)
+            .join('\n');
+
+    this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, ['brain'], ['CATORCE-BRAIN:listLearnedKnowledge']);
+    const voiceSummary =
+      items.length === 0
+        ? msg
+        : `${activeUserName}, tengo ${items.length} aprendizajes activos. Los mas recientes son: ` +
+          items
+            .slice(0, 3)
+            .map((it) => it.contenido)
+            .join('. ');
+    const audioUrl = await this.generateVoiceIfRequested(voiceSummary, canal);
+
+    return {
+      ok: true,
+      assistant: 'CATORCE',
+      actionExecuted: 'LISTADO_APRENDIZAJES',
+      activatedNodes: ['brain'],
+      toolsUsed: ['CATORCE-BRAIN:listLearnedKnowledge'],
+      data: items,
+      message: msg,
+      audioDataUrl: audioUrl,
+      latencyMs: Date.now() - startTime,
+    };
+  }
+
+  private async executeForgetAndRespond(
+    topicQuery: string,
+    userQuery: string,
+    user: any,
+    activeUserName: string,
+    canal: string,
+    startTime: number,
+  ) {
+    const resForget = await this.catorceBrain.forgetLearnedKnowledge(topicQuery, user);
+    const msg =
+      resForget.deactivatedCount > 0
+        ? `Entendido, ${activeUserName}. He desactivado de mi memoria activa ${resForget.deactivatedCount} registro(s) relacionados con "${topicQuery}" (${resForget.deactivatedTitles.slice(0, 3).join('; ')}). Ya no los aplicare en nuestras conversaciones.`
+        : `${activeUserName}, no encontre reglas o aprendizajes activos que coincidan con "${topicQuery}". Si desea ver que tengo guardado, pregunteme "Catorce, que has aprendido".`;
+
+    this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, ['brain'], ['CATORCE-BRAIN:forgetLearnedKnowledge']);
+    const audioUrl = await this.generateVoiceIfRequested(msg, canal);
+
+    return {
+      ok: true,
+      assistant: 'CATORCE',
+      actionExecuted: 'APRENDIZAJE_DESACTIVADO',
+      activatedNodes: ['brain'],
+      toolsUsed: ['CATORCE-BRAIN:forgetLearnedKnowledge'],
+      data: resForget,
+      message: msg,
+      audioDataUrl: audioUrl,
       latencyMs: Date.now() - startTime,
     };
   }

@@ -131,15 +131,28 @@ export class ContratosPersonalService {
             throw new InternalServerErrorException('Error al terminar contrato');
         }
 
-        // 4. Desvincular e inhabilitar empleado
+        // 4. Desvincular e inhabilitar empleado y cerrar asignaciones activas
         await supabase
             .from('empleados')
             .update({
                 contrato_personal_id: null,
                 activo: false,
-                fecha_salida: terminateDto.fecha_terminacion
+                asignado: false,
+                fecha_salida: terminateDto.fecha_terminacion,
+                updated_at: new Date().toISOString()
             })
             .eq('id', contract.empleado_id);
+
+        await supabase
+            .from('asignacion_guardas_puesto')
+            .update({
+                activo: false,
+                fecha_fin: terminateDto.fecha_terminacion,
+                motivo_finalizacion: terminateDto.motivo_terminacion || 'terminacion_contrato',
+                updated_at: new Date().toISOString()
+            })
+            .eq('empleado_id', contract.empleado_id)
+            .eq('activo', true);
 
         // 5. Auditar
         await this.auditoriaService.create({

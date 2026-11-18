@@ -79,6 +79,8 @@ export class EmpleadosService {
              e.tiene_discapacidad,
              e.tiene_curso_vigilancia,
              e.fecha_vencimiento_curso,
+             e.esta_acreditado,
+             e.fecha_acreditacion,
              e.fecha_proximas_vacaciones,
              e.dias_vacaciones_disponibles,
              e.fecha_salida,
@@ -331,7 +333,7 @@ export class EmpleadosService {
     'formacion_academica', 'edad', 'contrato_personal_id', 'rh', 'lugar_expedicion',
     'telefono_2', 'tiene_discapacidad', 'descripcion_discapacidad', 'experiencia',
     'observaciones', 'tipo_vigilante_id', 'tiene_curso_vigilancia',
-    'tipo_curso_vigilancia_id', 'fecha_vencimiento_curso', 'deleted_at',
+    'tipo_curso_vigilancia_id', 'fecha_vencimiento_curso', 'esta_acreditado', 'fecha_acreditacion', 'deleted_at',
     'deleted_by', 'deletion_reason', 'firma_digital_base64', 'cargo_oficial',
     'numero_cuenta', 'entidad_bancaria', 'tipo_cuenta', 'certificado_bancario_url',
     'sede_id', 'orden', 'fecha_examen_medico', 'fecha_ingreso',
@@ -454,6 +456,7 @@ export class EmpleadosService {
       .from("empleados")
       .update({
         activo: false,
+        asignado: false,
         fecha_salida: dto.fecha_salida,
         motivo_salida: dto.motivo_salida,
         observacion_salida: dto.observacion_salida || null,
@@ -465,6 +468,19 @@ export class EmpleadosService {
       .single();
 
     if (error) throw error;
+
+    // Liberar asignaciones activas en puestos/subpuestos para no bloquear cupos
+    await supabase
+      .from("asignacion_guardas_puesto")
+      .update({
+        activo: false,
+        fecha_fin: dto.fecha_salida,
+        motivo_finalizacion: dto.motivo_salida || "retiro_empleado",
+        updated_at: new Date().toISOString()
+      })
+      .eq("empleado_id", id)
+      .eq("activo", true);
+
     return data;
   }
 

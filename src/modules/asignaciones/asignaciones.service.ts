@@ -31,10 +31,15 @@ export class AsignacionesService {
     return this.formatDateOnly(new Date(fechaHoy.getFullYear(), fechaHoy.getMonth(), 1));
   }
 
-  // 🔹 Listar todas las asignaciones
-  async findAll() {
+  // 🔹 Listar todas las asignaciones (con soporte de filtros)
+  async findAll(filters?: {
+    puesto_id?: number;
+    subpuesto_id?: number;
+    empleado_id?: number;
+    activo?: boolean;
+  }) {
     const supabase = this.supabaseService.getClient();
-    const { data, error } = await supabase
+    let query = supabase
       .from("asignacion_guardas_puesto")
       .select(`
         *,
@@ -55,8 +60,22 @@ export class AsignacionesService {
             nombre
           )
         )
-      `)
-      .order("created_at", { ascending: false });
+      `);
+
+    if (filters?.puesto_id !== undefined && Number.isFinite(filters.puesto_id)) {
+      query = query.eq("puesto_id", filters.puesto_id);
+    }
+    if (filters?.subpuesto_id !== undefined && Number.isFinite(filters.subpuesto_id)) {
+      query = query.eq("subpuesto_id", filters.subpuesto_id);
+    }
+    if (filters?.empleado_id !== undefined && Number.isFinite(filters.empleado_id)) {
+      query = query.eq("empleado_id", filters.empleado_id);
+    }
+    if (filters?.activo !== undefined) {
+      query = query.eq("activo", filters.activo);
+    }
+
+    const { data, error } = await query.order("created_at", { ascending: false });
 
     if (error) throw error;
     return data;
@@ -183,28 +202,29 @@ export class AsignacionesService {
       );
     }
 
-    // ✅ 4. Calcular empleados necesarios usando TurnosHelperService
+    // ✅ 4. Calcular empleados necesarios usando TurnosHelperService (solo aplica límite estricto a titulares)
     const empleadosNecesarios = await this.turnosHelper.calcularEmpleadosNecesarios(
       subpuesto.guardas_activos,
       subpuesto.configuracion_id
     );
 
-    // Contar asignaciones activas actuales
+    // Contar asignaciones activas actuales de titulares
     const { count: asignacionesActivas } = await supabase
       .from("asignacion_guardas_puesto")
       .select("*", { count: "exact", head: true })
       .eq("subpuesto_id", dto.subpuesto_id)
-      .eq("activo", true);
+      .eq("activo", true)
+      .neq("rol_puesto", "relevante");
 
     const empleadosAsignados = asignacionesActivas || 0;
     const cuposDisponibles = empleadosNecesarios - empleadosAsignados;
 
-    if (cuposDisponibles <= 0) {
+    if (dto.rol_puesto !== 'relevante' && cuposDisponibles <= 0) {
       this.logger.warn(
-        `⚠️ Subpuesto ${subpuesto.nombre} sin cupos: ${empleadosAsignados}/${empleadosNecesarios} asignados`
+        `⚠️ Subpuesto ${subpuesto.nombre} sin cupos titulares: ${empleadosAsignados}/${empleadosNecesarios} asignados`
       );
       throw new BadRequestException(
-        `El subpuesto "${subpuesto.nombre}" ya tiene todos sus cupos ocupados ` +
+        `El subpuesto "${subpuesto.nombre}" ya tiene todos sus cupos titulares ocupados ` +
         `(${empleadosAsignados}/${empleadosNecesarios} empleados asignados)`
       );
     }

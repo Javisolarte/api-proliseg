@@ -47,6 +47,36 @@ export class LocalStorageBucketApi {
 
       await fs.promises.writeFile(fullLocalPath, buffer);
 
+      // Si la URL pública apunta a api.proliseg.com (VPS) y no estamos en localhost, sincronizar al VPS
+      if (this.publicBaseUrl && !this.publicBaseUrl.includes('localhost') && !this.publicBaseUrl.includes('127.0.0.1')) {
+        try {
+          const syncUrl = `${this.publicBaseUrl}/api/storage-sync/upload`;
+          const syncSecret = process.env.STORAGE_SYNC_SECRET || 'proliseg-sync-storage-secret-2026';
+          fetch(syncUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-sync-secret': syncSecret
+            },
+            body: JSON.stringify({
+              bucket: this.bucketName,
+              filePath: cleanPath,
+              base64: buffer.toString('base64')
+            })
+          }).then(res => {
+            if (!res.ok) {
+              this.logger.warn(`Sync to VPS storage returned status ${res.status} for ${this.bucketName}/${cleanPath}`);
+            } else {
+              this.logger.log(`⚡ Archivo sincronizado exitosamente al VPS SSD: ${this.bucketName}/${cleanPath}`);
+            }
+          }).catch(syncErr => {
+            this.logger.warn(`No se pudo sincronizar al VPS (${syncErr.message}), archivo guardado en disco local.`);
+          });
+        } catch (e) {
+          // Ignorar fallos de red en background
+        }
+      }
+
       return {
         data: {
           path: cleanPath,

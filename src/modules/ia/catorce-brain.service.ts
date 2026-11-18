@@ -29,6 +29,56 @@ export class CatorceBrainService {
     this.telemetryCache = null;
   }
 
+  /** Bloquea cualquier sentencia que elimine o destruya datos/estructura (DELETE, DROP, TRUNCATE, ALTER TABLE, REVOKE). */
+  public isDestructiveSql(sql: string): boolean {
+    const clean = (sql || '')
+      .replace(/--.*$/gm, ' ')
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/'(?:[^']|'')*'/g, "''");
+    return /\b(DELETE|DROP|TRUNCATE|ALTER\s+TABLE|REVOKE)\b/i.test(clean);
+  }
+
+  /** Solo permite una unica sentencia de lectura (SELECT / WITH ... SELECT) sin DML ni DDL. */
+  public isReadOnlySelect(sql: string): boolean {
+    const trimmed = (sql || '').trim().replace(/;+\s*$/, '');
+    if (!/^(SELECT|WITH)\b/i.test(trimmed)) return false;
+    const clean = trimmed
+      .replace(/--.*$/gm, ' ')
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/'(?:[^']|'')*'/g, "''");
+    if (clean.includes(';')) return false;
+    return !/\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE|COPY|EXECUTE|CALL|DO|MERGE|VACUUM)\b/i.test(clean);
+  }
+
+  public invalidateBrainCaches() {
+    this.telemetryCache = null;
+    this.corporateDbDocsCache = null;
+    this.corporateFilesCache = null;
+  }
+
+  public normalizeBrainText(text: string): string {
+    return (text || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private extractTopicTokens(text: string): string[] {
+    const stopWords = new Set([
+      'el', 'la', 'los', 'las', 'de', 'del', 'que', 'en', 'con', 'por', 'para',
+      'una', 'uno', 'unos', 'unas', 'sobre', 'como', 'cuando', 'cual', 'donde',
+      'este', 'esta', 'esto', 'ese', 'esa', 'eso', 'catorce', 'favor', 'dime',
+      'puedes', 'tienes', 'tengo', 'hay', 'ser', 'son', 'fue', 'algo', 'regla',
+      'olvida', 'borra', 'desactiva', 'elimina', 'ensene', 'aprendiste', 'memoria',
+    ]);
+    return this.normalizeBrainText(text)
+      .split(' ')
+      .filter((w) => w.length > 2 && !stopWords.has(w));
+  }
+
   private readonly logger = new Logger(CatorceBrainService.name);
   private readonly brainDirectory = 'C:\\Users\\Admin\\Documents\\PROLISEG LTDA';
   private readonly obsidianVaultDirectory = 'C:\\Users\\JaviSol\\Documents\\SegundoCerebro';
@@ -573,13 +623,7 @@ export class CatorceBrainService {
     const clean = (query || '').trim();
     if (!clean) return [];
 
-    const baseWords = clean
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .split(/\s+/)
-      .filter((w) => w.length > 2)
-      .slice(0, 6);
+    const baseWords = this.extractTopicTokens(clean).slice(0, 8);
 
     if (baseWords.length === 0) return [];
 
@@ -626,16 +670,26 @@ export class CatorceBrainService {
       const now = Date.now();
       if (!this.corporateDbDocsCache || this.corporateDbDocsCache.expiresAt <= now) {
         const allDocs = await this.runSql<any>(
-          `SELECT id, codigo_documento, titulo, categoria, ruta_archivo, resumen, Left(contenido, 1800) AS fragmento, LOWER(CONCAT(COALESCE(titulo, ''), ' ', COALESCE(Left(contenido, 1800), ''))) AS search_text, updated_at FROM ia_brain.conocimiento_corporativo WHERE activo = true ORDER BY updated_at DESC LIMIT 200`,
+          `SELECT id, codigo_documento, titulo, categoria, ruta_archivo, resumen, tags, Left(contenido, 1800) AS fragmento, LOWER(CONCAT(COALESCE(titulo, ''), ' ', COALESCE(tags::text, ''), ' ', COALESCE(Left(contenido, 1800), ''))) AS search_text, updated_at FROM ia_brain.conocimiento_corporativo WHERE activo = true ORDER BY updated_at DESC LIMIT 250`,
         );
-        this.corporateDbDocsCache = { docs: allDocs || [], expiresAt: now + 120_000 };
+        const normalizedDocs = (allDocs || []).map((doc: any) => ({
+          ...doc,
+          search_norm: this.normalizeBrainText(doc.search_text || ''),
+        }));
+        this.corporateDbDocsCache = { docs: normalizedDocs, expiresAt: now + 120_000 };
       }
       rows = this.corporateDbDocsCache.docs
         .map((doc) => {
-          const hay = doc.search_text || '';
+          const hay = doc.search_norm || this.normalizeBrainText(doc.search_text || '');
           let score = 0;
           for (const w of words) {
-            if (hay.includes(w)) score++;
+            if (hay.includes(w)) {
+              const isUserTaught =
+                String(doc.ruta_archivo || '').startsWith('09_Memoria_Colectiva_Catorce') ||
+                doc.categoria === 'Reglas de Comportamiento' ||
+                doc.categoria === 'Procedimientos Operativos';
+              score += isUserTaught ? 2 : 1;
+            }
           }
           return { doc, score };
         })
@@ -676,7 +730,7 @@ export class CatorceBrainService {
                 ruta_archivo: fullP,
                 resumen: fileContent.replace(/[#*`_]/g, '').replace(/\s+/g, ' ').slice(0, 300),
                 fragmento: fileContent.slice(0, 1800),
-                contentLower: fileContent.toLowerCase(),
+                contentLower: this.normalizeBrainText(fileContent),
               });
             }
           }
@@ -763,17 +817,20 @@ ${contenido}
     const safeContent = contenido.replace(/'/g, "''");
     const safeSummary = contenido.slice(0, 260).replace(/'/g, "''");
     const safeUser = String(userName).replace(/'/g, "''");
+    const tagsArr = Array.isArray(params.tags) ? params.tags.filter(Boolean).slice(0, 12) : [];
+    const tagsJson = JSON.stringify(tagsArr).replace(/'/g, "''");
     const embJson = JSON.stringify(embedding.slice(0, 128)); // Resumen compacto + vector
 
     const insertSql = `
       INSERT INTO ia_brain.conocimiento_corporativo
-        (codigo_documento, titulo, categoria, ruta_archivo, contenido, resumen, embedding_json, creado_por_id, creado_por_nombre)
+        (codigo_documento, titulo, categoria, ruta_archivo, contenido, resumen, tags, embedding_json, creado_por_id, creado_por_nombre)
       VALUES
-        ('${code}', '${safeTitle}', '${safeCat}', '09_Memoria_Colectiva_Catorce/${safeFileName}', '${safeContent}', '${safeSummary}', '${embJson}'::jsonb, ${userId || 'NULL'}, '${safeUser}')
+        ('${code}', '${safeTitle}', '${safeCat}', '09_Memoria_Colectiva_Catorce/${safeFileName}', '${safeContent}', '${safeSummary}', '${tagsJson}'::jsonb, '${embJson}'::jsonb, ${userId || 'NULL'}, '${safeUser}')
       RETURNING id, codigo_documento, titulo, categoria, created_at
     `;
 
     const inserted = await this.runSql(insertSql);
+    this.invalidateBrainCaches();
 
     // 3. Registrar en Auditoría
     await this.recordAudit({
@@ -784,7 +841,7 @@ ${contenido}
       tablaDestino: 'ia_brain.conocimiento_corporativo',
       registroId: String(inserted?.[0]?.id || code),
       comandoOriginal: `Guardar en Segundo Cerebro: ${titulo}`,
-      parametros: { titulo, categoria, safeFileName },
+      parametros: { titulo, categoria, tags: tagsArr, safeFileName },
       resultado: { ok: true, archivo: safeFileName },
       canal: 'catorce_ui',
     });
@@ -799,10 +856,17 @@ ${contenido}
   /**
    * 👤 Guarda un hecho o preferencia en la memoria vectorial individual del usuario
    */
-  public async saveUserMemory(user: any, hecho: string, clave: string = 'contexto_operativo', importancia: number = 7) {
+  public async saveUserMemory(
+    user: any,
+    hecho: string,
+    clave: string = 'contexto_operativo',
+    importancia: number = 7,
+    tipoMemoria: string = 'contexto_personal',
+  ) {
     if (!user?.id || !hecho) return;
     const safeHecho = hecho.replace(/'/g, "''");
     const safeClave = clave.replace(/'/g, "''");
+    const safeTipo = (tipoMemoria || 'contexto_personal').replace(/'/g, "''");
     const safeNombre = String(user.nombre_completo || user.nombre || user.email || 'Usuario').replace(/'/g, "''");
     const safeEmail = String(user.email || '').replace(/'/g, "''");
     const safeRol = String(user.rol || '').replace(/'/g, "''");
@@ -811,9 +875,242 @@ ${contenido}
       INSERT INTO ia_brain.memoria_usuarios
         (usuario_id, usuario_email, usuario_nombre, usuario_rol, tipo_memoria, clave, hecho_recordado, importancia)
       VALUES
-        (${Number(user.id)}, '${safeEmail}', '${safeNombre}', '${safeRol}', 'contexto_personal', '${safeClave}', '${safeHecho}', ${Number(importancia)})
+        (${Number(user.id)}, '${safeEmail}', '${safeNombre}', '${safeRol}', '${safeTipo}', '${safeClave}', '${safeHecho}', ${Number(importancia)})
     `;
     await this.runSql(sql);
+    this.invalidateTelemetryCache();
+  }
+
+  private doesLearnedRecordMatchTopic(recordText: string, topicTokens: string[], rawTopicNorm: string): boolean {
+    if (!recordText || topicTokens.length === 0) return false;
+    const normRec = this.normalizeBrainText(recordText);
+    if (rawTopicNorm.length >= 6 && normRec.includes(rawTopicNorm)) return true;
+    const hits = topicTokens.filter((tok) => normRec.includes(tok)).length;
+    return hits >= Math.max(1, Math.ceil(topicTokens.length * 0.6));
+  }
+
+  /**
+   * Aprendizaje inteligente unificado: reemplaza reglas equivalentes sin DELETE y persiste en Segundo Cerebro + memoria activa
+   */
+  public async teachCatorce(
+    params: {
+      titulo: string;
+      contenido: string;
+      tipoAprendizaje: 'regla_comportamiento' | 'procedimiento_operativo' | 'dato_operativo' | 'preferencia_usuario';
+      categoria?: string;
+      tags?: string[];
+      reemplazaTema?: string;
+    },
+    user: any,
+  ) {
+    const titulo = (params.titulo || 'Aprendizaje Operativo CATORCE').trim().slice(0, 120);
+    const contenido = (params.contenido || '').trim();
+    const tipoAprendizaje = params.tipoAprendizaje || 'dato_operativo';
+    const categoria = (params.categoria || '09_Memoria_Colectiva_Catorce').trim();
+    const slugClave = this.normalizeBrainText(titulo).replace(/\s+/g, '_').slice(0, 80) || 'aprendizaje_directo';
+    const userId = Number(user?.id) || 0;
+
+    let replacedCount = 0;
+    const topicBasis = (params.reemplazaTema || '').trim() || titulo;
+    const topicNorm = this.normalizeBrainText(topicBasis);
+    const topicTokens = this.extractTopicTokens(topicBasis);
+
+    if (topicTokens.length > 0 || topicNorm.length >= 5) {
+      if (userId) {
+        const activeUserMems =
+          (await this.runSql<any>(
+            `SELECT id, clave, hecho_recordado FROM ia_brain.memoria_usuarios WHERE usuario_id = ${userId} AND activo = true AND clave <> 'trato_preferido' ORDER BY created_at DESC LIMIT 80`,
+          )) || [];
+        const supersedeMemIds = activeUserMems
+          .filter(
+            (m: any) =>
+              m.clave === slugClave ||
+              this.doesLearnedRecordMatchTopic(`${m.clave || ''} ${m.hecho_recordado || ''}`, topicTokens, topicNorm),
+          )
+          .map((m: any) => Number(m.id))
+          .filter(Boolean);
+        if (supersedeMemIds.length > 0) {
+          await this.runSql(
+            `UPDATE ia_brain.memoria_usuarios SET activo = false, updated_at = NOW() WHERE id IN (${supersedeMemIds.join(',')})`,
+          );
+          replacedCount += supersedeMemIds.length;
+        }
+      }
+
+      const activeLearnedDocs =
+        (await this.runSql<any>(
+          `SELECT id, titulo, contenido FROM ia_brain.conocimiento_corporativo WHERE activo = true AND ruta_archivo LIKE '09_Memoria_Colectiva_Catorce/%' ORDER BY updated_at DESC LIMIT 120`,
+        )) || [];
+      const supersedeDocIds = activeLearnedDocs
+        .filter((d: any) =>
+          this.doesLearnedRecordMatchTopic(`${d.titulo || ''} ${d.contenido || ''}`, topicTokens, topicNorm),
+        )
+        .map((d: any) => Number(d.id))
+        .filter(Boolean);
+      if (supersedeDocIds.length > 0) {
+        await this.runSql(
+          `UPDATE ia_brain.conocimiento_corporativo SET activo = false, updated_at = NOW() WHERE id IN (${supersedeDocIds.join(',')})`,
+        );
+        replacedCount += supersedeDocIds.length;
+      }
+    }
+
+    const saved = await this.addCorporateKnowledge(
+      {
+        titulo,
+        categoria,
+        contenido,
+        tags: params.tags || [],
+      },
+      user,
+    );
+
+    const importancia = tipoAprendizaje === 'regla_comportamiento' || tipoAprendizaje === 'preferencia_usuario' ? 10 : 9;
+    await this.saveUserMemory(user, `[${titulo}] ${contenido}`, slugClave, importancia, tipoAprendizaje);
+
+    this.invalidateBrainCaches();
+    return {
+      ok: true,
+      titulo,
+      contenido,
+      tipoAprendizaje,
+      categoria,
+      replacedCount,
+      documento: saved.documento,
+    };
+  }
+
+  /**
+   * Lista reglas, procedimientos y datos activos aprendidos por CATORCE
+   */
+  public async listLearnedKnowledge(user: any, filterText?: string): Promise<Array<{ fuente: string; tipo: string; titulo: string; contenido: string; fecha?: string }>> {
+    const userId = Number(user?.id) || 0;
+    const [memRows, docRows] = await Promise.all([
+      userId
+        ? this.runSql<any>(
+            `SELECT id, tipo_memoria, clave, hecho_recordado, importancia, created_at FROM ia_brain.memoria_usuarios WHERE usuario_id = ${userId} AND activo = true AND clave <> 'trato_preferido' ORDER BY importancia DESC, created_at DESC LIMIT 25`,
+          )
+        : Promise.resolve([]),
+      this.runSql<any>(
+        `SELECT id, titulo, categoria, Left(contenido, 600) AS contenido, created_at FROM ia_brain.conocimiento_corporativo WHERE activo = true AND (ruta_archivo LIKE '09_Memoria_Colectiva_Catorce/%' OR categoria IN ('Reglas de Comportamiento', 'Procedimientos Operativos', 'Datos de Puestos y Clientes', 'Preferencias de Usuario', '09_Memoria_Colectiva_Catorce')) ORDER BY updated_at DESC LIMIT 25`,
+      ),
+    ]);
+
+    const merged: Array<{ fuente: string; tipo: string; titulo: string; contenido: string; fecha?: string }> = [];
+    const seen = new Set<string>();
+
+    for (const d of docRows || []) {
+      const key = this.normalizeBrainText(`${d.titulo || ''} ${d.contenido || ''}`).slice(0, 90);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      merged.push({
+        fuente: 'Segundo Cerebro',
+        tipo: d.categoria || 'Conocimiento',
+        titulo: d.titulo || 'Nota operativa',
+        contenido: d.contenido || '',
+        fecha: d.created_at,
+      });
+    }
+
+    for (const m of memRows || []) {
+      const txt = String(m.hecho_recordado || '').trim();
+      const titleMatch = txt.match(/^\[([^\]]+)\]\s*(.+)$/);
+      const titulo = titleMatch ? titleMatch[1] : String(m.clave || 'Regla personal').replace(/_/g, ' ');
+      const contenido = titleMatch ? titleMatch[2] : txt;
+      const key = this.normalizeBrainText(`${titulo} ${contenido}`).slice(0, 90);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      merged.push({
+        fuente: 'Memoria Activa',
+        tipo: m.tipo_memoria || 'regla',
+        titulo,
+        contenido,
+        fecha: m.created_at,
+      });
+    }
+
+    const filterTokens = filterText ? this.extractTopicTokens(filterText) : [];
+    const filterNorm = filterText ? this.normalizeBrainText(filterText) : '';
+    if (filterTokens.length > 0) {
+      return merged.filter((item) =>
+        this.doesLearnedRecordMatchTopic(`${item.titulo} ${item.contenido}`, filterTokens, filterNorm),
+      );
+    }
+    return merged;
+  }
+
+  /**
+   * Desactiva de forma segura (activo = false, nunca DELETE) conocimientos aprendidos sobre un tema
+   */
+  public async forgetLearnedKnowledge(topicQuery: string, user: any): Promise<{ ok: boolean; deactivatedCount: number; deactivatedTitles: string[] }> {
+    const cleanTopic = (topicQuery || '').trim();
+    const topicNorm = this.normalizeBrainText(cleanTopic);
+    const topicTokens = this.extractTopicTokens(cleanTopic);
+    if (topicTokens.length === 0) {
+      return { ok: false, deactivatedCount: 0, deactivatedTitles: [] };
+    }
+
+    const userId = Number(user?.id) || 0;
+    const deactivatedTitles: string[] = [];
+    let deactivatedCount = 0;
+
+    if (userId) {
+      const memRows =
+        (await this.runSql<any>(
+          `SELECT id, clave, hecho_recordado FROM ia_brain.memoria_usuarios WHERE usuario_id = ${userId} AND activo = true AND clave <> 'trato_preferido' ORDER BY created_at DESC LIMIT 100`,
+        )) || [];
+      const memIds: number[] = [];
+      for (const m of memRows) {
+        if (this.doesLearnedRecordMatchTopic(`${m.clave || ''} ${m.hecho_recordado || ''}`, topicTokens, topicNorm)) {
+          memIds.push(Number(m.id));
+          deactivatedTitles.push(String(m.hecho_recordado || m.clave).slice(0, 80));
+        }
+      }
+      if (memIds.length > 0) {
+        await this.runSql(
+          `UPDATE ia_brain.memoria_usuarios SET activo = false, updated_at = NOW() WHERE id IN (${memIds.join(',')})`,
+        );
+        deactivatedCount += memIds.length;
+      }
+    }
+
+    const docRows =
+      (await this.runSql<any>(
+        `SELECT id, titulo, contenido FROM ia_brain.conocimiento_corporativo WHERE activo = true AND (ruta_archivo LIKE '09_Memoria_Colectiva_Catorce/%' OR categoria IN ('Reglas de Comportamiento', 'Procedimientos Operativos', 'Datos de Puestos y Clientes', 'Preferencias de Usuario', '09_Memoria_Colectiva_Catorce')) ORDER BY updated_at DESC LIMIT 150`,
+      )) || [];
+    const docIds: number[] = [];
+    for (const d of docRows) {
+      if (this.doesLearnedRecordMatchTopic(`${d.titulo || ''} ${d.contenido || ''}`, topicTokens, topicNorm)) {
+        docIds.push(Number(d.id));
+        if (!deactivatedTitles.some((t) => this.normalizeBrainText(t).includes(this.normalizeBrainText(d.titulo || '')))) {
+          deactivatedTitles.push(String(d.titulo || '').slice(0, 80));
+        }
+      }
+    }
+    if (docIds.length > 0) {
+      await this.runSql(
+        `UPDATE ia_brain.conocimiento_corporativo SET activo = false, updated_at = NOW() WHERE id IN (${docIds.join(',')})`,
+      );
+      deactivatedCount += docIds.length;
+    }
+
+    if (deactivatedCount > 0) {
+      this.invalidateBrainCaches();
+      await this.recordAudit({
+        user,
+        subagente: 'CATORCE-BRAIN',
+        accion: 'DESACTIVAR_CONOCIMIENTO_APRENDIDO',
+        modulo: 'Segundo Cerebro PROLISEG LTDA',
+        tablaDestino: 'ia_brain.conocimiento_corporativo',
+        registroId: docIds[0] ? String(docIds[0]) : 'memoria_usuarios',
+        comandoOriginal: `Olvidar aprendizaje: ${cleanTopic}`,
+        parametros: { topicQuery: cleanTopic, deactivatedCount },
+        resultado: { ok: true, deactivatedTitles: deactivatedTitles.slice(0, 8) },
+        canal: 'catorce_ui',
+      });
+    }
+
+    return { ok: true, deactivatedCount, deactivatedTitles: deactivatedTitles.slice(0, 10) };
   }
 
   /**
@@ -1196,7 +1493,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
     const rawSqlUpper = (operation.sqlStatement || '').toUpperCase();
     if (
       operation.operationType === 'DELETE_ATTEMPT' ||
-      /(DELETEs+FROM|DROPs+TABLE|TRUNCATEs+TABLE|ALTERs+TABLE)/i.test(rawSqlUpper)
+      this.isDestructiveSql(operation.sqlStatement || '')
     ) {
       const auditBlock = await this.recordAudit({
         user,
@@ -1887,6 +2184,8 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
     resultado?: any;
     exitoso?: boolean;
     canal?: string;
+    /** Si es true, el codigo y el sello SHA-256 se calculan al instante y la escritura en BD/Markdown ocurre en segundo plano (solo consultas de lectura). */
+    background?: boolean;
   }) {
     const timestamp = new Date().toISOString();
     const codigo_auditoria = `AUD-CAT-${Date.now().toString().slice(-6)}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
@@ -1919,6 +2218,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
         ('${codigo_auditoria}', ${solicitanteId || 'NULL'}, '${solicitanteNombre}', '${userRole}', ${solicitanteId || 'NULL'}, '${solicitanteNombre}', ${autorizadorId || 'NULL'}, '${autorizadorNombre}', '${params.subagente}', '${params.accion}', '${params.modulo}', '${params.tablaDestino || ''}', '${params.registroId || ''}', '${safeCmd}', '${paramsJson}'::jsonb, '${resultJson}'::jsonb, '${antJson}'::jsonb, '${postJson}'::jsonb, '${hash_integridad}', ${exitoso}, '${params.canal || 'voz_live_api'}', true)
     `;
 
+    const persistAudit = async () => {
     await this.runSql(sql);
 
     // Registro en auditoría transaccional de PostgreSQL si aplica tabla pública
@@ -1946,6 +2246,15 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
       const entryLine = `- **[${new Date().toLocaleTimeString('es-CO')}] \`${codigo_auditoria}\`** | **SHA-256:** \`${hash_integridad.slice(0, 12)}...\` | **Agente:** \`${params.subagente}\` | **Acción:** \`${params.accion}\` | **Solicita:** ${solicitanteNombre} | **Autoriza:** ${autorizadorNombre} | **Comando:** *"${params.comandoOriginal}"*\n`;
       fs.appendFileSync(logFile, entryLine, 'utf8');
     } catch {}
+    };
+
+    if (params.background) {
+      persistAudit().catch((err: any) =>
+        this.logger.warn(`Auditoria en segundo plano fallida (${codigo_auditoria}): ${err?.message || err}`),
+      );
+    } else {
+      await persistAudit();
+    }
 
     return { codigo_auditoria, hash_integridad, timestamp };
   }
