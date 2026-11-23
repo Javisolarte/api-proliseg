@@ -238,8 +238,8 @@ export class ControlAccesoController {
 
   @Post('validar-credenciales')
   @ApiOperation({ summary: 'Valida usuario y contraseña contra un hardware específico' })
-  async validarCredenciales(@Body() body: { ip: string, user: string, pass: string }) {
-    return this.controlAccesoService.validateCredentials(body.ip, body.user, body.pass);
+  async validarCredenciales(@Body() body: { ip: string, user: string, pass: string, mikrotikIp?: string }) {
+    return this.controlAccesoService.validateCredentials(body.ip, body.user, body.pass, body.mikrotikIp);
   }
 
 

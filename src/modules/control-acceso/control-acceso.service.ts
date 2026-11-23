@@ -263,7 +263,8 @@ export class ControlAccesoService implements OnModuleInit {
           );
         }
 
-        // Actualizar detalles del dispositivo con el puerto mapeado HTTP principal
+        // Actualizar detalles del dispositivo con la IP VPN del MikroTik donde se creó el NAT y el puerto mapeado HTTP principal
+        finalIp = mikrotik_ip;
         finalPort = finalActivePort;
 
         // Actualizar mappedPortsInfo si el NAT fue exitoso
@@ -4302,6 +4303,22 @@ export class ControlAccesoService implements OnModuleInit {
 
         const deviceMap = new Map<string, any>();
 
+        const isHikvisionMac = (macAddr: string) => {
+          const m = (macAddr || '').toLowerCase();
+          return m.startsWith('a4:14:37') ||
+            m.startsWith('a4:d5:c2') ||
+            m.startsWith('bc:ad:28') ||
+            m.startsWith('44:55:c4') ||
+            m.startsWith('fc:3f:db') ||
+            m.startsWith('00:40:3d') ||
+            m.startsWith('84:25:3f') ||
+            m.startsWith('e0:50:8b') ||
+            m.startsWith('c0:56:e3') ||
+            m.startsWith('28:57:be') ||
+            m.startsWith('54:c4:15') ||
+            m.startsWith('4c:bd:8f');
+        };
+
         leases.forEach((lease: any) => {
           const address = lease.address;
           const mac = lease['mac-address'] || '';
@@ -4310,13 +4327,7 @@ export class ControlAccesoService implements OnModuleInit {
           const comment = lease.comment || '';
 
           if (address) {
-            const isHikvision = mac.toLowerCase().startsWith('a4:14:37') ||
-              mac.toLowerCase().startsWith('bc:ad:28') ||
-              mac.toLowerCase().startsWith('44:55:c4') ||
-              mac.toLowerCase().startsWith('fc:3f:db') ||
-              mac.toLowerCase().startsWith('00:40:3d') ||
-              mac.toLowerCase().startsWith('84:25:3f') ||
-              mac.toLowerCase().startsWith('e0:50:8b') ||
+            const isHikvision = isHikvisionMac(mac) ||
               hostname.toLowerCase().includes('hik') ||
               hostname.toLowerCase().includes('camera') ||
               hostname.toLowerCase().includes('vms') ||
@@ -4339,13 +4350,7 @@ export class ControlAccesoService implements OnModuleInit {
           const address = arp.address;
           const mac = arp['mac-address'] || '';
           if (address && !deviceMap.has(address)) {
-            const isHikvision = mac.toLowerCase().startsWith('a4:14:37') ||
-              mac.toLowerCase().startsWith('bc:ad:28') ||
-              mac.toLowerCase().startsWith('44:55:c4') ||
-              mac.toLowerCase().startsWith('fc:3f:db') ||
-              mac.toLowerCase().startsWith('00:40:3d') ||
-              mac.toLowerCase().startsWith('84:25:3f') ||
-              mac.toLowerCase().startsWith('e0:50:8b');
+            const isHikvision = isHikvisionMac(mac);
             deviceMap.set(address, {
               ip: address,
               mac: mac,
@@ -4382,13 +4387,7 @@ export class ControlAccesoService implements OnModuleInit {
           const iface = neigh.interface || '';
 
           if (address && !deviceMap.has(address)) {
-            const isHikvision = mac.toLowerCase().startsWith('a4:14:37') ||
-              mac.toLowerCase().startsWith('bc:ad:28') ||
-              mac.toLowerCase().startsWith('44:55:c4') ||
-              mac.toLowerCase().startsWith('fc:3f:db') ||
-              mac.toLowerCase().startsWith('00:40:3d') ||
-              mac.toLowerCase().startsWith('84:25:3f') ||
-              mac.toLowerCase().startsWith('e0:50:8b') ||
+            const isHikvision = isHikvisionMac(mac) ||
               identity.toLowerCase().includes('hik') ||
               identity.toLowerCase().includes('camera') ||
               identity.toLowerCase().includes('vms') ||
@@ -4608,22 +4607,26 @@ export class ControlAccesoService implements OnModuleInit {
     }
   }
 
-  async validateCredentials(ip: string, user: string, pass: string): Promise<any> {
+  async validateCredentials(ip: string, user: string, pass: string, mikrotikIp?: string): Promise<any> {
     let targetIp = ip;
     let targetPort = 80;
 
-    // Auto-resolución de IPs privadas vía MikroTik
-    const isPrivate = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(ip);
+    // Auto-resolución de IPs privadas vía el MikroTik correspondiente (evita apuntar siempre al primero)
+    const isPrivate = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(ip) && !this.isVpnIp(ip);
     if (isPrivate) {
       try {
-        const { data: servers } = await this.supabase
-          .getClient()
-          .from('control_acceso_servidores_mikrotik')
-          .select('*')
-          .limit(1);
+        let srv: any = null;
+        if (mikrotikIp) {
+          const { data } = await this.supabase
+            .getClient()
+            .from('control_acceso_servidores_mikrotik')
+            .select('*')
+            .eq('ip_publica', mikrotikIp)
+            .maybeSingle();
+          srv = data;
+        }
 
-        if (servers && servers.length > 0) {
-          const srv = servers[0];
+        if (srv) {
           const lastOctet = ip.split('.').pop();
           const mappedPort = 10000 + Number(lastOctet || '80');
 
@@ -4644,6 +4647,44 @@ export class ControlAccesoService implements OnModuleInit {
       } catch (err) {
         this.logger.error(`❌ [AUTO-NAT ERROR] No se pudo auto-mapear NAT para validación: ${err.message}`);
       }
+    }
+
+    // 1. Intento directo Hikvision ISAPI por VPN/NAT
+    try {
+      const resp = await this.executeDigestAuthRequest(
+        'GET',
+        `http://${targetIp}:${targetPort}/ISAPI/System/deviceInfo`,
+        user,
+        pass,
+        undefined,
+        'text',
+        5000
+      );
+      const xml = String(resp?.data || '');
+      if (xml.includes('<DeviceInfo') || xml.includes('<model>')) {
+        const model = this.extractXmlTag(xml, 'model') || 'Hikvision Terminal';
+        const serial = this.extractXmlTag(xml, 'serialNumber') || '';
+        const deviceName = this.extractXmlTag(xml, 'deviceName') || '';
+        return { valid: true, brand: 'Hikvision', model, serial, deviceName };
+      }
+    } catch {
+      // Continuar con prueba Dahua / proxy
+    }
+
+    // 2. Intento directo Dahua CGI por VPN/NAT
+    try {
+      const info = await this.dahuaService.getSystemInfo(targetIp, targetPort, user, pass);
+      if (info && (info.deviceType || info.serialNo)) {
+        return {
+          valid: true,
+          brand: 'Dahua',
+          model: info.deviceType || 'Dahua Terminal',
+          serial: info.serialNo || '',
+          deviceName: info.deviceType || '',
+        };
+      }
+    } catch {
+      // Continuar con fallback proxy
     }
 
     const url = `${this.proxyUrl}/validate`;

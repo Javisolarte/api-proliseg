@@ -78,6 +78,25 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   private readonly callCooldowns = new Map<string, number>();
   /** Estado de llamada previo por dispositivo para detectar fin de llamada o respuesta remota */
   private readonly lastCallStatus = new Map<string, string>();
+  /** Marca temporal de última llamada a central detectada por hardware o listener TCP */
+  private readonly lastCentralCallTimestamp = new Map<string, number>();
+
+  private async isCentralCallActive(device: DeviceInfo): Promise<boolean> {
+    const lastCall = this.lastCentralCallTimestamp.get(device.id) || 0;
+    if (Date.now() - lastCall < 15000) {
+      return true;
+    }
+    try {
+      const resp = await axios.get('http://10.8.0.1:8007', { timeout: 800 });
+      const active = resp.data?.active_calls || {};
+      const devIp = String(device.ip_direccion || '');
+      if (active[devIp] || (active['10.8.0.8'] && String(device.nombre_identificador || '').toUpperCase().includes('AMIRA'))) {
+        this.lastCentralCallTimestamp.set(device.id, Date.now());
+        return true;
+      }
+    } catch {}
+    return false;
+  }
 
   public setCallCooldown(deviceId: string, durationMs: number = 25000) {
     this.callCooldowns.set(deviceId, Date.now() + durationMs);
@@ -422,6 +441,36 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
 
       if (tienePantallas) {
         this.logger.log(`📞 [IntercomSetup] ${device.nombre_identificador} tiene pantallas conectadas: Preservando comunicaciones y enlace con pantallas de residentes intactos.`);
+        // Para AMIRA PRINCIPAL: Asegurar ÚNICAMENTE RelatedDeviceAddress apuntando a la central (10.8.0.1:8008)
+        // para que "Llamar a la Central" funcione sin dar "Error en la llamada"
+        const isAmira = String(device.nombre_identificador || '').toUpperCase().includes('AMIRA');
+        if (isAmira) {
+          const relatedDevXml = `<?xml version="1.0" encoding="UTF-8"?>
+<RelatedDeviceAddress version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
+  <ManageAddress>
+    <addressingFormatType>ipaddress</addressingFormatType>
+    <ipAddress>10.8.0.1</ipAddress>
+  </ManageAddress>
+  <SIPServerAddress>
+    <addressingFormatType>ipaddress</addressingFormatType>
+    <ipAddress>0.0.0.0</ipAddress>
+  </SIPServerAddress>
+  <centerPort>8008</centerPort>
+  <CenterAddress>
+    <addressingFormatType>ipaddress</addressingFormatType>
+    <ipAddress>10.8.0.1</ipAddress>
+  </CenterAddress>
+</RelatedDeviceAddress>`;
+          await this.executeDigestRequest(
+            'PUT',
+            `${base}/ISAPI/VideoIntercom/relatedDeviceAddress`,
+            user,
+            pass,
+            relatedDevXml,
+            'application/xml',
+            5000
+          ).catch(() => {});
+        }
         return;
       }
 
@@ -925,6 +974,9 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     // Captura timbre VideoIntercom (major 3, minor 43/1/88), botón llamada (major 5, minor 51), VoiceTalk (DS-K1T344) y estados calling/ring
     // NOTA: minor 112 (0x70) es MINOR_CALL_MANAGEMENT_CENTER (Llamar a la central en pantalla táctil DS-KD9203 / frentes de calle).
     const isCallCenterIntercom = (major === 3 && sub === 112);
+    if (isCallCenterIntercom) {
+      this.lastCentralCallTimestamp.set(device.id, Date.now());
+    }
     const isRemoteOperation = major === 3 && !isCallCenterIntercom && (sub === 113 || sub === 114 || !!info?.remoteHostAddr);
     const isRing =
       !isRemoteOperation &&
@@ -1082,8 +1134,26 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
               calleeData = cResp?.data?.CalleeInfo || cResp?.data;
             } catch {}
 
-            const esLlamadaApto = this.isCallToApartmentOrScreen(device, calleeData || cs);
+            let esLlamadaApto = this.isCallToApartmentOrScreen(device, calleeData || cs);
             const apto = this.extractApartmentNumber(calleeData || cs);
+
+            // Verificación para dispositivos con pantallas (AMIRA PRINCIPAL):
+            // Si el dispositivo tiene pantallas conectadas, verificar si el timbrado es hacia la Central
+            const tienePantallas = !!(
+              device.configuracion_tecnica?.tiene_pantallas ||
+              device.configuracion_tecnica?.pantallas_conectadas ||
+              device.configuracion_tecnica?.modo_citofonia === 'pantallas' ||
+              String(device.nombre_identificador || '').toUpperCase().includes('AMIRA PRINCIPAL')
+            );
+            if (tienePantallas) {
+              const isCentral = await this.isCentralCallActive(device);
+              if (isCentral) {
+                esLlamadaApto = false;
+              } else {
+                esLlamadaApto = true;
+              }
+            }
+
             const tipoEv = esLlamadaApto ? 'llamada_apartamento' : 'llamada';
             const aptoStr = apto ? `Apto ${apto}` : 'Apto';
             const nombrePer = esLlamadaApto ? (apto ? `Llamando al Apto ${apto}` : 'Llamando al Apto') : 'Llamada al Centro de Gestión';
@@ -1476,19 +1546,21 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
     }
 
     const apto = this.extractApartmentNumber(info);
-    // Solo es llamada a apartamento si se detectó un número de apartamento específico (ej: 601, 302, etc.)
     if (apto) {
       return true;
     }
 
-    // Si no hay un número de apartamento específico identificado (o el timbrado proviene de callStatus "ring" por "Llamar a la Central"):
-    // Siempre es llamada al Centro de Gestión / Central para que timbre en Prolicontrol y el operador de portería pueda contestar
-    const isGenericCallStatus = info?.status === 'ring' || info?.CallStatus?.status === 'ring' || (!subEv && !desc);
-    if (isGenericCallStatus && !apto) {
-      return false;
+    // Evento de hardware directo hacia habitación/pantalla (minor 43)
+    if (subEv === 43) {
+      return true;
     }
 
-    // Por defecto, sin apartamento específico no se clasifica como apartamento
+    // Para dispositivos con pantallas (AMIRA PRINCIPAL): si no es llamada explícita a la central, es a pantalla
+    if (tienePantallas && !isExplicitCallCenter) {
+      return true;
+    }
+
+    // Para dispositivos sin pantallas (Solsticio, Vado, etc.): sin apartamento es llamada a la Central
     return false;
   }
 
@@ -1598,6 +1670,9 @@ export class DevicePollerService implements OnModuleInit, OnModuleDestroy {
   private buildEventoAcceso(device: DeviceInfo, info: any, timestampStr: string): EventoAcceso {
     const major = Number(info?.majorEventType ?? info?.major ?? 0);
     const minor = Number(info?.subEventType ?? info?.minor ?? info?.sub ?? 0);
+    if (major === 3 && minor === 112) {
+      this.lastCentralCallTimestamp.set(device.id, Date.now());
+    }
     const desc = String(info?.eventDescription || '').toLowerCase();
     const eventType = info?.eventType || (desc.includes('management center') || desc.includes('call center') ? 'call' : undefined);
     const tipoEvento = this.mapHikvisionEventType(major, minor, eventType, info);
