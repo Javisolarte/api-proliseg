@@ -495,7 +495,7 @@ export class ControlAccesoService implements OnModuleInit {
   async controlPuerta(
     ip: string,
     doorId: number = 1,
-    command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada',
+    command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada' | 'reiniciar',
     options?: { user?: string; pass?: string; port?: number; marca?: string; deviceId?: string; operator?: any }
   ): Promise<{ ok: boolean; mensaje: string; marca?: string; detalle?: any }> {
     this.logger.log(`🚪 [PUERTA] Comando "${command}" → IP ${ip} | Puerta ${doorId}`);
@@ -575,7 +575,17 @@ export class ControlAccesoService implements OnModuleInit {
       let resultado: { ok: boolean; mensaje: string; marca?: string; detalle?: any };
       const targetDoorId = Number(deviceConfig?.numero_puerta ?? deviceConfig?.canal_puerta ?? doorId ?? 1);
 
-      if (isDahua) {
+      if (command === 'reiniciar') {
+        resultado = await this.rebootDispositivoHardware(
+          target.ip,
+          target.port,
+          user,
+          pass,
+          isDahua,
+          isHikvision,
+          options?.deviceId,
+        );
+      } else if (isDahua) {
         const resolvedSdkPort = this.resolveDahuaSdkPort(target.port, deviceConfig, target.via);
         resultado = await this.controlPuertaDahua(target.ip, target.port, targetDoorId, command, user, pass, resolvedSdkPort);
       } else if (isHikvision || marca.includes('hikvision') || marca.includes('hik')) {
@@ -603,6 +613,80 @@ export class ControlAccesoService implements OnModuleInit {
     } catch (err) {
       this.logger.error(`❌ [PUERTA ERROR] ${err.message}`);
       return { ok: false, mensaje: `Error al ejecutar comando: ${err.message}` };
+    }
+  }
+
+  /**
+   * 🔄 Reinicio eléctrico seguro (SOLO REBOOT: apagar y encender, sin formatear ni borrar usuarios/configuración)
+   * Soporta terminales Hikvision (PUT /ISAPI/System/reboot) y Dahua (GET /cgi-bin/magicBox.cgi?action=reboot)
+   */
+  private async rebootDispositivoHardware(
+    ip: string,
+    port: number,
+    user: string,
+    pass: string,
+    isDahua: boolean,
+    isHikvision: boolean,
+    deviceId?: string,
+  ): Promise<{ ok: boolean; mensaje: string; marca?: string; detalle?: any }> {
+    this.logger.log(`🔄 [REBOOT SEGURO] Enviando orden de reinicio eléctrico (SOLO REBOOT) a ${ip}:${port}...`);
+
+    const scheduleMediaMtxReconnect = () => {
+      if (!deviceId) return;
+      const streamName = `cam_${String(deviceId).substring(0, 8)}`;
+      setTimeout(async () => {
+        try {
+          const apiAuth = { username: 'proliseg_vms', password: 'vms_password_2026' };
+          await axios.delete(`https://servidor.proliseg.com/webrtc-api/v3/config/paths/delete/${streamName}`, { auth: apiAuth }).catch(() => {});
+          await new Promise((r) => setTimeout(r, 2000));
+          await this.startVideoStream(deviceId);
+        } catch {}
+      }, 42000);
+    };
+
+    const tryHikvisionReboot = async () => {
+      const url = `http://${ip}:${port}/ISAPI/System/reboot`;
+      const resp = await this.executeDigestAuthRequest('PUT', url, user, pass, null, 'text', 6000);
+      scheduleMediaMtxReconnect();
+      return {
+        ok: true,
+        marca: 'Hikvision',
+        mensaje: `Reinicio eléctrico (reboot) enviado correctamente al terminal Hikvision (${ip}:${port}). El equipo tardará ~40 segundos en volver en línea.`,
+        detalle: { endpoint: '/ISAPI/System/reboot', mode: 'SAFE_REBOOT_ONLY', response: String(resp?.data || 'OK').slice(0, 120) },
+      };
+    };
+
+    const tryDahuaReboot = async () => {
+      const res = await this.dahuaService.cgi(ip, port, user, pass, 'GET', '/cgi-bin/magicBox.cgi?action=reboot', undefined, 'text', undefined, 6000);
+      scheduleMediaMtxReconnect();
+      return {
+        ok: true,
+        marca: 'Dahua',
+        mensaje: `Reinicio eléctrico (reboot) enviado correctamente al terminal Dahua (${ip}:${port}). El equipo tardará ~40 segundos en volver en línea.`,
+        detalle: { endpoint: '/cgi-bin/magicBox.cgi?action=reboot', mode: 'SAFE_REBOOT_ONLY', response: String(res?.data || 'OK').trim() },
+      };
+    };
+
+    if (isDahua) {
+      try {
+        return await tryDahuaReboot();
+      } catch (errDahua: any) {
+        try {
+          return await tryHikvisionReboot();
+        } catch {
+          return { ok: false, marca: 'Dahua', mensaje: `No se pudo reiniciar el dispositivo Dahua (${ip}:${port}): ${errDahua.message}` };
+        }
+      }
+    }
+
+    try {
+      return await tryHikvisionReboot();
+    } catch (errHik: any) {
+      try {
+        return await tryDahuaReboot();
+      } catch {
+        return { ok: false, marca: isHikvision ? 'Hikvision' : 'Control Acceso', mensaje: `No se pudo reiniciar el dispositivo (${ip}:${port}): ${errHik.message}` };
+      }
     }
   }
 
@@ -2381,7 +2465,7 @@ export class ControlAccesoService implements OnModuleInit {
   private async registrarResultadoPuerta(
     ip: string,
     doorId: number,
-    command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada',
+    command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada' | 'reiniciar',
     deviceId: string | undefined,
     resultado: { ok: boolean; mensaje: string; marca?: string; detalle?: any },
     operator?: any,

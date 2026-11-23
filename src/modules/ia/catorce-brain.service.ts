@@ -484,7 +484,7 @@ export class CatorceBrainService {
       admin.from('turnos_reemplazos').select('id, turno_original_id, empleado_reemplazo_id, motivo, estado, fecha_autorizacion').order('created_at', { ascending: false }).limit(15),
       this.runSql(`SELECT COUNT(*)::int AS total FROM ia_brain.conocimiento_corporativo WHERE activo = true`),
       user?.id
-        ? this.runSql(`SELECT id, tipo_memoria, clave, hecho_recordado, importancia, created_at FROM ia_brain.memoria_usuarios WHERE usuario_id = ${Number(user.id)} AND activo = true ORDER BY importancia DESC, created_at DESC LIMIT 15`)
+        ? this.runSql(`SELECT id, tipo_memoria, clave, hecho_recordado, importancia, created_at FROM ia_brain.memoria_usuarios WHERE usuario_id = ${Number(user.id)} AND activo = true AND clave <> 'trato_preferido' ORDER BY importancia DESC, created_at DESC LIMIT 15`)
         : Promise.resolve([]),
       this.runSql(`SELECT id, codigo_auditoria, usuario_nombre, usuario_rol, subagente, accion_ejecutada, modulo_afectado, comando_original, exitoso, canal, created_at FROM ia_brain.auditoria_acciones ORDER BY created_at DESC LIMIT 20`),
     ]);
@@ -3781,14 +3781,18 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
   // CONTROL REMOTO DE PUERTAS Y ACCESOS IOT (BRAZOS FISICOS HIKVISION / DAHUA)
   // =========================================================================
   public parseDoorCommandAndId(query: string): {
-    command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada' | null;
+    command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada' | 'reiniciar' | 'bloqueado-formateo' | null;
     doorId?: number;
     applyAll: boolean;
   } {
     const qNorm = this.normalizeFuzzy(query || '');
 
-    let command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada' | null = null;
-    if (/\b(siempre abierta|mantener abierta|deja abierta|dejar abierta|modo libre|puerta libre|apertura permanente)\b/i.test(qNorm)) {
+    let command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada' | 'reiniciar' | 'bloqueado-formateo' | null = null;
+    if (/\b(formatea|formatear|formateo|reset de fabrica|restaurar de fabrica|restaura de fabrica|factory reset|borrar memoria|limpiar dispositivo|formatear control)\b/i.test(qNorm)) {
+      command = 'bloqueado-formateo';
+    } else if (/\b(reinicia|reiniciar|reiniciame|reinicio|reboot|apaga y prende|apagar y prender|prender y apagar|prende y apaga|ciclo de encendido)\b/i.test(qNorm)) {
+      command = 'reiniciar';
+    } else if (/\b(siempre abierta|mantener abierta|deja abierta|dejar abierta|modo libre|puerta libre|apertura permanente)\b/i.test(qNorm)) {
       command = 'siempre-abierta';
     } else if (/\b(siempre cerrada|mantener cerrada|deja cerrada|dejar cerrada|bloqueo total|cierre permanente|tranca total)\b/i.test(qNorm)) {
       command = 'siempre-cerrada';
@@ -3808,7 +3812,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
       doorId = 3;
     }
 
-    const applyAll = /\b(todas las puertas|todos los accesos|todos los portones|todas las entradas)\b/i.test(qNorm);
+    const applyAll = /\b(todas las puertas|todos los accesos|todos los controles|todos los biometricos|todos los dispositivos|todos los portones|todas las entradas)\b/i.test(qNorm);
     return { command, doorId, applyAll };
   }
 
@@ -3852,7 +3856,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
       deviceId?: string;
       ip?: string;
       doorId?: number;
-      command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada';
+      command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada' | 'reiniciar';
       applyAll?: boolean;
     },
     user?: any,
@@ -3909,6 +3913,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
         cerrar: 'Cerrada / Asegurada',
         'siempre-abierta': 'Siempre Abierta (Modo Libre)',
         'siempre-cerrada': 'Siempre Cerrada (Bloqueo Total)',
+        reiniciar: 'Reiniciando dispositivo (Reboot CATORCE)',
       };
 
       if (hwResult.ok) {
@@ -3979,7 +3984,7 @@ ${params.persona_involucrada ? `• Persona / Visitante: ${params.persona_involu
       if (foundByIp) return executeOnSingleDevice(foundByIp, params.doorId);
     }
 
-    const doorStopWords = /\b(catorce|por|favor|abre|abrir|abreme|abra|abrirle|cierra|cerrar|cierrame|cierre|desbloquea|desbloquear|destraba|destrabar|libera|liberar|da|paso|dar|bloquea|bloquear|asegura|asegurar|traba|trabar|deja|dejar|mantener|siempre|abierta|cerrada|modo|libre|permanente|emergencia|puerta|puertas|acceso|accesos|control|controles|biometrico|biometricos|porton|torniquete|talanquera|citofono|del|de|la|el|los|las|en|al|a|un|una|remoto|remotamente|puesto|edificio|sede|numero|canal|todas|todos)\b/gi;
+    const doorStopWords = /\b(catorce|14|oye|hola|por|favor|abre|abrir|abreme|abra|abrirle|cierra|cerrar|cierrame|cierre|reinicia|reiniciar|reiniciame|reinicio|reboot|apaga|apagar|prende|prender|encender|desbloquea|desbloquear|destraba|destrabar|libera|liberar|da|paso|dar|bloquea|bloquear|asegura|asegurar|traba|trabar|deja|dejar|mantener|siempre|abierta|cerrada|modo|libre|permanente|emergencia|puerta|puertas|acceso|accesos|control|controles|biometrico|biometricos|dispositivo|dispositivos|equipo|equipos|terminal|terminales|porton|torniquete|talanquera|citofono|del|de|la|el|los|las|en|al|a|un|una|remoto|remotamente|puesto|edificio|sede|numero|canal|todas|todos)\b/gi;
     const cleanTarget = rawTarget.replace(doorStopWords, ' ').replace(/\s+/g, ' ').trim();
 
     if (params.applyAll) {

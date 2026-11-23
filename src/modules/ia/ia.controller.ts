@@ -301,4 +301,17 @@ export class IaController {
     await this.catorceBrain.clearWorkingMemory(user);
     return { ok: true, message: 'Memoria de trabajo limpiada exitosamente.' };
   }
+
+  // ============================================================
+  // 🔹 15. REPORTE DIARIO DE VERIFICACIÓN OPERATIVA (LLAMADAS, ACCESOS, SISTEMA)
+  // ============================================================
+  @Get('catorce/daily-report')
+  @ApiOperation({
+    summary: 'Obtiene o ejecuta la verificación diaria integral de CATORCE (14): llamadas/citofonía SIP/WebRTC, controles de acceso y sistema',
+  })
+  async getDailyVerificationReport(@Req() req: any) {
+    const force = req?.query?.refresh === 'true' || req?.query?.refresh === '1';
+    const report = await this.catorceSentinel.getOrRunDailyVerification(force);
+    return { ok: true, report };
+  }
 }

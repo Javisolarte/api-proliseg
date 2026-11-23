@@ -98,6 +98,47 @@ export class IaService {
 
   private readonly BLOCKED_ROLES = ['cliente'];
   private preferredNameCache = new Map<number, { name: string; expiresAt: number }>();
+  private userTurnCounter = new Map<string, number>();
+
+  /**
+   * 🤝 Determina de forma natural cuándo incluir el vocativo (ej. "Ing. Solarte" / "Ingeniero")
+   * para mantener máximo respeto sin repetirlo robóticamente en todos los mensajes.
+   */
+  private getNaturalVocativeControl(activeUserName: string, user: any, forceInclude = false): {
+    includeThisTurn: boolean;
+    prefix: string;
+    suffix: string;
+  } {
+    const key = String(user?.id || user?.email || 'default_user');
+    const nextTurn = (this.userTurnCounter.get(key) || 0) + 1;
+    this.userTurnCounter.set(key, nextTurn);
+
+    // Incluir vocativo en el primer turno o cada 4 turnos (o cuando se fuerce en una confirmación importante)
+    const includeThisTurn = forceInclude || nextTurn === 1 || nextTurn % 4 === 0;
+    return {
+      includeThisTurn,
+      prefix: includeThisTurn ? `${activeUserName}, ` : '',
+      suffix: includeThisTurn ? `, ${activeUserName}` : '',
+    };
+  }
+
+  /**
+   * Limpia vocativos redundantes al inicio de respuestas consecutivas para que el diálogo suene natural y fluido
+   */
+  private stripRedundantVocativeIfNeeded(text: string, activeUserName: string, includeThisTurn: boolean): string {
+    if (!text || includeThisTurn) return text;
+    const escaped = activeUserName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`^(?:(?:hola|entendido|claro|listo|con gusto|perfecto)\\s*,?\\s+)?(?:${escaped}|ing\\.?\\s*solarte|ingeniero(?:\\s+solarte)?)\\s*[,.:;-]+\\s*`, 'i');
+    const match = text.match(regex);
+    if (match) {
+      const leadingWordMatch = match[0].match(/^(hola|entendido|claro|listo|con gusto|perfecto)/i);
+      const rest = text.slice(match[0].length).trim();
+      if (!rest) return text;
+      const capRest = rest.charAt(0).toUpperCase() + rest.slice(1);
+      return leadingWordMatch ? `${leadingWordMatch[1].charAt(0).toUpperCase() + leadingWordMatch[1].slice(1).toLowerCase()}. ${capRest}` : capRest;
+    }
+    return text;
+  }
 
 
 
@@ -232,27 +273,68 @@ export class IaService {
 
       const toolsUsed: string[] = [];
 
-
+      const vocativeCtrl = this.getNaturalVocativeControl(activeUserName, user);
+      const pendingDailyReport = await this.catorceSentinel.consumePendingDailyReportForUser(user);
 
       // =========================================================================
-      // 0-0: SALUDOS DIRECTOS Y RESPUESTA ULTRA-VELOZ (<50ms)
+      // 0-00: CONSULTA O ENTREGA DE VERIFICACIÓN DIARIA (LLAMADAS, CONTROLES, SISTEMA)
+      // =========================================================================
+      const isDailyVerificationRequest =
+        /\b(reporte diario|verificacion diaria|chequeo diario|diagnostico diario|verifica que todo este funcionando|verificar que todo este funcionando|como estan las llamadas|funcionando llamadas|estado de las llamadas|estado de llamadas|todo este funcionando)\b/i.test(qNorm);
+
+      if (isDailyVerificationRequest) {
+        const forceRefresh = /\b(verifica|verificar|ejecuta|actualiza|haz|hacer)\b/i.test(qNorm);
+        const dailyRep = await this.catorceSentinel.getOrRunDailyVerification(forceRefresh);
+        const reportMsg = `${vocativeCtrl.includeThisTurn ? activeUserName + ', ' : ''}${dailyRep.spokenSummary}\n\n${dailyRep.detailedSummary}`;
+        const audioUrl = await this.generateVoiceIfRequested(dailyRep.spokenSummary, canal);
+        this.catorceBrain.appendConversationTurn(user, userQuery, reportMsg, canal, ['core', 'accesos'], ['CATORCE-SENTINEL:dailyVerification']);
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: 'REPORTE_DIARIO_VERIFICACION',
+          activity: 'Entregando reporte diario de llamadas y controles de acceso',
+          activatedNodes: ['core', 'accesos'],
+          toolsUsed: ['CATORCE-SENTINEL:dailyVerification'],
+          dailyReport: dailyRep,
+          message: reportMsg,
+          audioUrl,
+          audioDataUrl: audioUrl,
+          latencyMs: Date.now() - startTime,
+        };
+      }
+
+      // =========================================================================
+      // 0-0: SALUDOS Y LLAMADO POR NOMBRE ("CATORCE" O "14") ULTRA-VELOZ (<30ms)
       // =========================================================================
       const isPureGreeting =
-        /^(hola|buenos dias|buenas tardes|buenas noches|buen dia|como estas|como esta|como te va|que tal|como va todo|hola catorce|saludos)\b/i.test(qNorm) &&
-        !/\b(contrato|minuta|turno|empleado|puesto|dispositivo|alarma|cabrachi|crear|inactivar|novedad|guarda|informe|auditoria|buscar)\b/i.test(qNorm) &&
+        /^(hola|buenos dias|buenas tardes|buenas noches|buen dia|como estas|como esta|como te va|que tal|como va todo|hola catorce|hola 14|oye catorce|oye 14|hey catorce|hey 14|catorce|14|saludos|estas ahi|me escuchas)\b/i.test(qNorm) &&
+        !/\b(contrato|minuta|turno|empleado|puesto|dispositivo|alarma|cabrachi|crear|inactivar|novedad|guarda|informe|auditoria|buscar|reinicia|reiniciar|reboot|abre|abrir|cierra|cerrar)\b/i.test(qNorm) &&
         qNorm.length < 50;
 
       if (isPureGreeting) {
-        const greetingMsg = `Hola ${activeUserName}, todo en orden por aquí en el Segundo Cerebro de Prolicontrol. ¿En qué le puedo colaborar en este momento?`;
+        let greetingMsg = '';
+        if (pendingDailyReport) {
+          greetingMsg = `Hola ${activeUserName}, a la orden. Ya realicé la verificación diaria de hoy: ${pendingDailyReport.spokenSummary} ¿En qué le puedo colaborar en este momento?`;
+        } else {
+          const replies = [
+            `A la orden${vocativeCtrl.suffix}. Todo en orden en Prolicontrol, ¿en qué le colaboro?`,
+            `Aquí estoy${vocativeCtrl.suffix}. ¿Qué gestión realizamos ahora?`,
+            `Hola${vocativeCtrl.suffix}, todo operativo por aquí. Dígame qué necesita.`,
+            `Le escucho. ¿En qué le puedo colaborar en este momento?`,
+          ];
+          greetingMsg = replies[Math.floor(Math.random() * replies.length)];
+        }
         const audioUrl = await this.generateVoiceIfRequested(greetingMsg, canal);
         this.catorceBrain.appendConversationTurn(user, userQuery, greetingMsg, canal, ['core'], ['CATORCE-CORE:saludoDirecto']);
         return {
           ok: true,
           assistant: 'CATORCE',
-          actionExecuted: 'SALUDO_CORDIAL',
-          activity: 'Saludando al Ingeniero',
+          actionExecuted: pendingDailyReport ? 'SALUDO_CON_REPORTE_DIARIO' : 'SALUDO_CORDIAL',
+          activity: 'Atendiendo llamado de CATORCE (14)',
+          dailyReport: pendingDailyReport || undefined,
           message: greetingMsg,
           audioUrl,
+          audioDataUrl: audioUrl,
           latencyMs: Date.now() - startTime,
         };
       }
@@ -263,7 +345,7 @@ export class IaService {
 
       // =========================================================================
 
-      const nameLearningMatch = userQuery.match(/\b(?:a partir de ahora\s+|de ahora en adelante\s+)?(?:llamame|dime|nombrame|puedes llamarme|debes llamarme|mi nombre es)\s+([a-zA-Z0-9_áéíóúÁÉÍÓÚñÑ ]+)/i);
+      const nameLearningMatch = userQuery.match(/\b(?:a partir de ahora\s+|de ahora en adelante\s+)?(?:llamame|dime|nombrame|puedes llamarme|debes llamarme|mi nombre es)\s+([a-zA-Z0-9_áéíóúÁÉÍÓÚñÑ .]+)/i);
 
       if (nameLearningMatch) {
 
@@ -277,7 +359,7 @@ export class IaService {
 
             user,
 
-            `El usuario indicó expresamente que su nombre o título preferido es "${customName}". Dirígete a él SIEMPRE como "${customName}".`,
+            `El usuario indicó que su nombre o título preferido es "${customName}". Mantén un trato de usted natural y respetuoso usando "${customName}" ocasionalmente sin repetirlo en todos los mensajes.`,
 
             'trato_preferido',
 
@@ -291,7 +373,7 @@ export class IaService {
             this.preferredNameCache.set(Number(user.id), { name: customName, expiresAt: Date.now() + 60_000 });
           }
 
-          const confirmMsg = `Entendido, ${customName}. A partir de este momento me dirigiré a usted siempre como ${customName}. He registrado esta instrucción en mi memoria permanente para que todas nuestras conversaciones en Prolicontrol usen su trato preferido. ¿En qué le puedo colaborar hoy, ${customName}?`;
+          const confirmMsg = `Entendido, ${customName}. Lo tendré presente con total respeto y naturalidad en nuestras conversaciones sin repetirlo en cada frase. ¿En qué le colaboro ahora?`;
 
           this.catorceBrain.appendConversationTurn(user, userQuery, confirmMsg, canal, ['core', 'brain'], ['CATORCE-MEMORY:setUserPreferredName']);
 
@@ -576,16 +658,34 @@ export class IaService {
 
 
       // =========================================================================
-      // 0-0B: CONTROL FISICO REMOTO DE PUERTAS Y ACCESOS IOT (BRAZOS CATORCE-IOT)
+      // 0-0B: CONTROL FISICO REMOTO DE PUERTAS Y ACCESOS IOT (BRAZOS CATORCE-IOT + REBOOT SEGURO)
       // =========================================================================
       const parsedDoorCmd = this.catorceBrain.parseDoorCommandAndId(userQuery);
       const mentionsAccessNoun =
-        /\b(puerta|puertas|acceso|accesos|porton|portones|torniquete|torniquetes|talanquera|biometrico|citofono|entrada|salida|porteria|hikvision|dahua|rele)\b/i.test(qNorm);
+        /\b(puerta|puertas|acceso|accesos|control|controles|dispositivo|dispositivos|equipo|equipos|terminal|terminales|porton|portones|torniquete|torniquetes|talanquera|biometrico|biometricos|citofono|entrada|salida|porteria|hikvision|dahua|rele)\b/i.test(qNorm);
       const isDoorReadOnlyQuestion =
         /\b(cuantas puertas|cuantos controles|estado de las puertas|estado de puertas|como funciona|manual|protocolo|test de dispositivos|testear dispositivos|probar puertas|verificar puertas)\b/i.test(qNorm);
       const isListDoorsQuery =
         !parsedDoorCmd.command &&
         /\b(que puertas|cuales puertas|lista de puertas|listar puertas|muestra.*puertas|muestrame.*puertas|ver puertas|ver controles de acceso)\b/i.test(qNorm);
+
+      // 🛡️ Bloqueo estricto anti-formateo / anti-factory-reset en controles de acceso
+      if (parsedDoorCmd.command === 'bloqueado-formateo' && mentionsAccessNoun) {
+        const blockMsg = `Por protocolo estricto de seguridad de hardware, solo tengo autorizado ejecutar reinicios eléctricos (reboot: apagar y encender) en los controles de acceso. Cualquier operación de formateo o restauración de fábrica está bloqueada permanentemente.`;
+        const audioUrl = await this.generateVoiceIfRequested(blockMsg, canal);
+        this.catorceBrain.appendConversationTurn(user, userQuery, blockMsg, canal, ['accesos'], ['CATORCE-IOT:blockFormat']);
+        return {
+          ok: true,
+          assistant: 'CATORCE',
+          actionExecuted: 'BLOQUEO_FORMATEO_HARDWARE',
+          activatedNodes: ['accesos'],
+          toolsUsed: ['CATORCE-IOT:blockFormat'],
+          message: blockMsg,
+          audioUrl,
+          audioDataUrl: audioUrl,
+          latencyMs: Date.now() - startTime,
+        };
+      }
 
       if (isListDoorsQuery) {
         const puertas = await this.catorceBrain.toolListarPuertasYDispositivos();
@@ -594,8 +694,8 @@ export class IaService {
           .map((d: any, idx: number) => `${idx + 1}. **${d.nombre}** (${d.puesto}, ${d.marca}, IP ${d.ip}, estado: ${d.estadoPuerta})`)
           .join('\n');
         const msg = puertas.length > 0
-          ? `${activeUserName}, tenemos ${puertas.length} dispositivos de control de acceso registrados:\n\n${listado}\n\nSi desea abrir o cerrar alguno, solo indiqueme cual.`
-          : `${activeUserName}, no hay dispositivos de control de acceso registrados en Prolicontrol.`;
+          ? `${vocativeCtrl.prefix}Tenemos ${puertas.length} dispositivos de control de acceso registrados:\n\n${listado}\n\nSi desea abrir, cerrar o reiniciar (reboot) alguno, solo indíqueme cuál.`
+          : `No hay dispositivos de control de acceso registrados en Prolicontrol.`;
         this.catorceBrain.appendConversationTurn(user, userQuery, msg, canal, ['accesos'], ['CATORCE-IOT:listarPuertas']);
         return {
           ok: true,
@@ -609,7 +709,7 @@ export class IaService {
         };
       }
 
-      if (parsedDoorCmd.command && mentionsAccessNoun && !isDoorReadOnlyQuestion) {
+      if (parsedDoorCmd.command && parsedDoorCmd.command !== 'bloqueado-formateo' && mentionsAccessNoun && !isDoorReadOnlyQuestion) {
         const doorRes = await this.catorceBrain.toolControlarPuerta(
           {
             targetQuery: userQuery,
@@ -634,10 +734,12 @@ export class IaService {
       if (!parsedDoorCmd.command && qNorm.split(/\s+/).length <= 6 && !qNorm.includes('?')) {
         const memHistory = await this.catorceBrain.getRecentConversationHistory(user);
         const lastBotTurn = [...(memHistory || [])].reverse().find((h) => h.role !== 'user')?.text || '';
-        const doorAskMatch = lastBotTurn.match(/Cual desea (abrir|cerrar|dejar siempre abierta|dejar siempre cerrada)\?|Indiqueme cual desea operar/i);
+        const doorAskMatch = lastBotTurn.match(/Cual desea (abrir|cerrar|reiniciar|dejar siempre abierta|dejar siempre cerrada)\?|Indiqueme cual desea operar/i);
         if (doorAskMatch) {
           const prevUserTurn = [...(memHistory || [])].reverse().find((h) => h.role === 'user')?.text || '';
-          const prevCmd = this.catorceBrain.parseDoorCommandAndId(prevUserTurn).command || 'abrir';
+          const rawPrevCmd = this.catorceBrain.parseDoorCommandAndId(prevUserTurn).command;
+          const prevCmd: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada' | 'reiniciar' =
+            rawPrevCmd && rawPrevCmd !== 'bloqueado-formateo' ? rawPrevCmd : 'abrir';
           const numSelectionMatch = qNorm.match(/\b(primera|uno|1|segunda|dos|2|tercera|tres|3|cuarta|cuatro|4|quinta|cinco|5)\b/i);
           let resolvedDeviceId: string | undefined = undefined;
           if (numSelectionMatch) {
@@ -2771,7 +2873,7 @@ ${
 
       const orchestratorPrompt = `
 
-Eres **CATORCE**, la IA Omnisciente y Segundo Cerebro de **PROLISEG LTDA** con control total de la plataforma **Prolicontrol**.
+Eres **CATORCE** (también llamado **14**), la IA Omnisciente y Segundo Cerebro de **PROLISEG LTDA** con control total de la plataforma **Prolicontrol**.
 
 Hoy es ${new Date().toISOString().slice(0, 10)}.
 
@@ -2781,18 +2883,10 @@ Usuario actual: "${activeUserName}" (Rol: ${user?.rol || 'superusuario'}, ID: ${
 
 REGLAS OBLIGATORIAS DE OPERACIÓN Y TRATO:
 
-1. TRATO AL USUARIO: ${
-
-  activeUserName !== 'Ingeniero' && activeUserName !== userName
-
-    ? `El usuario indicó expresamente que su trato o título preferido es "${activeUserName}". Dirígete a él/ella SIEMPRE con el título o nombre exacto de "${activeUserName}" (ej. "Hola ${activeUserName}", "Con gusto, ${activeUserName}", "${activeUserName}, le confirmo que..."). NUNCA uses la palabra "jefe" ni nombres ajenos.`
-
-    : isIngeniero
-
-    ? 'El usuario actual es el Ingeniero. Dirígete a él SIEMPRE con el título respetuoso de "Ingeniero" (ej. "Hola Ingeniero", "Con gusto, Ingeniero", "Ingeniero, le confirmo que..."). NUNCA lo llames "Oscar", "Javier", "Solarte", "Oscar Javier Solarte", ni uses la palabra "jefe".'
-
-    : `El usuario actual se llama "${userName}" (Rol: ${user?.rol || 'operativo'}). Dirígete a él/ella de manera cálida, ejecutiva y profesional por su nombre: "${userName}" (ej. "Hola ${userName}", "Con gusto ${userName}"). NUNCA uses la palabra "jefe".`
-
+1. TRATO NATURAL Y RESPETUOSO AL USUARIO: ${
+  vocativeCtrl.includeThisTurn
+    ? `El trato respetuoso del usuario es "${activeUserName}". En este mensaje puedes mencionarlo una sola vez con naturalidad y respeto (trato de usted), sin usar la palabra "jefe".`
+    : `Mantén siempre un trato formal de "usted" y máximo respeto hacia el usuario (${activeUserName}), pero EN ESTE MENSAJE NO repitas su nombre ni digas "${activeUserName}" ni "Ing. Solarte" ni "Ingeniero"; ve directo a la respuesta con naturalidad para no sonar repetitivo.`
 }
 
 2. ALCANCE DE SERVICIOS: Tienes control operativo total para gestionar TODOS los servicios de Prolicontrol:
@@ -2951,13 +3045,13 @@ Analiza el mensaje y responde en UN SOLO JSON ESTRICTO con esta estructura:
 
   "wantsPdf": boolean,
 
-  "directAnswer": "Tu respuesta hablada/escrita corta, humana, concisa (máximo 2 a 3 oraciones claras), SIN NINGÚN EMOJI y en español dirigiéndote siempre al usuario como '${activeUserName}'. Si el mensaje es casual o sobre permisos (ej. irse temprano, cenar, relevos), responde con empatía y criterio operativo breve. NUNCA listes todas las cifras de la empresa a menos que se pida expresamente un informe general. Responde EXACTAMENTE lo que se preguntó con el dato concreto (nombre, IP, cifra, estado); jamás sustituyas un dato específico por un resumen genérico de totales. Si el dato pedido no aparece textualmente en la telemetría, NO lo inventes ni lo resumas: deja directAnswer vacío y llena customSelectSql.",
+  "directAnswer": "Tu respuesta hablada/escrita corta, humana, concisa (máximo 2 a 3 oraciones claras), SIN NINGÚN EMOJI y en español con trato formal de usted (${vocativeCtrl.includeThisTurn ? `puedes mencionar '${activeUserName}' una vez con respeto` : `NO menciones '${activeUserName}' ni 'Ing. Solarte' en este turno para no ser repetitivo`}). Si el mensaje es casual o sobre permisos (ej. irse temprano, cenar, relevos), responde con empatía y criterio operativo breve. NUNCA listes todas las cifras de la empresa a menos que se pida expresamente un informe general. Responde EXACTAMENTE lo que se preguntó con el dato concreto (nombre, IP, cifra, estado); jamás sustituyas un dato específico por un resumen genérico de totales. Si el dato pedido no aparece textualmente en la telemetría, NO lo inventes ni lo resumas: deja directAnswer vacío y llena customSelectSql.",
 
   "doorControl": {
 
-    "command": "abrir" | "cerrar" | "siempre-abierta" | "siempre-cerrada",
+    "command": "abrir" | "cerrar" | "siempre-abierta" | "siempre-cerrada" | "reiniciar",
 
-    "targetQuery": "Nombre de la puerta, puesto o IP destino",
+    "targetQuery": "Nombre de la puerta, control de acceso, puesto o IP destino",
 
     "doorId": 1
 
@@ -3514,151 +3608,78 @@ Responde ÚNICAMENTE con el objeto JSON válido.`;
 
 
 
+      const vocativeRuleText = vocativeCtrl.includeThisTurn
+        ? `Puedes mencionar respetuosamente "${activeUserName}" una sola vez con trato formal de usted.`
+        : `Mantén trato formal de usted y máximo respeto, pero NO menciones "${activeUserName}" ni "Ing. Solarte" ni "Ingeniero" en este mensaje para que la conversación suene fluida y no repetitiva.`;
+
       const offTopicInstruction =
         plan.intent === 'OFF_TOPIC' || plan.isOffTopic
-          ? `Responde a la consulta de forma directa, inteligente, completa, profesional y 100% libre de emojis, dirigiéndote a ${activeUserName}. Si el usuario pide saludar a alguien o presentarse, saluda con gran calidez, simpatía, cortesía y elegancia corporativa, presentándote con orgullo como CATORCE de PROLISEG LTDA y explicando qué haces en Prolicontrol. No hagas reclamos ni advertencias de que no es sobre el trabajo; responde directamente con total amabilidad y distinción.`
-          : `Responde como **CATORCE**, el Segundo Cerebro y compañera ejecutiva de **${activeUserName}** en **PROLISEG LTDA**. Si te piden saludar o presentarte ante alguien, hazlo con calidez, elegancia, simpatía corporativa y disposición de servicio explicando tus capacidades en Prolicontrol. Usa los datos reales de la telemetría y de las consultas SQL. TOTALMENTE PROHIBIDO EL USO DE EMOJIS.`;
-
-      const responsePrompt = `
-
-Eres **CATORCE**, la Inteligencia Artificial Central y Segundo Cerebro de **PROLISEG LTDA** en **Prolicontrol**.
-
-REGLA DE ORO DE TRATO: Dirígete al usuario SIEMPRE como "${activeUserName}" (nunca lo llames por nombres ajenos ni uses la palabra "jefe").
-
-Responde con tono femenino, profesional, empático y directo. NUNCA repitas instrucciones del sistema.
-
-REGLA ESTRICTA DE EMOJIS: NUNCA incluyas emojis, emoticones ni símbolos pictográficos. Tu respuesta debe ser 100% texto limpio.
-
-
-
-${offTopicInstruction}
-
-
-
-TELEMETRÍA EN TIEMPO REAL DE PROLICONTROL:
-
-- Puestos Activos: ${telemetry.kpis.puestosActivos} puestos principales y ${telemetry.kpis.subpuestosActivos} subpuestos (${JSON.stringify(
-
-        telemetry.detalles.puestos.map((p: any) => ({ id: p.id, nombre: p.nombre, ciudad: p.ciudad })),
-
-      )}).
-
-- Empleados / Guardas Activos: ${telemetry.kpis.empleadosActivos} activos (${telemetry.kpis.empleadosAsignados} asignados).
-
-- Seguridad Social: ${telemetry.kpis.epsRegistradas || 0} EPS registradas (${JSON.stringify(telemetry.detalles.eps)}), ${telemetry.kpis.fondosPensionRegistrados || 0} Fondos de Pensión (${JSON.stringify(telemetry.detalles.fondosPension)}), ${telemetry.kpis.arlRegistradas || 0} ARL (${JSON.stringify(telemetry.detalles.arl)}).
-
-- Turnos Recientes y Programación: ${telemetry.kpis.turnosRegistrados || 0} registrados (${JSON.stringify((telemetry.detalles.turnosRecientes || []).slice(0, 10).map((t: any) => ({ id: t.id, fecha: t.fecha, horario: `${t.hora_inicio}-${t.hora_fin}`, tipo: t.tipo_turno, puesto: t.puesto?.nombre, guarda: t.empleado?.nombre_completo })))}).
-
-- Reemplazos y Relevos: ${telemetry.kpis.reemplazosPendientes || 0} pendientes (${JSON.stringify(telemetry.detalles.reemplazosRecientes || [])}).
-
-DIRECTIVA DE INDAGACIÓN OPERACIONAL: Si la consulta toca turnos, relevos o puestos, cruza activamente las características del puesto (12h/24h, armado/sin armas, controles de acceso) y formula una pregunta proactiva de seguimiento al final.
-
-- Vacaciones y Quiénes Siguen:
-
-  - Vacaciones actuales: ${JSON.stringify(telemetry.detalles.vacacionesActuales)}
-
-  - Próximos en salir a vacaciones: ${JSON.stringify(telemetry.detalles.quienesSiguenVacaciones)}
-
-- Clientes y Contratos Activos: ${telemetry.kpis.clientesActivos} clientes (${JSON.stringify(
-
-        telemetry.detalles.clientes.map((c: any) => c.nombre_empresa),
-
-      )}) y ${telemetry.kpis.contratosActivos} contratos vigentes (${telemetry.kpis.guardasContratadosTotal} guardas).
-
-- Controles de Acceso y Puertas IoT: ${telemetry.kpis.controlesAccesoTotal} controles de acceso (${telemetry.kpis.dispositivosOnline} en línea). Detalle: ${JSON.stringify(
-
-        doorStatusDetail?.dispositivos || telemetry.detalles.controlesAcceso,
-
-      )}
-
-- Minutas Recientes: ${JSON.stringify(telemetry.detalles.minutasRecientes.slice(0, 6))}
-
-${customSqlResult.length > 0 ? `- Datos de Consulta SQL (${executedSql}): ${JSON.stringify(customSqlResult.slice(0, 40))}` : ''}
-
-${brainMatches.length > 0 ? `- Conocimiento del Segundo Cerebro PROLISEG LTDA: ${JSON.stringify(brainMatches.map((b: any) => ({ titulo: b.titulo, categoria: b.categoria, resumen: b.resumen, procedimiento: b.fragmento })))}` : ''}
-${telemetry.userContext?.memoriasActivas?.length > 0 ? `- REGLAS Y APRENDIZAJES PERMANENTES ENSEÑADOS POR ${activeUserName} (CUMPLIMIENTO OBLIGATORIO): ${JSON.stringify(telemetry.userContext.memoriasActivas.map((m: any) => ({ clave: m.clave, regla_o_dato: m.hecho_recordado, tipo: m.tipo_memoria })))}` : ''}
-
-DIRECTIVA DE RESOLUCIÓN DE PROBLEMAS: Si la consulta expone un problema, contingencia o novedad operativa (red, MikroTik, cámaras, corte de luz, relevos), diagnostica la situación usando los datos del Segundo Cerebro de PROLISEG y genera una solución paso a paso con acciones concretas en Prolicontrol, ofreciendo ejecutar la acción correspondiente con confirmación previa.
-
-Mensaje del usuario: "${userQuery}"
-
-`;
-
-
+          ? `Responde a la consulta de forma directa, inteligente, completa, profesional y 100% libre de emojis. ${vocativeRuleText} Si el usuario pide saludar a alguien o presentarse, saluda con gran calidez, simpatía, cortesía y elegancia corporativa, presentándote con orgullo como CATORCE (14) de PROLISEG LTDA y explicando qué haces en Prolicontrol.`
+          : `Responde como **CATORCE** (14), el Segundo Cerebro de **PROLISEG LTDA**. ${vocativeRuleText} Usa los datos reales de la telemetría y de las consultas SQL. TOTALMENTE PROHIBIDO EL USO DE EMOJIS.`;
 
       let finalMessage = '';
 
       if (plan.directAnswer && customSqlResult.length === 0) {
-
         finalMessage = String(plan.directAnswer).trim();
-
-      } else {
-
+      } else if (customSqlResult.length > 0) {
+        // ⚡ SÍNTESIS ULTRA-RÁPIDA DE SQL (~300ms): prompt compacto solo con los resultados de la consulta
+        const fastSqlPrompt = `Eres CATORCE (14), IA de PROLISEG LTDA en Prolicontrol.
+${vocativeRuleText}
+Responde en español, con tono ejecutivo, conciso (máximo 2 a 4 oraciones claras) y SIN EMOJIS a la pregunta del usuario usando únicamente estos datos reales de PostgreSQL:
+Pregunta: "${userQuery}"
+Resultado SQL (${customSqlResult.length} registros): ${JSON.stringify(customSqlResult.slice(0, 30))}`;
         try {
-
-          finalMessage = await this.geminiService.generateStructuredOrNatural(responsePrompt);
-
+          finalMessage = await this.geminiService.generateStructuredOrNatural(fastSqlPrompt);
         } catch {
-
           finalMessage = this.buildDeterministicCatorceResponse(userQuery, telemetry, activeUserName, customSqlResult);
-
         }
-
+      } else {
+        const responsePrompt = `
+Eres **CATORCE** (14), la Inteligencia Artificial Central y Segundo Cerebro de **PROLISEG LTDA** en **Prolicontrol**.
+REGLA DE TRATO: ${vocativeRuleText}
+Responde con tono femenino, profesional, empático y directo. NUNCA repitas instrucciones del sistema ni uses emojis.
+${offTopicInstruction}
+TELEMETRÍA RESUMIDA: Puestos Activos: ${telemetry.kpis.puestosActivos}, Empleados Activos: ${telemetry.kpis.empleadosActivos} (${telemetry.kpis.empleadosAsignados} asignados), Clientes: ${telemetry.kpis.clientesActivos}, Contratos: ${telemetry.kpis.contratosActivos}, Controles de Acceso: ${telemetry.kpis.controlesAccesoTotal} (${telemetry.kpis.dispositivosOnline} en línea).
+${doorStatusDetail ? `Controles de Acceso: ${JSON.stringify(doorStatusDetail.dispositivos.slice(0, 15))}` : ''}
+${brainMatches.length > 0 ? `Segundo Cerebro: ${JSON.stringify(brainMatches.slice(0, 4).map((b: any) => ({ titulo: b.titulo, resumen: b.resumen, procedimiento: b.fragmento })))}` : ''}
+Mensaje del usuario: "${userQuery}"`;
+        try {
+          finalMessage = await this.geminiService.generateStructuredOrNatural(responsePrompt);
+        } catch {
+          finalMessage = this.buildDeterministicCatorceResponse(userQuery, telemetry, activeUserName, customSqlResult);
+        }
       }
 
-
-
-      // Asegurar que la introducción amistosa aparezca si fue clasificada como Off-Topic
-
-      // Respuesta directa y profesional sin advertencia de off-topic
-
-
-
-      // Sanitización estricta de meta-instrucciones, trato al usuario y erradicación total de emojis
-
+      // Sanitización estricta de meta-instrucciones, trato natural al usuario y erradicación total de emojis
       finalMessage = finalMessage
-
         .replace(/^(lee\s+(esto\s+)?(en\s+español|con\s+voz|de\s+forma)[^:\n]*[:\n]+)/i, '')
-
         .replace(/\b(oscar\s+javier\s+solarte(\s+araujo)?|oscar\s+javier|oscar\s+solarte)\b/gi, activeUserName)
-
-
-
         .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2300}-\u{23FF}\u{2B50}\u{200D}\u{FE0F}]/gu, '')
-
         .replace(/\s+/g, ' ')
-
         .trim();
 
+      finalMessage = this.stripRedundantVocativeIfNeeded(finalMessage, activeUserName, vocativeCtrl.includeThisTurn);
 
+      if (pendingDailyReport) {
+        finalMessage += `\n\nPor cierto, ya realicé la verificación diaria de hoy: ${pendingDailyReport.spokenSummary}`;
+      }
 
-      // Auditar operación
-
-      const audit = await this.catorceBrain.recordAudit({
-
+      // ⚡ Auditoría no bloqueante en segundo plano (0ms de espera para el usuario)
+      const fastAuditCode = `AUD-CAT-${Date.now().toString().slice(-6)}`;
+      this.catorceBrain.recordAudit({
         user,
-
         subagente: 'CATORCE-CORE',
-
         accion: plan.wantsPdf ? 'GENERAR_DOCUMENTO_PDF' : 'CONSULTA_OMNISCIENTE_PROLICONTROL',
-
         modulo: activatedNodes.join(','),
-
         tablaDestino: 'ia_brain.conversaciones',
-
         registroId: 'LIVE',
-
         comandoOriginal: userQuery,
-
         parametros: { canal, activatedNodes, wantsPdf: plan.wantsPdf },
-
         resultado: { kpis: telemetry.kpis },
-
         canal,
-
         background: true,
-
-      });
+      }).catch(() => {});
+      const audit = { codigo_auditoria: fastAuditCode };
 
 
 
@@ -4593,7 +4614,7 @@ Mensaje del usuario: "${userQuery}"
    */
 
   public async generateVoiceIfRequested(text: string, canal?: string): Promise<string | undefined> {
-    if (!canal || (!canal.includes('voz') && !canal.includes('radio') && canal !== 'texto')) {
+    if (!canal || canal === 'texto' || (!canal.includes('voz') && !canal.includes('radio'))) {
       return undefined;
     }
     try {
@@ -4637,32 +4658,45 @@ Mensaje del usuario: "${userQuery}"
     return firstSentence.length > 220 ? firstSentence.slice(0, 210).trim() : firstSentence;
   }
 
-  private formatDoorControlReply(doorRes: any, command: string, activeUserName: string): { ok: boolean; message: string; awaitingFollowUp?: boolean } {
+  private formatDoorControlReply(
+    doorRes: any,
+    command: string,
+    activeUserName: string,
+    user?: any,
+  ): { ok: boolean; message: string; awaitingFollowUp?: boolean } {
+    const vocative = this.getNaturalVocativeControl(activeUserName, user, false);
+    const vocPrefix = vocative.includeThisTurn ? `${activeUserName}, ` : '';
+    const capFirst = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
     const cmdVerbMap: Record<string, string> = {
       abrir: 'abrir',
       cerrar: 'cerrar',
       'siempre-abierta': 'dejar siempre abierta',
       'siempre-cerrada': 'dejar siempre cerrada',
+      reiniciar: 'reiniciar electricamente (reboot)',
     };
     const cmdDoneMap: Record<string, string> = {
-      abrir: 'Puerta abierta correctamente',
-      cerrar: 'Puerta cerrada y asegurada',
-      'siempre-abierta': 'Puerta dejada en modo siempre abierta',
-      'siempre-cerrada': 'Bloqueo total aplicado (siempre cerrada)',
+      abrir: 'puerta abierta correctamente',
+      cerrar: 'puerta cerrada y asegurada',
+      'siempre-abierta': 'puerta dejada en modo siempre abierta',
+      'siempre-cerrada': 'bloqueo total aplicado (siempre cerrada)',
+      reiniciar: 'reinicio electrico seguro (reboot, sin formateo ni perdida de datos) ejecutado correctamente',
     };
     const cmdVerb = cmdVerbMap[command] || command;
 
     if (doorRes?.noDevices) {
       return {
         ok: false,
-        message: `${activeUserName}, no hay dispositivos de control de acceso registrados actualmente en Prolicontrol.`,
+        message: capFirst(`${vocPrefix}no hay dispositivos de control de acceso registrados actualmente en Prolicontrol.`),
       };
     }
 
     if (doorRes?.batch) {
       return {
         ok: Boolean(doorRes.ok),
-        message: `${activeUserName}, comando de ${cmdVerb} ejecutado en control de acceso: ${doorRes.okCount} de ${doorRes.totalAttempted} puertas respondieron correctamente${doorRes.failCount > 0 ? `, con ${doorRes.failCount} sin respuesta` : ''}.`,
+        message: capFirst(
+          `${vocPrefix}comando de ${cmdVerb} ejecutado en control de acceso: ${doorRes.okCount} de ${doorRes.totalAttempted} equipos respondieron correctamente${doorRes.failCount > 0 ? `, con ${doorRes.failCount} sin respuesta` : ''}.`,
+        ),
       };
     }
 
@@ -4670,8 +4704,8 @@ Mensaje del usuario: "${userQuery}"
       const cands = (doorRes.candidates || []).slice(0, 5);
       const listText = cands.map((c: any, idx: number) => `${idx + 1}. ${c.nombre} (${c.puesto})`).join(', ');
       const prefix = doorRes.ambiguous
-        ? `${activeUserName}, encontre varias puertas posibles`
-        : `${activeUserName}, no identifique una puerta exacta para "${doorRes.targetQuery || ''}"`;
+        ? capFirst(`${vocPrefix}encontre varios controles de acceso posibles`)
+        : capFirst(`${vocPrefix}no identifique un control de acceso exacto para "${doorRes.targetQuery || ''}"`);
       const tail = listText ? `: ${listText}. Cual desea ${cmdVerb}?` : '. Por favor indiqueme el nombre del puesto o puerta.';
       return {
         ok: false,
@@ -4684,9 +4718,12 @@ Mensaje del usuario: "${userQuery}"
       const devName = doorRes.device?.nombre || 'Control de Acceso';
       const puesto = doorRes.puestoName || doorRes.device?.puesto || 'Sede Principal';
       const marca = doorRes.hwResult?.marca || doorRes.device?.marca || '';
+      const doorInfo = command === 'reiniciar' ? `IP ${doorRes.device?.ip || 'registrada'}` : `puerta ${doorRes.doorId}`;
       return {
         ok: true,
-        message: `${activeUserName}, ${cmdDoneMap[command] || 'comando ejecutado'} en **${devName}** (${puesto}${marca ? ', ' + marca : ''}, puerta ${doorRes.doorId}).${doorRes.auditCode ? ' Auditoria: [' + doorRes.auditCode + ']' : ''}`,
+        message: capFirst(
+          `${vocPrefix}${cmdDoneMap[command] || 'comando ejecutado'} en **${devName}** (${puesto}${marca ? ', ' + marca : ''}, ${doorInfo}).${doorRes.auditCode ? ' Auditoria: [' + doorRes.auditCode + ']' : ''}`,
+        ),
       };
     }
 
@@ -4694,20 +4731,20 @@ Mensaje del usuario: "${userQuery}"
     const errDetail = doorRes?.hwResult?.mensaje || doorRes?.mensaje || 'sin comunicacion';
     return {
       ok: false,
-      message: `${activeUserName}, intente ${cmdVerb} ${devLabel}, pero el hardware respondio con error: ${errDetail}.`,
+      message: capFirst(`${vocPrefix}intente ${cmdVerb} ${devLabel}, pero el hardware respondio con error: ${errDetail}.`),
     };
   }
 
   private async buildAndReturnDoorControlResponse(
     doorRes: any,
-    command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada',
+    command: 'abrir' | 'cerrar' | 'siempre-abierta' | 'siempre-cerrada' | 'reiniciar',
     userQuery: string,
     activeUserName: string,
     user: any,
     canal: string,
     startTime: number,
   ) {
-    const formatted = this.formatDoorControlReply(doorRes, command, activeUserName);
+    const formatted = this.formatDoorControlReply(doorRes, command, activeUserName, user);
     const tools = [`CATORCE-IOT:controlPuerta(${command})`];
 
     if (formatted.awaitingFollowUp) {
@@ -4848,7 +4885,7 @@ Mensaje del usuario: "${userQuery}"
     listFilter?: string;
   } | null {
     const cleaned = qNorm
-      .replace(/^(oye\s+)?catorce[\s,.:;-]*/i, '')
+      .replace(/^(oye\s+)?(catorce|14)[\s,.:;-]*/i, '')
       .replace(/^[¿¡\s]+|[?!.\s]+$/g, '')
       .trim();
 
@@ -4875,7 +4912,7 @@ Mensaje del usuario: "${userQuery}"
     }
 
     const strippedOriginal = (userQuery || '')
-      .replace(/^\s*(?:oye\s+)?catorce[\s,.:;-]*/i, '')
+      .replace(/^\s*(?:oye\s+)?(?:catorce|14)[\s,.:;-]*/i, '')
       .replace(/^\s*por\s+favor[\s,.:;-]*/i, '')
       .trim();
 
